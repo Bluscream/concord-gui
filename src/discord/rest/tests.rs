@@ -25,6 +25,9 @@ use crate::{
         BASE_ATTACHMENT_LIMIT_BYTES, ChannelInfo, GuildFolder, MessageAttachmentUpload,
         MessageSearchAuthorType, MessageSearchHas, MessageSearchQuery, ReactionEmoji,
         ReplyReference,
+        application_commands::{
+            ApplicationCommandAutocompleteInteraction, ApplicationCommandAutocompleteOption,
+        },
         fingerprint::{CLIENT_BUILD_NUMBER, ClientFingerprint},
     },
 };
@@ -35,25 +38,29 @@ use super::{
     RestMutationPacer, RestRateLimitBody, RestRateLimitDecision, RestRateLimitResponse,
     RestRateLimitRoute, RestRateLimiter,
     application_commands::{
-        application_command_interaction_body, application_command_option_body,
-        parse_application_command_index,
+        application_command_autocomplete_body, application_command_interaction_body,
+        application_command_option_body, parse_application_command_index,
     },
     apply_authenticated_method_headers,
     forum::{
-        ForumPostPage, ForumSearchSort, create_forum_post_request_body, forum_search_retry_after,
-        merge_forum_pages, merge_pinned_forum_posts, parse_create_forum_post_response,
-        parse_forum_first_messages, parse_forum_threads,
+        ForumPostPage, ForumSearchSort, create_forum_post_request_body, forum_search_has_more,
+        forum_search_next_offset, forum_search_retry_after, merge_forum_pages,
+        merge_pinned_forum_posts, parse_create_forum_post_response, parse_forum_first_messages,
+        parse_forum_thread_search_response, parse_forum_threads,
     },
     messages::{
         MessageEditRequest, edit_message_request_body, message_multipart_form,
-        message_request_body, message_request_body_with_tts, upload_content_type,
-        validate_message_content, validate_message_payload,
+        message_request_body, message_request_body_with_tts, parse_pinned_messages_response,
+        upload_content_type, validate_message_content, validate_message_payload,
     },
     notification_settings::mute_request_body,
     polls::poll_vote_request_body,
     profile::parse_user_profile_response,
     reactions::{next_reaction_users_after, reaction_route_component},
-    search::{message_search_date_snowflake_bounds, message_search_query_params},
+    search::{
+        MessageSearchResponse, message_search_date_snowflake_bounds, message_search_has_more,
+        message_search_query_params, message_search_retry_delay,
+    },
     user_settings::settings_proto_request_body,
 };
 
@@ -90,7 +97,10 @@ fn rest_rate_limit_routes_normalize_ids_but_keep_major_scope() {
     );
     assert_eq!(safety_first.major_parameter, "123");
     assert_eq!(safety_second.major_parameter, "999");
+}
 
+#[test]
+fn rest_mutation_pacer_reserves_the_minimum_interval() {
     let pacer = RestMutationPacer::default();
     let started_at = std::time::Instant::now();
     assert_eq!(pacer.reserve_at(started_at), None);
@@ -761,6 +771,7 @@ fn application_command_interaction_body_nests_subcommand_options_for_guild_comma
     let interaction = ApplicationCommandInteraction {
         guild_id: Some(Id::new(1)),
         channel_id: Id::new(2),
+        nonce: "interaction-nonce".to_owned(),
         command: ApplicationCommandInfo {
             application_id: Id::<ApplicationMarker>::new(200),
             version: "1".to_owned(),
@@ -808,6 +819,7 @@ fn application_command_interaction_body_nests_subcommand_options_for_guild_comma
         ])
     );
     assert_eq!(body["data"]["guild_id"], "1");
+    assert_eq!(body["nonce"], "interaction-nonce");
     assert!(body["data"]["options"][0].get("value").is_none());
     assert!(
         body["data"]["options"][0]["options"][0]
@@ -821,6 +833,7 @@ fn application_command_interaction_body_omits_data_guild_id_for_global_command()
     let interaction = ApplicationCommandInteraction {
         guild_id: Some(Id::new(1)),
         channel_id: Id::new(2),
+        nonce: "interaction-nonce".to_owned(),
         command: ApplicationCommandInfo {
             application_id: Id::<ApplicationMarker>::new(200),
             version: "1".to_owned(),
@@ -842,6 +855,50 @@ fn application_command_interaction_body_omits_data_guild_id_for_global_command()
 
     assert_eq!(body["guild_id"], "1");
     assert!(body["data"].get("guild_id").is_none());
+}
+
+#[test]
+fn application_command_autocomplete_body_marks_only_the_focused_option() {
+    let interaction = ApplicationCommandAutocompleteInteraction {
+        guild_id: Some(Id::new(1)),
+        channel_id: Id::new(2),
+        nonce: "autocomplete-nonce".to_owned(),
+        command: ApplicationCommandInfo {
+            application_id: Id::<ApplicationMarker>::new(200),
+            version: "1".to_owned(),
+            raw: serde_json::json!({
+                "id": "100",
+                "application_id": "200",
+                "name": "search",
+                "version": "1",
+                "guild_id": "1",
+            }),
+            ..ApplicationCommandInfo::test(Id::<ApplicationMarker>::new(100), "search")
+        },
+        options: vec![ApplicationCommandAutocompleteOption {
+            kind: 3,
+            name: "query".to_owned(),
+            value: Some(serde_json::json!("ne")),
+            options: Vec::new(),
+            focused: true,
+        }],
+    };
+
+    let body = application_command_autocomplete_body(&interaction, "session");
+
+    assert_eq!(body["type"], 4);
+    assert_eq!(body["nonce"], "autocomplete-nonce");
+    assert_eq!(
+        body["data"]["options"],
+        serde_json::json!([
+            {
+                "type": 3,
+                "name": "query",
+                "value": "ne",
+                "focused": true
+            }
+        ])
+    );
 }
 
 #[test]
@@ -1036,7 +1093,8 @@ fn forum_thread_page_filters_or_fills_parent_and_supplies_guild() {
         "has_more": false
     });
 
-    let threads = parse_forum_threads(&raw, Some(guild_id), forum_id, false);
+    let response = parse_forum_thread_search_response(&raw, Some(guild_id), forum_id, false);
+    let threads = &response.threads;
 
     assert_eq!(threads.len(), 1);
     assert_eq!(threads[0].guild_id, Some(guild_id));
@@ -1044,6 +1102,17 @@ fn forum_thread_page_filters_or_fills_parent_and_supplies_guild() {
     assert_eq!(threads[0].parent_id, Some(forum_id));
     assert_eq!(threads[0].name, "welcome");
     assert_eq!(threads[0].owner_id, Some(Id::new(88)));
+    assert_eq!(response.raw_threads.len(), 2);
+    assert_eq!(forum_search_next_offset(25, &response), 27);
+    assert!(!forum_search_has_more(&response));
+
+    let empty_page = parse_forum_thread_search_response(
+        &serde_json::json!({ "threads": [], "has_more": true }),
+        Some(guild_id),
+        forum_id,
+        false,
+    );
+    assert!(!forum_search_has_more(&empty_page));
 
     let raw = serde_json::json!({
         "threads": [
@@ -1061,6 +1130,74 @@ fn forum_thread_page_filters_or_fills_parent_and_supplies_guild() {
 
     assert_eq!(threads.len(), 1);
     assert_eq!(threads[0].parent_id, Some(forum_id));
+}
+
+#[test]
+fn search_and_pin_pagination_follow_server_metadata() {
+    let response = MessageSearchResponse {
+        total_results: Some(1),
+        messages: Vec::new(),
+        message_groups: vec![serde_json::json!([])],
+        extra_fields: Default::default(),
+    };
+    assert!(!message_search_has_more(&response, 25));
+    let full_page = MessageSearchResponse {
+        message_groups: vec![serde_json::json!([]); 25],
+        ..response
+    };
+    assert!(
+        message_search_has_more(&full_page, 25),
+        "an approximate total must not stop a full search page"
+    );
+    let short_page_with_reported_results_remaining = MessageSearchResponse {
+        total_results: Some(50),
+        messages: Vec::new(),
+        message_groups: vec![serde_json::json!([])],
+        extra_fields: Default::default(),
+    };
+    assert!(
+        message_search_has_more(&short_page_with_reported_results_remaining, 25),
+        "reported remaining results must keep pagination alive after a short page"
+    );
+    assert_eq!(
+        message_search_retry_delay(&serde_json::json!({ "retry_after": 2.5 })),
+        Duration::from_millis(2_500)
+    );
+    assert_eq!(
+        message_search_retry_delay(&serde_json::json!({ "retry_after": 0 })),
+        Duration::from_secs(1)
+    );
+
+    let pins = parse_pinned_messages_response(&serde_json::json!({
+        "items": [
+            {
+                "pinned_at": "2026-07-24T02:00:00.000Z",
+                "message": {
+                    "id": "100",
+                    "channel_id": "10",
+                    "author": { "id": "20", "username": "neo" },
+                    "timestamp": "2026-07-24T02:00:00.000Z"
+                }
+            },
+            {
+                "pinned_at": "2026-07-24T01:00:00.000Z",
+                "message": {
+                    "id": "99",
+                    "channel_id": "10",
+                    "author": { "id": "20", "username": "neo" },
+                    "timestamp": "2026-07-24T01:00:00.000Z"
+                }
+            }
+        ],
+        "has_more": true
+    }))
+    .expect("pin page should parse");
+    assert_eq!(pins.messages.len(), 2);
+    assert!(pins.has_more);
+    assert_eq!(
+        pins.next_before.as_deref(),
+        Some("2026-07-24T01:00:00.000Z")
+    );
 }
 
 #[test]

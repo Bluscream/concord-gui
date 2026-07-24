@@ -14,6 +14,9 @@ use crate::discord::{
     AppEvent, ForumPostArchiveState, MessageHistoryAfterMode, MessageHistoryLoadTarget,
 };
 
+const APPLICATION_COMMAND_REQUEST_TTL: Duration = Duration::from_secs(15 * 60);
+const MAX_APPLICATION_COMMAND_REQUESTS: usize = 1_024;
+
 #[derive(Debug, Default)]
 pub(super) struct HistoryRequests {
     requests: OnDemandRequests<Id<ChannelMarker>>,
@@ -96,6 +99,42 @@ pub(super) struct UserNoteRequests {
     in_flight: HashSet<Id<UserMarker>>,
 }
 
+#[derive(Debug)]
+struct ApplicationCommandRequests {
+    pending: TimedRequestSet<String>,
+}
+
+impl Default for ApplicationCommandRequests {
+    fn default() -> Self {
+        Self {
+            pending: TimedRequestSet::new(
+                APPLICATION_COMMAND_REQUEST_TTL,
+                MAX_APPLICATION_COMMAND_REQUESTS,
+            ),
+        }
+    }
+}
+
+impl ApplicationCommandRequests {
+    fn begin(&mut self, nonce: String, now: Instant) {
+        self.pending.insert(nonce, now);
+    }
+
+    fn clear(&mut self, nonce: &str) {
+        self.pending.remove(&nonce.to_owned());
+    }
+
+    fn correlate(&mut self, nonce: &str, now: Instant) -> bool {
+        self.pending.prune(now);
+        let nonce = nonce.to_owned();
+        let correlated = self.pending.contains(&nonce);
+        if correlated {
+            self.pending.remove(&nonce);
+        }
+        correlated
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct RequestLifecycle {
     history: HistoryRequests,
@@ -112,6 +151,7 @@ pub(crate) struct RequestLifecycle {
     thread_previews: ThreadPreviewRequests,
     user_profiles: UserProfileRequests,
     user_notes: UserNoteRequests,
+    pending_application_commands: ApplicationCommandRequests,
 }
 
 impl RequestLifecycle {
@@ -138,6 +178,34 @@ impl RequestLifecycle {
         self.member_list_subscriptions = MemberListSubscriptionRequests::default();
         self.mention_member_searches = MentionMemberSearchRequests::default();
         self.members = MemberRequests::default();
+        self.pending_application_commands = ApplicationCommandRequests::default();
+    }
+
+    pub(crate) fn begin_application_command(&mut self, nonce: String, now: Instant) {
+        self.pending_application_commands.begin(nonce, now);
+    }
+
+    pub(crate) fn clear_application_command(&mut self, nonce: &str) {
+        self.pending_application_commands.clear(nonce);
+    }
+
+    pub(crate) fn correlate_interaction_event(&mut self, event: &mut AppEvent) {
+        self.correlate_interaction_event_at(event, Instant::now());
+    }
+
+    fn correlate_interaction_event_at(&mut self, event: &mut AppEvent, now: Instant) {
+        let (nonce, correlated) = match event {
+            AppEvent::InteractionSucceeded {
+                nonce, correlated, ..
+            }
+            | AppEvent::InteractionFailed {
+                nonce, correlated, ..
+            } => (nonce, correlated),
+            _ => return,
+        };
+        *correlated = nonce
+            .as_deref()
+            .is_some_and(|nonce| self.pending_application_commands.correlate(nonce, now));
     }
 
     pub(crate) fn next_history_request(

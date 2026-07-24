@@ -4,10 +4,12 @@ use crate::discord::events::{AppEvent, GatewayDispatchInfo};
 
 mod channels;
 mod guilds;
+mod interactions;
 mod members;
 mod messages;
 mod notifications;
 mod presence;
+mod read_state;
 mod ready;
 mod relationships;
 mod shared;
@@ -24,6 +26,10 @@ use guilds::{
     parse_guild_onboarding_update, parse_guild_role_delete, parse_guild_role_upsert,
     parse_guild_update, parse_user_guild_settings_update,
 };
+use interactions::{
+    parse_application_command_autocomplete_response, parse_application_command_index_update,
+    parse_interaction_failure, parse_interaction_success,
+};
 use members::{
     parse_current_user_verification, parse_member_add, parse_member_chunk,
     parse_member_list_update, parse_member_remove, parse_member_upsert, parse_user_update,
@@ -37,9 +43,12 @@ use messages::{
 use notifications::parse_recent_mention_delete;
 pub(in crate::discord) use presence::parse_activity;
 use presence::{parse_presence_update, parse_typing_start};
+use read_state::{
+    parse_channel_pins_ack, parse_channel_unread_update, parse_feature_read_state_ack,
+};
 use ready::{parse_ready, parse_ready_supplemental};
 use relationships::{parse_relationship_add, parse_relationship_remove, parse_relationship_update};
-use user_settings::parse_user_settings_update;
+use user_settings::{parse_user_notification_settings_update, parse_user_settings_update};
 use voice::{
     parse_call, parse_call_delete, parse_guild_voice_states, parse_voice_server_update,
     parse_voice_state_update,
@@ -96,6 +105,16 @@ fn parse_user_account_event_data(event_type: &str, data: &Value) -> Vec<AppEvent
         }
         "GUILD_ROLE_DELETE" => parse_guild_role_delete(data).into_iter().collect(),
         "GUILD_DELETE" => parse_guild_delete(data).into_iter().collect(),
+        "GUILD_APPLICATION_COMMAND_INDEX_UPDATE" => parse_application_command_index_update(data)
+            .into_iter()
+            .collect(),
+        "INTERACTION_SUCCESS" => parse_interaction_success(data).into_iter().collect(),
+        "INTERACTION_FAILURE" => parse_interaction_failure(data).into_iter().collect(),
+        "APPLICATION_COMMAND_AUTOCOMPLETE_RESPONSE" => {
+            parse_application_command_autocomplete_response(data)
+                .into_iter()
+                .collect()
+        }
         "CHANNEL_CREATE" | "CHANNEL_UPDATE" | "THREAD_CREATE" | "THREAD_UPDATE" => {
             parse_channel_upsert(data).into_iter().collect()
         }
@@ -116,11 +135,19 @@ fn parse_user_account_event_data(event_type: &str, data: &Value) -> Vec<AppEvent
             .into_iter()
             .collect(),
         "CHANNEL_PINS_UPDATE" => parse_channel_pins_update(data).into_iter().collect(),
+        "CHANNEL_PINS_ACK" => parse_channel_pins_ack(data).into_iter().collect(),
+        "CHANNEL_UNREAD_UPDATE" => parse_channel_unread_update(data).into_iter().collect(),
         "MESSAGE_ACK" => parse_message_ack(data).into_iter().collect(),
+        "GUILD_FEATURE_ACK" | "USER_NON_CHANNEL_ACK" => {
+            parse_feature_read_state_ack(data).into_iter().collect()
+        }
         "RECENT_MENTION_DELETE" => parse_recent_mention_delete(data).into_iter().collect(),
         "USER_GUILD_SETTINGS_UPDATE" => {
             parse_user_guild_settings_update(data).into_iter().collect()
         }
+        "NOTIFICATION_SETTINGS_UPDATE" => parse_user_notification_settings_update(data)
+            .into_iter()
+            .collect(),
         "USER_SETTINGS_UPDATE" => parse_user_settings_update(data).into_iter().collect(),
         "GUILD_MEMBER_ADD" => parse_member_add(data).into_iter().collect(),
         "GUILD_MEMBER_UPDATE" => parse_member_upsert(data).into_iter().collect(),

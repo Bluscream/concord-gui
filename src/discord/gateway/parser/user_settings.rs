@@ -18,6 +18,11 @@ pub(super) fn parse_user_settings_update(data: &Value) -> Option<AppEvent> {
     parse_user_settings_info(settings).map(|settings| AppEvent::UserSettingsUpdate { settings })
 }
 
+pub(super) fn parse_user_notification_settings_update(data: &Value) -> Option<AppEvent> {
+    let flags = data.get("flags").and_then(Value::as_u64)?;
+    Some(AppEvent::UserNotificationSettingsUpdate { flags })
+}
+
 pub(super) fn parse_user_settings_info(settings: &Value) -> Option<UserSettingsInfo> {
     settings.as_object()?;
 

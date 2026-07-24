@@ -1,5 +1,7 @@
 use super::*;
 
+pub(super) const MAX_VOICE_RECONNECT_ATTEMPTS: u8 = 3;
+
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum VoiceRuntimeAction {
     Connect(VoiceGatewaySession),
@@ -18,7 +20,11 @@ pub(super) struct VoiceRuntimeState {
     current_voice: Option<ObservedSelfVoiceState>,
     server: Option<VoiceServerInfo>,
     active: Option<VoiceGatewaySession>,
+    blocked: Option<VoiceGatewaySession>,
+    reconnect_target: Option<VoiceGatewaySession>,
+    reconnect_attempts: u8,
     participant_playback_settings: HashMap<Id<UserMarker>, VoiceParticipantPlaybackSettings>,
+    next_connection_id: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -38,6 +44,9 @@ impl VoiceRuntimeState {
         let mut participant_playback_changed = false;
         match event {
             VoiceRuntimeEvent::Requested(requested) => {
+                if requested.is_none() || self.current_voice.is_none() {
+                    self.blocked = None;
+                }
                 if let Some(next) = requested
                     && self.requested.is_some_and(|current| {
                         current.scope != next.scope || current.channel_id != next.channel_id
@@ -54,6 +63,17 @@ impl VoiceRuntimeState {
                         participant_playback_changed,
                     };
                 }
+            }
+            VoiceRuntimeEvent::ManualRetry(requested) => {
+                if self.requested.is_some_and(|current| {
+                    current.scope != requested.scope || current.channel_id != requested.channel_id
+                }) {
+                    self.server = None;
+                }
+                self.requested = Some(requested);
+                self.blocked = None;
+                self.reconnect_target = None;
+                self.reconnect_attempts = 0;
             }
             VoiceRuntimeEvent::ReplaceParticipantPlaybackSettings(settings) => {
                 let settings = settings
@@ -98,16 +118,64 @@ impl VoiceRuntimeState {
                 }
                 self.server = Some(server);
             }
+            VoiceRuntimeEvent::ConnectionEstablished { connection_id } => {
+                if self
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| active.connection_id == connection_id)
+                {
+                    self.reconnect_attempts = 0;
+                }
+                return VoiceRuntimeApplyResult {
+                    action: None,
+                    participant_playback_changed,
+                };
+            }
             VoiceRuntimeEvent::ConnectionEnded {
+                connection_id,
                 scope,
                 channel_id,
                 session_id,
                 endpoint,
+                outcome,
             } => {
-                if self.active.as_ref().is_some_and(|active| {
-                    active.matches_connection_end(scope, channel_id, &session_id, &endpoint)
-                }) {
+                if let Some(active) = self
+                    .active
+                    .as_ref()
+                    .filter(|active| {
+                        active.matches_connection_end(
+                            connection_id,
+                            scope,
+                            channel_id,
+                            &session_id,
+                            &endpoint,
+                        )
+                    })
+                    .cloned()
+                {
                     self.active = None;
+                    if outcome == VoiceConnectionEnd::Stop {
+                        self.blocked = Some(active);
+                        return VoiceRuntimeApplyResult {
+                            action: None,
+                            participant_playback_changed,
+                        };
+                    }
+                    if self.reconnect_attempts >= MAX_VOICE_RECONNECT_ATTEMPTS {
+                        self.blocked = Some(active);
+                        logging::debug(
+                            "voice",
+                            format!(
+                                "voice reconnect limit reached after {} attempts",
+                                MAX_VOICE_RECONNECT_ATTEMPTS
+                            ),
+                        );
+                        return VoiceRuntimeApplyResult {
+                            action: None,
+                            participant_playback_changed,
+                        };
+                    }
+                    self.reconnect_attempts += 1;
                     return VoiceRuntimeApplyResult {
                         action: self.connect_if_ready(),
                         participant_playback_changed,
@@ -172,7 +240,8 @@ impl VoiceRuntimeState {
         if endpoint.is_empty() || server.token.is_empty() {
             return None;
         }
-        let session = VoiceGatewaySession {
+        let mut session = VoiceGatewaySession {
+            connection_id: 0,
             scope: requested.scope,
             channel_id: requested.channel_id,
             user_id: self.current_user_id?,
@@ -180,9 +249,19 @@ impl VoiceRuntimeState {
             endpoint,
             token: server.token.clone(),
         };
+        if self.reconnect_target.as_ref() != Some(&session) {
+            self.reconnect_target = Some(session.clone());
+            self.reconnect_attempts = 0;
+        }
         if self.active.as_ref() == Some(&session) {
             return None;
         }
+        if self.blocked.as_ref() == Some(&session) {
+            return None;
+        }
+        self.blocked = None;
+        self.next_connection_id = self.next_connection_id.wrapping_add(1).max(1);
+        session.connection_id = self.next_connection_id;
         self.active = Some(session.clone());
         Some(VoiceRuntimeAction::Connect(session))
     }

@@ -78,7 +78,7 @@ fn guild_partial_updates_preserve_and_replace_optional_metadata() {
 }
 
 #[test]
-fn stores_and_clears_custom_guild_emojis() {
+fn guild_outage_preserves_cache_and_membership_removal_clears_it() {
     let guild_id = Id::new(1);
     let mut state = DiscordState::default();
 
@@ -94,8 +94,14 @@ fn stores_and_clears_custom_guild_emojis() {
     assert_eq!(state.custom_emojis_for_guild(guild_id).len(), 1);
     assert_eq!(state.custom_emojis_for_guild(guild_id)[0].name, "party");
 
+    state.apply_event(&AppEvent::GuildUnavailable { guild_id });
+
+    assert!(state.guild(guild_id).is_some());
+    assert_eq!(state.custom_emojis_for_guild(guild_id).len(), 1);
+
     state.apply_event(&AppEvent::GuildDelete { guild_id });
 
+    assert!(state.guild(guild_id).is_none());
     assert!(state.custom_emojis_for_guild(guild_id).is_empty());
 }
 

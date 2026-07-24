@@ -10,7 +10,9 @@ use crate::discord::ids::{
     marker::{ChannelMarker, EmojiMarker, ForumTagMarker, GuildMarker, MessageMarker, UserMarker},
 };
 
-use super::application_commands::ApplicationCommandInvocation;
+use super::application_commands::{
+    ApplicationCommandAutocompleteInvocation, ApplicationCommandInvocation,
+};
 use super::message::MessageInfo;
 use super::{ActivityInfo, PresenceStatus, VoiceScope};
 
@@ -578,6 +580,9 @@ pub enum AppCommand {
     },
     RunApplicationCommand {
         invocation: ApplicationCommandInvocation,
+    },
+    RequestApplicationCommandAutocomplete {
+        invocation: ApplicationCommandAutocompleteInvocation,
     },
     EditMessage {
         channel_id: Id<ChannelMarker>,

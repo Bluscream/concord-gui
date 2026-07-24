@@ -26,7 +26,7 @@ impl PresenceStatus {
             Self::Idle => "idle",
             Self::DoNotDisturb => "dnd",
             Self::Offline => "invisible",
-            Self::Unknown => "online",
+            Self::Unknown => "unknown",
         }
     }
 

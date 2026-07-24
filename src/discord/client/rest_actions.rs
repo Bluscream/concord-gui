@@ -276,7 +276,14 @@ impl DiscordClient {
         channel_id: Id<ChannelMarker>,
         message_id: Id<MessageMarker>,
     ) -> Result<()> {
-        self.rest.ack_channel(channel_id, message_id).await
+        let (flags, last_viewed) = self
+            .state
+            .read()
+            .expect("discord state lock is not poisoned")
+            .channel_ack_metadata(channel_id);
+        self.rest
+            .ack_channel(channel_id, message_id, flags, last_viewed)
+            .await
     }
 
     pub async fn set_guild_muted(
@@ -641,6 +648,13 @@ impl DiscordClient {
         invocation: &ApplicationCommandInvocation,
     ) -> Result<()> {
         self.ensure_channel_action(invocation.channel_id, DiscordAction::RunApplicationCommand)
+    }
+
+    pub(super) fn ensure_can_request_application_command_autocomplete(
+        &self,
+        channel_id: Id<ChannelMarker>,
+    ) -> Result<()> {
+        self.ensure_channel_action(channel_id, DiscordAction::RunApplicationCommand)
     }
 
     pub(super) fn ensure_can_remove_current_user_reaction(

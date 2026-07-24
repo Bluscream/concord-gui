@@ -38,11 +38,11 @@ pub use action_policy::{ActionBlockReason, DiscordAction};
 pub use application_commands::{
     APPLICATION_COMMAND_CHANNEL_KIND, APPLICATION_COMMAND_MENTIONABLE_KIND,
     APPLICATION_COMMAND_ROLE_KIND, APPLICATION_COMMAND_STRING_KIND, APPLICATION_COMMAND_USER_KIND,
-    ApplicationCommandChoiceInfo, ApplicationCommandIdentity, ApplicationCommandInfo,
-    ApplicationCommandInteraction, ApplicationCommandInteractionOption,
-    ApplicationCommandInvocation, ApplicationCommandOptionInfo,
-    application_command_content_is_complete, application_command_option_scope,
-    parsed_application_command_option_names,
+    ApplicationCommandAutocompleteInvocation, ApplicationCommandChoiceInfo,
+    ApplicationCommandIdentity, ApplicationCommandInfo, ApplicationCommandInteraction,
+    ApplicationCommandInteractionOption, ApplicationCommandInvocation,
+    ApplicationCommandOptionInfo, application_command_content_is_complete,
+    application_command_option_scope, parsed_application_command_option_names,
 };
 pub(crate) use auth_http::DiscordAuthSession;
 pub use builtin_commands::{

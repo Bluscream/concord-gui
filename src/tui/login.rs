@@ -173,6 +173,21 @@ pub async fn prompt_login(
                         };
                         state.screen = LoginScreen::MfaCode;
                     }
+                    PasswordAuthEvent::RequiredActions(actions) => {
+                        password_handle = None;
+                        state.password.reset_sensitive();
+                        let actions = actions
+                            .into_iter()
+                            .map(|action| match action.as_str() {
+                                "update_password" => "update the account password".to_owned(),
+                                _ => action,
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        state.error = Some(format!(
+                            "Discord requires you to {actions} in the official client before Concord can continue."
+                        ));
+                    }
                     PasswordAuthEvent::Token(token) => {
                         if let Some(handle) = password_handle.take() {
                             let _ = handle.handle.await;

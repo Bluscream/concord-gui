@@ -213,9 +213,15 @@ pub(super) fn build_command_choice_candidates(
     query: &str,
     option: &ApplicationCommandOptionInfo,
 ) -> Vec<CommandPickerEntry> {
+    build_command_choice_candidates_from_choices(query, &option.choices)
+}
+
+pub(super) fn build_command_choice_candidates_from_choices(
+    query: &str,
+    choices: &[crate::discord::ApplicationCommandChoiceInfo],
+) -> Vec<CommandPickerEntry> {
     let needle = query.to_ascii_lowercase();
-    option
-        .choices
+    choices
         .iter()
         .filter(|choice| choice.name.to_ascii_lowercase().contains(&needle))
         .map(|choice| CommandPickerEntry {

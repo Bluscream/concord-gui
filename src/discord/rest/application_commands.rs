@@ -6,6 +6,9 @@ use crate::{
     discord::{
         ApplicationCommandChoiceInfo, ApplicationCommandInfo, ApplicationCommandInteraction,
         ApplicationCommandInteractionOption, ApplicationCommandOptionInfo,
+        application_commands::{
+            ApplicationCommandAutocompleteInteraction, ApplicationCommandAutocompleteOption,
+        },
     },
 };
 
@@ -40,6 +43,21 @@ impl DiscordRest {
                 .post("https://discord.com/api/v9/interactions")
                 .json(&body),
             "application command",
+        )
+        .await
+    }
+
+    pub(in crate::discord) async fn request_application_command_autocomplete(
+        &self,
+        interaction: &ApplicationCommandAutocompleteInteraction,
+        session_id: &str,
+    ) -> Result<()> {
+        let body = application_command_autocomplete_body(interaction, session_id);
+        self.send_unit(
+            self.raw_http
+                .post("https://discord.com/api/v9/interactions")
+                .json(&body),
+            "application command autocomplete",
         )
         .await
     }
@@ -211,7 +229,7 @@ pub(super) fn application_command_interaction_body(
             "application_command": interaction.command.raw,
             "attachments": [],
         },
-        "nonce": interaction_nonce(),
+        "nonce": interaction.nonce,
         "analytics_location": "slash_ui",
     });
     if let Some(command_guild_id) = interaction
@@ -246,12 +264,58 @@ pub(super) fn application_command_option_body(
     body
 }
 
-fn interaction_nonce() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
+pub(super) fn application_command_autocomplete_body(
+    interaction: &ApplicationCommandAutocompleteInteraction,
+    session_id: &str,
+) -> Value {
+    let mut body = json!({
+        "type": 4,
+        "application_id": interaction.command.application_id.to_string(),
+        "guild_id": interaction.guild_id.map(|guild_id| guild_id.to_string()),
+        "channel_id": interaction.channel_id.to_string(),
+        "session_id": session_id,
+        "data": {
+            "version": interaction.command.version,
+            "id": interaction.command.id.to_string(),
+            "name": interaction.command.name,
+            "type": 1,
+            "options": interaction.options.iter().map(application_command_autocomplete_option_body).collect::<Vec<_>>(),
+            "application_command": interaction.command.raw,
+        },
+        "nonce": interaction.nonce,
+        "analytics_location": "slash_ui",
+    });
+    if let Some(command_guild_id) = interaction
+        .command
+        .raw
+        .get("guild_id")
+        .and_then(Value::as_str)
+    {
+        body["data"]["guild_id"] = Value::String(command_guild_id.to_owned());
+    }
+    body
+}
 
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or_default();
-    (millis << 22).to_string()
+fn application_command_autocomplete_option_body(
+    option: &ApplicationCommandAutocompleteOption,
+) -> Value {
+    let mut body = json!({
+        "type": option.kind,
+        "name": option.name,
+    });
+    if let Some(value) = &option.value {
+        body["value"] = value.clone();
+    } else if !option.options.is_empty() {
+        body["options"] = Value::Array(
+            option
+                .options
+                .iter()
+                .map(application_command_autocomplete_option_body)
+                .collect(),
+        );
+    }
+    if option.focused {
+        body["focused"] = Value::Bool(true);
+    }
+    body
 }

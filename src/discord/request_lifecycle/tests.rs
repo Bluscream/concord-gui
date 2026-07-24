@@ -15,9 +15,9 @@ use crate::discord::test_builders::{
 };
 
 use super::{
-    ForumPostRequestTarget, ForumPostRequests, HistoryRequests, MemberBatchRequests,
-    MemberListSubscriptionRequests, MemberListSubscriptionTarget, MemberRequests,
-    MentionMemberSearchRequests, MentionMemberSearchTarget, PinnedMessageRequests,
+    APPLICATION_COMMAND_REQUEST_TTL, ForumPostRequestTarget, ForumPostRequests, HistoryRequests,
+    MemberBatchRequests, MemberListSubscriptionRequests, MemberListSubscriptionTarget,
+    MemberRequests, MentionMemberSearchRequests, MentionMemberSearchTarget, PinnedMessageRequests,
     RequestLifecycle, ThreadPreviewRequests, UserNoteRequests, UserProfileRequests,
 };
 
@@ -818,4 +818,58 @@ fn read_ack_request_debounces_and_coalesces_by_channel() {
         vec![(channel_id, Id::new(31))]
     );
     assert_eq!(requests.next_read_ack_deadline(), None);
+}
+
+#[test]
+fn application_command_results_correlate_once_before_nonce_expires() {
+    let mut requests = RequestLifecycle::default();
+    let started_at = std::time::Instant::now();
+    requests.begin_application_command("request-1".to_owned(), started_at);
+
+    let mut matched = AppEvent::InteractionFailed {
+        interaction_id: 20,
+        nonce: Some("request-1".to_owned()),
+        reason_code: 2,
+        correlated: false,
+    };
+    requests.correlate_interaction_event_at(&mut matched, started_at);
+    assert!(matches!(
+        matched,
+        AppEvent::InteractionFailed {
+            correlated: true,
+            ..
+        }
+    ));
+
+    let mut duplicate = AppEvent::InteractionSucceeded {
+        interaction_id: 20,
+        nonce: Some("request-1".to_owned()),
+        correlated: false,
+    };
+    requests.correlate_interaction_event_at(&mut duplicate, started_at);
+    assert!(matches!(
+        duplicate,
+        AppEvent::InteractionSucceeded {
+            correlated: false,
+            ..
+        }
+    ));
+
+    requests.begin_application_command("request-2".to_owned(), started_at);
+    let mut expired = AppEvent::InteractionSucceeded {
+        interaction_id: 21,
+        nonce: Some("request-2".to_owned()),
+        correlated: false,
+    };
+    requests.correlate_interaction_event_at(
+        &mut expired,
+        started_at + APPLICATION_COMMAND_REQUEST_TTL + std::time::Duration::from_millis(1),
+    );
+    assert!(matches!(
+        expired,
+        AppEvent::InteractionSucceeded {
+            correlated: false,
+            ..
+        }
+    ));
 }

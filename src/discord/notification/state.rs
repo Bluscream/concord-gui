@@ -14,6 +14,15 @@ use crate::discord::{
 use crate::discord::{MessageState, state::DiscordState};
 
 const SUPPRESS_NOTIFICATIONS_FLAG: u64 = 1 << 12;
+const USER_MENTION_ON_ALL_MESSAGES: u64 = 1 << 5;
+const CHANNEL_UNREADS_ONLY_MENTIONS: u64 = 1 << 9;
+const CHANNEL_UNREADS_ALL_MESSAGES: u64 = 1 << 10;
+const CHANNEL_OPT_IN_ENABLED: u64 = 1 << 12;
+const GUILD_UNREADS_ALL_MESSAGES: u64 = 1 << 11;
+const GUILD_UNREADS_ONLY_MENTIONS: u64 = 1 << 12;
+const GUILD_OPT_IN_CHANNELS_OFF: u64 = 1 << 13;
+const GUILD_OPT_IN_CHANNELS_ON: u64 = 1 << 14;
+pub(in crate::discord) const READ_STATE_MENTION_LOW_IMPORTANCE: u64 = 1 << 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChannelUnreadState {
@@ -27,7 +36,14 @@ pub enum ChannelUnreadState {
 pub(in crate::discord) enum MessageNotificationKind {
     None,
     Mention,
+    LowImportanceMention,
     Notify,
+}
+
+impl MessageNotificationKind {
+    const fn is_audible(self) -> bool {
+        matches!(self, Self::Mention | Self::Notify)
+    }
 }
 
 pub(in crate::discord) struct MessageNotificationInput<'a> {
@@ -46,6 +62,8 @@ struct ChannelNotificationSettingsState {
     message_notifications: Option<NotificationLevel>,
     muted: bool,
     mute_end_time: Option<String>,
+    collapsed: bool,
+    flags: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -55,11 +73,57 @@ pub(in crate::discord) struct GuildNotificationSettingsState {
     mute_end_time: Option<String>,
     suppress_everyone: bool,
     suppress_roles: bool,
+    flags: u64,
+    hide_muted_channels: bool,
+    mobile_push: bool,
+    mute_scheduled_events: bool,
+    notify_highlights: u64,
+    version: u64,
     channel_overrides: BTreeMap<Id<ChannelMarker>, ChannelNotificationSettingsState>,
 }
 
 impl DiscordState {
+    pub(in crate::discord) fn channel_visible_in_notification_settings(
+        &self,
+        channel_id: Id<ChannelMarker>,
+    ) -> bool {
+        let Some(channel) = self.navigation.channels.get(&channel_id) else {
+            return true;
+        };
+        let settings = match channel.guild_id {
+            Some(guild_id) => self.notifications.notification_settings.get(&guild_id),
+            None => self.notifications.private_notification_settings.as_ref(),
+        };
+        let Some(settings) = settings else {
+            return true;
+        };
+        if settings.hide_muted_channels
+            && self.channel_notification_muted_in_settings(settings, channel_id)
+        {
+            return false;
+        }
+        if settings.flags & GUILD_OPT_IN_CHANNELS_ON == 0
+            || settings.flags & GUILD_OPT_IN_CHANNELS_OFF != 0
+            || channel.is_category()
+        {
+            return true;
+        }
+        settings
+            .channel_overrides
+            .get(&channel_id)
+            .is_some_and(|setting| setting.flags & CHANNEL_OPT_IN_ENABLED != 0)
+            || channel.parent_id.is_some_and(|parent_id| {
+                settings
+                    .channel_overrides
+                    .get(&parent_id)
+                    .is_some_and(|setting| setting.flags & CHANNEL_OPT_IN_ENABLED != 0)
+            })
+    }
+
     pub fn channel_sidebar_unread(&self, channel_id: Id<ChannelMarker>) -> ChannelUnreadState {
+        if !self.channel_visible_in_notification_settings(channel_id) {
+            return ChannelUnreadState::Seen;
+        }
         if self
             .navigation
             .channels
@@ -161,6 +225,12 @@ impl DiscordState {
             mute_end_time: settings.and_then(|settings| settings.mute_end_time.clone()),
             suppress_everyone: settings.is_some_and(|settings| settings.suppress_everyone),
             suppress_roles: settings.is_some_and(|settings| settings.suppress_roles),
+            flags: settings.map_or(0, |settings| settings.flags),
+            hide_muted_channels: settings.is_some_and(|settings| settings.hide_muted_channels),
+            mobile_push: settings.is_none_or(|settings| settings.mobile_push),
+            mute_scheduled_events: settings.is_some_and(|settings| settings.mute_scheduled_events),
+            notify_highlights: settings.map_or(0, |settings| settings.notify_highlights),
+            version: settings.map_or(0, |settings| settings.version),
             channel_overrides: settings.map(channel_override_infos).unwrap_or_default(),
         }
     }
@@ -178,7 +248,7 @@ impl DiscordState {
             .notifications
             .read_states
             .get(&channel_id)
-            .copied()
+            .cloned()
             .unwrap_or_default();
         if read.mention_count > 0 {
             return ChannelUnreadState::Mentioned(read.mention_count);
@@ -243,7 +313,8 @@ impl DiscordState {
             mention_everyone: message.mention_everyone,
             mention_roles: &message.mention_roles,
             flags: message.flags,
-        }) != MessageNotificationKind::None
+        })
+        .is_audible()
     }
 
     pub(in crate::discord) fn upsert_notification_settings(
@@ -256,6 +327,12 @@ impl DiscordState {
             mute_end_time: settings.mute_end_time.clone(),
             suppress_everyone: settings.suppress_everyone,
             suppress_roles: settings.suppress_roles,
+            flags: settings.flags,
+            hide_muted_channels: settings.hide_muted_channels,
+            mobile_push: settings.mobile_push,
+            mute_scheduled_events: settings.mute_scheduled_events,
+            notify_highlights: settings.notify_highlights,
+            version: settings.version,
             channel_overrides: notification_override_map(&settings.channel_overrides),
         };
         if let Some(guild_id) = settings.guild_id {
@@ -336,6 +413,12 @@ impl DiscordState {
             NotificationLevel::AllMessages if mentions_current_user(settings) => {
                 MessageNotificationKind::Mention
             }
+            NotificationLevel::AllMessages
+                if self.notifications.user_notification_flags & USER_MENTION_ON_ALL_MESSAGES
+                    != 0 =>
+            {
+                MessageNotificationKind::LowImportanceMention
+            }
             NotificationLevel::AllMessages => MessageNotificationKind::Notify,
             NotificationLevel::OnlyMentions | NotificationLevel::ParentDefault => {
                 if mentions_current_user(settings) {
@@ -369,6 +452,12 @@ impl DiscordState {
             NotificationLevel::AllMessages if mentions_current_user => {
                 MessageNotificationKind::Mention
             }
+            NotificationLevel::AllMessages
+                if self.notifications.user_notification_flags & USER_MENTION_ON_ALL_MESSAGES
+                    != 0 =>
+            {
+                MessageNotificationKind::LowImportanceMention
+            }
             NotificationLevel::AllMessages => MessageNotificationKind::Notify,
             NotificationLevel::OnlyMentions | NotificationLevel::ParentDefault => {
                 if mentions_current_user {
@@ -397,7 +486,10 @@ impl DiscordState {
             .filter(|message| last_acked.is_none_or(|last_acked| message.id > last_acked))
         {
             match self.message_state_notification_kind(message) {
-                MessageNotificationKind::Mention => mentions = mentions.saturating_add(1),
+                MessageNotificationKind::Mention
+                | MessageNotificationKind::LowImportanceMention => {
+                    mentions = mentions.saturating_add(1);
+                }
                 MessageNotificationKind::Notify => notifications = notifications.saturating_add(1),
                 MessageNotificationKind::None => {}
             }
@@ -410,6 +502,16 @@ impl DiscordState {
         settings: &GuildNotificationSettingsState,
         channel_id: Id<ChannelMarker>,
     ) -> NotificationLevel {
+        if let Some(flags) = settings
+            .channel_overrides
+            .get(&channel_id)
+            .map(|setting| setting.flags)
+            .filter(|flags| {
+                *flags & (CHANNEL_UNREADS_ONLY_MENTIONS | CHANNEL_UNREADS_ALL_MESSAGES) != 0
+            })
+        {
+            return notification_level_from_channel_flags(flags);
+        }
         if let Some(level) = settings
             .channel_overrides
             .get(&channel_id)
@@ -426,10 +528,25 @@ impl DiscordState {
             && let Some(level) = settings
                 .channel_overrides
                 .get(&parent_id)
-                .and_then(|setting| setting.message_notifications)
+                .and_then(|setting| {
+                    let flags = setting.flags;
+                    if flags & (CHANNEL_UNREADS_ONLY_MENTIONS | CHANNEL_UNREADS_ALL_MESSAGES) != 0 {
+                        Some(notification_level_from_channel_flags(flags))
+                    } else {
+                        setting.message_notifications
+                    }
+                })
                 .filter(|level| *level != NotificationLevel::ParentDefault)
         {
             return level;
+        }
+
+        if settings.flags & (GUILD_UNREADS_ALL_MESSAGES | GUILD_UNREADS_ONLY_MENTIONS) != 0 {
+            return if settings.flags & GUILD_UNREADS_ALL_MESSAGES != 0 {
+                NotificationLevel::AllMessages
+            } else {
+                NotificationLevel::OnlyMentions
+            };
         }
 
         settings
@@ -497,6 +614,8 @@ fn channel_override_infos(
             message_notifications: setting.message_notifications,
             muted: setting.muted,
             mute_end_time: setting.mute_end_time.clone(),
+            collapsed: setting.collapsed,
+            flags: setting.flags,
         })
         .collect()
 }
@@ -513,6 +632,8 @@ fn notification_override_map(
                     message_notifications: override_info.message_notifications,
                     muted: override_info.muted,
                     mute_end_time: override_info.mute_end_time.clone(),
+                    collapsed: override_info.collapsed,
+                    flags: override_info.flags,
                 },
             )
         })
@@ -563,4 +684,12 @@ fn aggregate_unread_states(
 
 fn saturating_u32_count(count: usize) -> u32 {
     u32::try_from(count).unwrap_or(u32::MAX)
+}
+
+fn notification_level_from_channel_flags(flags: u64) -> NotificationLevel {
+    if flags & CHANNEL_UNREADS_ALL_MESSAGES != 0 {
+        NotificationLevel::AllMessages
+    } else {
+        NotificationLevel::OnlyMentions
+    }
 }

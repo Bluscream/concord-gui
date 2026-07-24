@@ -24,6 +24,20 @@ struct EventViewportContext {
     channel_cursor: Option<ChannelPaneCursor>,
 }
 
+fn interaction_failure_reason(reason_code: u64) -> &'static str {
+    match reason_code {
+        1 => "Discord returned an unknown interaction error",
+        2 => "the command timed out",
+        3 => "the application is unknown",
+        16 => "the activity is not released on this platform",
+        17 => "the activity failed to launch",
+        18 => "the user does not have access to the activity",
+        19 => "the activity cannot launch from this location",
+        20 => "the activity is not supported in this region",
+        _ => "Discord returned an interaction error",
+    }
+}
+
 impl EventViewportContext {
     fn capture(state: &DashboardState, event: &AppEvent) -> Self {
         // Two layered behaviours run on every event:
@@ -204,6 +218,29 @@ impl DashboardState {
                     .application_commands
                     .insert(*guild_id, commands.clone());
                 self.refresh_active_mention_query();
+            }
+            AppEvent::ApplicationCommandIndexUpdated { guild_id } => {
+                self.discord.application_commands.remove(&Some(*guild_id));
+                self.invalidate_application_command_autocomplete();
+                self.queue_application_command_load(Some(*guild_id));
+            }
+            AppEvent::InteractionFailed {
+                reason_code,
+                correlated: true,
+                ..
+            } => {
+                self.show_error_toast(
+                    format!(
+                        "Discord could not complete the application command: {}.",
+                        interaction_failure_reason(*reason_code)
+                    ),
+                    Instant::now(),
+                );
+            }
+            AppEvent::InteractionFailed { .. } => {}
+            AppEvent::InteractionSucceeded { .. } => {}
+            AppEvent::ApplicationCommandAutocompleteResponse { nonce, choices } => {
+                self.apply_application_command_autocomplete_response(nonce.as_deref(), choices);
             }
             AppEvent::AttachmentDownloadStarted {
                 id,

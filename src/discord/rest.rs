@@ -55,6 +55,7 @@ pub struct DiscordRest {
     rate_limiter: Arc<RestRateLimiter>,
     mutation_pacer: Arc<RestMutationPacer>,
     message_sends: Arc<MessageSendCoordinator>,
+    preloaded_settings: Arc<AsyncMutex<Option<Vec<u8>>>>,
 }
 
 const FORBIDDEN_CIRCUIT_THRESHOLD: u8 = 3;
@@ -66,7 +67,7 @@ const FORBIDDEN_FAILURE_WINDOW: Duration = Duration::from_secs(5 * 60);
 // many messages from retaining state for the whole application session.
 const MAX_FORBIDDEN_CIRCUITS: usize = 512;
 const REST_MUTATION_MIN_INTERVAL: Duration = Duration::from_millis(200);
-const REST_UNKNOWN_MUTATION_ROUTE_INTERVAL: Duration = Duration::from_secs(1);
+const REST_UNKNOWN_MUTATION_ROUTE_INTERVAL: Duration = Duration::from_millis(500);
 
 impl DiscordRest {
     pub(crate) fn new(
@@ -83,6 +84,7 @@ impl DiscordRest {
             rate_limiter: Arc::new(RestRateLimiter::default()),
             mutation_pacer: Arc::new(RestMutationPacer::default()),
             message_sends: Arc::new(MessageSendCoordinator::default()),
+            preloaded_settings: Arc::new(AsyncMutex::new(None)),
         }
     }
 

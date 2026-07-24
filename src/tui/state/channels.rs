@@ -522,7 +522,7 @@ impl DashboardState {
             ActiveGuildScope::Guild(guild_id) => self
                 .discord
                 .cache
-                .viewable_channels_for_guild(Some(guild_id)),
+                .sidebar_channels_for_guild(Some(guild_id)),
         }
     }
 

@@ -165,6 +165,10 @@ impl MessageKind {
         self.code == 0 || self.code == 19
     }
 
+    pub const fn is_poll_result(self) -> bool {
+        self.code == 46
+    }
+
     pub const fn known_label(self) -> Option<&'static str> {
         match self.code {
             0 => Some("Default"),

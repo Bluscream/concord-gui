@@ -1,8 +1,10 @@
 use super::{
     ConnectionOutcome, GATEWAY_SEND_LIMIT, GATEWAY_SEND_WINDOW, GATEWAY_WEBSOCKET_LIMIT,
-    GatewayCommand, GatewaySendWindow, GatewaySender, HeartbeatAckState, SessionState,
-    SubscriptionDeduper, USER_ACCOUNT_CAPABILITIES, build_identify_payload, build_resume_payload,
-    close_code_outcome, direct_message_subscribe_payload, dispatch_command,
+    GUILD_MEMBER_REQUEST_INTERVAL, GatewayCommand, GatewayPresence, GatewaySendWindow,
+    GatewaySender, GatewaySessionResources, GuildMemberRequestKind, GuildMemberRequestLimiter,
+    GuildMemberRequestScheduler, HeartbeatAckState, MAX_PENDING_GUILD_MEMBER_REQUESTS,
+    SessionState, SubscriptionDeduper, USER_ACCOUNT_CAPABILITIES, build_identify_payload,
+    build_resume_payload, close_code_outcome, direct_message_subscribe_payload, dispatch_command,
     gateway_guild_member_rate_limit, gateway_request, gateway_websocket_config,
     guild_channel_subscribe_payload, presence_update_payload, ready_installation_id,
     request_guild_members_by_ids_payload, request_guild_members_payload,
@@ -57,20 +59,38 @@ fn gateway_rate_limit_covers_connection_window_and_parses_member_retry() {
         "d": {
             "opcode": 8,
             "retry_after": 45.0,
-            "meta": { "guild_id": "10" }
+            "meta": {
+                "guild_id": "10",
+                "nonce": "member-request"
+            }
         }
     });
-    let (limited_guild_id, retry_after) =
+    let rate_limit =
         gateway_guild_member_rate_limit(&rate_limited).expect("rate limit should parse");
-    assert_eq!(limited_guild_id, guild_id);
-    assert_eq!(retry_after, Duration::from_secs(45));
+    assert_eq!(rate_limit.guild_id, guild_id);
+    assert_eq!(rate_limit.nonce.as_deref(), Some("member-request"));
+    assert_eq!(rate_limit.retry_after, Duration::from_secs(45));
+
+    let now = Instant::now();
+    let mut limiter = GuildMemberRequestLimiter::default();
+    assert_eq!(limiter.reserve(guild_id, now), Duration::ZERO);
+    assert_eq!(
+        limiter.reserve(guild_id, now),
+        GUILD_MEMBER_REQUEST_INTERVAL
+    );
+    assert_eq!(
+        limiter.reserve(Id::new(11), now),
+        Duration::ZERO,
+        "Opcode 8 cooldowns are isolated per guild"
+    );
 
     let (urgent_tx, _urgent_rx) = tokio::sync::mpsc::unbounded_channel();
-    let (normal_tx, mut normal_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (normal_tx, _normal_rx) = tokio::sync::mpsc::unbounded_channel();
     let sender = GatewaySender {
         urgent_tx,
         normal_tx,
     };
+    let mut resources = GatewaySessionResources::default();
     dispatch_command(
         &sender,
         GatewayCommand::RequestGuildMembers {
@@ -81,14 +101,210 @@ fn gateway_rate_limit_covers_connection_window_and_parses_member_retry() {
             nonce: None,
         },
         &mut SubscriptionDeduper::default(),
+        &mut resources,
     )
-    .expect("ordinary guild member search should enqueue immediately");
-    let request = normal_rx
-        .try_recv()
-        .expect("ordinary guild member search should not wait for a guild cooldown");
-    let payload: serde_json::Value =
-        serde_json::from_str(&request.payload).expect("gateway payload should be valid json");
+    .expect("ordinary guild member search should enter the session queue");
+    let request = resources
+        .guild_member_requests
+        .pending
+        .front()
+        .expect("ordinary guild member search should be retained by the session");
+    let payload: serde_json::Value = serde_json::from_str(&request.request.payload())
+        .expect("gateway payload should be valid json");
     assert_eq!(payload["op"].as_u64(), Some(8));
+}
+
+#[test]
+fn guild_member_rate_limit_requeues_the_correlated_request() {
+    let now = Instant::now();
+    let guild_id = Id::new(99);
+    let mut scheduler = GuildMemberRequestScheduler::default();
+    assert!(scheduler.enqueue_search(
+        guild_id,
+        "neo".to_owned(),
+        10,
+        false,
+        Some("member-request".to_owned()),
+        now,
+    ));
+    scheduler
+        .start_due(now)
+        .expect("the queued request should be due");
+    scheduler.complete_send(now);
+
+    scheduler.apply_rate_limit(
+        guild_id,
+        Some("member-request"),
+        Duration::from_secs(45),
+        now,
+    );
+
+    let retried = scheduler
+        .pending
+        .front()
+        .expect("the rate-limited request should be requeued");
+    assert_eq!(retried.request.nonce, "member-request");
+    assert_eq!(retried.send_at, now + Duration::from_secs(45));
+    assert!(scheduler.awaiting_response.is_empty());
+}
+
+#[test]
+fn guild_member_requests_survive_resume_and_reidentify() {
+    let now = Instant::now();
+    let guild_id = Id::new(99);
+    let mut scheduler = GuildMemberRequestScheduler::default();
+    assert!(scheduler.enqueue_search(
+        guild_id,
+        "neo".to_owned(),
+        10,
+        false,
+        Some("member-request".to_owned()),
+        now,
+    ));
+
+    scheduler
+        .start_due(now)
+        .expect("the queued request should start sending");
+    let disconnected_at = now + Duration::from_secs(1);
+    scheduler.cancel_in_flight(disconnected_at);
+    let resumed = scheduler
+        .pending
+        .front()
+        .expect("an unfinished send should return to the session queue");
+    assert_eq!(resumed.request.nonce, "member-request");
+    assert_eq!(
+        resumed.send_at,
+        disconnected_at + GUILD_MEMBER_REQUEST_INTERVAL
+    );
+    let resumed_at = resumed.send_at;
+
+    scheduler
+        .start_due(resumed_at)
+        .expect("the resumed request should send after its session cooldown");
+    scheduler.complete_send(resumed_at);
+    assert_eq!(scheduler.awaiting_response.len(), 1);
+
+    let written_disconnect_at = resumed_at + Duration::from_secs(1);
+    scheduler.prepare_reconnect(written_disconnect_at);
+    assert!(scheduler.awaiting_response.is_empty());
+    let written_retry = scheduler
+        .pending
+        .front()
+        .expect("a written request without a response should retry after reconnect");
+    assert_eq!(written_retry.request.nonce, "member-request");
+    assert_eq!(
+        written_retry.send_at,
+        written_disconnect_at + GUILD_MEMBER_REQUEST_INTERVAL
+    );
+
+    scheduler.acknowledge("member-request");
+    assert!(
+        scheduler.pending.is_empty(),
+        "a replayed chunk should cancel the scheduled retry"
+    );
+
+    assert!(scheduler.enqueue_search(
+        guild_id,
+        "next".to_owned(),
+        10,
+        false,
+        Some("member-request-2".to_owned()),
+        written_disconnect_at,
+    ));
+    let next_send_at = scheduler
+        .pending
+        .front()
+        .expect("the next request should be queued")
+        .send_at;
+    scheduler
+        .start_due(next_send_at)
+        .expect("the next request should start sending");
+    scheduler.complete_send(next_send_at);
+    let reidentified_at = next_send_at + Duration::from_secs(1);
+    scheduler.start_new_session(reidentified_at);
+    assert!(scheduler.awaiting_response.is_empty());
+    let reidentified = scheduler
+        .pending
+        .front()
+        .expect("an unresolved response should retry in the new session");
+    assert_eq!(reidentified.request.nonce, "member-request-2");
+    assert_eq!(reidentified.send_at, reidentified_at);
+}
+
+#[test]
+fn guild_member_queue_coalesces_searches_and_merges_id_hydration() {
+    let now = Instant::now();
+    let guild_id = Id::new(99);
+    let mut scheduler = GuildMemberRequestScheduler::default();
+
+    assert!(scheduler.enqueue_search(
+        guild_id,
+        "ne".to_owned(),
+        10,
+        false,
+        Some("search-1".to_owned()),
+        now,
+    ));
+    assert!(scheduler.enqueue_search(
+        guild_id,
+        "neo".to_owned(),
+        10,
+        false,
+        Some("search-2".to_owned()),
+        now,
+    ));
+    assert_eq!(scheduler.pending.len(), 1);
+    assert_eq!(scheduler.pending[0].request.nonce, "search-2");
+
+    scheduler.enqueue_by_ids(guild_id, vec![Id::new(1), Id::new(2)], false, now);
+    scheduler.enqueue_by_ids(guild_id, vec![Id::new(2), Id::new(3)], false, now);
+    assert_eq!(scheduler.pending.len(), 2);
+    let GuildMemberRequestKind::ByIds { user_ids, .. } = &scheduler.pending[1].request.kind else {
+        panic!("second request should hydrate member ids");
+    };
+    assert_eq!(user_ids, &[Id::new(1), Id::new(2), Id::new(3)]);
+}
+
+#[test]
+fn guild_member_id_hydration_displaces_searches_instead_of_dropping_ids() {
+    let now = Instant::now();
+    let guild_id = Id::new(99);
+    let mut scheduler = GuildMemberRequestScheduler::default();
+    scheduler.enqueue_by_ids(guild_id, (1..=99).map(Id::new).collect(), false, now);
+    for index in 0..MAX_PENDING_GUILD_MEMBER_REQUESTS - 1 {
+        assert!(scheduler.enqueue_search(
+            Id::new(1_000 + index as u64),
+            format!("member-{index}"),
+            10,
+            true,
+            None,
+            now,
+        ));
+    }
+
+    scheduler.enqueue_by_ids(guild_id, vec![Id::new(1_000), Id::new(1_001)], false, now);
+
+    let hydrated_user_ids = scheduler
+        .pending
+        .iter()
+        .filter_map(|pending| match &pending.request.kind {
+            GuildMemberRequestKind::ByIds { user_ids, .. } => Some(user_ids.as_slice()),
+            GuildMemberRequestKind::Search { .. } => None,
+        })
+        .flatten()
+        .copied()
+        .collect::<Vec<_>>();
+    assert!(hydrated_user_ids.contains(&Id::new(1_000)));
+    assert!(hydrated_user_ids.contains(&Id::new(1_001)));
+    assert_eq!(scheduler.pending.len(), MAX_PENDING_GUILD_MEMBER_REQUESTS);
+    assert_eq!(
+        scheduler
+            .pending
+            .iter()
+            .filter(|pending| matches!(pending.request.kind, GuildMemberRequestKind::Search { .. }))
+            .count(),
+        MAX_PENDING_GUILD_MEMBER_REQUESTS - 2
+    );
 }
 
 #[test]
@@ -131,7 +347,7 @@ fn identify_payload_carries_user_account_capabilities() {
     let fingerprint = ClientFingerprint::new(CLIENT_BUILD_NUMBER);
     fingerprint.set_installation_id_for_test("installation-id");
     let payload: serde_json::Value =
-        serde_json::from_str(&build_identify_payload("dummy-token", &fingerprint))
+        serde_json::from_str(&build_identify_payload("dummy-token", &fingerprint, None))
             .expect("identify payload should be valid json");
     assert_eq!(payload["op"].as_u64(), Some(2));
     assert_eq!(
@@ -179,7 +395,7 @@ fn identify_payload_carries_user_account_capabilities() {
         Some("installation-id")
     );
     assert_eq!(payload["d"]["compress"].as_bool(), Some(false));
-    assert_eq!(payload["d"]["presence"]["status"].as_str(), Some("online"));
+    assert_eq!(payload["d"]["presence"]["status"].as_str(), Some("unknown"));
     assert_eq!(
         ready_installation_id(&json!({
             "apex_experiments": {
@@ -187,6 +403,28 @@ fn identify_payload_carries_user_account_capabilities() {
             }
         })),
         Some("ready-installation-id")
+    );
+}
+
+#[test]
+fn reidentify_payload_uses_the_last_requested_presence() {
+    let fingerprint = ClientFingerprint::new(CLIENT_BUILD_NUMBER);
+    let presence = GatewayPresence {
+        status: PresenceStatus::Online,
+        activities: vec![ActivityInfo::playing("Concord")],
+    };
+
+    let payload: serde_json::Value = serde_json::from_str(&build_identify_payload(
+        "dummy-token",
+        &fingerprint,
+        Some(&presence),
+    ))
+    .expect("reidentify payload should be valid json");
+
+    assert_eq!(payload["d"]["presence"]["status"].as_str(), Some("online"));
+    assert_eq!(
+        payload["d"]["presence"]["activities"][0]["name"].as_str(),
+        Some("Concord")
     );
 }
 
@@ -381,6 +619,7 @@ fn request_guild_members_by_ids_payload_matches_web_shape() {
         Id::<GuildMarker>::new(10),
         &[Id::<UserMarker>::new(20), Id::<UserMarker>::new(30)],
         false,
+        "member-request",
     ))
     .expect("payload should be valid json");
 
@@ -391,7 +630,8 @@ fn request_guild_members_by_ids_payload_matches_web_shape() {
             "d": {
                 "guild_id": "10",
                 "user_ids": ["20", "30"],
-                "presences": false
+                "presences": false,
+                "nonce": "member-request"
             }
         })
     );

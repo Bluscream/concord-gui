@@ -179,6 +179,14 @@ pub(super) async fn handle(client: DiscordClient, command: AppCommand) {
                 publish_app_error(&client, "run application command failed", &error).await;
             }
         }
+        AppCommand::RequestApplicationCommandAutocomplete { invocation } => {
+            if let Err(error) = client
+                .request_application_command_autocomplete(&invocation)
+                .await
+            {
+                log_app_error("application command autocomplete failed", &error);
+            }
+        }
         AppCommand::EditMessage {
             channel_id,
             message_id,

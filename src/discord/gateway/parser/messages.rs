@@ -753,7 +753,9 @@ pub(super) fn parse_message_ack(data: &Value) -> Option<AppEvent> {
         mention_count: data
             .get("mention_count")
             .and_then(Value::as_u64)
-            .unwrap_or(0) as u32,
+            .and_then(|count| u32::try_from(count).ok()),
+        flags: data.get("flags").and_then(Value::as_u64),
+        last_viewed: data.get("last_viewed").and_then(Value::as_u64),
     })
 }
 

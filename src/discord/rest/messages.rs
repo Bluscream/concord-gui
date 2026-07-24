@@ -274,18 +274,36 @@ impl DiscordRest {
         &self,
         channel_id: Id<ChannelMarker>,
     ) -> Result<Vec<MessageInfo>> {
-        let raw: Value = self
-            .send_json(
-                self.raw_http
-                    .get(format!(
-                        "https://discord.com/api/v9/channels/{}/messages/pins",
-                        channel_id.get()
-                    ))
-                    .query(&[("limit", "50")]),
-                "pins",
-            )
-            .await?;
-        parse_pinned_messages_response(&raw).map(|response| response.messages)
+        let endpoint = format!(
+            "https://discord.com/api/v9/channels/{}/messages/pins",
+            channel_id.get()
+        );
+        let mut before = None;
+        let mut messages = Vec::new();
+
+        loop {
+            let mut request = self.raw_http.get(&endpoint).query(&[("limit", "50")]);
+            if let Some(before) = before.as_deref() {
+                request = request.query(&[("before", before)]);
+            }
+            let raw: Value = self.send_json(request, "pins").await?;
+            let page = parse_pinned_messages_response(&raw)?;
+            messages.extend(page.messages);
+            if !page.has_more {
+                return Ok(messages);
+            }
+            let next_before = page.next_before.ok_or_else(|| {
+                AppError::DiscordRequest(
+                    "pins response has more pages but no pinned timestamp".to_owned(),
+                )
+            })?;
+            if before.as_deref() == Some(next_before.as_str()) {
+                return Err(AppError::DiscordRequest(
+                    "pins response did not advance its cursor".to_owned(),
+                ));
+            }
+            before = Some(next_before);
+        }
     }
 
     pub async fn set_message_pinned(
@@ -342,6 +360,8 @@ fn recent_mention_delete_request(
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct PinnedMessagesResponse {
     pub(super) messages: Vec<MessageInfo>,
+    pub(super) has_more: bool,
+    pub(super) next_before: Option<String>,
     pub(super) raw_items: Vec<Value>,
     pub(super) extra_fields: std::collections::BTreeMap<String, Value>,
 }
@@ -359,6 +379,11 @@ pub(super) struct MessageListResponse {
 }
 
 pub(super) fn parse_pinned_messages_response(raw: &Value) -> Result<PinnedMessagesResponse> {
+    let raw_items = match raw {
+        Value::Array(_) => clone_array(Some(raw)),
+        Value::Object(_) => clone_array(raw.get("items")),
+        _ => Vec::new(),
+    };
     let messages: Vec<&Value> = match raw {
         Value::Array(items) => items.iter().collect(),
         Value::Object(object) => object
@@ -383,12 +408,17 @@ pub(super) fn parse_pinned_messages_response(raw: &Value) -> Result<PinnedMessag
         .collect::<Result<Vec<_>>>()?;
     Ok(PinnedMessagesResponse {
         messages,
-        raw_items: match raw {
-            Value::Array(_) => clone_array(Some(raw)),
-            Value::Object(_) => clone_array(raw.get("items")),
-            _ => Vec::new(),
-        },
-        extra_fields: extra_fields(raw, &["items"]),
+        has_more: raw
+            .get("has_more")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        next_before: raw_items
+            .last()
+            .and_then(|item| item.get("pinned_at"))
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        raw_items,
+        extra_fields: extra_fields(raw, &["items", "has_more"]),
     })
 }
 

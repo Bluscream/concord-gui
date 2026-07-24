@@ -1,6 +1,9 @@
 use std::time::Instant;
 
-use super::{DiscordClient, DueMemberListSubscription, MemberListSubscriptionRequest};
+use super::{
+    AppEventPublisher, DiscordClient, DueMemberListSubscription, MemberListSubscriptionRequest,
+    publish_app_event,
+};
 use crate::discord::{
     commands::{AppCommand, ForumPostArchiveState, MessageHistoryAfterMode},
     events::AppEvent,
@@ -11,19 +14,45 @@ use crate::discord::{
     request_lifecycle::{
         ForumPostRequestTarget, MemberListSubscriptionTarget, MentionMemberSearchTarget,
     },
+    voice,
 };
 
-impl DiscordClient {
-    pub(crate) fn record_request_lifecycle_event(&self, event: &AppEvent) {
-        if let AppEvent::ApplicationCommandsLoaded { guild_id, .. } = event {
-            self.record_application_commands_loaded(*guild_id);
-        }
-        self.request_lifecycle
-            .lock()
-            .expect("request lifecycle lock is not poisoned")
-            .record_event(event);
+impl AppEventPublisher {
+    pub(crate) async fn publish(&self, mut event: AppEvent) {
+        self.prepare(&mut event);
+        publish_app_event(
+            &self.effects_tx,
+            &self.snapshots_tx,
+            &self.state,
+            &self.revision,
+            &self.publish_lock,
+            &event,
+        )
+        .await;
+        voice::forward_app_event(&self.voice_events_tx, &event);
     }
 
+    fn prepare(&self, event: &mut AppEvent) {
+        if let AppEvent::ApplicationCommandIndexUpdated { guild_id } = event {
+            self.application_commands
+                .lock()
+                .expect("application command cache lock is not poisoned")
+                .remove(&Some(*guild_id));
+            self.application_command_requests
+                .lock()
+                .expect("application command request lock is not poisoned")
+                .remove(&Some(*guild_id));
+        }
+        let mut requests = self
+            .request_lifecycle
+            .lock()
+            .expect("request lifecycle lock is not poisoned");
+        requests.correlate_interaction_event(event);
+        requests.record_event(event);
+    }
+}
+
+impl DiscordClient {
     pub(crate) fn next_message_history_request(
         &self,
         channel_id: Option<Id<ChannelMarker>>,
@@ -313,10 +342,17 @@ impl DiscordClient {
         channel_id: Id<ChannelMarker>,
         message_id: Id<MessageMarker>,
     ) {
+        let (flags, last_viewed) = self
+            .state
+            .read()
+            .expect("discord state lock is not poisoned")
+            .channel_ack_metadata(channel_id);
         self.publish_event(AppEvent::MessageAck {
             channel_id,
             message_id,
-            mention_count: 0,
+            mention_count: Some(0),
+            flags,
+            last_viewed: Some(last_viewed),
         })
         .await;
     }

@@ -219,6 +219,19 @@ impl DiscordState {
             .collect()
     }
 
+    /// Channels shown in the main channel sidebar. Notification settings can
+    /// hide muted or non-opted-in channels there, but they must not affect
+    /// permission checks, search, composer completion, or subscriptions.
+    pub fn sidebar_channels_for_guild(
+        &self,
+        guild_id: Option<Id<GuildMarker>>,
+    ) -> Vec<&ChannelState> {
+        self.viewable_channels_for_guild(guild_id)
+            .into_iter()
+            .filter(|channel| self.channel_visible_in_notification_settings(channel.id))
+            .collect()
+    }
+
     /// Visible/hidden channel counts for a guild scope. DM scope reports
     /// `(visible, 0)` since DMs are never hidden. Threads are excluded from
     /// both sides. The debug-panel readout focuses on top-level channels

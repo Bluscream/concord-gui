@@ -116,11 +116,15 @@ pub(in crate::discord) struct SessionState {
     pub(in crate::discord) current_user_mfa_enabled: Option<bool>,
     pub(in crate::discord) selected_message_channel_known: bool,
     pub(in crate::discord) selected_message_channel_id: Option<Id<ChannelMarker>>,
+    pub(in crate::discord) ready_users:
+        BTreeMap<Id<UserMarker>, crate::discord::ChannelRecipientInfo>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub(in crate::discord) struct NotificationCache {
     pub(in crate::discord) read_states: BTreeMap<Id<ChannelMarker>, ChannelReadState>,
+    pub(in crate::discord) non_channel_read_states: BTreeMap<(u8, u64), NonChannelReadState>,
+    pub(in crate::discord) user_notification_flags: u64,
     pub(in crate::discord) notification_settings:
         BTreeMap<Id<GuildMarker>, GuildNotificationSettingsState>,
     pub(in crate::discord) private_notification_settings: Option<GuildNotificationSettingsState>,

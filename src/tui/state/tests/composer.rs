@@ -5,8 +5,9 @@ use crate::discord::test_builders::{
     typing_start_event,
 };
 use crate::discord::{
-    ApplicationCommandInfo, ApplicationCommandOptionInfo, GuildParticipationBlock,
-    GuildParticipationRestriction, GuildVerificationLevel, MessageAttachmentUpload,
+    ApplicationCommandChoiceInfo, ApplicationCommandInfo, ApplicationCommandOptionInfo,
+    GuildParticipationBlock, GuildParticipationRestriction, GuildVerificationLevel,
+    MessageAttachmentUpload,
 };
 use crate::tui::keybindings::ScrollAction;
 use crate::tui::state::{ActiveModalPopupKind, ForumPostComposerField, LocalUploadPreviewView};
@@ -851,6 +852,147 @@ fn start_composer_queues_application_command_load_when_missing() {
             guild_id: Some(Id::new(1)),
         }]
     );
+}
+
+#[test]
+fn application_command_autocomplete_response_updates_the_picker() {
+    let command = application_command(
+        "search",
+        vec![ApplicationCommandOptionInfo {
+            autocomplete: true,
+            ..application_command_option(3, "query", true, Vec::new())
+        }],
+    );
+    let mut state = state_with_application_command(command);
+
+    type_composer_text(&mut state, "/search query:ne");
+    let requests = state
+        .drain_pending_commands()
+        .into_iter()
+        .filter_map(|command| match command {
+            AppCommand::RequestApplicationCommandAutocomplete { invocation } => Some(invocation),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let request = requests
+        .last()
+        .expect("typing an autocomplete option should queue a request");
+    assert_eq!(request.focused_option_name, "query");
+    assert_eq!(request.content, "/search query:ne");
+
+    state.push_event(AppEvent::ApplicationCommandAutocompleteResponse {
+        nonce: Some(request.nonce.clone()),
+        choices: vec![
+            ApplicationCommandChoiceInfo {
+                name: "Neo".to_owned(),
+                value: json!("neo"),
+            },
+            ApplicationCommandChoiceInfo {
+                name: "Next".to_owned(),
+                value: json!("next"),
+            },
+        ],
+    });
+
+    assert_eq!(
+        state
+            .composer_command_candidates()
+            .into_iter()
+            .map(|candidate| candidate.label)
+            .collect::<Vec<_>>(),
+        ["Neo", "Next"]
+    );
+
+    state.push_event(AppEvent::ApplicationCommandAutocompleteResponse {
+        nonce: Some("stale".to_owned()),
+        choices: vec![ApplicationCommandChoiceInfo {
+            name: "Stale".to_owned(),
+            value: json!("stale"),
+        }],
+    });
+    assert_eq!(
+        state
+            .composer_command_candidates()
+            .into_iter()
+            .map(|candidate| candidate.label)
+            .collect::<Vec<_>>(),
+        ["Neo", "Next"]
+    );
+}
+
+#[test]
+fn application_command_index_update_discards_stale_autocomplete_state() {
+    let command = application_command(
+        "search",
+        vec![ApplicationCommandOptionInfo {
+            autocomplete: true,
+            ..application_command_option(3, "query", true, Vec::new())
+        }],
+    );
+    let mut state = state_with_application_command(command);
+
+    type_composer_text(&mut state, "/search query:ne");
+    let request = state
+        .drain_pending_commands()
+        .into_iter()
+        .filter_map(|command| match command {
+            AppCommand::RequestApplicationCommandAutocomplete { invocation } => Some(invocation),
+            _ => None,
+        })
+        .next_back()
+        .expect("typing an autocomplete option should queue a request");
+    state.push_event(AppEvent::ApplicationCommandAutocompleteResponse {
+        nonce: Some(request.nonce.clone()),
+        choices: vec![ApplicationCommandChoiceInfo {
+            name: "Neo".to_owned(),
+            value: json!("neo"),
+        }],
+    });
+    assert_eq!(state.composer_command_candidates().len(), 1);
+
+    state.push_event(AppEvent::ApplicationCommandIndexUpdated {
+        guild_id: Id::new(1),
+    });
+    assert!(state.composer_command_candidates().is_empty());
+    assert_eq!(
+        state.drain_pending_commands(),
+        vec![AppCommand::LoadApplicationCommands {
+            guild_id: Some(Id::new(1)),
+        }]
+    );
+
+    state.push_event(AppEvent::ApplicationCommandAutocompleteResponse {
+        nonce: Some(request.nonce),
+        choices: vec![ApplicationCommandChoiceInfo {
+            name: "Stale".to_owned(),
+            value: json!("stale"),
+        }],
+    });
+    assert!(state.composer_command_candidates().is_empty());
+
+    let mut refreshed = application_command(
+        "search",
+        vec![ApplicationCommandOptionInfo {
+            autocomplete: true,
+            ..application_command_option(3, "query", true, Vec::new())
+        }],
+    );
+    refreshed.version = "2".to_owned();
+    refreshed.raw["version"] = json!("2");
+    state.push_event(AppEvent::ApplicationCommandsLoaded {
+        guild_id: Some(Id::new(1)),
+        commands: vec![refreshed],
+    });
+
+    let refreshed_request = state
+        .drain_pending_commands()
+        .into_iter()
+        .find_map(|command| match command {
+            AppCommand::RequestApplicationCommandAutocomplete { invocation } => Some(invocation),
+            _ => None,
+        })
+        .expect("the refreshed command version should queue a new autocomplete request");
+    assert_eq!(refreshed_request.command_version, "2");
 }
 
 #[test]

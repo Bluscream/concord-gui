@@ -7,19 +7,19 @@ use crate::discord::ids::{
     marker::{ChannelMarker, GuildMarker, MessageMarker, RoleMarker, UserMarker},
 };
 
-use super::ApplicationCommandInfo;
 use super::commands::{
     AttachmentDownloadId, DownloadAttachmentSource, ForumPostArchiveState, MediaPlaybackRequestId,
     MessageHistoryAfterMode, MessageSearchPage, MessageSearchQuery, ReactionEmoji,
 };
 use super::{
-    ActivityInfo, AttachmentUpdate, ChannelInfo, CustomEmojiInfo, EmbedInfo, GuildBoostTier,
-    GuildNotificationSettingsInfo, GuildOnboardingInfo, GuildVerificationLevel, MemberInfo,
-    MentionInfo, MessageInfo, PollInfo, PremiumTier, PresenceStatus, ReactionUserInfo,
+    ActivityInfo, AttachmentUpdate, ChannelInfo, ChannelRecipientInfo, CustomEmojiInfo, EmbedInfo,
+    GuildBoostTier, GuildNotificationSettingsInfo, GuildOnboardingInfo, GuildVerificationLevel,
+    MemberInfo, MentionInfo, MessageInfo, PollInfo, PremiumTier, PresenceStatus, ReactionUserInfo,
     ReadStateInfo, RelationshipInfo, RoleInfo, SnapshotAreas, UserProfileInfo, UserSettingsInfo,
     VoiceConnectionStatus, VoiceScope, VoiceServerInfo, VoiceSoundKind, VoiceStateInfo,
     is_thread_kind,
 };
+use super::{ApplicationCommandChoiceInfo, ApplicationCommandInfo};
 
 #[cfg(test)]
 use super::PollAnswerInfo;
@@ -28,6 +28,13 @@ use super::PollAnswerInfo;
 pub struct GatewayDispatchInfo {
     pub event_type: String,
     pub payload: Value,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChannelUnreadInfo {
+    pub channel_id: Id<ChannelMarker>,
+    pub last_message_id: Option<Option<Id<MessageMarker>>>,
+    pub last_pin_timestamp: Option<Option<String>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -143,6 +150,9 @@ pub enum AppEvent {
         user: String,
         user_id: Option<Id<UserMarker>>,
     },
+    ReadyUserDirectory {
+        users: Vec<ChannelRecipientInfo>,
+    },
     SignedOut,
     CurrentUserCapabilities {
         premium_tier: PremiumTier,
@@ -162,6 +172,24 @@ pub enum AppEvent {
     ApplicationCommandsLoaded {
         guild_id: Option<Id<GuildMarker>>,
         commands: Vec<ApplicationCommandInfo>,
+    },
+    ApplicationCommandIndexUpdated {
+        guild_id: Id<GuildMarker>,
+    },
+    InteractionSucceeded {
+        interaction_id: u64,
+        nonce: Option<String>,
+        correlated: bool,
+    },
+    InteractionFailed {
+        interaction_id: u64,
+        nonce: Option<String>,
+        reason_code: u64,
+        correlated: bool,
+    },
+    ApplicationCommandAutocompleteResponse {
+        nonce: Option<String>,
+        choices: Vec<ApplicationCommandChoiceInfo>,
     },
     GuildCreate {
         guild_id: Id<GuildMarker>,
@@ -220,6 +248,9 @@ pub enum AppEvent {
     GuildDelete {
         guild_id: Id<GuildMarker>,
     },
+    GuildUnavailable {
+        guild_id: Id<GuildMarker>,
+    },
     SelectedGuildChanged {
         guild_id: Option<Id<GuildMarker>>,
     },
@@ -227,6 +258,10 @@ pub enum AppEvent {
         channel_id: Option<Id<ChannelMarker>>,
     },
     ChannelUpsert(ChannelInfo),
+    LazyPrivateChannelUpsert {
+        channel: ChannelInfo,
+        recipient_ids: Vec<Id<UserMarker>>,
+    },
     ChannelDelete {
         guild_id: Option<Id<GuildMarker>>,
         channel_id: Id<ChannelMarker>,
@@ -489,6 +524,9 @@ pub enum AppEvent {
     UserSettingsUpdate {
         settings: UserSettingsInfo,
     },
+    UserNotificationSettingsUpdate {
+        flags: u64,
+    },
     UserGuildSettingsInit {
         settings: Vec<UserGuildSettingsInfo>,
     },
@@ -583,7 +621,24 @@ pub enum AppEvent {
     MessageAck {
         channel_id: Id<ChannelMarker>,
         message_id: Id<MessageMarker>,
-        mention_count: u32,
+        mention_count: Option<u32>,
+        flags: Option<u64>,
+        last_viewed: Option<u64>,
+    },
+    FeatureReadStateAck {
+        read_state_type: u8,
+        resource_id: u64,
+        entity_id: u64,
+        version: u64,
+    },
+    ChannelPinsAck {
+        channel_id: Id<ChannelMarker>,
+        timestamp: String,
+        version: u64,
+    },
+    ChannelUnreadUpdate {
+        guild_id: Id<GuildMarker>,
+        channels: Vec<ChannelUnreadInfo>,
     },
     GatewayResumed,
     GatewayReidentified,
@@ -616,11 +671,16 @@ macro_rules! define_app_event_kinds {
 define_app_event_kinds! {
     GatewayDispatchReceived: AppEvent::GatewayDispatchReceived { .. },
     Ready: AppEvent::Ready { .. },
+    ReadyUserDirectory: AppEvent::ReadyUserDirectory { .. },
     SignedOut: AppEvent::SignedOut,
     CurrentUserCapabilities: AppEvent::CurrentUserCapabilities { .. },
     CurrentUserVerification: AppEvent::CurrentUserVerification { .. },
     UserIdentityUpdate: AppEvent::UserIdentityUpdate { .. },
     ApplicationCommandsLoaded: AppEvent::ApplicationCommandsLoaded { .. },
+    ApplicationCommandIndexUpdated: AppEvent::ApplicationCommandIndexUpdated { .. },
+    InteractionSucceeded: AppEvent::InteractionSucceeded { .. },
+    InteractionFailed: AppEvent::InteractionFailed { .. },
+    ApplicationCommandAutocompleteResponse: AppEvent::ApplicationCommandAutocompleteResponse { .. },
     GuildCreate: AppEvent::GuildCreate { .. },
     GuildUpdate: AppEvent::GuildUpdate { .. },
     GuildOnboardingUpdate: AppEvent::GuildOnboardingUpdate { .. },
@@ -629,9 +689,11 @@ define_app_event_kinds! {
     GuildRoleDelete: AppEvent::GuildRoleDelete { .. },
     GuildEmojisUpdate: AppEvent::GuildEmojisUpdate { .. },
     GuildDelete: AppEvent::GuildDelete { .. },
+    GuildUnavailable: AppEvent::GuildUnavailable { .. },
     SelectedGuildChanged: AppEvent::SelectedGuildChanged { .. },
     SelectedMessageChannelChanged: AppEvent::SelectedMessageChannelChanged { .. },
     ChannelUpsert: AppEvent::ChannelUpsert(_),
+    LazyPrivateChannelUpsert: AppEvent::LazyPrivateChannelUpsert { .. },
     ChannelDelete: AppEvent::ChannelDelete { .. },
     ThreadListSync: AppEvent::ThreadListSync { .. },
     ThreadMembersUpdateDispatch: AppEvent::ThreadMembersUpdateDispatch { .. },
@@ -688,6 +750,7 @@ define_app_event_kinds! {
     ReactionUsersLoaded: AppEvent::ReactionUsersLoaded { .. },
     ReactionUsersLoadFailed: AppEvent::ReactionUsersLoadFailed { .. },
     UserSettingsUpdate: AppEvent::UserSettingsUpdate { .. },
+    UserNotificationSettingsUpdate: AppEvent::UserNotificationSettingsUpdate { .. },
     UserGuildSettingsInit: AppEvent::UserGuildSettingsInit { .. },
     UserGuildSettingsUpdate: AppEvent::UserGuildSettingsUpdate { .. },
     GatewayError: AppEvent::GatewayError { .. },
@@ -711,6 +774,9 @@ define_app_event_kinds! {
     ActivateChannel: AppEvent::ActivateChannel { .. },
     ReadStateInit: AppEvent::ReadStateInit { .. },
     MessageAck: AppEvent::MessageAck { .. },
+    FeatureReadStateAck: AppEvent::FeatureReadStateAck { .. },
+    ChannelPinsAck: AppEvent::ChannelPinsAck { .. },
+    ChannelUnreadUpdate: AppEvent::ChannelUnreadUpdate { .. },
     GatewayResumed: AppEvent::GatewayResumed,
     GatewayReidentified: AppEvent::GatewayReidentified,
     GatewayClosed: AppEvent::GatewayClosed,
@@ -1166,7 +1232,9 @@ pub(crate) mod test_builders {
         AppEvent::MessageAck {
             channel_id: f.channel_id,
             message_id: f.message_id,
-            mention_count: f.mention_count,
+            mention_count: Some(f.mention_count),
+            flags: None,
+            last_viewed: None,
         }
     }
 
@@ -1615,6 +1683,7 @@ impl AppEventKind {
             | AppEventKind::ThreadListSync
             | AppEventKind::ThreadMembersUpdateDispatch
             | AppEventKind::ChannelUpsert
+            | AppEventKind::LazyPrivateChannelUpsert
             | AppEventKind::Ready => AppEventMetadata::mutating(SnapshotAreas::navigation()),
 
             AppEventKind::ForumPostsLoaded => {
@@ -1643,11 +1712,14 @@ impl AppEventKind {
             | AppEventKind::MessageReactionRemoveAll
             | AppEventKind::MessageReactionRemoveEmoji
             | AppEventKind::MessagePinnedUpdate
-            | AppEventKind::ChannelPinsUpdate
             | AppEventKind::CurrentUserPollVoteUpdate
             | AppEventKind::MessageDelete
             | AppEventKind::MessageDeleteBulk => {
                 AppEventMetadata::mutating(SnapshotAreas::message())
+            }
+
+            AppEventKind::ChannelPinsUpdate => {
+                AppEventMetadata::mutating(SnapshotAreas::message_and_detail())
             }
 
             AppEventKind::SelectedMessageChannelChanged => {
@@ -1672,7 +1744,10 @@ impl AppEventKind {
                 AppEventMetadata::mutating(SnapshotAreas::navigation_and_message())
             }
 
+            AppEventKind::GuildUnavailable => AppEventMetadata::inert(),
+
             AppEventKind::SelectedGuildChanged
+            | AppEventKind::ReadyUserDirectory
             | AppEventKind::GuildRolesUpdate
             | AppEventKind::GuildRoleUpsert
             | AppEventKind::GuildRoleDelete
@@ -1683,6 +1758,7 @@ impl AppEventKind {
             | AppEventKind::CallDelete
             | AppEventKind::TypingStart
             | AppEventKind::UserSettingsUpdate
+            | AppEventKind::UserNotificationSettingsUpdate
             | AppEventKind::UserNoteLoaded
             | AppEventKind::CurrentUserVerification
             | AppEventKind::UserGuildSettingsInit
@@ -1691,7 +1767,11 @@ impl AppEventKind {
                 AppEventMetadata::mutating(SnapshotAreas::navigation())
             }
 
-            AppEventKind::ReadStateInit | AppEventKind::MessageAck => {
+            AppEventKind::ReadStateInit
+            | AppEventKind::MessageAck
+            | AppEventKind::FeatureReadStateAck
+            | AppEventKind::ChannelPinsAck
+            | AppEventKind::ChannelUnreadUpdate => {
                 AppEventMetadata::mutating(SnapshotAreas::navigation_and_detail())
             }
 
@@ -1704,6 +1784,10 @@ impl AppEventKind {
             | AppEventKind::SignedOut
             | AppEventKind::MediaPlaybackWindowReady
             | AppEventKind::ApplicationCommandsLoaded
+            | AppEventKind::ApplicationCommandIndexUpdated
+            | AppEventKind::InteractionSucceeded
+            | AppEventKind::InteractionFailed
+            | AppEventKind::ApplicationCommandAutocompleteResponse
             | AppEventKind::AttachmentDownloadStarted
             | AppEventKind::AttachmentDownloadProgress
             | AppEventKind::AttachmentDownloadCompleted

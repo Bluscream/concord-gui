@@ -1,6 +1,11 @@
-use std::sync::Arc;
+use std::{
+    future::Future,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use tokio::sync::Semaphore;
+use tokio::task::AbortHandle;
 
 use crate::{DiscordClient, discord::AppCommand};
 
@@ -11,12 +16,36 @@ use super::{
 
 const MAX_CONCURRENT_ATTACHMENT_PREVIEWS: usize = 4;
 const MAX_CONCURRENT_ATTACHMENT_DOWNLOADS: usize = 2;
+const APPLICATION_COMMAND_AUTOCOMPLETE_DEBOUNCE: Duration = Duration::from_millis(150);
+
+#[derive(Clone, Default)]
+struct AutocompleteRequestScheduler {
+    pending: Arc<Mutex<Option<AbortHandle>>>,
+}
+
+impl AutocompleteRequestScheduler {
+    fn replace(&self, request: impl Future<Output = ()> + Send + 'static) {
+        let mut pending = self
+            .pending
+            .lock()
+            .expect("autocomplete request lock is not poisoned");
+        if let Some(previous) = pending.take() {
+            previous.abort();
+        }
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(APPLICATION_COMMAND_AUTOCOMPLETE_DEBOUNCE).await;
+            request.await;
+        });
+        *pending = Some(task.abort_handle());
+    }
+}
 
 #[derive(Clone)]
 pub(super) struct CommandDispatcher {
     client: DiscordClient,
     attachment_preview_permits: Arc<Semaphore>,
     attachment_download_permits: Arc<Semaphore>,
+    autocomplete_requests: AutocompleteRequestScheduler,
 }
 
 impl CommandDispatcher {
@@ -29,18 +58,25 @@ impl CommandDispatcher {
             attachment_download_permits: Arc::new(Semaphore::new(
                 MAX_CONCURRENT_ATTACHMENT_DOWNLOADS,
             )),
+            autocomplete_requests: AutocompleteRequestScheduler::default(),
         }
     }
 
     pub(super) async fn dispatch(&self, command: AppCommand) {
+        if matches!(
+            &command,
+            AppCommand::RequestApplicationCommandAutocomplete { .. }
+        ) {
+            let dispatcher = self.clone();
+            self.autocomplete_requests.replace(async move {
+                dispatcher.handle(command).await;
+            });
+            return;
+        }
         if runs_inline(&command) {
             self.handle(command).await;
         } else {
-            let dispatcher = Self {
-                client: self.client.clone(),
-                attachment_preview_permits: self.attachment_preview_permits.clone(),
-                attachment_download_permits: self.attachment_download_permits.clone(),
-            };
+            let dispatcher = self.clone();
             tokio::spawn(async move {
                 dispatcher.handle(command).await;
             });
@@ -103,6 +139,7 @@ impl CommandDispatcher {
             | AppCommand::SendTtsMessage { .. }
             | AppCommand::LoadApplicationCommands { .. }
             | AppCommand::RunApplicationCommand { .. }
+            | AppCommand::RequestApplicationCommandAutocomplete { .. }
             | AppCommand::EditMessage { .. }
             | AppCommand::DeleteMessage { .. }
             | AppCommand::RemoveMessageEmbeds { .. }
@@ -157,6 +194,8 @@ fn runs_inline(command: &AppCommand) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use crate::discord::{
         MicrophoneSensitivityDb, VoiceParticipantPlaybackSettings, VoiceScope, VoiceVolumePercent,
         ids::Id,
@@ -214,5 +253,32 @@ mod tests {
         assert!(!runs_inline(&AppCommand::LoadAttachmentPreview {
             url: "https://cdn.discordapp.com/avatar.png".to_owned(),
         }));
+    }
+
+    #[tokio::test]
+    async fn autocomplete_scheduler_runs_only_the_latest_request() {
+        let scheduler = AutocompleteRequestScheduler::default();
+        let (result_tx, mut result_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let first_tx = result_tx.clone();
+        scheduler.replace(async move {
+            first_tx.send(1).expect("result receiver stays open");
+        });
+        scheduler.replace(async move {
+            result_tx.send(2).expect("result receiver stays open");
+        });
+
+        let result = tokio::time::timeout(
+            APPLICATION_COMMAND_AUTOCOMPLETE_DEBOUNCE + Duration::from_millis(100),
+            result_rx.recv(),
+        )
+        .await
+        .expect("latest autocomplete request runs after the debounce");
+        assert_eq!(result, Some(2));
+        let superseded = tokio::time::timeout(Duration::from_millis(25), result_rx.recv()).await;
+        assert!(
+            !matches!(superseded, Ok(Some(_))),
+            "superseded autocomplete request must not run"
+        );
     }
 }

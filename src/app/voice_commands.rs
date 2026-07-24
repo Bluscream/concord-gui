@@ -18,8 +18,7 @@ pub(super) async fn handle(client: DiscordClient, command: AppCommand) {
             participant_playback_settings,
         } => {
             client.replace_voice_participant_playback_settings(participant_playback_settings);
-            if let Err(message) =
-                client.update_voice_state(scope, Some(channel_id), self_mute, self_deaf)
+            if let Err(message) = client.request_voice_join(scope, channel_id, self_mute, self_deaf)
             {
                 logging::error("app", &message);
                 client

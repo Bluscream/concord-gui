@@ -1,7 +1,11 @@
 use std::{
     collections::{HashMap, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
-    sync::{Arc, Mutex, RwLock},
+    sync::{
+        Arc, Mutex, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Instant,
 };
 
 mod lifecycle;
@@ -23,9 +27,13 @@ use tokio::{
 use crate::{AppError, Result};
 
 use super::{
-    ActivityInfo, ApplicationCommandInfo, ApplicationCommandInvocation, DiscordAction,
-    DiscordAuthSession, DiscordPermission, PresenceStatus,
-    application_commands::application_command_interaction_from_invocation,
+    ActivityInfo, ApplicationCommandAutocompleteInvocation, ApplicationCommandInfo,
+    ApplicationCommandInvocation, DiscordAction, DiscordAuthSession, DiscordPermission,
+    PresenceStatus,
+    application_commands::{
+        application_command_autocomplete_from_invocation,
+        application_command_interaction_from_invocation,
+    },
     events::{AppEvent, SequencedAppEvent},
     fingerprint::{CLIENT_BUILD_NUMBER, ClientFingerprint, discord_http_client},
     gateway::{GatewayCommand, GatewayRuntime, run_gateway},
@@ -53,11 +61,23 @@ type MemberListSubscriptionRequest = (
 type DueMemberListSubscription = (Id<GuildMarker>, Id<ChannelMarker>, Vec<MemberListRange>);
 
 #[derive(Clone, Debug)]
+pub(crate) struct AppEventPublisher {
+    effects_tx: mpsc::Sender<SequencedAppEvent>,
+    snapshots_tx: watch::Sender<SnapshotRevision>,
+    state: Arc<RwLock<DiscordState>>,
+    revision: Arc<RwLock<SnapshotRevision>>,
+    publish_lock: Arc<AsyncMutex<()>>,
+    application_command_requests: Arc<Mutex<HashMap<Option<Id<GuildMarker>>, RequestState>>>,
+    application_commands: Arc<Mutex<ApplicationCommandCache>>,
+    request_lifecycle: Arc<Mutex<RequestLifecycle>>,
+    voice_events_tx: mpsc::UnboundedSender<VoiceRuntimeEvent>,
+}
+
+#[derive(Clone, Debug)]
 pub struct DiscordClient {
     token: String,
     fingerprint: Arc<ClientFingerprint>,
     rest: DiscordRest,
-    effects_tx: mpsc::Sender<SequencedAppEvent>,
     effects_rx: Arc<Mutex<Option<mpsc::Receiver<SequencedAppEvent>>>>,
     snapshots_tx: watch::Sender<SnapshotRevision>,
     state: Arc<RwLock<DiscordState>>,
@@ -69,13 +89,14 @@ pub struct DiscordClient {
     gateway_session_id: Arc<RwLock<Option<String>>>,
     application_command_requests: Arc<Mutex<HashMap<Option<Id<GuildMarker>>, RequestState>>>,
     application_commands: Arc<Mutex<ApplicationCommandCache>>,
+    next_application_command_request: Arc<AtomicU64>,
     request_lifecycle: Arc<Mutex<RequestLifecycle>>,
     revision: Arc<RwLock<SnapshotRevision>>,
-    publish_lock: Arc<AsyncMutex<()>>,
     gateway_commands_tx: mpsc::UnboundedSender<GatewayCommand>,
     gateway_commands_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<GatewayCommand>>>>,
     voice_events_tx: mpsc::UnboundedSender<VoiceRuntimeEvent>,
     voice_events_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<VoiceRuntimeEvent>>>>,
+    event_publisher: AppEventPublisher,
 }
 
 impl DiscordClient {
@@ -114,28 +135,45 @@ impl DiscordClient {
         let (snapshots_tx, _) = watch::channel(SnapshotRevision::default());
         let (gateway_commands_tx, gateway_commands_rx) = mpsc::unbounded_channel();
         let (voice_events_tx, voice_events_rx) = mpsc::unbounded_channel();
+        let state = Arc::new(RwLock::new(initial_state));
+        let revision = Arc::new(RwLock::new(SnapshotRevision::default()));
+        let publish_lock = Arc::new(AsyncMutex::new(()));
+        let application_command_requests = Arc::new(Mutex::new(HashMap::new()));
+        let application_commands = Arc::new(Mutex::new(HashMap::new()));
+        let request_lifecycle = Arc::new(Mutex::new(RequestLifecycle::default()));
+        let event_publisher = AppEventPublisher {
+            effects_tx: effects_tx.clone(),
+            snapshots_tx: snapshots_tx.clone(),
+            state: Arc::clone(&state),
+            revision: Arc::clone(&revision),
+            publish_lock: Arc::clone(&publish_lock),
+            application_command_requests: Arc::clone(&application_command_requests),
+            application_commands: Arc::clone(&application_commands),
+            request_lifecycle: Arc::clone(&request_lifecycle),
+            voice_events_tx: voice_events_tx.clone(),
+        };
 
         Ok(Self {
             token,
             fingerprint,
             rest,
-            effects_tx,
             effects_rx: Arc::new(Mutex::new(Some(effects_rx))),
             snapshots_tx,
-            state: Arc::new(RwLock::new(initial_state)),
+            state,
             requested_voice: Arc::new(RwLock::new(None)),
             selected_rich_presence: Arc::new(RwLock::new(None)),
             external_assets: Arc::new(Mutex::new(HashMap::new())),
             gateway_session_id: Arc::new(RwLock::new(None)),
-            application_command_requests: Arc::new(Mutex::new(HashMap::new())),
-            application_commands: Arc::new(Mutex::new(HashMap::new())),
-            request_lifecycle: Arc::new(Mutex::new(RequestLifecycle::default())),
-            revision: Arc::new(RwLock::new(SnapshotRevision::default())),
-            publish_lock: Arc::new(AsyncMutex::new(())),
+            application_command_requests,
+            application_commands,
+            next_application_command_request: Arc::new(AtomicU64::new(1)),
+            request_lifecycle,
+            revision,
             gateway_commands_tx,
             gateway_commands_rx: Arc::new(Mutex::new(Some(gateway_commands_rx))),
             voice_events_tx,
             voice_events_rx: Arc::new(Mutex::new(Some(voice_events_rx))),
+            event_publisher,
         })
     }
 
@@ -197,29 +235,15 @@ impl DiscordClient {
     }
 
     pub async fn publish_event(&self, event: AppEvent) {
-        self.record_request_lifecycle_event(&event);
-        publish_app_event(
-            &self.effects_tx,
-            &self.snapshots_tx,
-            &self.state,
-            &self.revision,
-            &self.publish_lock,
-            &event,
-        )
-        .await;
-        voice::forward_app_event(&self.voice_events_tx, &event);
+        self.event_publisher.publish(event).await;
     }
 
     pub fn start_gateway(&self, serve_rich_presence: bool) -> JoinHandle<()> {
         let token = self.token.clone();
-        let effects_tx = self.effects_tx.clone();
-        let snapshots_tx = self.snapshots_tx.clone();
         let state = Arc::clone(&self.state);
-        let revision = Arc::clone(&self.revision);
         let gateway_session_id = Arc::clone(&self.gateway_session_id);
         let fingerprint = Arc::clone(&self.fingerprint);
-        let publish_lock = Arc::clone(&self.publish_lock);
-        let request_lifecycle = Arc::clone(&self.request_lifecycle);
+        let event_publisher = self.event_publisher.clone();
         let gateway_commands = self
             .gateway_commands_rx
             .lock()
@@ -227,13 +251,7 @@ impl DiscordClient {
             .take()
             .expect("gateway can only be started once");
         let voice_events_tx = self.voice_events_tx.clone();
-        let voice_status_publisher = voice::VoiceStatusPublisher::new(
-            self.effects_tx.clone(),
-            self.snapshots_tx.clone(),
-            Arc::clone(&self.state),
-            Arc::clone(&self.revision),
-            Arc::clone(&self.publish_lock),
-        );
+        let voice_status_publisher = voice::VoiceStatusPublisher::new(self.event_publisher.clone());
         if let Some(voice_events) = self
             .voice_events_rx
             .lock()
@@ -255,14 +273,9 @@ impl DiscordClient {
         tokio::spawn(async move {
             let runtime = GatewayRuntime {
                 fingerprint,
-                effects_tx,
-                snapshots_tx,
                 state,
-                revision,
                 gateway_session_id,
-                publish_lock,
-                request_lifecycle,
-                voice_events_tx,
+                event_publisher,
             };
             run_gateway(token, gateway_commands, runtime).await;
         })
@@ -293,7 +306,7 @@ impl DiscordClient {
             return Ok(());
         };
         let limit = limit.min(MEMBER_SEARCH_MAX_LIMIT);
-        let nonce = format!("mention-ac-{}-{:016x}", guild_id.get(), query_hash(&query));
+        let nonce = format!("mention-ac-{:016x}", query_hash(guild_id, &query));
         self.send_gateway_command(GatewayCommand::RequestGuildMembers {
             guild_id,
             query,
@@ -341,18 +354,41 @@ impl DiscordClient {
         self_mute: bool,
         self_deaf: bool,
     ) -> std::result::Result<(), String> {
+        self.update_voice_state_inner(scope, channel_id, self_mute, self_deaf, false)
+    }
+
+    pub fn request_voice_join(
+        &self,
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+        self_mute: bool,
+        self_deaf: bool,
+    ) -> std::result::Result<(), String> {
+        self.update_voice_state_inner(scope, Some(channel_id), self_mute, self_deaf, true)
+    }
+
+    fn update_voice_state_inner(
+        &self,
+        scope: VoiceScope,
+        channel_id: Option<Id<ChannelMarker>>,
+        self_mute: bool,
+        self_deaf: bool,
+        manual_retry: bool,
+    ) -> std::result::Result<(), String> {
         let mut requested = self
             .requested_voice
             .write()
             .expect("requested voice lock is not poisoned");
-        if voice_state_request_is_duplicate(*requested, scope, channel_id, self_mute, self_deaf) {
+        if !manual_retry
+            && voice_state_request_is_duplicate(*requested, scope, channel_id, self_mute, self_deaf)
+        {
             return Ok(());
         }
         if let Some(channel_id) = channel_id {
             let requested_same_channel = requested
                 .filter(|voice| voice.scope == scope && voice.channel_id == channel_id)
                 .is_some();
-            if !requested_same_channel {
+            if manual_retry || !requested_same_channel {
                 let state = self
                     .state
                     .read()
@@ -411,9 +447,12 @@ impl DiscordClient {
                     voice_output_volume,
                 };
                 *requested = Some(voice);
-                let _ = self
-                    .voice_events_tx
-                    .send(VoiceRuntimeEvent::Requested(Some(voice)));
+                let event = if manual_retry {
+                    VoiceRuntimeEvent::ManualRetry(voice)
+                } else {
+                    VoiceRuntimeEvent::Requested(Some(voice))
+                };
+                let _ = self.voice_events_tx.send(event);
             } else if requested.is_some_and(|voice| voice.scope == scope) {
                 *requested = None;
                 let _ = self
@@ -715,16 +754,16 @@ impl DiscordClient {
         &self,
         guild_id: Option<Id<GuildMarker>>,
     ) -> Result<Option<Vec<ApplicationCommandInfo>>> {
-        if !self.begin_application_command_request(guild_id) {
+        let Some(request_id) = self.begin_application_command_request(guild_id) else {
             return Ok(None);
-        }
+        };
         let result = self.rest.load_application_commands(guild_id).await;
         match result {
-            Ok(commands) => Ok(Some(
-                self.record_application_commands_for_tui(guild_id, commands),
-            )),
+            Ok(commands) => {
+                Ok(self.finish_application_command_request(guild_id, request_id, commands))
+            }
             Err(error) => {
-                self.clear_application_command_request(guild_id);
+                self.clear_application_command_request(guild_id, request_id);
                 Err(error)
             }
         }
@@ -742,8 +781,38 @@ impl DiscordClient {
             .clone()
             .ok_or_else(|| AppError::DiscordRequest("gateway session is not ready".to_owned()))?;
         let interaction = self.application_command_interaction(invocation)?;
-        self.rest
+        let nonce = interaction.nonce.clone();
+        self.request_lifecycle
+            .lock()
+            .expect("request lifecycle lock is not poisoned")
+            .begin_application_command(nonce.clone(), Instant::now());
+        let result = self
+            .rest
             .run_application_command(&interaction, &session_id)
+            .await;
+        if result.is_err() {
+            self.request_lifecycle
+                .lock()
+                .expect("request lifecycle lock is not poisoned")
+                .clear_application_command(&nonce);
+        }
+        result
+    }
+
+    pub async fn request_application_command_autocomplete(
+        &self,
+        invocation: &ApplicationCommandAutocompleteInvocation,
+    ) -> Result<()> {
+        self.ensure_can_request_application_command_autocomplete(invocation.channel_id)?;
+        let session_id = self
+            .gateway_session_id
+            .read()
+            .expect("gateway session id lock is not poisoned")
+            .clone()
+            .ok_or_else(|| AppError::DiscordRequest("gateway session is not ready".to_owned()))?;
+        let interaction = self.application_command_autocomplete_interaction(invocation)?;
+        self.rest
+            .request_application_command_autocomplete(&interaction, &session_id)
             .await
     }
 
@@ -779,6 +848,35 @@ impl DiscordClient {
         })
     }
 
+    fn application_command_autocomplete_interaction(
+        &self,
+        invocation: &ApplicationCommandAutocompleteInvocation,
+    ) -> Result<super::application_commands::ApplicationCommandAutocompleteInteraction> {
+        let commands = self
+            .application_commands
+            .lock()
+            .expect("application command cache lock is not poisoned");
+        let command = commands
+            .get(&invocation.guild_id)
+            .and_then(|commands| {
+                commands
+                    .iter()
+                    .find(|command| command.identity() == invocation.command_identity)
+            })
+            .ok_or_else(|| {
+                AppError::DiscordRequest(format!(
+                    "application command {} is not loaded",
+                    invocation.command_name
+                ))
+            })?;
+        application_command_autocomplete_from_invocation(invocation, command).ok_or_else(|| {
+            AppError::DiscordRequest(format!(
+                "application command {} autocomplete input is invalid",
+                invocation.command_name
+            ))
+        })
+    }
+
     fn send_gateway_command(&self, command: GatewayCommand) -> std::result::Result<(), String> {
         self.gateway_commands_tx
             .send(command)
@@ -786,7 +884,7 @@ impl DiscordClient {
     }
 }
 
-pub(super) async fn publish_app_event(
+async fn publish_app_event(
     effects_tx: &mpsc::Sender<SequencedAppEvent>,
     snapshots_tx: &watch::Sender<SnapshotRevision>,
     state: &Arc<RwLock<DiscordState>>,
@@ -896,70 +994,78 @@ fn normalize_member_search_query(query: &str) -> Option<String> {
     (normalized.chars().count() >= MEMBER_SEARCH_MIN_QUERY_CHARS).then_some(normalized)
 }
 
-fn query_hash(query: &str) -> u64 {
+fn query_hash(guild_id: Id<GuildMarker>, query: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
+    guild_id.hash(&mut hasher);
     query.hash(&mut hasher);
     hasher.finish()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RequestState {
-    Requested,
+    Requested(u64),
     Loaded,
 }
 
 impl DiscordClient {
-    fn begin_application_command_request(&self, guild_id: Option<Id<GuildMarker>>) -> bool {
+    fn begin_application_command_request(&self, guild_id: Option<Id<GuildMarker>>) -> Option<u64> {
         let mut requests = self
             .application_command_requests
             .lock()
             .expect("application command request lock is not poisoned");
-        if requests.contains_key(&guild_id) {
-            return false;
+        if matches!(requests.get(&guild_id), Some(RequestState::Requested(_))) {
+            return None;
         }
-        requests.insert(guild_id, RequestState::Requested);
-        true
+        let request_id = self
+            .next_application_command_request
+            .fetch_add(1, Ordering::Relaxed);
+        requests.insert(guild_id, RequestState::Requested(request_id));
+        Some(request_id)
     }
 
-    fn record_application_commands_loaded(&self, guild_id: Option<Id<GuildMarker>>) {
-        self.application_command_requests
-            .lock()
-            .expect("application command request lock is not poisoned")
-            .insert(guild_id, RequestState::Loaded);
-    }
-
-    fn record_application_commands(
+    fn finish_application_command_request(
         &self,
         guild_id: Option<Id<GuildMarker>>,
+        request_id: u64,
         commands: Vec<ApplicationCommandInfo>,
-    ) {
-        self.application_commands
+    ) -> Option<Vec<ApplicationCommandInfo>> {
+        let mut cached_commands = self
+            .application_commands
             .lock()
-            .expect("application command cache lock is not poisoned")
-            .insert(guild_id, commands);
-    }
-
-    fn record_application_commands_for_tui(
-        &self,
-        guild_id: Option<Id<GuildMarker>>,
-        commands: Vec<ApplicationCommandInfo>,
-    ) -> Vec<ApplicationCommandInfo> {
+            .expect("application command cache lock is not poisoned");
+        let mut requests = self
+            .application_command_requests
+            .lock()
+            .expect("application command request lock is not poisoned");
+        if requests.get(&guild_id) != Some(&RequestState::Requested(request_id)) {
+            return None;
+        }
         let commands = commands
             .into_iter()
             .filter(|command| !is_hidden_default_application_command(command))
             .collect::<Vec<_>>();
-        self.record_application_commands(guild_id, commands.clone());
-        commands
-            .into_iter()
-            .map(ApplicationCommandInfo::without_raw)
-            .collect()
+        cached_commands.insert(guild_id, commands.clone());
+        requests.insert(guild_id, RequestState::Loaded);
+        Some(
+            commands
+                .into_iter()
+                .map(ApplicationCommandInfo::without_raw)
+                .collect(),
+        )
     }
 
-    fn clear_application_command_request(&self, guild_id: Option<Id<GuildMarker>>) {
-        self.application_command_requests
+    fn clear_application_command_request(
+        &self,
+        guild_id: Option<Id<GuildMarker>>,
+        request_id: u64,
+    ) {
+        let mut requests = self
+            .application_command_requests
             .lock()
-            .expect("application command request lock is not poisoned")
-            .remove(&guild_id);
+            .expect("application command request lock is not poisoned");
+        if requests.get(&guild_id) == Some(&RequestState::Requested(request_id)) {
+            requests.remove(&guild_id);
+        }
     }
 }
 

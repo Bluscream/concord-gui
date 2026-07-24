@@ -195,7 +195,7 @@ fn voice_runtime_closes_on_leave() {
 }
 
 #[test]
-fn voice_runtime_reconnects_after_matching_connection_end() {
+fn voice_runtime_respects_connection_end_outcome() {
     let mut state = VoiceRuntimeState::default();
     state.apply(VoiceRuntimeEvent::CurrentUserReady(Some(Id::new(10))));
     state.apply(VoiceRuntimeEvent::Requested(Some(requested_voice())));
@@ -208,15 +208,122 @@ fn voice_runtime_reconnects_after_matching_connection_end() {
         panic!("expected initial voice connect action, got {connected:?}");
     };
 
+    let reconnected = state.apply(session.connection_ended_event(VoiceConnectionEnd::Reconnect));
+    let Some(VoiceRuntimeAction::Connect(active)) = reconnected else {
+        panic!("recoverable end should reconnect, got {reconnected:?}");
+    };
     assert_eq!(
-        state.apply(session.connection_ended_event()),
-        Some(VoiceRuntimeAction::Connect(session))
+        state.apply(active.connection_ended_event(VoiceConnectionEnd::Stop)),
+        None
     );
+    assert_eq!(
+        state.apply(VoiceRuntimeEvent::VoiceServer(voice_server())),
+        None
+    );
+    assert!(matches!(
+        state.apply(VoiceRuntimeEvent::ManualRetry(requested_voice())),
+        Some(VoiceRuntimeAction::Connect(_))
+    ));
+}
+
+#[test]
+fn voice_runtime_limits_reconnects_and_resets_after_success() {
+    let mut state = VoiceRuntimeState::default();
+    state.apply(VoiceRuntimeEvent::CurrentUserReady(Some(Id::new(10))));
+    state.apply(VoiceRuntimeEvent::Requested(Some(requested_voice())));
+    state.apply(VoiceRuntimeEvent::VoiceState(voice_state(
+        10,
+        Some(Id::new(10)),
+    )));
+    let connected = state.apply(VoiceRuntimeEvent::VoiceServer(voice_server()));
+    let Some(VoiceRuntimeAction::Connect(mut active)) = connected else {
+        panic!("expected initial voice connect action, got {connected:?}");
+    };
+
+    for _ in 0..super::runtime::MAX_VOICE_RECONNECT_ATTEMPTS {
+        let reconnected = state.apply(active.connection_ended_event(VoiceConnectionEnd::Reconnect));
+        let Some(VoiceRuntimeAction::Connect(next)) = reconnected else {
+            panic!("retry within the limit should reconnect, got {reconnected:?}");
+        };
+        active = next;
+    }
+    assert_eq!(
+        state.apply(active.connection_ended_event(VoiceConnectionEnd::Reconnect)),
+        None
+    );
+    let manual_retry = state.apply(VoiceRuntimeEvent::ManualRetry(requested_voice()));
+    assert!(
+        matches!(manual_retry, Some(VoiceRuntimeAction::Connect(_))),
+        "manual retry should reset the reconnect limit, got {manual_retry:?}"
+    );
+
+    let mut rotated = voice_server();
+    rotated.token = "rotated-token".to_owned();
+    let reset = state.apply(VoiceRuntimeEvent::VoiceServer(rotated));
+    let Some(VoiceRuntimeAction::Connect(mut active)) = reset else {
+        panic!("new voice session should reset the retry limit, got {reset:?}");
+    };
+    assert_eq!(
+        state.apply(active.connection_established_event()),
+        None,
+        "a healthy connection should reset consecutive retries"
+    );
+    for _ in 0..super::runtime::MAX_VOICE_RECONNECT_ATTEMPTS {
+        let reconnected = state.apply(active.connection_ended_event(VoiceConnectionEnd::Reconnect));
+        let Some(VoiceRuntimeAction::Connect(next)) = reconnected else {
+            panic!("retry after a healthy connection should reconnect, got {reconnected:?}");
+        };
+        active = next;
+    }
+}
+
+#[test]
+fn voice_runtime_ignores_stale_end_after_server_token_rotation() {
+    let mut state = VoiceRuntimeState::default();
+    state.apply(VoiceRuntimeEvent::CurrentUserReady(Some(Id::new(10))));
+    state.apply(VoiceRuntimeEvent::Requested(Some(requested_voice())));
+    state.apply(VoiceRuntimeEvent::VoiceState(voice_state(
+        10,
+        Some(Id::new(10)),
+    )));
+    let connected = state.apply(VoiceRuntimeEvent::VoiceServer(voice_server()));
+    let Some(VoiceRuntimeAction::Connect(previous)) = connected else {
+        panic!("expected initial voice connect action, got {connected:?}");
+    };
+
+    let mut rotated = voice_server();
+    rotated.token = "rotated-token".to_owned();
+    let replaced = state.apply(VoiceRuntimeEvent::VoiceServer(rotated));
+    let Some(VoiceRuntimeAction::Connect(replacement)) = replaced else {
+        panic!("token rotation should replace the voice task, got {replaced:?}");
+    };
+    assert_ne!(previous.connection_id, replacement.connection_id);
+
+    assert_eq!(
+        state.apply(previous.connection_ended_event(VoiceConnectionEnd::Stop)),
+        None
+    );
+    assert!(matches!(
+        state.apply(replacement.connection_ended_event(VoiceConnectionEnd::Reconnect)),
+        Some(VoiceRuntimeAction::Connect(_))
+    ));
+}
+
+#[test]
+fn voice_close_codes_follow_reconnect_policy() {
+    assert_eq!(voice_close_action(4013), VoiceCloseAction::Resume);
+    assert_eq!(voice_close_action(4015), VoiceCloseAction::Resume);
+    assert_eq!(voice_close_action(4006), VoiceCloseAction::Reconnect);
+    assert_eq!(voice_close_action(4009), VoiceCloseAction::Reconnect);
+    for code in [4014, 4021, 4022] {
+        assert_eq!(voice_close_action(code), VoiceCloseAction::Stop);
+    }
 }
 
 #[test]
 fn voice_gateway_session_debug_redacts_secrets() {
     let session = VoiceGatewaySession {
+        connection_id: 0,
         scope: VoiceScope::Guild(Id::new(1)),
         channel_id: Id::new(10),
         user_id: Id::new(20),
@@ -245,6 +352,7 @@ fn voice_state_debug_redacts_session_id() {
 #[test]
 fn voice_dave_state_tracks_speaking_ssrc_mapping() {
     let session = VoiceGatewaySession {
+        connection_id: 0,
         scope: VoiceScope::Guild(Id::new(1)),
         channel_id: Id::new(10),
         user_id: Id::new(20),
@@ -1349,6 +1457,7 @@ fn voice_microphone_overload_gain_blanks_extreme_same_polarity_clip() {
 #[test]
 fn voice_identify_payload_matches_expected_shape() {
     let session = VoiceGatewaySession {
+        connection_id: 0,
         scope: VoiceScope::Guild(Id::new(1)),
         channel_id: Id::new(10),
         user_id: Id::new(20),
@@ -1374,6 +1483,15 @@ fn voice_identify_payload_matches_expected_shape() {
         .expect("voice heartbeat payload is valid JSON");
     assert_eq!(heartbeat["op"].as_u64(), Some(3));
     assert_eq!(heartbeat["d"]["seq_ack"].as_i64(), Some(42));
+
+    let resume: Value = serde_json::from_str(&voice_resume_payload(&session, 43))
+        .expect("voice resume payload is valid JSON");
+    assert_eq!(resume["op"].as_u64(), Some(7));
+    assert_eq!(resume["d"]["server_id"].as_str(), Some("1"));
+    assert_eq!(resume["d"]["channel_id"].as_str(), Some("10"));
+    assert_eq!(resume["d"]["session_id"].as_str(), Some("voice-session"));
+    assert_eq!(resume["d"]["token"].as_str(), Some("voice-token"));
+    assert_eq!(resume["d"]["seq_ack"].as_i64(), Some(43));
 
     let mut heartbeat_ack = VoiceHeartbeatAckState::default();
     assert!(heartbeat_ack.mark_sent());
@@ -2324,6 +2442,7 @@ fn fake_outbound_state(mode: &str, nonce_suffix: u32) -> VoiceOutboundSendState 
 
 fn test_voice_gateway_session() -> VoiceGatewaySession {
     VoiceGatewaySession {
+        connection_id: 0,
         scope: VoiceScope::Guild(Id::new(1)),
         channel_id: Id::new(10),
         user_id: Id::new(20),

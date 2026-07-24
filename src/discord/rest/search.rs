@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use chrono::{NaiveDate, TimeZone, Utc};
 use reqwest::StatusCode;
 use serde_json::Value;
@@ -11,6 +13,8 @@ use super::{DiscordRest, clone_array, extra_fields};
 
 const MESSAGE_SEARCH_PAGE_LIMIT: u16 = 25;
 const MESSAGE_SEARCH_MAX_OFFSET: usize = 9_975;
+const MESSAGE_SEARCH_MAX_ATTEMPTS: usize = 3;
+const MESSAGE_SEARCH_DEFAULT_RETRY: Duration = Duration::from_secs(1);
 const DISCORD_EPOCH_MILLIS: i64 = 1_420_070_400_000;
 
 impl DiscordRest {
@@ -40,32 +44,43 @@ impl DiscordRest {
             }
         };
         let params = message_search_query_params(&query);
-        let response = self
-            .execute_authenticated(self.raw_http.get(endpoint).query(&params), "message search")
-            .await?;
-
-        let status = response.status();
-        if status != StatusCode::ACCEPTED
-            && let Err(error) = response.error_for_status_ref()
-        {
-            return Err(super::request_error(error, response, "message search").await);
+        let mut raw = None;
+        for attempt in 0..MESSAGE_SEARCH_MAX_ATTEMPTS {
+            let response = self
+                .execute_authenticated(
+                    self.raw_http.get(&endpoint).query(&params),
+                    "message search",
+                )
+                .await?;
+            let status = response.status();
+            if status != StatusCode::ACCEPTED
+                && let Err(error) = response.error_for_status_ref()
+            {
+                return Err(super::request_error(error, response, "message search").await);
+            }
+            let response_body: Value = response.json().await.map_err(|error| {
+                AppError::DiscordRequest(format!("message search decode failed: {error}"))
+            })?;
+            if status != StatusCode::ACCEPTED {
+                raw = Some(response_body);
+                break;
+            }
+            if attempt + 1 == MESSAGE_SEARCH_MAX_ATTEMPTS {
+                return Err(AppError::DiscordRequest(message_search_indexing_message(
+                    &response_body,
+                )));
+            }
+            tokio::time::sleep(message_search_retry_delay(&response_body)).await;
         }
-        let raw: Value = response.json().await.map_err(|error| {
-            AppError::DiscordRequest(format!("message search decode failed: {error}"))
-        })?;
-        if status == StatusCode::ACCEPTED {
-            return Err(AppError::DiscordRequest(message_search_indexing_message(
-                &raw,
-            )));
-        }
+        let raw = raw.expect("message search attempt loop returns a response");
         let response = parse_message_search_response(&raw)?;
         let next_offset = query
             .offset
             .saturating_add(MESSAGE_SEARCH_PAGE_LIMIT as usize);
-        let has_more = response
-            .total_results
-            .is_some_and(|total| next_offset < total)
-            && next_offset <= MESSAGE_SEARCH_MAX_OFFSET;
+        // Continue when the reported total says results remain, even after a
+        // short filtered page. A full page also keeps pagination alive when
+        // Discord's approximate total undercounts a changing result set.
+        let has_more = message_search_has_more(&response, next_offset);
         Ok(MessageSearchPage {
             query,
             messages: response.messages,
@@ -235,4 +250,23 @@ fn message_search_indexing_message(raw: &Value) -> String {
     } else {
         "message search index is not ready, try again shortly".to_owned()
     }
+}
+
+pub(super) fn message_search_retry_delay(raw: &Value) -> Duration {
+    raw.get("retry_after")
+        .and_then(Value::as_f64)
+        .and_then(super::rate_limit_delay)
+        .filter(|delay| !delay.is_zero())
+        .unwrap_or(MESSAGE_SEARCH_DEFAULT_RETRY)
+}
+
+pub(super) fn message_search_has_more(
+    response: &MessageSearchResponse,
+    next_offset: usize,
+) -> bool {
+    let reported_results_remain = response
+        .total_results
+        .is_some_and(|total_results| next_offset < total_results);
+    let full_page = response.message_groups.len() >= usize::from(MESSAGE_SEARCH_PAGE_LIMIT);
+    next_offset <= MESSAGE_SEARCH_MAX_OFFSET && (reported_results_remain || full_page)
 }

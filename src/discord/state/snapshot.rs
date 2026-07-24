@@ -37,6 +37,7 @@ pub struct NavigationSnapshot {
     pub(in crate::discord) notification_settings:
         BTreeMap<Id<GuildMarker>, GuildNotificationSettingsState>,
     pub(in crate::discord) private_notification_settings: Option<GuildNotificationSettingsState>,
+    pub(in crate::discord) user_notification_flags: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -47,6 +48,7 @@ pub struct MessageSnapshot {
 #[derive(Clone, Debug)]
 pub struct DetailSnapshot {
     pub(in crate::discord) read_states: BTreeMap<Id<ChannelMarker>, ChannelReadState>,
+    pub(in crate::discord) non_channel_read_states: BTreeMap<(u8, u64), NonChannelReadState>,
 }
 
 impl SnapshotRevision {
@@ -113,6 +115,14 @@ impl SnapshotAreas {
             detail: true,
         }
     }
+
+    pub(in crate::discord) const fn message_and_detail() -> Self {
+        Self {
+            navigation: false,
+            message: true,
+            detail: true,
+        }
+    }
 }
 
 impl DiscordSnapshot {
@@ -127,6 +137,8 @@ impl DiscordSnapshot {
         state.message_cache = self.message.message_cache.clone();
         state.notifications = NotificationCache {
             read_states: self.detail.read_states.clone(),
+            non_channel_read_states: self.detail.non_channel_read_states.clone(),
+            user_notification_flags: self.navigation.user_notification_flags,
             notification_settings: self.navigation.notification_settings.clone(),
             private_notification_settings: self.navigation.private_notification_settings.clone(),
         };
@@ -163,6 +175,7 @@ pub struct DiscordStateCacheCounts {
     pub typing_channels: usize,
     pub voice_states: usize,
     pub read_states: usize,
+    pub non_channel_read_states: usize,
     pub notification_settings: usize,
     pub has_private_notification_settings: bool,
 }
@@ -177,7 +190,7 @@ impl DiscordStateCacheCounts {
              custom_emojis={} custom_emoji_guilds={} guild_folders={} user_profiles={} \
              fetched_notes={} relationships={} guild_user_presences={} \
              guild_user_activities={} user_presences={} user_activities={} typing_users={} \
-             typing_channels={} voice_states={} read_states={} notification_settings={} \
+             typing_channels={} voice_states={} read_states={} non_channel_read_states={} notification_settings={} \
              has_private_notification_settings={}",
             self.guilds,
             self.channels,
@@ -206,6 +219,7 @@ impl DiscordStateCacheCounts {
             self.typing_channels,
             self.voice_states,
             self.read_states,
+            self.non_channel_read_states,
             self.notification_settings,
             self.has_private_notification_settings,
         )

@@ -12,13 +12,14 @@ use crate::discord::ids::{
 };
 use crate::discord::{
     APPLICATION_COMMAND_CHANNEL_KIND, APPLICATION_COMMAND_MENTIONABLE_KIND,
-    APPLICATION_COMMAND_ROLE_KIND, APPLICATION_COMMAND_USER_KIND, ApplicationCommandIdentity,
-    ApplicationCommandInfo, ApplicationCommandInvocation, BuiltinSlashCommandParse,
-    BuiltinSlashCommandSubmit, GlobalUserProfileUpdate, GuildParticipationBlock,
-    GuildParticipationRestriction, GuildUserProfileUpdate, MAX_UPLOAD_ATTACHMENT_COUNT,
-    MessageAttachmentUpload, UserProfileUpdate, application_command_content_is_complete,
-    application_command_option_scope, parse_builtin_slash_command,
-    parsed_application_command_option_names,
+    APPLICATION_COMMAND_ROLE_KIND, APPLICATION_COMMAND_USER_KIND,
+    ApplicationCommandAutocompleteInvocation, ApplicationCommandChoiceInfo,
+    ApplicationCommandIdentity, ApplicationCommandInfo, ApplicationCommandInvocation,
+    BuiltinSlashCommandParse, BuiltinSlashCommandSubmit, GlobalUserProfileUpdate,
+    GuildParticipationBlock, GuildParticipationRestriction, GuildUserProfileUpdate,
+    MAX_UPLOAD_ATTACHMENT_COUNT, MessageAttachmentUpload, UserProfileUpdate,
+    application_command_content_is_complete, application_command_option_scope, next_message_nonce,
+    parse_builtin_slash_command, parsed_application_command_option_names,
 };
 
 use super::super::MINIMUM_ESTABLISHED_DM_MESSAGES;
@@ -36,7 +37,8 @@ use super::super::{
 use super::completions::{
     ComposerEmojiImageCompletion, EmojiCompletion, MAX_MENTION_PICKER_VISIBLE, MentionCompletion,
     MentionExpansionMode, build_builtin_command_candidates, build_channel_mention_candidates,
-    build_command_candidates, build_command_choice_candidates, build_command_option_candidates,
+    build_command_candidates, build_command_choice_candidates,
+    build_command_choice_candidates_from_choices, build_command_option_candidates,
     build_emoji_candidates, build_mention_candidates, expand_composer_completions,
     expand_emoji_shortcodes, is_command_query_char, is_mention_query_char, move_picker_selection,
     should_start_completion_query,
@@ -75,6 +77,7 @@ pub(in crate::tui::state) struct ComposerUiState {
     pub(in crate::tui::state) composer_picker: ComposerPickerState,
     pub(in crate::tui::state) composer_selected_command_identity:
         Option<ApplicationCommandIdentity>,
+    application_command_autocomplete: Option<ApplicationCommandAutocompleteState>,
     /// Records `@displayname` substrings that the picker inserted, so the
     /// composer can rewrite them to Discord's `<@USER_ID>` wire format on
     /// submit even though the visible text is still the friendly form.
@@ -92,6 +95,22 @@ pub(in crate::tui::state) struct ComposerUiState {
     /// to throttle resends.
     pub(in crate::tui::state) last_typing_sent: Option<(Id<ChannelMarker>, Instant)>,
     pub(in crate::tui::state) slow_mode_deadlines: HashMap<Id<ChannelMarker>, Instant>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ApplicationCommandAutocompleteKey {
+    channel_id: Id<ChannelMarker>,
+    command_identity: ApplicationCommandIdentity,
+    command_version: String,
+    focused_option_name: String,
+    content: String,
+}
+
+#[derive(Debug)]
+struct ApplicationCommandAutocompleteState {
+    key: ApplicationCommandAutocompleteKey,
+    nonce: String,
+    choices: Vec<ApplicationCommandChoiceInfo>,
 }
 
 #[derive(Debug, Default)]
@@ -1292,6 +1311,7 @@ impl DashboardState {
         self.composer.composer_mention_completions.clear();
         self.composer.composer_emoji_completions.clear();
         self.composer.composer_selected_command_identity = None;
+        self.composer.application_command_autocomplete = None;
     }
 
     fn close_composer_mention_query(&mut self) {
@@ -1326,6 +1346,34 @@ impl DashboardState {
             None => Vec::new(),
         };
         self.composer.emoji_completion.set(detected, candidates);
+    }
+
+    pub(in crate::tui::state) fn apply_application_command_autocomplete_response(
+        &mut self,
+        nonce: Option<&str>,
+        choices: &[ApplicationCommandChoiceInfo],
+    ) {
+        let Some(nonce) = nonce else {
+            return;
+        };
+        let Some(autocomplete) = self.composer.application_command_autocomplete.as_mut() else {
+            return;
+        };
+        if autocomplete.nonce != nonce {
+            return;
+        }
+        autocomplete.choices = choices.to_vec();
+        self.refresh_active_mention_query();
+    }
+
+    pub(in crate::tui::state) fn invalidate_application_command_autocomplete(&mut self) {
+        self.composer.application_command_autocomplete = None;
+        if matches!(
+            self.composer.composer_picker.active,
+            Some(ActiveComposerPicker::Command { .. })
+        ) {
+            self.composer.composer_picker.close();
+        }
     }
 
     fn replace_composer_range(&mut self, range: Range<usize>, replacement: &str) {
@@ -1532,8 +1580,8 @@ impl DashboardState {
             return None;
         }
 
-        let command = self.application_command_for_input()?;
-        let option_scope = application_command_option_scope(command, before_cursor)?;
+        let command = self.application_command_for_input()?.clone();
+        let option_scope = application_command_option_scope(&command, before_cursor)?;
         if let Some((option_name, value_query)) = token.split_once(':') {
             let option = option_scope
                 .iter()
@@ -1543,6 +1591,19 @@ impl DashboardState {
                     token_start + option_name.len() + ':'.len_utf8(),
                     build_command_choice_candidates(value_query, option),
                 ));
+            }
+            if option.autocomplete {
+                let value_start = token_start + option_name.len() + ':'.len_utf8();
+                let value_query = value_query.to_owned();
+                let content = before_cursor.to_owned();
+                let option_name = option.name.clone();
+                let candidates = self.application_command_autocomplete_candidates(
+                    &value_query,
+                    &command,
+                    &option_name,
+                    content,
+                );
+                return Some((value_start, candidates));
             }
             let candidates = self.command_option_value_candidates(value_query, option);
             if !candidates.is_empty() {
@@ -1554,7 +1615,7 @@ impl DashboardState {
         if token.chars().all(is_command_query_char) {
             let used = parsed_application_command_option_names(
                 self.composer.composer_input.value(),
-                command,
+                &command,
                 option_scope,
             );
             let options = option_scope
@@ -1569,6 +1630,53 @@ impl DashboardState {
         }
 
         None
+    }
+
+    fn application_command_autocomplete_candidates(
+        &mut self,
+        query: &str,
+        command: &ApplicationCommandInfo,
+        focused_option_name: &str,
+        content: String,
+    ) -> Vec<CommandPickerEntry> {
+        let Some(channel_id) = self.selected_channel_id() else {
+            return Vec::new();
+        };
+        let key = ApplicationCommandAutocompleteKey {
+            channel_id,
+            command_identity: command.identity(),
+            command_version: command.version.clone(),
+            focused_option_name: focused_option_name.to_owned(),
+            content: content.clone(),
+        };
+        if let Some(autocomplete) = &self.composer.application_command_autocomplete
+            && autocomplete.key == key
+        {
+            return build_command_choice_candidates_from_choices(query, &autocomplete.choices);
+        }
+
+        let nonce = next_message_nonce().to_string();
+        self.composer.application_command_autocomplete =
+            Some(ApplicationCommandAutocompleteState {
+                key,
+                nonce: nonce.clone(),
+                choices: Vec::new(),
+            });
+        self.enqueue_pending_command(AppCommand::RequestApplicationCommandAutocomplete {
+            invocation: ApplicationCommandAutocompleteInvocation {
+                guild_id: self
+                    .selected_channel_state()
+                    .and_then(|channel| channel.guild_id),
+                channel_id,
+                command_identity: command.identity(),
+                command_version: command.version.clone(),
+                command_name: command.name.clone(),
+                content,
+                focused_option_name: focused_option_name.to_owned(),
+                nonce,
+            },
+        });
+        Vec::new()
     }
 
     fn command_option_value_candidates(

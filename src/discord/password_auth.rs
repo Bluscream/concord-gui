@@ -5,6 +5,8 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use super::{DiscordAuthSession, auth_http::discord_login_headers};
 
 const LOGIN_URL: &str = "https://discord.com/api/v9/auth/login";
+const SUSPENDED_ACCOUNT_ERROR: &str =
+    "Discord account is suspended. Use Discord's Safety Hub to review or appeal the suspension.";
 const MFA_VERIFY_URL: &str = "https://discord.com/api/v9/auth/mfa";
 const MFA_SMS_SEND_URL: &str = "https://discord.com/api/v9/auth/mfa/sms/send";
 
@@ -13,6 +15,7 @@ pub enum PasswordAuthEvent {
     Status(String),
     MfaRequired(MfaChallenge),
     SmsSent { phone: Option<String> },
+    RequiredActions(Vec<String>),
     Token(String),
     Failed(String),
 }
@@ -67,6 +70,11 @@ pub(crate) fn spawn_login_with_auth_session(
             Ok(LoginOutcome::MfaRequired(challenge)) => {
                 let _ = events_tx
                     .send(PasswordAuthEvent::MfaRequired(challenge))
+                    .await;
+            }
+            Ok(LoginOutcome::RequiredActions(actions)) => {
+                let _ = events_tx
+                    .send(PasswordAuthEvent::RequiredActions(actions))
                     .await;
             }
             Err(error) => {
@@ -152,6 +160,7 @@ pub(crate) fn spawn_sms_send_with_auth_session(
 enum LoginOutcome {
     Token(String),
     MfaRequired(MfaChallenge),
+    RequiredActions(Vec<String>),
 }
 
 async fn login_with_password(
@@ -261,10 +270,18 @@ fn parse_login_success(body: &str) -> Result<LoginOutcome, String> {
         ticket: Option<String>,
         login_instance_id: Option<String>,
         suspended_user_token: Option<String>,
+        #[serde(default)]
+        required_actions: Vec<String>,
     }
 
     let response: LoginResponse = serde_json::from_str(body)
         .map_err(|error| format!("decode Discord password login response failed: {error}"))?;
+    if response.suspended_user_token.is_some() {
+        return Err(SUSPENDED_ACCOUNT_ERROR.to_owned());
+    }
+    if !response.required_actions.is_empty() {
+        return Ok(LoginOutcome::RequiredActions(response.required_actions));
+    }
     if let Some(token) = response.token {
         return Ok(LoginOutcome::Token(token));
     }
@@ -293,9 +310,6 @@ fn parse_login_success(body: &str) -> Result<LoginOutcome, String> {
             methods,
         }));
     }
-    if response.suspended_user_token.is_some() {
-        return Err("Discord account is suspended".into());
-    }
     Err("Discord password login response did not include a token".into())
 }
 
@@ -318,6 +332,7 @@ fn format_login_error(status: reqwest::StatusCode, body: &str) -> String {
         code: Option<i64>,
         message: Option<String>,
         captcha_key: Option<Value>,
+        suspended_user_token: Option<String>,
     }
 
     let Ok(error) = serde_json::from_str::<DiscordError>(body) else {
@@ -325,6 +340,9 @@ fn format_login_error(status: reqwest::StatusCode, body: &str) -> String {
     };
     if error.captcha_key.is_some() {
         return "Discord requires captcha verification, so email/password login cannot continue in this terminal. Log in with a token instead.".to_string();
+    }
+    if error.suspended_user_token.is_some() {
+        return SUSPENDED_ACCOUNT_ERROR.to_owned();
     }
     match error.code {
         Some(50035) => "Discord rejected the email/phone number or password".to_string(),
@@ -357,10 +375,18 @@ mod tests {
     use reqwest::StatusCode;
 
     #[test]
-    fn parse_login_success_returns_token() {
+    fn parse_login_success_prioritizes_required_actions_before_token() {
         let outcome = parse_login_success(r#"{"token":"abc"}"#).expect("token should parse");
-
         assert!(matches!(outcome, LoginOutcome::Token(token) if token == "abc"));
+
+        let outcome =
+            parse_login_success(r#"{"token":"temporary","required_actions":["update_password"]}"#)
+                .expect("required actions should parse");
+        assert!(matches!(
+            outcome,
+            LoginOutcome::RequiredActions(actions)
+                if actions == vec!["update_password".to_owned()]
+        ));
     }
 
     #[test]
@@ -376,6 +402,16 @@ mod tests {
         assert_eq!(challenge.ticket, "ticket");
         assert_eq!(challenge.login_instance_id, "login");
         assert_eq!(challenge.methods, vec![MfaMethod::Totp, MfaMethod::Sms]);
+    }
+
+    #[test]
+    fn parse_login_success_reports_suspended_account() {
+        let Err(error) = parse_login_success(r#"{"suspended_user_token":"secret"}"#) else {
+            panic!("suspended account should not be accepted as a login");
+        };
+
+        assert!(error.contains("Safety Hub"));
+        assert!(!error.contains("secret"));
     }
 
     #[test]
@@ -395,6 +431,11 @@ mod tests {
                 StatusCode::TOO_MANY_REQUESTS,
                 "not json secret",
                 "Discord login failed with HTTP 429 Too Many Requests",
+            ),
+            (
+                StatusCode::FORBIDDEN,
+                r#"{"message":"suspended","suspended_user_token":"secret"}"#,
+                "Safety Hub",
             ),
         ];
 

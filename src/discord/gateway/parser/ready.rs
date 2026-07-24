@@ -98,6 +98,20 @@ pub(super) fn parse_ready(data: &Value) -> Vec<AppEvent> {
                 .collect()
         })
         .unwrap_or_default();
+    let mut ready_users = users_by_id
+        .values()
+        .filter_map(|user| parse_channel_recipient_info(user))
+        .collect::<Vec<_>>();
+    if let Some(current_user) = current_user.clone()
+        && !ready_users
+            .iter()
+            .any(|user| user.user_id == current_user.user_id)
+    {
+        ready_users.push(current_user);
+    }
+    if !ready_users.is_empty() {
+        events.push(AppEvent::ReadyUserDirectory { users: ready_users });
+    }
 
     // User-account READY also lists DM and group-DM channels under
     // `private_channels`. They have no `guild_id` and never come through
@@ -156,6 +170,13 @@ pub(super) fn parse_ready(data: &Value) -> Vec<AppEvent> {
     if let Some(settings) = parse_user_guild_settings_entries(data.get("user_guild_settings")) {
         events.push(AppEvent::UserGuildSettingsInit { settings });
     }
+    if let Some(flags) = data
+        .get("notification_settings")
+        .and_then(|settings| settings.get("flags"))
+        .and_then(Value::as_u64)
+    {
+        events.push(AppEvent::UserNotificationSettingsUpdate { flags });
+    }
 
     // Guild folder ordering and grouping live in the legacy `user_settings`
     // payload. The modern `user_settings_proto` blob is base64+protobuf and is
@@ -177,6 +198,30 @@ pub(super) fn parse_ready_supplemental(data: &Value) -> Vec<AppEvent> {
             presence,
         }
     }));
+    if let Some(channels) = data.get("lazy_private_channels").and_then(Value::as_array) {
+        for raw_channel in channels {
+            let Some(channel) = parse_channel_info(raw_channel, None) else {
+                continue;
+            };
+            let recipient_ids = raw_channel
+                .get("recipient_ids")
+                .and_then(Value::as_array)
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(parse_id::<UserMarker>)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if recipient_ids.is_empty() {
+                events.push(AppEvent::ChannelUpsert(channel));
+            } else {
+                events.push(AppEvent::LazyPrivateChannelUpsert {
+                    channel,
+                    recipient_ids,
+                });
+            }
+        }
+    }
     events
 }
 
@@ -400,13 +445,29 @@ fn add_current_user_to_group_dm(
 fn parse_read_state_entry(value: &Value) -> Option<ReadStateInfo> {
     let channel_id = parse_id::<ChannelMarker>(value.get("id")?)?;
     Some(ReadStateInfo {
+        read_state_type: value
+            .get("read_state_type")
+            .and_then(Value::as_u64)
+            .and_then(|value| u8::try_from(value).ok())
+            .unwrap_or(0),
         channel_id,
         last_acked_message_id: value
             .get("last_message_id")
+            .or_else(|| value.get("last_acked_id"))
             .and_then(parse_id::<MessageMarker>),
         mention_count: value
             .get("mention_count")
             .and_then(Value::as_u64)
             .unwrap_or(0) as u32,
+        badge_count: value
+            .get("badge_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u32,
+        last_pin_timestamp: value
+            .get("last_pin_timestamp")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        flags: value.get("flags").and_then(Value::as_u64).unwrap_or(0),
+        last_viewed: value.get("last_viewed").and_then(Value::as_u64),
     })
 }

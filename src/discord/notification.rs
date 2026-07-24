@@ -3,6 +3,7 @@ mod state;
 pub use state::ChannelUnreadState;
 pub(in crate::discord) use state::{
     GuildNotificationSettingsState, MessageNotificationInput, MessageNotificationKind,
+    READ_STATE_MENTION_LOW_IMPORTANCE,
 };
 
 use crate::discord::ids::{
@@ -36,6 +37,8 @@ pub struct ChannelNotificationOverrideInfo {
     pub message_notifications: Option<NotificationLevel>,
     pub muted: bool,
     pub mute_end_time: Option<String>,
+    pub collapsed: bool,
+    pub flags: u64,
 }
 
 #[cfg(test)]
@@ -47,6 +50,8 @@ impl ChannelNotificationOverrideInfo {
             message_notifications: None,
             muted: false,
             mute_end_time: None,
+            collapsed: false,
+            flags: 0,
         }
     }
 }
@@ -59,6 +64,12 @@ pub struct GuildNotificationSettingsInfo {
     pub mute_end_time: Option<String>,
     pub suppress_everyone: bool,
     pub suppress_roles: bool,
+    pub flags: u64,
+    pub hide_muted_channels: bool,
+    pub mobile_push: bool,
+    pub mute_scheduled_events: bool,
+    pub notify_highlights: u64,
+    pub version: u64,
     pub channel_overrides: Vec<ChannelNotificationOverrideInfo>,
 }
 
@@ -73,6 +84,12 @@ impl GuildNotificationSettingsInfo {
             mute_end_time: None,
             suppress_everyone: false,
             suppress_roles: false,
+            flags: 0,
+            hide_muted_channels: false,
+            mobile_push: true,
+            mute_scheduled_events: false,
+            notify_highlights: 0,
+            version: 0,
             channel_overrides: Vec::new(),
         }
     }

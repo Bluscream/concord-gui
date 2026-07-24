@@ -361,14 +361,29 @@ impl DiscordRest {
         })?;
 
         let response = parse_forum_thread_search_response(&raw, Some(guild_id), channel_id, true);
+        let has_more = forum_search_has_more(&response);
 
         Ok(ForumPostPage {
-            next_offset: offset.saturating_add(response.threads.len()),
+            // Advance by Discord's raw result count. Local filtering can drop
+            // malformed or unrelated threads and must not make the cursor
+            // repeat those same server-side rows.
+            next_offset: forum_search_next_offset(offset, &response),
             threads: response.threads,
             first_messages: response.first_messages,
-            has_more: response.has_more,
+            has_more,
         })
     }
+}
+
+pub(super) fn forum_search_next_offset(
+    offset: usize,
+    response: &ForumThreadSearchResponse,
+) -> usize {
+    offset.saturating_add(response.raw_threads.len())
+}
+
+pub(super) fn forum_search_has_more(response: &ForumThreadSearchResponse) -> bool {
+    response.has_more && !response.raw_threads.is_empty()
 }
 
 pub(super) fn create_forum_post_request_body(

@@ -6,8 +6,9 @@ pub(super) async fn run_voice_gateway_session(
     status_publisher: VoiceStatusPublisher,
     controls: VoiceGatewayControls,
 ) {
-    match connect_voice_gateway(&session, &status_publisher, controls).await {
-        Ok(()) => {
+    let connection = connect_voice_gateway(&session, &events_tx, &status_publisher, controls).await;
+    let outcome = match connection {
+        Ok(outcome) => {
             status_publisher
                 .publish(
                     &session,
@@ -15,22 +16,25 @@ pub(super) async fn run_voice_gateway_session(
                     "Voice gateway disconnected",
                 )
                 .await;
+            outcome
         }
         Err(error) => {
             logging::error("voice", &error);
             status_publisher
                 .publish(&session, VoiceConnectionStatus::Failed, error)
                 .await;
+            VoiceConnectionEnd::Reconnect
         }
-    }
-    let _ = events_tx.send(session.connection_ended_event());
+    };
+    let _ = events_tx.send(session.connection_ended_event(outcome));
 }
 
 pub(super) async fn connect_voice_gateway(
     session: &VoiceGatewaySession,
+    events_tx: &mpsc::UnboundedSender<VoiceRuntimeEvent>,
     status_publisher: &VoiceStatusPublisher,
     controls: VoiceGatewayControls,
-) -> Result<(), String> {
+) -> Result<VoiceConnectionEnd, String> {
     let VoiceGatewayControls {
         initial_capture_gate,
         mut capture_gate_rx,
@@ -85,13 +89,17 @@ pub(super) async fn connect_voice_gateway(
     let mut voice_ready: Option<VoiceTransportSession> = None;
     let last_sequence = Arc::new(Mutex::new(None));
     let heartbeat_ack = Arc::new(Mutex::new(VoiceHeartbeatAckState::default()));
-    let (heartbeat_timeout_tx, mut heartbeat_timeout_rx) = mpsc::unbounded_channel();
+    let (heartbeat_timeout_tx, mut heartbeat_timeout_rx) =
+        mpsc::unbounded_channel::<VoiceHeartbeatTimeout>();
     let dave_state = Arc::new(Mutex::new(VoiceDaveState::new(session)));
 
-    let result: Result<(), String> = async {
+    let result: Result<VoiceConnectionEnd, String> = async {
     send_voice_text(&writer, voice_identify_payload(session)).await?;
     logging::debug("voice", "voice identify sent");
     logging::debug("voice", "voice websocket read loop started");
+    let mut resume_pending = false;
+    let mut resume_deadline: Option<Instant> = None;
+    let mut connection_generation = 0u64;
 
     loop {
         let frame = tokio::select! {
@@ -157,15 +165,85 @@ pub(super) async fn connect_voice_gateway(
                 }
                 continue;
             }
-            _ = heartbeat_timeout_rx.recv() => {
-                return Err("voice heartbeat ACK timed out".to_owned());
+            heartbeat_timeout = heartbeat_timeout_rx.recv() => {
+                match heartbeat_timeout {
+                    Some(timeout) if timeout.generation == connection_generation => None,
+                    Some(_) => continue,
+                    None => break,
+                }
             }
-            frame = reader.next() => frame,
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
+                resume_deadline.unwrap_or_else(Instant::now)
+            )), if resume_deadline.is_some() => {
+                logging::debug("voice", "voice resume handshake timed out");
+                return Ok(VoiceConnectionEnd::Reconnect);
+            }
+            frame = reader.next() => Some(frame),
         };
         let Some(frame) = frame else {
-            break;
+            if resume_pending {
+                return Ok(VoiceConnectionEnd::Reconnect);
+            }
+            connection_generation = connection_generation.wrapping_add(1);
+            reader = resume_voice_gateway(
+                &url,
+                &writer,
+                session,
+                &last_sequence,
+                &heartbeat_ack,
+                &mut child_tasks,
+                "heartbeat ACK timed out",
+            )
+            .await?;
+            resume_pending = true;
+            resume_deadline = Some(Instant::now() + VOICE_RESUME_HANDSHAKE_TIMEOUT);
+            continue;
         };
-        let frame = frame.map_err(|error| format!("voice websocket read failed: {error}"))?;
+        let Some(frame) = frame else {
+            if resume_pending {
+                return Ok(VoiceConnectionEnd::Reconnect);
+            }
+            connection_generation = connection_generation.wrapping_add(1);
+            reader = resume_voice_gateway(
+                &url,
+                &writer,
+                session,
+                &last_sequence,
+                &heartbeat_ack,
+                &mut child_tasks,
+                "websocket stream ended",
+            )
+            .await?;
+            resume_pending = true;
+            resume_deadline = Some(Instant::now() + VOICE_RESUME_HANDSHAKE_TIMEOUT);
+            continue;
+        };
+        let frame = match frame {
+            Ok(frame) => frame,
+            Err(error) => {
+                if resume_pending {
+                    logging::debug(
+                        "voice",
+                        format!("voice resume websocket failed before completion: {error}"),
+                    );
+                    return Ok(VoiceConnectionEnd::Reconnect);
+                }
+                connection_generation = connection_generation.wrapping_add(1);
+                reader = resume_voice_gateway(
+                    &url,
+                    &writer,
+                    session,
+                    &last_sequence,
+                    &heartbeat_ack,
+                    &mut child_tasks,
+                    &format!("websocket read failed: {error}"),
+                )
+                .await?;
+                resume_pending = true;
+                resume_deadline = Some(Instant::now() + VOICE_RESUME_HANDSHAKE_TIMEOUT);
+                continue;
+            }
+        };
         match frame {
             WsMessage::Text(text) => {
                 let value: Value = serde_json::from_str(&text)
@@ -179,6 +257,7 @@ pub(super) async fn connect_voice_gateway(
                         let (socket, ready) =
                             establish_voice_transport(&value, &writer, &audio_handle).await?;
                         udp_socket = Some(socket);
+                        let _ = events_tx.send(session.connection_established_event());
                         #[cfg(feature = "voice-playback")]
                         {
                             voice_ready = Some(ready);
@@ -224,6 +303,12 @@ pub(super) async fn connect_voice_gateway(
                     VOICE_OP_HEARTBEAT_ACK => {
                         heartbeat_ack.lock().await.mark_acknowledged();
                     }
+                    VOICE_OP_RESUMED => {
+                        resume_pending = false;
+                        resume_deadline = None;
+                        let _ = events_tx.send(session.connection_established_event());
+                        logging::debug("voice", "voice gateway session resumed");
+                    }
                     VOICE_OP_HELLO => {
                         handle_voice_hello(
                             &value,
@@ -231,6 +316,7 @@ pub(super) async fn connect_voice_gateway(
                             &last_sequence,
                             &heartbeat_ack,
                             &heartbeat_timeout_tx,
+                            connection_generation,
                             &mut child_tasks,
                         )
                         .await?;
@@ -270,6 +356,10 @@ pub(super) async fn connect_voice_gateway(
                     .map_err(|error| format!("voice websocket pong failed: {error}"))?;
             }
             WsMessage::Close(frame) => {
+                let close_action = frame
+                    .as_ref()
+                    .map(|frame| voice_close_action(u16::from(frame.code)))
+                    .unwrap_or(VoiceCloseAction::Resume);
                 if let Some(frame) = frame {
                     logging::debug(
                         "voice",
@@ -281,7 +371,27 @@ pub(super) async fn connect_voice_gateway(
                 } else {
                     logging::debug("voice", "voice websocket closed without close frame");
                 }
-                break;
+                match close_action {
+                    VoiceCloseAction::Stop => return Ok(VoiceConnectionEnd::Stop),
+                    VoiceCloseAction::Reconnect => return Ok(VoiceConnectionEnd::Reconnect),
+                    VoiceCloseAction::Resume if resume_pending => {
+                        return Ok(VoiceConnectionEnd::Reconnect);
+                    }
+                    VoiceCloseAction::Resume => {}
+                }
+                connection_generation = connection_generation.wrapping_add(1);
+                reader = resume_voice_gateway(
+                    &url,
+                    &writer,
+                    session,
+                    &last_sequence,
+                    &heartbeat_ack,
+                    &mut child_tasks,
+                    "websocket closed",
+                )
+                .await?;
+                resume_pending = true;
+                resume_deadline = Some(Instant::now() + VOICE_RESUME_HANDSHAKE_TIMEOUT);
             }
             WsMessage::Binary(payload) => {
                 let frame = parse_voice_binary_frame(&payload)?;
@@ -296,7 +406,7 @@ pub(super) async fn connect_voice_gateway(
         }
     }
 
-    Ok(())
+    Ok(VoiceConnectionEnd::Stop)
     }
     .await;
 
@@ -307,6 +417,58 @@ pub(super) async fn connect_voice_gateway(
             .await;
     }
     result
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum VoiceCloseAction {
+    Resume,
+    Reconnect,
+    Stop,
+}
+
+pub(super) fn voice_close_action(code: u16) -> VoiceCloseAction {
+    match code {
+        4013 | 4015 => VoiceCloseAction::Resume,
+        4006 | 4009 => VoiceCloseAction::Reconnect,
+        4014 | 4021 | 4022 => VoiceCloseAction::Stop,
+        _ => VoiceCloseAction::Stop,
+    }
+}
+
+async fn resume_voice_gateway(
+    url: &str,
+    writer: &VoiceWriter,
+    session: &VoiceGatewaySession,
+    last_sequence: &Arc<Mutex<Option<i64>>>,
+    heartbeat_ack: &Arc<Mutex<VoiceHeartbeatAckState>>,
+    child_tasks: &mut VoiceChildTasks,
+    reason: &str,
+) -> Result<VoiceReader, String> {
+    logging::debug(
+        "voice",
+        format!("resuming voice websocket after {reason}: {url}"),
+    );
+    child_tasks.heartbeat.abort();
+    heartbeat_ack.lock().await.reset();
+
+    let (ws, response) = timeout(VOICE_WEBSOCKET_CONNECT_TIMEOUT, connect_async(url))
+        .await
+        .map_err(|_| "voice resume websocket connect timed out after 10s".to_owned())?
+        .map_err(|error| format!("voice resume websocket connect failed: {error}"))?;
+    logging::debug(
+        "voice",
+        format!(
+            "voice resume websocket connected: status={}",
+            response.status()
+        ),
+    );
+
+    let (resumed_writer, reader) = ws.split();
+    *writer.lock().await = resumed_writer;
+    let sequence = last_sequence.lock().await.unwrap_or(-1);
+    send_voice_text(writer, voice_resume_payload(session, sequence)).await?;
+    logging::debug("voice", format!("voice resume sent: seq_ack={sequence}"));
+    Ok(reader)
 }
 
 async fn establish_voice_transport(
@@ -444,7 +606,8 @@ async fn handle_voice_hello(
     writer: &VoiceWriter,
     last_sequence: &Arc<Mutex<Option<i64>>>,
     heartbeat_ack: &Arc<Mutex<VoiceHeartbeatAckState>>,
-    heartbeat_timeout_tx: &mpsc::UnboundedSender<()>,
+    heartbeat_timeout_tx: &mpsc::UnboundedSender<VoiceHeartbeatTimeout>,
+    generation: u64,
     child_tasks: &mut VoiceChildTasks,
 ) -> Result<(), String> {
     let interval = value
@@ -471,6 +634,7 @@ async fn handle_voice_hello(
         last_sequence,
         heartbeat_ack,
         heartbeat_timeout_tx,
+        generation,
     )));
     logging::debug("voice", "voice heartbeat task started");
     Ok(())
@@ -776,17 +940,18 @@ pub(super) async fn run_voice_heartbeat(
     interval: Duration,
     last_sequence: Arc<Mutex<Option<i64>>>,
     heartbeat_ack: Arc<Mutex<VoiceHeartbeatAckState>>,
-    heartbeat_timeout_tx: mpsc::UnboundedSender<()>,
+    heartbeat_timeout_tx: mpsc::UnboundedSender<VoiceHeartbeatTimeout>,
+    generation: u64,
 ) {
     loop {
         if !heartbeat_ack.lock().await.mark_sent() {
-            let _ = heartbeat_timeout_tx.send(());
+            let _ = heartbeat_timeout_tx.send(VoiceHeartbeatTimeout { generation });
             break;
         }
         let sequence = last_sequence.lock().await.unwrap_or(-1);
         if let Err(error) = send_voice_text(&writer, voice_heartbeat_payload(sequence)).await {
             logging::error("voice", format!("voice heartbeat send failed: {error}"));
-            let _ = heartbeat_timeout_tx.send(());
+            let _ = heartbeat_timeout_tx.send(VoiceHeartbeatTimeout { generation });
             break;
         }
         sleep(interval).await;
@@ -850,6 +1015,20 @@ pub(super) fn voice_heartbeat_payload(sequence: i64) -> String {
         "op": VOICE_OP_HEARTBEAT,
         "d": {
             "t": chrono::Utc::now().timestamp_millis(),
+            "seq_ack": sequence,
+        },
+    })
+    .to_string()
+}
+
+pub(super) fn voice_resume_payload(session: &VoiceGatewaySession, sequence: i64) -> String {
+    json!({
+        "op": VOICE_OP_RESUME,
+        "d": {
+            "server_id": session.scope.server_id_string(),
+            "channel_id": session.channel_id.to_string(),
+            "session_id": session.session_id,
+            "token": session.token,
             "seq_ack": sequence,
         },
     })

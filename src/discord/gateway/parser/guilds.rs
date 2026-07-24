@@ -335,7 +335,15 @@ pub(super) fn parse_guild_update(data: &Value) -> Option<AppEvent> {
 
 pub(super) fn parse_guild_delete(data: &Value) -> Option<AppEvent> {
     let guild_id = parse_id::<GuildMarker>(data.get("id")?)?;
-    Some(AppEvent::GuildDelete { guild_id })
+    if data
+        .get("unavailable")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        Some(AppEvent::GuildUnavailable { guild_id })
+    } else {
+        Some(AppEvent::GuildDelete { guild_id })
+    }
 }
 
 pub(super) fn parse_user_guild_settings_update(data: &Value) -> Option<AppEvent> {
@@ -380,6 +388,24 @@ fn parse_user_guild_notification_settings(value: &Value) -> Option<GuildNotifica
             .get("suppress_roles")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        flags: value.get("flags").and_then(Value::as_u64).unwrap_or(0),
+        hide_muted_channels: value
+            .get("hide_muted_channels")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        mobile_push: value
+            .get("mobile_push")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        mute_scheduled_events: value
+            .get("mute_scheduled_events")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        notify_highlights: value
+            .get("notify_highlights")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        version: value.get("version").and_then(Value::as_u64).unwrap_or(0),
         channel_overrides,
     })
 }
@@ -419,6 +445,11 @@ fn parse_channel_notification_override(value: &Value) -> Option<ChannelNotificat
         message_notifications: parse_notification_level(value.get("message_notifications")),
         muted: value.get("muted").and_then(Value::as_bool).unwrap_or(false),
         mute_end_time: parse_mute_end_time(value),
+        collapsed: value
+            .get("collapsed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        flags: value.get("flags").and_then(Value::as_u64).unwrap_or(0),
     })
 }
 
@@ -431,6 +462,11 @@ fn parse_channel_notification_override_with_key(
         message_notifications: parse_notification_level(value.get("message_notifications")),
         muted: value.get("muted").and_then(Value::as_bool).unwrap_or(false),
         mute_end_time: parse_mute_end_time(value),
+        collapsed: value
+            .get("collapsed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        flags: value.get("flags").and_then(Value::as_u64).unwrap_or(0),
     })
 }
 

@@ -3,7 +3,7 @@ use std::num::NonZeroU16;
 use std::{
     collections::HashMap,
     fmt,
-    sync::{Arc, RwLock},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -94,18 +94,15 @@ use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use tokio::{
     net::UdpSocket,
-    sync::{Mutex, Mutex as AsyncMutex, mpsc, watch},
+    sync::{Mutex, mpsc, watch},
     task::JoinHandle,
     time::{sleep, timeout},
 };
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 
-use crate::discord::{
-    DiscordState, SequencedAppEvent, SnapshotRevision,
-    ids::{
-        Id,
-        marker::{ChannelMarker, UserMarker},
-    },
+use crate::discord::ids::{
+    Id,
+    marker::{ChannelMarker, UserMarker},
 };
 use crate::logging;
 pub use levels::{
@@ -113,10 +110,11 @@ pub use levels::{
     VoiceVolumePercent,
 };
 
-use super::{client::publish_app_event, events::AppEvent};
+use super::{client::AppEventPublisher, events::AppEvent};
 
 const VOICE_GATEWAY_VERSION: u8 = 9;
 const VOICE_WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const VOICE_RESUME_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 const VOICE_CONNECTION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const UDP_DISCOVERY_PACKET_LEN: usize = 74;
 const UDP_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -240,7 +238,9 @@ const VOICE_OP_HEARTBEAT: u8 = 3;
 const VOICE_OP_SESSION_DESCRIPTION: u8 = 4;
 const VOICE_OP_SPEAKING: u8 = 5;
 const VOICE_OP_HEARTBEAT_ACK: u8 = 6;
+const VOICE_OP_RESUME: u8 = 7;
 const VOICE_OP_HELLO: u8 = 8;
+const VOICE_OP_RESUMED: u8 = 9;
 const VOICE_OP_CLIENTS_CONNECT: u8 = 11;
 const VOICE_OP_CLIENT_DISCONNECT: u8 = 13;
 const VOICE_OP_MEDIA_SINK_WANTS: u8 = 15;
@@ -261,10 +261,12 @@ const VOICE_OP_DAVE_MLS_INVALID_COMMIT_WELCOME: u8 = 31;
 type VoiceGatewayStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 type VoiceWriter = Arc<Mutex<futures::stream::SplitSink<VoiceGatewayStream, WsMessage>>>;
+type VoiceReader = futures::stream::SplitStream<VoiceGatewayStream>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum VoiceRuntimeEvent {
     Requested(Option<CurrentVoiceConnectionState>),
+    ManualRetry(CurrentVoiceConnectionState),
     ReplaceParticipantPlaybackSettings(Vec<(Id<UserMarker>, VoiceParticipantPlaybackSettings)>),
     UpdateParticipantPlaybackSettings {
         user_id: Id<UserMarker>,
@@ -273,26 +275,34 @@ pub(crate) enum VoiceRuntimeEvent {
     CurrentUserReady(Option<Id<UserMarker>>),
     VoiceState(VoiceStateInfo),
     VoiceServer(VoiceServerInfo),
+    ConnectionEstablished {
+        connection_id: u64,
+    },
     ConnectionEnded {
+        connection_id: u64,
         scope: VoiceScope,
         channel_id: Id<ChannelMarker>,
         session_id: String,
         endpoint: String,
+        outcome: VoiceConnectionEnd,
     },
     Shutdown,
 }
 
-#[derive(Clone)]
-pub(crate) struct VoiceStatusPublisher {
-    effects_tx: mpsc::Sender<SequencedAppEvent>,
-    snapshots_tx: watch::Sender<SnapshotRevision>,
-    state: Arc<RwLock<DiscordState>>,
-    revision: Arc<RwLock<SnapshotRevision>>,
-    publish_lock: Arc<AsyncMutex<()>>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum VoiceConnectionEnd {
+    Reconnect,
+    Stop,
 }
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone)]
+pub(crate) struct VoiceStatusPublisher {
+    events: AppEventPublisher,
+}
+
+#[derive(Clone)]
 struct VoiceGatewaySession {
+    connection_id: u64,
     scope: VoiceScope,
     channel_id: Id<ChannelMarker>,
     user_id: Id<UserMarker>,
@@ -302,20 +312,8 @@ struct VoiceGatewaySession {
 }
 
 impl VoiceStatusPublisher {
-    pub(crate) fn new(
-        effects_tx: mpsc::Sender<SequencedAppEvent>,
-        snapshots_tx: watch::Sender<SnapshotRevision>,
-        state: Arc<RwLock<DiscordState>>,
-        revision: Arc<RwLock<SnapshotRevision>>,
-        publish_lock: Arc<AsyncMutex<()>>,
-    ) -> Self {
-        Self {
-            effects_tx,
-            snapshots_tx,
-            state,
-            revision,
-            publish_lock,
-        }
+    pub(crate) fn new(events: AppEventPublisher) -> Self {
+        Self { events }
     }
 
     async fn publish(
@@ -324,20 +322,14 @@ impl VoiceStatusPublisher {
         status: VoiceConnectionStatus,
         message: impl Into<String>,
     ) {
-        publish_app_event(
-            &self.effects_tx,
-            &self.snapshots_tx,
-            &self.state,
-            &self.revision,
-            &self.publish_lock,
-            &AppEvent::VoiceConnectionStatusChanged {
+        self.events
+            .publish(AppEvent::VoiceConnectionStatusChanged {
                 scope: session.scope,
                 channel_id: Some(session.channel_id),
                 status,
                 message: Some(message.into()),
-            },
-        )
-        .await;
+            })
+            .await;
     }
 
     async fn publish_speaking(
@@ -346,46 +338,63 @@ impl VoiceStatusPublisher {
         user_id: Id<UserMarker>,
         speaking: bool,
     ) {
-        publish_app_event(
-            &self.effects_tx,
-            &self.snapshots_tx,
-            &self.state,
-            &self.revision,
-            &self.publish_lock,
-            &AppEvent::VoiceSpeakingUpdate {
+        self.events
+            .publish(AppEvent::VoiceSpeakingUpdate {
                 scope: session.scope,
                 channel_id: session.channel_id,
                 user_id,
                 speaking,
-            },
-        )
-        .await;
+            })
+            .await;
     }
 }
 
 impl VoiceGatewaySession {
+    fn connection_established_event(&self) -> VoiceRuntimeEvent {
+        VoiceRuntimeEvent::ConnectionEstablished {
+            connection_id: self.connection_id,
+        }
+    }
+
     fn matches_connection_end(
         &self,
+        connection_id: u64,
         scope: VoiceScope,
         channel_id: Id<ChannelMarker>,
         session_id: &str,
         endpoint: &str,
     ) -> bool {
-        self.scope == scope
+        self.connection_id == connection_id
+            && self.scope == scope
             && self.channel_id == channel_id
             && self.session_id == session_id
             && self.endpoint == endpoint
     }
 
-    fn connection_ended_event(&self) -> VoiceRuntimeEvent {
+    fn connection_ended_event(&self, outcome: VoiceConnectionEnd) -> VoiceRuntimeEvent {
         VoiceRuntimeEvent::ConnectionEnded {
+            connection_id: self.connection_id,
             scope: self.scope,
             channel_id: self.channel_id,
             session_id: self.session_id.clone(),
             endpoint: self.endpoint.clone(),
+            outcome,
         }
     }
 }
+
+impl PartialEq for VoiceGatewaySession {
+    fn eq(&self, other: &Self) -> bool {
+        self.scope == other.scope
+            && self.channel_id == other.channel_id
+            && self.user_id == other.user_id
+            && self.session_id == other.session_id
+            && self.endpoint == other.endpoint
+            && self.token == other.token
+    }
+}
+
+impl Eq for VoiceGatewaySession {}
 
 impl VoiceSpeakingTracker {
     fn record_remote(
@@ -534,6 +543,11 @@ struct VoiceHeartbeatAckState {
     awaiting_ack: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct VoiceHeartbeatTimeout {
+    generation: u64,
+}
+
 impl VoiceHeartbeatAckState {
     fn mark_sent(&mut self) -> bool {
         if self.awaiting_ack {
@@ -677,6 +691,7 @@ struct VoiceBinaryFrame<'a> {
 impl fmt::Debug for VoiceGatewaySession {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("VoiceGatewaySession")
+            .field("connection_id", &self.connection_id)
             .field("scope", &self.scope)
             .field("channel_id", &self.channel_id)
             .field("user_id", &self.user_id)

@@ -20,7 +20,7 @@ use super::notification::{
     GuildNotificationSettingsState, MessageNotificationInput, MessageNotificationKind,
 };
 use super::profile::{ProfileRoleIds, UserProfileCacheKey};
-use super::read::ChannelReadState;
+use super::read::{ChannelReadState, NonChannelReadState};
 pub use super::voice::{CurrentVoiceConnectionState, VoiceParticipantState, VoiceScope};
 use crate::discord::ids::{
     Id,
@@ -142,6 +142,7 @@ impl DiscordState {
             typing_channels: self.presence.typing.len(),
             voice_states: self.voice.states.len(),
             read_states: self.notifications.read_states.len(),
+            non_channel_read_states: self.notifications.non_channel_read_states.len(),
             notification_settings: self.notifications.notification_settings.len(),
             has_private_notification_settings: self
                 .notifications
@@ -165,12 +166,14 @@ impl DiscordState {
                     .notifications
                     .private_notification_settings
                     .clone(),
+                user_notification_flags: self.notifications.user_notification_flags,
             },
             message: MessageSnapshot {
                 message_cache: self.message_cache.clone(),
             },
             detail: DetailSnapshot {
                 read_states: self.notifications.read_states.clone(),
+                non_channel_read_states: self.notifications.non_channel_read_states.clone(),
             },
         }
     }
@@ -192,12 +195,16 @@ impl DiscordState {
                 snapshot.navigation.notification_settings.clone();
             self.notifications.private_notification_settings =
                 snapshot.navigation.private_notification_settings.clone();
+            self.notifications.user_notification_flags =
+                snapshot.navigation.user_notification_flags;
         }
         if areas.message {
             self.message_cache = snapshot.message.message_cache.clone();
         }
         if areas.detail {
             self.notifications.read_states = snapshot.detail.read_states.clone();
+            self.notifications.non_channel_read_states =
+                snapshot.detail.non_channel_read_states.clone();
         }
     }
 
@@ -212,6 +219,14 @@ impl DiscordState {
             read_state.last_acked_message_id.hash(&mut hasher);
             read_state.mention_count.hash(&mut hasher);
             read_state.notification_count.hash(&mut hasher);
+            read_state.last_pin_timestamp.hash(&mut hasher);
+            read_state.flags.hash(&mut hasher);
+            read_state.last_viewed.hash(&mut hasher);
+        }
+        for (key, read_state) in &self.notifications.non_channel_read_states {
+            key.hash(&mut hasher);
+            read_state.last_acked_id.hash(&mut hasher);
+            read_state.badge_count.hash(&mut hasher);
         }
         hasher.finish()
     }
@@ -302,6 +317,7 @@ impl DiscordState {
                     .insert(*guild_id, emojis.clone());
             }
             AppEvent::GuildDelete { .. } => self.apply_guild_delete_event(event),
+            AppEvent::GuildUnavailable { .. } => {}
             AppEvent::SelectedGuildChanged { guild_id } => {
                 self.record_selected_member_guild(*guild_id);
             }
@@ -313,6 +329,37 @@ impl DiscordState {
                 }
             }
             AppEvent::ChannelUpsert(channel) => self.upsert_channel(channel),
+            AppEvent::LazyPrivateChannelUpsert {
+                channel,
+                recipient_ids,
+            } => {
+                let mut channel = channel.clone();
+                let mut recipients = recipient_ids
+                    .iter()
+                    .filter_map(|user_id| self.session.ready_users.get(user_id).cloned())
+                    .collect::<Vec<_>>();
+                if channel.kind == "group-dm"
+                    && let Some(current_user_id) = self.session.current_user_id
+                    && !recipients
+                        .iter()
+                        .any(|recipient| recipient.user_id == current_user_id)
+                    && let Some(current_user) = self.session.ready_users.get(&current_user_id)
+                {
+                    recipients.push(current_user.clone());
+                }
+                if !recipients.is_empty() {
+                    let synthetic_label = format!("dm-{}", channel.channel_id.get());
+                    if channel.name == synthetic_label {
+                        channel.name = recipients
+                            .iter()
+                            .map(|recipient| recipient.display_name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                    }
+                    channel.recipients = Some(recipients);
+                }
+                self.upsert_channel(&channel);
+            }
             AppEvent::ThreadListSync { sync } => {
                 for thread in &sync.threads {
                     self.upsert_channel(thread);
@@ -482,8 +529,17 @@ impl DiscordState {
                 message_id,
                 pinned,
             } => self.set_cached_message_pinned(*channel_id, *message_id, *pinned),
-            AppEvent::ChannelPinsUpdate { channel_id, .. } => {
+            AppEvent::ChannelPinsUpdate {
+                channel_id,
+                last_pin_timestamp,
+                ..
+            } => {
                 self.invalidate_pinned_messages(*channel_id);
+                self.notifications
+                    .read_states
+                    .entry(*channel_id)
+                    .or_default()
+                    .latest_pin_timestamp = last_pin_timestamp.clone();
             }
             AppEvent::PinnedMessagesLoaded {
                 channel_id,
@@ -630,6 +686,9 @@ impl DiscordState {
                     self.navigation.guild_folders = folders.clone();
                 }
             }
+            AppEvent::UserNotificationSettingsUpdate { flags } => {
+                self.notifications.user_notification_flags = *flags;
+            }
             AppEvent::UserProfileLoaded { .. } => self.apply_user_profile_loaded_event(event),
             AppEvent::UserNoteLoaded { user_id, note } => {
                 self.profiles.fetched_notes.insert(*user_id, note.clone());
@@ -666,6 +725,12 @@ impl DiscordState {
                     self.refresh_current_user_role_cache();
                 }
             }
+            AppEvent::ReadyUserDirectory { users } => {
+                self.session.ready_users = users
+                    .iter()
+                    .map(|user| (user.user_id, user.clone()))
+                    .collect();
+            }
             AppEvent::CurrentUserCapabilities { premium_tier } => {
                 self.session.current_user_premium_tier = Some(*premium_tier);
             }
@@ -686,6 +751,47 @@ impl DiscordState {
             }
             AppEvent::ReadStateInit { .. } => self.apply_read_state_init_event(event),
             AppEvent::MessageAck { .. } => self.apply_message_ack_event(event),
+            AppEvent::FeatureReadStateAck {
+                read_state_type,
+                resource_id,
+                entity_id,
+                ..
+            } => {
+                let entry = self
+                    .notifications
+                    .non_channel_read_states
+                    .entry((*read_state_type, *resource_id))
+                    .or_default();
+                entry.last_acked_id = Some(*entity_id);
+                entry.badge_count = 0;
+            }
+            AppEvent::ChannelPinsAck {
+                channel_id,
+                timestamp,
+                ..
+            } => {
+                self.notifications
+                    .read_states
+                    .entry(*channel_id)
+                    .or_default()
+                    .last_pin_timestamp = Some(timestamp.clone());
+            }
+            AppEvent::ChannelUnreadUpdate { channels, .. } => {
+                for update in channels {
+                    if let Some(last_message_id) = update.last_message_id
+                        && let Some(channel) = self.navigation.channels.get_mut(&update.channel_id)
+                    {
+                        channel.last_message_id = last_message_id;
+                    }
+                    if let Some(last_pin_timestamp) = &update.last_pin_timestamp {
+                        self.notifications
+                            .read_states
+                            .entry(update.channel_id)
+                            .or_default()
+                            .latest_pin_timestamp = last_pin_timestamp.clone();
+                    }
+                }
+            }
             AppEvent::UserGuildSettingsInit { settings } => {
                 self.notifications.notification_settings.clear();
                 self.notifications.private_notification_settings = None;
@@ -708,6 +814,10 @@ impl DiscordState {
             | AppEvent::SignedOut
             | AppEvent::MediaPlaybackWindowReady { .. }
             | AppEvent::ApplicationCommandsLoaded { .. }
+            | AppEvent::ApplicationCommandIndexUpdated { .. }
+            | AppEvent::InteractionSucceeded { .. }
+            | AppEvent::InteractionFailed { .. }
+            | AppEvent::ApplicationCommandAutocompleteResponse { .. }
             | AppEvent::AttachmentDownloadStarted { .. }
             | AppEvent::AttachmentDownloadProgress { .. }
             | AppEvent::AttachmentDownloadCompleted { .. }
@@ -883,7 +993,15 @@ impl DiscordState {
                     .read_states
                     .entry(message.channel_id)
                     .or_default();
-                entry.mention_count = entry.mention_count.saturating_add(1);
+                entry.record_mention(false);
+            }
+            MessageNotificationKind::LowImportanceMention => {
+                let entry = self
+                    .notifications
+                    .read_states
+                    .entry(message.channel_id)
+                    .or_default();
+                entry.record_mention(true);
             }
             MessageNotificationKind::Notify => {
                 let entry = self
@@ -891,7 +1009,7 @@ impl DiscordState {
                     .read_states
                     .entry(message.channel_id)
                     .or_default();
-                entry.notification_count = entry.notification_count.saturating_add(1);
+                entry.record_notification();
             }
             MessageNotificationKind::None => {}
         }
@@ -914,7 +1032,7 @@ impl DiscordState {
                 .insert(message.channel_id);
         }
         self.upsert_message(state);
-        if is_current_user_message {
+        if is_current_user_message && !message.message_kind.is_poll_result() {
             self.mark_message_read_locally(message.channel_id, message.message_id);
         }
     }
@@ -1093,15 +1211,30 @@ impl DiscordState {
         };
 
         self.notifications.read_states.clear();
+        self.notifications.non_channel_read_states.clear();
         for entry in entries {
-            self.notifications.read_states.insert(
-                entry.channel_id,
-                ChannelReadState {
-                    last_acked_message_id: entry.last_acked_message_id,
-                    mention_count: entry.mention_count,
-                    notification_count: 0,
-                },
-            );
+            if entry.read_state_type == 0 {
+                self.notifications.read_states.insert(
+                    entry.channel_id,
+                    ChannelReadState {
+                        last_acked_message_id: entry.last_acked_message_id,
+                        mention_count: entry.mention_count,
+                        notification_count: 0,
+                        last_pin_timestamp: entry.last_pin_timestamp.clone(),
+                        latest_pin_timestamp: None,
+                        flags: entry.flags,
+                        last_viewed: entry.last_viewed,
+                    },
+                );
+            } else {
+                self.notifications.non_channel_read_states.insert(
+                    (entry.read_state_type, entry.channel_id.get()),
+                    NonChannelReadState {
+                        last_acked_id: entry.last_acked_message_id.map(Id::get),
+                        badge_count: entry.badge_count,
+                    },
+                );
+            }
         }
     }
 
@@ -1110,6 +1243,8 @@ impl DiscordState {
             channel_id,
             message_id,
             mention_count,
+            flags,
+            last_viewed,
         } = event
         else {
             unreachable!("message ack helper only handles message ack events");
@@ -1120,15 +1255,7 @@ impl DiscordState {
             .read_states
             .entry(*channel_id)
             .or_default();
-        if entry
-            .last_acked_message_id
-            .is_some_and(|acked| acked > *message_id)
-        {
-            return;
-        }
-        entry.last_acked_message_id = Some(*message_id);
-        entry.mention_count = *mention_count;
-        entry.notification_count = 0;
+        entry.apply_server_ack(*message_id, *mention_count, *flags, *last_viewed);
     }
 
     pub(in crate::discord) fn private_user_display_name(

@@ -221,6 +221,8 @@ fn guild_notification_settings_update(
                     muted,
                     mute_end_time: mute_end_time
                         .map(|value| value.to_rfc3339_opts(SecondsFormat::Millis, true)),
+                    collapsed: false,
+                    flags: 0,
                 });
         }
     }

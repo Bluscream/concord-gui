@@ -419,6 +419,17 @@ async fn requested_voice_state_tracks_changes_and_skips_duplicate_gateway_update
     ));
 
     client
+        .request_voice_join(VoiceScope::Guild(Id::new(1)), Id::new(2), true, false)
+        .expect("manual join retries the same target");
+    assert_voice_update(
+        &mut gateway_commands,
+        Id::new(1),
+        Some(Id::new(2)),
+        true,
+        false,
+    );
+
+    client
         .update_voice_state(
             VoiceScope::Guild(Id::new(1)),
             Some(Id::new(2)),
@@ -1243,27 +1254,93 @@ async fn voice_state_update_allows_current_channel_mute_change_without_connect_p
 }
 
 #[test]
-fn application_command_requests_are_deduped_until_loaded() {
+fn application_command_requests_dedupe_in_flight_but_allow_refresh() {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
     let guild_id = Some(Id::new(1));
 
-    assert!(client.begin_application_command_request(guild_id));
-    assert!(!client.begin_application_command_request(guild_id));
+    let request_id = client
+        .begin_application_command_request(guild_id)
+        .expect("first request should start");
+    assert!(client.begin_application_command_request(guild_id).is_none());
 
-    client.record_application_commands_loaded(guild_id);
-    assert!(!client.begin_application_command_request(guild_id));
+    assert!(
+        client
+            .finish_application_command_request(guild_id, request_id, Vec::new())
+            .is_some()
+    );
+    assert!(client.begin_application_command_request(guild_id).is_some());
 
     let retry_guild_id = Some(Id::new(2));
-    assert!(client.begin_application_command_request(retry_guild_id));
-    assert!(!client.begin_application_command_request(retry_guild_id));
-    client.clear_application_command_request(retry_guild_id);
-    assert!(client.begin_application_command_request(retry_guild_id));
+    let retry_request_id = client
+        .begin_application_command_request(retry_guild_id)
+        .expect("retry request should start");
+    assert!(
+        client
+            .begin_application_command_request(retry_guild_id)
+            .is_none()
+    );
+    client.clear_application_command_request(retry_guild_id, retry_request_id);
+    assert!(
+        client
+            .begin_application_command_request(retry_guild_id)
+            .is_some()
+    );
 
-    assert!(client.begin_application_command_request(None));
-    assert!(!client.begin_application_command_request(None));
-    client.record_application_commands_loaded(None);
-    assert!(!client.begin_application_command_request(None));
+    let direct_request_id = client
+        .begin_application_command_request(None)
+        .expect("first direct message request should start");
+    assert!(client.begin_application_command_request(None).is_none());
+    assert!(
+        client
+            .finish_application_command_request(None, direct_request_id, Vec::new())
+            .is_some()
+    );
+    assert!(client.begin_application_command_request(None).is_some());
+}
+
+#[tokio::test]
+async fn application_command_index_update_invalidates_in_flight_generation() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
+    let guild = Id::new(1);
+    let guild_id = Some(guild);
+    let stale_request_id = client
+        .begin_application_command_request(guild_id)
+        .expect("initial request should start");
+
+    client
+        .publish_event(AppEvent::ApplicationCommandIndexUpdated { guild_id: guild })
+        .await;
+
+    let fresh_request_id = client
+        .begin_application_command_request(guild_id)
+        .expect("index invalidation should allow a fresh request");
+    client.clear_application_command_request(guild_id, stale_request_id);
+    assert!(
+        client
+            .finish_application_command_request(
+                guild_id,
+                stale_request_id,
+                vec![application_command("stale")],
+            )
+            .is_none(),
+        "an invalidated response must not repopulate the command cache"
+    );
+    assert!(
+        client
+            .finish_application_command_request(
+                guild_id,
+                fresh_request_id,
+                vec![application_command("fresh")],
+            )
+            .is_some()
+    );
+    let commands = client
+        .application_commands
+        .lock()
+        .expect("application command cache lock is not poisoned");
+    assert_eq!(commands[&guild_id][0].name, "fresh");
 }
 
 #[test]
@@ -1279,17 +1356,23 @@ fn application_command_metadata_keeps_raw_backend_owned() {
     let official_wordle =
         application_command_with_ids("wordle", "Wordle", 105, OFFICIAL_WORDLE_APPLICATION_ID);
 
-    let tui_commands = client.record_application_commands_for_tui(
-        guild_id,
-        vec![
-            command,
-            selected_command.clone(),
-            third_party_play,
-            third_party_wordle,
-            discord_play,
-            official_wordle,
-        ],
-    );
+    let request_id = client
+        .begin_application_command_request(guild_id)
+        .expect("application command request should start");
+    let tui_commands = client
+        .finish_application_command_request(
+            guild_id,
+            request_id,
+            vec![
+                command,
+                selected_command.clone(),
+                third_party_play,
+                third_party_wordle,
+                discord_play,
+                official_wordle,
+            ],
+        )
+        .expect("current application command request should finish");
 
     assert_eq!(tui_commands[0].raw, Value::Null);
     assert_eq!(
@@ -1429,7 +1512,8 @@ fn guild_member_search_validates_query_and_caps_limit() {
     assert_eq!(limit, MEMBER_SEARCH_MAX_LIMIT);
     assert!(presences);
     let nonce = nonce.expect("member search should include nonce");
-    assert!(nonce.starts_with("mention-ac-1-"));
+    assert!(nonce.starts_with("mention-ac-"));
+    assert!(nonce.len() <= 32);
     assert!(!nonce.contains(&query));
 }
 

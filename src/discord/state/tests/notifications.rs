@@ -50,6 +50,90 @@ fn all_message_notification_settings_show_numeric_badge() {
 }
 
 #[test]
+fn notification_flags_drive_low_priority_mentions_and_sidebar_visibility() {
+    let guild_id = Id::new(1);
+    let opted_in_channel_id = Id::new(2);
+    let hidden_channel_id = Id::new(3);
+    let current_user_id = Id::new(10);
+    let author_id = Id::new(20);
+    let mut settings = notification_settings(guild_id, NotificationLevel::NoMessages);
+    settings.flags = 1 << 14;
+    settings.hide_muted_channels = true;
+    settings
+        .channel_overrides
+        .push(ChannelNotificationOverrideInfo {
+            flags: (1 << 10) | (1 << 12),
+            ..ChannelNotificationOverrideInfo::test(opted_in_channel_id)
+        });
+    settings
+        .channel_overrides
+        .push(ChannelNotificationOverrideInfo {
+            muted: true,
+            ..ChannelNotificationOverrideInfo::test(hidden_channel_id)
+        });
+
+    let mut state = DiscordState::default();
+    state.apply_event(&AppEvent::Ready {
+        user: "me".to_owned(),
+        user_id: Some(current_user_id),
+    });
+    state.apply_event(&guild_create_event(GuildCreateFixture {
+        guild_id,
+        channels: vec![
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                name: "opted-in".to_owned(),
+                ..channel_info(opted_in_channel_id, "GuildText", Vec::new())
+            },
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                name: "hidden".to_owned(),
+                ..channel_info(hidden_channel_id, "GuildText", Vec::new())
+            },
+        ],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+    state.apply_event(&user_guild_settings_init(vec![settings]));
+    state.apply_event(&AppEvent::UserNotificationSettingsUpdate { flags: 1 << 5 });
+
+    let message = message_create(
+        Some(guild_id),
+        opted_in_channel_id,
+        Id::new(30),
+        author_id,
+        "hello",
+        Vec::new(),
+    );
+    assert!(
+        !state.message_event_triggers_notification(&message),
+        "low-priority all-message mentions should not play a notification"
+    );
+    state.apply_event(&message);
+
+    assert_eq!(
+        state.channel_sidebar_unread(opted_in_channel_id),
+        ChannelUnreadState::Mentioned(1)
+    );
+    assert_eq!(
+        state
+            .sidebar_channels_for_guild(Some(guild_id))
+            .into_iter()
+            .map(|channel| channel.id)
+            .collect::<Vec<_>>(),
+        vec![opted_in_channel_id]
+    );
+    assert_eq!(
+        state
+            .viewable_channels_for_guild(Some(guild_id))
+            .into_iter()
+            .map(|channel| channel.id)
+            .collect::<Vec<_>>(),
+        vec![opted_in_channel_id, hidden_channel_id],
+        "notification hiding must not change permission-based visibility"
+    );
+}
+
+#[test]
 fn loaded_guild_messages_use_notification_numeric_badge() {
     let guild_id = Id::new(1);
     let channel_id = Id::new(2);

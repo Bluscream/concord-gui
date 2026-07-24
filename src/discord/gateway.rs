@@ -11,7 +11,7 @@ use crate::discord::ids::{
 use futures::{SinkExt, StreamExt};
 use rand::Rng;
 use serde_json::{Value, json};
-use tokio::sync::{Mutex, mpsc, oneshot, watch};
+use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::time::{Instant, sleep};
 use tokio_tungstenite::{
     connect_async_with_config,
@@ -25,15 +25,13 @@ use tokio_tungstenite::{
 
 use super::{
     ActivityInfo, PresenceStatus,
-    client::publish_app_event,
-    events::{AppEvent, SequencedAppEvent},
+    client::AppEventPublisher,
+    events::AppEvent,
     fingerprint::{
         CLIENT_BROWSER, CLIENT_BROWSER_VERSION, ClientFingerprint, DISCORD_REFERRER_CURRENT,
         DISCORD_REFERRING_DOMAIN_CURRENT, discord_gateway_headers,
     },
-    request_lifecycle::RequestLifecycle,
-    state::{DiscordState, SnapshotRevision},
-    voice::{self, VoiceRuntimeEvent},
+    state::DiscordState,
 };
 use crate::logging;
 
@@ -87,14 +85,9 @@ pub enum GatewayCommand {
 #[derive(Clone)]
 pub(crate) struct GatewayRuntime {
     pub(crate) fingerprint: Arc<ClientFingerprint>,
-    pub(crate) effects_tx: mpsc::Sender<SequencedAppEvent>,
-    pub(crate) snapshots_tx: watch::Sender<SnapshotRevision>,
     pub(crate) state: Arc<RwLock<DiscordState>>,
-    pub(crate) revision: Arc<RwLock<SnapshotRevision>>,
     pub(crate) gateway_session_id: Arc<RwLock<Option<String>>>,
-    pub(crate) publish_lock: Arc<Mutex<()>>,
-    pub(crate) request_lifecycle: Arc<std::sync::Mutex<RequestLifecycle>>,
-    pub(crate) voice_events_tx: mpsc::UnboundedSender<VoiceRuntimeEvent>,
+    pub(crate) event_publisher: AppEventPublisher,
 }
 
 /// Discord user-account gateway endpoint. We pin to `v=9` because the v9
@@ -130,6 +123,10 @@ const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(30);
 // WebSocket control frames such as Pong and Close are not Gateway events.
 const GATEWAY_SEND_LIMIT: usize = 120;
 const GATEWAY_SEND_WINDOW: Duration = Duration::from_secs(60);
+const GUILD_MEMBER_REQUEST_INTERVAL: Duration = Duration::from_secs(30);
+const GUILD_MEMBER_REQUEST_RESPONSE_TTL: Duration = Duration::from_secs(2 * 60);
+const MAX_PENDING_GUILD_MEMBER_REQUESTS: usize = 512;
+const MAX_SENT_GUILD_MEMBER_REQUESTS: usize = 512;
 const MAX_GATEWAY_RETRY_DELAY: Duration = Duration::from_secs(30 * 60);
 
 type GatewayStream =
@@ -162,6 +159,526 @@ struct GatewaySendWindow {
 struct SubscriptionDeduper {
     direct_messages: HashSet<Id<ChannelMarker>>,
     guild_channels: HashMap<GuildChannelSubscriptionKey, Vec<(u32, u32)>>,
+}
+
+#[derive(Default)]
+struct GuildMemberRequestLimiter {
+    next_available: HashMap<Id<GuildMarker>, Instant>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum GuildMemberRequestKind {
+    Search {
+        query: String,
+        limit: u16,
+        presences: bool,
+    },
+    ByIds {
+        user_ids: Vec<Id<UserMarker>>,
+        presences: bool,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct GuildMemberRequest {
+    guild_id: Id<GuildMarker>,
+    nonce: String,
+    kind: GuildMemberRequestKind,
+}
+
+#[derive(Clone, Debug)]
+struct PendingGuildMemberRequest {
+    request: GuildMemberRequest,
+    send_at: Instant,
+}
+
+struct InFlightGuildMemberRequest {
+    completion: oneshot::Receiver<Result<(), String>>,
+}
+
+struct ScheduledGuildMemberRequest {
+    request: GuildMemberRequest,
+    accepted: bool,
+    retry_at: Option<Instant>,
+}
+
+struct SentGuildMemberRequest {
+    request: GuildMemberRequest,
+    sent_at: Instant,
+}
+
+struct GuildMemberRequestScheduler {
+    limiter: GuildMemberRequestLimiter,
+    pending: VecDeque<PendingGuildMemberRequest>,
+    in_flight: Option<ScheduledGuildMemberRequest>,
+    awaiting_response: VecDeque<SentGuildMemberRequest>,
+    next_nonce: u64,
+}
+
+#[derive(Default)]
+struct GatewaySessionResources {
+    guild_member_requests: GuildMemberRequestScheduler,
+    last_presence: Option<GatewayPresence>,
+}
+
+struct GatewayPresence {
+    status: PresenceStatus,
+    activities: Vec<ActivityInfo>,
+}
+
+impl GuildMemberRequestLimiter {
+    fn reserve(&mut self, guild_id: Id<GuildMarker>, now: Instant) -> Duration {
+        let send_at = self
+            .next_available
+            .get(&guild_id)
+            .copied()
+            .filter(|next| *next > now)
+            .unwrap_or(now);
+        self.next_available
+            .insert(guild_id, send_at + GUILD_MEMBER_REQUEST_INTERVAL);
+        send_at.saturating_duration_since(now)
+    }
+}
+
+impl Default for GuildMemberRequestScheduler {
+    fn default() -> Self {
+        Self {
+            limiter: GuildMemberRequestLimiter::default(),
+            pending: VecDeque::new(),
+            in_flight: None,
+            awaiting_response: VecDeque::new(),
+            next_nonce: 1,
+        }
+    }
+}
+
+impl GuildMemberRequest {
+    fn payload(&self) -> String {
+        match &self.kind {
+            GuildMemberRequestKind::Search {
+                query,
+                limit,
+                presences,
+            } => request_guild_members_payload(
+                self.guild_id,
+                query,
+                *limit,
+                *presences,
+                Some(&self.nonce),
+            ),
+            GuildMemberRequestKind::ByIds {
+                user_ids,
+                presences,
+            } => request_guild_members_by_ids_payload(
+                self.guild_id,
+                user_ids,
+                *presences,
+                &self.nonce,
+            ),
+        }
+    }
+
+    fn is_coalescible_search(&self) -> bool {
+        matches!(
+            &self.kind,
+            GuildMemberRequestKind::Search { query, limit, .. }
+                if !query.is_empty() || *limit > 0
+        )
+    }
+}
+
+impl GuildMemberRequestScheduler {
+    fn enqueue_search(
+        &mut self,
+        guild_id: Id<GuildMarker>,
+        query: String,
+        limit: u16,
+        presences: bool,
+        nonce: Option<String>,
+        now: Instant,
+    ) -> bool {
+        self.prune_awaiting(now);
+        let request = GuildMemberRequest {
+            guild_id,
+            nonce: nonce.unwrap_or_else(|| self.next_nonce()),
+            kind: GuildMemberRequestKind::Search {
+                query,
+                limit,
+                presences,
+            },
+        };
+        self.awaiting_response
+            .retain(|sent| sent.request.nonce != request.nonce);
+
+        if request.is_coalescible_search()
+            && let Some(pending) = self.pending.iter_mut().rev().find(|pending| {
+                pending.request.guild_id == guild_id && pending.request.is_coalescible_search()
+            })
+        {
+            pending.request = request;
+            return true;
+        }
+
+        if self.pending.len() >= MAX_PENDING_GUILD_MEMBER_REQUESTS {
+            let Some(position) = self
+                .pending
+                .iter()
+                .position(|pending| pending.request.is_coalescible_search())
+            else {
+                return false;
+            };
+            self.pending.remove(position);
+        }
+
+        self.enqueue_request(request, now)
+    }
+
+    fn enqueue_by_ids(
+        &mut self,
+        guild_id: Id<GuildMarker>,
+        user_ids: Vec<Id<UserMarker>>,
+        presences: bool,
+        now: Instant,
+    ) {
+        self.prune_awaiting(now);
+        let mut remaining = user_ids;
+        remaining.sort_unstable();
+        remaining.dedup();
+
+        let compatible_requests = self.pending.iter().filter(|pending| {
+            pending.request.guild_id == guild_id
+                && matches!(
+                    pending.request.kind,
+                    GuildMemberRequestKind::ByIds {
+                        presences: pending_presences,
+                        ..
+                    } if pending_presences == presences
+                )
+        });
+        let mut available = 0usize;
+        for pending in compatible_requests {
+            let GuildMemberRequestKind::ByIds { user_ids, .. } = &pending.request.kind else {
+                continue;
+            };
+            remaining.retain(|user_id| !user_ids.contains(user_id));
+            available += 100usize.saturating_sub(user_ids.len());
+        }
+        let new_request_count = remaining.len().saturating_sub(available).div_ceil(100);
+        self.make_room_for_by_ids(new_request_count);
+
+        for pending in self.pending.iter_mut().filter(|pending| {
+            pending.request.guild_id == guild_id
+                && matches!(
+                    pending.request.kind,
+                    GuildMemberRequestKind::ByIds {
+                        presences: pending_presences,
+                        ..
+                    } if pending_presences == presences
+                )
+        }) {
+            let GuildMemberRequestKind::ByIds { user_ids, .. } = &mut pending.request.kind else {
+                continue;
+            };
+            remaining.retain(|user_id| !user_ids.contains(user_id));
+            let available = 100usize.saturating_sub(user_ids.len());
+            let added = remaining.len().min(available);
+            user_ids.extend(remaining.drain(..added));
+            if remaining.is_empty() {
+                return;
+            }
+        }
+
+        for user_ids in remaining.chunks(100) {
+            let request = GuildMemberRequest {
+                guild_id,
+                nonce: self.next_nonce(),
+                kind: GuildMemberRequestKind::ByIds {
+                    user_ids: user_ids.to_vec(),
+                    presences,
+                },
+            };
+            self.enqueue_by_ids_request(request, now);
+        }
+    }
+
+    fn make_room_for_by_ids(&mut self, additional: usize) {
+        let overflow = self
+            .pending
+            .len()
+            .saturating_add(additional)
+            .saturating_sub(MAX_PENDING_GUILD_MEMBER_REQUESTS);
+        if overflow == 0 {
+            return;
+        }
+        let positions = self
+            .pending
+            .iter()
+            .enumerate()
+            .filter_map(|(index, pending)| pending.request.is_coalescible_search().then_some(index))
+            .take(overflow)
+            .collect::<Vec<_>>();
+        for position in positions.into_iter().rev() {
+            self.pending.remove(position);
+        }
+    }
+
+    fn enqueue_request(&mut self, request: GuildMemberRequest, now: Instant) -> bool {
+        if self.pending.len() >= MAX_PENDING_GUILD_MEMBER_REQUESTS {
+            return false;
+        }
+        let guild_id = request.guild_id;
+        let send_at = now + self.limiter.reserve(guild_id, now);
+        self.pending
+            .push_back(PendingGuildMemberRequest { request, send_at });
+        true
+    }
+
+    fn enqueue_by_ids_request(&mut self, request: GuildMemberRequest, now: Instant) {
+        // Hydration requests resolve concrete users already visible in the UI,
+        // so losing them is worse than briefly exceeding the search queue's
+        // soft memory bound. IDs are deduplicated and grouped into 100-member
+        // payloads here, while the per-guild limiter still controls sends.
+        let guild_id = request.guild_id;
+        let send_at = now + self.limiter.reserve(guild_id, now);
+        self.pending
+            .push_back(PendingGuildMemberRequest { request, send_at });
+    }
+
+    fn next_nonce(&mut self) -> String {
+        let nonce = format!("concord-{:016x}", self.next_nonce);
+        self.next_nonce = self.next_nonce.wrapping_add(1).max(1);
+        nonce
+    }
+
+    fn next_delay(&self, now: Instant) -> Option<Duration> {
+        self.pending
+            .iter()
+            .map(|request| request.send_at.saturating_duration_since(now))
+            .min()
+    }
+
+    fn start_due(&mut self, now: Instant) -> Option<String> {
+        if self.in_flight.is_some() {
+            return None;
+        }
+        let index = self
+            .pending
+            .iter()
+            .enumerate()
+            .filter(|(_, request)| request.send_at <= now)
+            .min_by_key(|(_, request)| request.send_at)
+            .map(|(index, _)| index)?;
+        let pending = self
+            .pending
+            .remove(index)
+            .expect("due guild member request exists");
+        let payload = pending.request.payload();
+        self.in_flight = Some(ScheduledGuildMemberRequest {
+            request: pending.request,
+            accepted: false,
+            retry_at: None,
+        });
+        Some(payload)
+    }
+
+    fn complete_send(&mut self, sent_at: Instant) {
+        let completed = self
+            .in_flight
+            .take()
+            .expect("sent guild member request exists");
+        let guild_id = completed.request.guild_id;
+        if let Some(retry_at) = completed.retry_at {
+            self.pending.push_front(PendingGuildMemberRequest {
+                request: completed.request,
+                send_at: retry_at,
+            });
+            self.reschedule_guild(guild_id, retry_at);
+            return;
+        }
+
+        self.reschedule_guild(guild_id, sent_at + GUILD_MEMBER_REQUEST_INTERVAL);
+        if completed.accepted {
+            return;
+        }
+
+        self.prune_awaiting(sent_at);
+        if self.awaiting_response.len() >= MAX_SENT_GUILD_MEMBER_REQUESTS {
+            self.awaiting_response.pop_front();
+        }
+        self.awaiting_response.push_back(SentGuildMemberRequest {
+            request: completed.request,
+            sent_at,
+        });
+    }
+
+    fn cancel_in_flight(&mut self, now: Instant) {
+        let Some(in_flight) = self.in_flight.take() else {
+            return;
+        };
+        if in_flight.accepted {
+            return;
+        }
+        let guild_id = in_flight.request.guild_id;
+        let send_at = in_flight
+            .retry_at
+            .unwrap_or(now + GUILD_MEMBER_REQUEST_INTERVAL);
+        self.pending.push_front(PendingGuildMemberRequest {
+            request: in_flight.request,
+            send_at,
+        });
+        self.reschedule_guild(guild_id, send_at);
+    }
+
+    fn apply_rate_limit(
+        &mut self,
+        guild_id: Id<GuildMarker>,
+        nonce: Option<&str>,
+        retry_after: Duration,
+        now: Instant,
+    ) {
+        self.prune_awaiting(now);
+        let retry_at = now + retry_after;
+        let has_newer_search = self.pending.iter().any(|pending| {
+            pending.request.guild_id == guild_id && pending.request.is_coalescible_search()
+        });
+
+        let in_flight_matches = self.in_flight.as_ref().is_some_and(|in_flight| {
+            in_flight.request.guild_id == guild_id
+                && nonce.is_none_or(|nonce| in_flight.request.nonce == nonce)
+        });
+        if in_flight_matches {
+            let in_flight = self
+                .in_flight
+                .as_mut()
+                .expect("matching guild member request is in flight");
+            if in_flight.request.is_coalescible_search() && has_newer_search {
+                in_flight.accepted = true;
+                in_flight.retry_at = None;
+                self.reschedule_guild(guild_id, retry_at);
+            } else {
+                in_flight.retry_at = Some(retry_at);
+                in_flight.accepted = false;
+            }
+            return;
+        }
+
+        let position = match nonce {
+            Some(nonce) => self
+                .awaiting_response
+                .iter()
+                .rposition(|sent| sent.request.guild_id == guild_id && sent.request.nonce == nonce),
+            None => self
+                .awaiting_response
+                .iter()
+                .rposition(|sent| sent.request.guild_id == guild_id),
+        };
+        if let Some(position) = position {
+            let sent = self
+                .awaiting_response
+                .remove(position)
+                .expect("rate-limited guild member request exists");
+            if !sent.request.is_coalescible_search() || !has_newer_search {
+                self.pending.push_front(PendingGuildMemberRequest {
+                    request: sent.request,
+                    send_at: retry_at,
+                });
+            }
+        }
+        self.reschedule_guild(guild_id, retry_at);
+    }
+
+    fn acknowledge(&mut self, nonce: &str) {
+        if let Some(in_flight) = self.in_flight.as_mut()
+            && in_flight.request.nonce == nonce
+        {
+            in_flight.accepted = true;
+            return;
+        }
+        if let Some(position) = self
+            .awaiting_response
+            .iter()
+            .rposition(|sent| sent.request.nonce == nonce)
+        {
+            self.awaiting_response.remove(position);
+            return;
+        }
+        if let Some(position) = self
+            .pending
+            .iter()
+            .rposition(|pending| pending.request.nonce == nonce)
+        {
+            self.pending.remove(position);
+        }
+    }
+
+    fn reschedule_guild(&mut self, guild_id: Id<GuildMarker>, earliest: Instant) {
+        let mut next_available = earliest;
+        for pending in self
+            .pending
+            .iter_mut()
+            .filter(|pending| pending.request.guild_id == guild_id)
+        {
+            pending.send_at = pending.send_at.max(next_available);
+            next_available = pending.send_at + GUILD_MEMBER_REQUEST_INTERVAL;
+        }
+        self.limiter.next_available.insert(guild_id, next_available);
+    }
+
+    fn prune_awaiting(&mut self, now: Instant) {
+        while self.awaiting_response.front().is_some_and(|sent| {
+            now.saturating_duration_since(sent.sent_at) >= GUILD_MEMBER_REQUEST_RESPONSE_TTL
+        }) {
+            self.awaiting_response.pop_front();
+        }
+    }
+
+    fn prepare_reconnect(&mut self, now: Instant) {
+        self.prune_awaiting(now);
+        self.cancel_in_flight(now);
+        self.recover_awaiting(now + GUILD_MEMBER_REQUEST_INTERVAL);
+    }
+
+    fn recover_awaiting(&mut self, earliest: Instant) {
+        let mut recovered = VecDeque::new();
+        let mut recovered_guilds = HashSet::new();
+        while let Some(sent) = self.awaiting_response.pop_back() {
+            let superseded_search = sent.request.is_coalescible_search()
+                && self.pending.iter().chain(recovered.iter()).any(|pending| {
+                    pending.request.guild_id == sent.request.guild_id
+                        && pending.request.is_coalescible_search()
+                });
+            if !superseded_search {
+                recovered_guilds.insert(sent.request.guild_id);
+                recovered.push_front(PendingGuildMemberRequest {
+                    request: sent.request,
+                    send_at: earliest,
+                });
+            }
+        }
+        recovered.append(&mut self.pending);
+        self.pending = recovered;
+        for guild_id in recovered_guilds {
+            self.reschedule_guild(guild_id, earliest);
+        }
+    }
+
+    fn start_new_session(&mut self, now: Instant) {
+        self.prune_awaiting(now);
+        self.cancel_in_flight(now);
+        self.recover_awaiting(now);
+        self.limiter = GuildMemberRequestLimiter::default();
+        for pending in &mut self.pending {
+            pending.send_at = now + self.limiter.reserve(pending.request.guild_id, now);
+        }
+    }
+}
+
+impl InFlightGuildMemberRequest {
+    async fn wait(&mut self) -> Result<(), String> {
+        (&mut self.completion)
+            .await
+            .map_err(|_| "gateway writer task stopped before send completed".to_owned())?
+    }
 }
 
 impl SubscriptionDeduper {
@@ -213,14 +730,9 @@ struct GuildChannelSubscriptionKey {
 
 #[derive(Clone, Copy)]
 struct GatewayPublishContext<'a> {
-    effects_tx: &'a mpsc::Sender<SequencedAppEvent>,
-    snapshots_tx: &'a watch::Sender<SnapshotRevision>,
     state: &'a Arc<RwLock<DiscordState>>,
-    revision: &'a Arc<RwLock<SnapshotRevision>>,
     gateway_session_id: &'a Arc<RwLock<Option<String>>>,
-    publish_lock: &'a Arc<Mutex<()>>,
-    request_lifecycle: &'a Arc<std::sync::Mutex<RequestLifecycle>>,
-    voice_events_tx: &'a mpsc::UnboundedSender<VoiceRuntimeEvent>,
+    event_publisher: &'a AppEventPublisher,
 }
 
 #[derive(Clone, Copy)]
@@ -310,24 +822,21 @@ pub async fn run_gateway(
     runtime: GatewayRuntime,
 ) {
     let mut session = SessionState::default();
+    let mut resources = GatewaySessionResources::default();
     let mut backoff = RECONNECT_BASE_DELAY;
     let mut publish_gateway_closed = true;
 
     loop {
         let publish = GatewayPublishContext {
-            effects_tx: &runtime.effects_tx,
-            snapshots_tx: &runtime.snapshots_tx,
             state: &runtime.state,
-            revision: &runtime.revision,
             gateway_session_id: &runtime.gateway_session_id,
-            publish_lock: &runtime.publish_lock,
-            request_lifecycle: &runtime.request_lifecycle,
-            voice_events_tx: &runtime.voice_events_tx,
+            event_publisher: &runtime.event_publisher,
         };
         let outcome = match connect_and_run(
             &token,
             &mut commands,
             &mut session,
+            &mut resources,
             &runtime.fingerprint,
             publish,
         )
@@ -385,14 +894,9 @@ pub async fn run_gateway(
 
     if publish_gateway_closed {
         let publish = GatewayPublishContext {
-            effects_tx: &runtime.effects_tx,
-            snapshots_tx: &runtime.snapshots_tx,
             state: &runtime.state,
-            revision: &runtime.revision,
             gateway_session_id: &runtime.gateway_session_id,
-            publish_lock: &runtime.publish_lock,
-            request_lifecycle: &runtime.request_lifecycle,
-            voice_events_tx: &runtime.voice_events_tx,
+            event_publisher: &runtime.event_publisher,
         };
         publish_gateway_event(publish, AppEvent::GatewayClosed).await;
     }
@@ -402,6 +906,7 @@ async fn connect_and_run(
     token: &str,
     commands: &mut mpsc::UnboundedReceiver<GatewayCommand>,
     session: &mut SessionState,
+    resources: &mut GatewaySessionResources,
     fingerprint: &ClientFingerprint,
     publish: GatewayPublishContext<'_>,
 ) -> Result<ConnectionOutcome, String> {
@@ -456,7 +961,21 @@ async fn connect_and_run(
         send_text(&sender, payload).await?;
         logging::debug("gateway", "RESUME sent");
     } else {
-        let payload = build_identify_payload(token, fingerprint);
+        resources
+            .guild_member_requests
+            .start_new_session(Instant::now());
+        if session.has_received_ready && resources.last_presence.is_none() {
+            let state = publish
+                .state
+                .read()
+                .expect("discord state lock is not poisoned");
+            resources.last_presence = current_gateway_presence(&state);
+        }
+        let reidentify_presence = session
+            .has_received_ready
+            .then_some(resources.last_presence.as_ref())
+            .flatten();
+        let payload = build_identify_payload(token, fingerprint, reidentify_presence);
         send_text(&sender, payload).await?;
         logging::debug("gateway", "IDENTIFY sent");
     }
@@ -470,11 +989,9 @@ async fn connect_and_run(
     let heartbeat_ack: Arc<Mutex<HeartbeatAckState>> = Arc::default();
     let heartbeat_ack_for_task = Arc::clone(&heartbeat_ack);
     let (heartbeat_timeout_tx, mut heartbeat_timeout_rx) = mpsc::unbounded_channel();
-    let initial_jitter = {
-        let jitter_ms =
-            rand::thread_rng().gen_range(0..=heartbeat_interval.as_millis().min(2_000) as u64);
-        Duration::from_millis(jitter_ms)
-    };
+    let initial_jitter = Duration::from_millis(
+        rand::thread_rng().gen_range(0..=heartbeat_interval.as_millis() as u64),
+    );
     let heartbeat_task = tokio::spawn(async move {
         sleep(initial_jitter).await;
         loop {
@@ -499,7 +1016,12 @@ async fn connect_and_run(
 
     // Main loop: race incoming frames against outgoing user commands. The
     // heartbeat task is already running on its own cadence in the background.
+    let mut member_request_send: Option<InFlightGuildMemberRequest> = None;
     let outcome = loop {
+        let member_request_delay = member_request_send
+            .is_none()
+            .then(|| resources.guild_member_requests.next_delay(Instant::now()))
+            .flatten();
         tokio::select! {
             biased;
 
@@ -513,7 +1035,12 @@ async fn connect_and_run(
                             }
                             break ConnectionOutcome::Stop;
                         } else if let Err(error) =
-                            dispatch_command(&sender, command, &mut subscription_deduper)
+                            dispatch_command(
+                                &sender,
+                                command,
+                                &mut subscription_deduper,
+                                resources,
+                            )
                         {
                             let message = format!("command send failed: {error}");
                             log_and_publish_gateway_error(publish, message).await;
@@ -547,6 +1074,7 @@ async fn connect_and_run(
                             value,
                             session,
                             frame_context,
+                            resources,
                         ).await {
                             FrameOutcome::Continue => {}
                             FrameOutcome::Resume => break ConnectionOutcome::Resume,
@@ -593,9 +1121,57 @@ async fn connect_and_run(
                 log_and_publish_gateway_error(publish, error).await;
                 break ConnectionOutcome::Resume;
             }
+            send_result = async {
+                member_request_send
+                    .as_mut()
+                    .expect("guard ensures a guild member request is in flight")
+                    .wait()
+                    .await
+            }, if member_request_send.is_some() => {
+                member_request_send
+                    .take()
+                    .expect("completed guild member request exists");
+                if let Err(error) = send_result {
+                    let message = format!("guild member request send failed: {error}");
+                    log_and_publish_gateway_error(publish, message).await;
+                    break ConnectionOutcome::Resume;
+                }
+                resources
+                    .guild_member_requests
+                    .complete_send(Instant::now());
+            }
+            _ = sleep(member_request_delay.unwrap_or_default()), if member_request_delay.is_some() => {
+                let Some(payload) = resources
+                    .guild_member_requests
+                    .start_due(Instant::now())
+                else {
+                    continue;
+                };
+                let completion = match sender.enqueue_normal(payload) {
+                    Ok(completion) => completion,
+                    Err(error) => {
+                        let message = format!("guild member request send failed: {error}");
+                        log_and_publish_gateway_error(publish, message).await;
+                        break ConnectionOutcome::Resume;
+                    }
+                };
+                member_request_send = Some(InFlightGuildMemberRequest { completion });
+            }
         }
     };
 
+    if matches!(
+        outcome,
+        ConnectionOutcome::Resume | ConnectionOutcome::Reidentify
+    ) {
+        resources
+            .guild_member_requests
+            .prepare_reconnect(Instant::now());
+    } else {
+        resources
+            .guild_member_requests
+            .cancel_in_flight(Instant::now());
+    }
     heartbeat_task.abort();
     gateway_writer_task.abort();
     Ok(outcome)
@@ -627,6 +1203,7 @@ async fn handle_frame(
     value: Value,
     session: &mut SessionState,
     context: FrameContext<'_>,
+    resources: &mut GatewaySessionResources,
 ) -> FrameOutcome {
     let op = value.get("op").and_then(Value::as_u64).unwrap_or_default();
     match op {
@@ -639,16 +1216,26 @@ async fn handle_frame(
             let dispatch_type = value.get("t").and_then(Value::as_str).unwrap_or("");
             let mut publish_reidentified = false;
             if dispatch_type == "RATE_LIMITED"
-                && let Some((guild_id, retry_after)) = gateway_guild_member_rate_limit(&value)
+                && let Some(rate_limit) = gateway_guild_member_rate_limit(&value)
             {
                 logging::debug(
                     "gateway",
                     format!(
                         "guild member requests rate limited: guild={} retry_after_ms={}",
-                        guild_id.get(),
-                        retry_after.as_millis()
+                        rate_limit.guild_id.get(),
+                        rate_limit.retry_after.as_millis()
                     ),
                 );
+                resources.guild_member_requests.apply_rate_limit(
+                    rate_limit.guild_id,
+                    rate_limit.nonce.as_deref(),
+                    rate_limit.retry_after,
+                    Instant::now(),
+                );
+            } else if dispatch_type == "GUILD_MEMBERS_CHUNK"
+                && let Some(nonce) = gateway_guild_member_chunk_nonce(&value)
+            {
+                resources.guild_member_requests.acknowledge(nonce);
             }
             // Capture the session_id and resume_url from READY so a later
             // disconnect can RESUME instead of redoing the heavy initial sync.
@@ -748,21 +1335,7 @@ async fn handle_frame(
 }
 
 async fn publish_gateway_event(context: GatewayPublishContext<'_>, event: AppEvent) {
-    context
-        .request_lifecycle
-        .lock()
-        .expect("request lifecycle lock is not poisoned")
-        .record_event(&event);
-    publish_app_event(
-        context.effects_tx,
-        context.snapshots_tx,
-        context.state,
-        context.revision,
-        context.publish_lock,
-        &event,
-    )
-    .await;
-    voice::forward_app_event(context.voice_events_tx, &event);
+    context.event_publisher.publish(event).await;
 }
 
 fn ready_installation_id(ready: &Value) -> Option<&str> {
@@ -812,12 +1385,19 @@ fn dispatch_command(
     sender: &GatewaySender,
     command: GatewayCommand,
     subscription_deduper: &mut SubscriptionDeduper,
+    resources: &mut GatewaySessionResources,
 ) -> Result<(), String> {
     if !subscription_deduper.should_send(&command) {
         logging::debug("gateway", "skipping duplicate channel subscription");
         return Ok(());
     }
 
+    if let GatewayCommand::UpdatePresence { status, activities } = &command {
+        resources.last_presence = Some(GatewayPresence {
+            status: *status,
+            activities: activities.clone(),
+        });
+    }
     let payload = match command {
         GatewayCommand::RequestGuildMembers {
             guild_id,
@@ -836,7 +1416,20 @@ fn dispatch_command(
                     presences
                 ),
             );
-            request_guild_members_payload(guild_id, &query, limit, presences, nonce.as_deref())
+            if !resources.guild_member_requests.enqueue_search(
+                guild_id,
+                query,
+                limit,
+                presences,
+                nonce,
+                Instant::now(),
+            ) {
+                logging::debug(
+                    "gateway",
+                    "dropping guild member search because the session queue is full",
+                );
+            }
+            return Ok(());
         }
         GatewayCommand::RequestGuildMembersByIds {
             guild_id,
@@ -852,7 +1445,13 @@ fn dispatch_command(
                     presences
                 ),
             );
-            request_guild_members_by_ids_payload(guild_id, &user_ids, presences)
+            resources.guild_member_requests.enqueue_by_ids(
+                guild_id,
+                user_ids,
+                presences,
+                Instant::now(),
+            );
+            return Ok(());
         }
         GatewayCommand::SubscribeDirectMessage { channel_id } => {
             logging::debug(
@@ -959,6 +1558,20 @@ impl GatewaySender {
             })
             .map_err(|_| "gateway writer task stopped".to_owned())
     }
+
+    fn enqueue_normal(
+        &self,
+        payload: String,
+    ) -> Result<oneshot::Receiver<Result<(), String>>, String> {
+        let (completion_tx, completion_rx) = oneshot::channel();
+        self.normal_tx
+            .send(GatewaySendRequest {
+                payload,
+                completion: Some(completion_tx),
+            })
+            .map_err(|_| "gateway writer task stopped".to_owned())?;
+        Ok(completion_rx)
+    }
 }
 
 impl GatewaySendWindow {
@@ -1004,7 +1617,14 @@ fn spawn_gateway_sender(
     )
 }
 
-fn gateway_guild_member_rate_limit(value: &Value) -> Option<(Id<GuildMarker>, Duration)> {
+#[derive(Debug, Eq, PartialEq)]
+struct GuildMemberRateLimit {
+    guild_id: Id<GuildMarker>,
+    nonce: Option<String>,
+    retry_after: Duration,
+}
+
+fn gateway_guild_member_rate_limit(value: &Value) -> Option<GuildMemberRateLimit> {
     let data = value.get("d")?;
     if data.get("opcode").and_then(Value::as_u64) != Some(8) {
         return None;
@@ -1020,10 +1640,24 @@ fn gateway_guild_member_rate_limit(value: &Value) -> Option<(Id<GuildMarker>, Du
     if !retry_after.is_finite() || retry_after < 0.0 {
         return None;
     }
-    Some((
+    Some(GuildMemberRateLimit {
         guild_id,
-        Duration::from_secs_f64(retry_after.min(MAX_GATEWAY_RETRY_DELAY.as_secs_f64())),
-    ))
+        nonce: data
+            .get("meta")
+            .and_then(|meta| meta.get("nonce"))
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        retry_after: Duration::from_secs_f64(
+            retry_after.min(MAX_GATEWAY_RETRY_DELAY.as_secs_f64()),
+        ),
+    })
+}
+
+fn gateway_guild_member_chunk_nonce(value: &Value) -> Option<&str> {
+    value
+        .get("d")
+        .and_then(|data| data.get("nonce"))
+        .and_then(Value::as_str)
 }
 
 async fn run_gateway_sender(
@@ -1117,7 +1751,11 @@ fn drain_gateway_requests(
     }
 }
 
-fn build_identify_payload(token: &str, fingerprint: &ClientFingerprint) -> String {
+fn build_identify_payload(
+    token: &str,
+    fingerprint: &ClientFingerprint,
+    presence: Option<&GatewayPresence>,
+) -> String {
     let mut properties = json!({
         "os": fingerprint.os,
         "browser": CLIENT_BROWSER,
@@ -1138,18 +1776,17 @@ fn build_identify_payload(token: &str, fingerprint: &ClientFingerprint) -> Strin
         properties["installation_id"] = Value::String(installation_id);
     }
 
+    let presence = presence
+        .map(|presence| gateway_presence_payload(&presence.status, &presence.activities))
+        .unwrap_or_else(|| gateway_presence_payload(&PresenceStatus::Unknown, &[]));
+
     json!({
         "op": 2,
         "d": {
             "token": token,
             "capabilities": USER_ACCOUNT_CAPABILITIES,
             "properties": properties,
-            "presence": {
-                "status": PresenceStatus::Online.gateway_status(),
-                "since": 0,
-                "activities": [],
-                "afk": false,
-            },
+            "presence": presence,
             "compress": false,
             "client_state": {
                 "guild_versions": {},
@@ -1204,6 +1841,7 @@ fn request_guild_members_by_ids_payload(
     guild_id: Id<GuildMarker>,
     user_ids: &[Id<UserMarker>],
     presences: bool,
+    nonce: &str,
 ) -> String {
     let user_ids = user_ids
         .iter()
@@ -1216,6 +1854,7 @@ fn request_guild_members_by_ids_payload(
             "guild_id": guild_id.to_string(),
             "user_ids": user_ids,
             "presences": presences,
+            "nonce": nonce,
         },
     })
     .to_string()
@@ -1278,14 +1917,26 @@ fn voice_state_update_payload(
 fn presence_update_payload(status: PresenceStatus, activities: &[ActivityInfo]) -> String {
     json!({
         "op": 3,
-        "d": {
-            "since": 0,
-            "activities": activities.iter().map(activity_gateway_payload).collect::<Vec<_>>(),
-            "status": status.gateway_status(),
-            "afk": false,
-        },
+        "d": gateway_presence_payload(&status, activities),
     })
     .to_string()
+}
+
+fn gateway_presence_payload(status: &PresenceStatus, activities: &[ActivityInfo]) -> Value {
+    json!({
+        "since": 0,
+        "activities": activities.iter().map(activity_gateway_payload).collect::<Vec<_>>(),
+        "status": status.gateway_status(),
+        "afk": false,
+    })
+}
+
+fn current_gateway_presence(state: &DiscordState) -> Option<GatewayPresence> {
+    let user_id = state.current_user_id()?;
+    Some(GatewayPresence {
+        status: state.user_presence(user_id)?,
+        activities: state.user_activities(user_id).to_vec(),
+    })
 }
 
 fn activity_gateway_payload(activity: &ActivityInfo) -> Value {
