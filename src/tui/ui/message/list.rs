@@ -101,6 +101,7 @@ pub(in crate::tui::ui) fn render_messages(
                 selected,
                 forum_card_width,
                 is_loading,
+                state.animation_frame(),
                 state.show_custom_emoji(),
             ))
             .style(theme::current().style(theme::HighlightGroup::Normal)),

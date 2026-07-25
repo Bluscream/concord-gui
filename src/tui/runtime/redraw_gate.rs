@@ -130,6 +130,11 @@ pub(super) fn view_signature(state: &DashboardState) -> u64 {
     hash_dbg(&mut hasher, &state.composer_emoji_candidates());
     hash_dbg(&mut hasher, &state.composer_command_candidates());
 
+    // Search results and the forum loading placeholder both change from
+    // background responses rather than direct input.
+    hash_dbg(&mut hasher, &state.search_popup_view());
+    state.selected_forum_posts_loading().hash(&mut hasher);
+
     // Notification inbox: only hash it while open. The active items, unread
     // mention badge, and loading state can all change from background events.
     if let Some(tab) = state.notification_inbox_tab() {
@@ -153,8 +158,9 @@ mod tests {
     use super::view_signature;
     use crate::discord::ids::Id;
     use crate::discord::{
-        ActivityInfo, ActivityKind, AppEvent, ChannelInfo, ChannelRecipientInfo,
-        MessageHistoryLoadTarget, PresenceEventFields, PresenceStatus,
+        ActivityInfo, ActivityKind, AppCommand, AppEvent, ChannelInfo, ChannelRecipientInfo,
+        MessageHistoryLoadTarget, MessageInfo, MessageSearchPage, PresenceEventFields,
+        PresenceStatus,
     };
     use crate::tui::state::DashboardState;
 
@@ -172,6 +178,26 @@ mod tests {
             latest_version: "9.9.9".to_owned(),
         });
         assert_ne!(before, view_signature(&state));
+
+        let mut search_state = DashboardState::new();
+        search_state.open_message_search_popup();
+        search_state.push_search_char('x');
+        let command = search_state
+            .activate_search_popup()
+            .expect("search should start");
+        let AppCommand::SearchMessages { query } = command else {
+            panic!("expected message search command");
+        };
+        let loading = view_signature(&search_state);
+        search_state.push_event(AppEvent::MessageSearchLoaded {
+            page: MessageSearchPage {
+                query,
+                messages: vec![MessageInfo::test(Id::new(20), Id::new(30))],
+                total_results: Some(1),
+                has_more: false,
+            },
+        });
+        assert_ne!(loading, view_signature(&search_state));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use super::super::message::list::format_message_sent_time;
 use super::*;
 use crate::tui::state::{MemberSearchResultItem, SearchSuggestionItem};
+use crate::tui::ui::loading_indicator::AsciiLoadingIndicator;
 
 const SEARCH_POPUP_WIDTH: u16 = 86;
 
@@ -21,7 +22,12 @@ pub(in crate::tui::ui) fn render_search_popup(
         frame,
         popup,
         view.mode.title(),
-        search_popup_lines(&view, max_result_lines, popup.width as usize - 2),
+        search_popup_lines(
+            &view,
+            max_result_lines,
+            popup.width as usize - 2,
+            state.animation_frame(),
+        ),
     );
     if let Some(position) = search_popup_cursor_position(popup, &view) {
         frame.set_cursor_position(position);
@@ -50,7 +56,7 @@ fn search_popup_result_capacity(popup: Rect, view: &SearchPopupView) -> usize {
         popup
             .height
             .saturating_sub(view.fields.len() as u16)
-            .saturating_sub(4),
+            .saturating_sub(if view.loading { 6 } else { 4 }),
     )
     .max(1)
 }
@@ -63,34 +69,43 @@ pub(in crate::tui::ui) fn search_popup_lines(
     view: &SearchPopupView,
     max_result_lines: usize,
     width: usize,
+    animation_frame: usize,
 ) -> Vec<Line<'static>> {
     let mut lines = view
         .fields
         .iter()
         .map(|field| search_field_line(field, width))
         .collect::<Vec<_>>();
-    let status = if view.loading {
-        "Searching...".to_owned()
-    } else if let Some(error) = &view.error {
-        error.clone()
-    } else if let Some(total) = view.total_results {
-        format!("{} result(s)", total)
-    } else {
-        match view.mode {
-            SearchPopupMode::Message => "Enter filters, then [Enter] search".to_owned(),
-            SearchPopupMode::Member => "Type to filter members".to_owned(),
-        }
-    };
     lines.push(Line::from(Span::styled(
         "─".repeat(width.max(1)),
         theme::current().style(theme::HighlightGroup::Decoration),
     )));
-    push_wrapped_styled_popup_text(
-        &mut lines,
-        &status,
-        width,
-        theme::current().style(theme::HighlightGroup::Hint),
-    );
+    if view.loading {
+        lines.extend(
+            AsciiLoadingIndicator::new(
+                "Searching...",
+                theme::current().style(theme::HighlightGroup::Hint),
+            )
+            .lines(animation_frame),
+        );
+    } else {
+        let status = if let Some(error) = &view.error {
+            error.clone()
+        } else if let Some(total) = view.total_results {
+            format!("{} result(s)", total)
+        } else {
+            match view.mode {
+                SearchPopupMode::Message => "Enter filters, then [Enter] search".to_owned(),
+                SearchPopupMode::Member => "Type to filter members".to_owned(),
+            }
+        };
+        push_wrapped_styled_popup_text(
+            &mut lines,
+            &status,
+            width,
+            theme::current().style(theme::HighlightGroup::Hint),
+        );
+    }
 
     if !view.suggestions.is_empty() {
         let start = view

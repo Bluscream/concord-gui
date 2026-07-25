@@ -1,6 +1,7 @@
 use super::message::list::message_author_style;
 use super::*;
 use crate::tui::ui::emoji_overlay::{EmojiSlot, overlay_emoji_slots};
+use crate::tui::ui::loading_indicator::AsciiLoadingIndicator;
 
 #[cfg(test)]
 pub(super) fn forum_post_viewport_lines(
@@ -9,7 +10,7 @@ pub(super) fn forum_post_viewport_lines(
     width: usize,
     is_loading: bool,
 ) -> Vec<Line<'static>> {
-    forum_post_viewport_lines_with_custom_emoji_images(posts, selected, width, is_loading, true)
+    forum_post_viewport_lines_with_custom_emoji_images(posts, selected, width, is_loading, 0, true)
 }
 
 pub(super) fn forum_post_viewport_lines_with_custom_emoji_images(
@@ -17,23 +18,26 @@ pub(super) fn forum_post_viewport_lines_with_custom_emoji_images(
     selected: Option<usize>,
     width: usize,
     is_loading: bool,
+    animation_frame: usize,
     show_custom_emoji: bool,
 ) -> Vec<Line<'static>> {
     let width = width.max(1);
     if posts.is_empty() {
         // Shared by the forum post list and a channel's thread list; "threads"
         // reads correctly for both since forum posts are themselves threads.
-        let message = if is_loading {
-            "Loading threads…"
-        } else {
-            "No threads yet."
-        };
-        let style = theme::current().style(if is_loading {
-            theme::HighlightGroup::Loading
-        } else {
-            theme::HighlightGroup::Placeholder
-        });
-        return vec![Line::from(Span::styled(message, style))];
+        if is_loading {
+            return AsciiLoadingIndicator::new(
+                "Loading threads...",
+                theme::current().style(theme::HighlightGroup::Loading),
+            )
+            .lines(animation_frame)
+            .into_iter()
+            .collect();
+        }
+        return vec![Line::from(Span::styled(
+            "No threads yet.",
+            theme::current().style(theme::HighlightGroup::Placeholder),
+        ))];
     }
 
     let mut lines = Vec::new();

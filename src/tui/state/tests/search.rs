@@ -19,6 +19,7 @@ fn message_search_builds_query_and_jumps_to_selected_result() {
     assert_eq!(query.guild_id, Some(Id::new(1)));
     assert_eq!(query.content.as_deref(), Some("needle"));
     assert_eq!(query.offset, 0);
+    assert!(state.needs_animation_frame());
 
     let mut result = message_info(Id::new(2), 42);
     result.content = Some("needle in a haystack".to_owned());
@@ -30,6 +31,7 @@ fn message_search_builds_query_and_jumps_to_selected_result() {
             has_more: false,
         },
     });
+    assert!(!state.needs_animation_frame());
 
     let view = state.search_popup_view().expect("search popup view");
     assert_eq!(view.results.len(), 1);

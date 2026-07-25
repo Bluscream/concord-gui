@@ -88,7 +88,10 @@ impl DashboardState {
     }
 
     pub(in crate::tui) fn needs_animation_frame(&self) -> bool {
-        self.terminal_focused() && self.notification_inbox_has_visible_loading_indicator()
+        self.terminal_focused()
+            && (self.notification_inbox_has_visible_loading_indicator()
+                || self.search_popup_has_visible_loading_indicator()
+                || self.selected_forum_posts_loading())
     }
 
     pub fn set_terminal_focused(&mut self, focused: bool) {

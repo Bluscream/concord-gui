@@ -239,6 +239,12 @@ impl DashboardState {
         self.popups.search_popup().map(SearchPopupState::view)
     }
 
+    pub(in crate::tui) fn search_popup_has_visible_loading_indicator(&self) -> bool {
+        self.popups
+            .search_popup()
+            .is_some_and(|search| search.loading)
+    }
+
     pub fn cycle_search_field_next(&mut self) {
         if let Some(search) = self.popups.search_popup_mut()
             && !search.fields.is_empty()

@@ -6,9 +6,11 @@
 use std::time::Duration;
 
 use ratatui::{
+    layout::Alignment,
     style::Style,
     text::{Line, Span},
 };
+use unicode_width::UnicodeWidthStr;
 
 pub(in crate::tui) const LOADING_ANIMATION_FRAME_INTERVAL: Duration = Duration::from_millis(180);
 
@@ -38,15 +40,22 @@ impl<'a> AsciiLoadingIndicator<'a> {
 
     pub(in crate::tui) fn lines(&self, animation_frame: usize) -> [Line<'static>; 3] {
         let frame = CHARACTER_FRAMES[animation_frame % CHARACTER_FRAMES.len()];
-        [
-            self.line(frame[0]),
-            self.line(format!("{:<LABEL_COLUMN$}{}", frame[1], self.label)),
-            self.line(frame[2]),
-        ]
+        let mut rows = [
+            frame[0].to_owned(),
+            format!("{:<LABEL_COLUMN$}{}", frame[1], self.label),
+            frame[2].to_owned(),
+        ];
+        let block_width = rows.iter().map(|row| row.width()).max().unwrap_or_default();
+
+        for row in &mut rows {
+            let padding = block_width.saturating_sub(row.width());
+            row.push_str(&" ".repeat(padding));
+        }
+        rows.map(|row| self.line(row))
     }
 
     fn line(&self, content: impl Into<String>) -> Line<'static> {
-        Line::from(Span::styled(content.into(), self.style))
+        Line::from(Span::styled(content.into(), self.style)).alignment(Alignment::Center)
     }
 }
 
@@ -76,6 +85,17 @@ mod tests {
         assert!(frames.windows(2).all(|pair| pair[0] != pair[1]));
         assert!(frames.iter().all(|frame| frame.len() == indicator.height()));
         assert!(frames.iter().all(|frame| frame[1].contains("Working...")));
+        assert!(
+            indicator
+                .lines(0)
+                .iter()
+                .all(|line| line.alignment == Some(Alignment::Center))
+        );
+        assert!(frames.iter().all(|frame| {
+            frame
+                .windows(2)
+                .all(|rows| rows[0].width() == rows[1].width())
+        }));
         assert_eq!(frames[0], text(&indicator.lines(CHARACTER_FRAMES.len())));
     }
 }
