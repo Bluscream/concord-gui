@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.6] - 2026-07-25
+
+### Bug Fixes
+
+- Show new threads in sidebar without restart (#274) in [#274](https://github.com/chojs23/concord/pull/274) by @michaelnew
+- Correct Discord event snapshot area mappings by @chojs23
+- Align Discord API and Gateway behavior by @chojs23
+- Replace flat message cache with segmented live-aware timelines by @chojs23
+
+### Features
+
+- Loading indicator by @chojs23
+- Add attachment URL access in viewer (#276) in [#276](https://github.com/chojs23/concord/pull/276) by @chojs23
+
+### New Contributors
+
+- @michaelnew made their first contribution in [#274](https://github.com/chojs23/concord/pull/274)
+
 ## [2.4.5] - 2026-07-23
 
 ### Features
