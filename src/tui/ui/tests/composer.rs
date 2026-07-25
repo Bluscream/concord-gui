@@ -84,11 +84,6 @@ fn sync_view_heights_reserves_space_for_composer_height() {
 }
 
 #[test]
-fn composer_prompt_line_count_uses_display_width_for_wide_chars() {
-    assert_eq!(composer_prompt_line_count("漢字仮", 4), 2);
-}
-
-#[test]
 fn composer_prompt_line_count_matches_prefixed_multiline_rendering() {
     let mut state = state_with_message();
     state.start_composer();
@@ -101,6 +96,10 @@ fn composer_prompt_line_count_matches_prefixed_multiline_rendering() {
     assert_eq!(rendered, vec!["> a", "  bbb", "b"]);
     assert_eq!(composer_prompt_line_count(state.composer_input(), 5), 3);
     assert_eq!(composer_content_line_count(&state, 5), 3);
+
+    // Wrapping counts display columns, so three wide glyphs need two rows in a
+    // four-column composer even though that is only three `char`s.
+    assert_eq!(composer_prompt_line_count("漢字仮", 4), 2);
 }
 
 #[test]

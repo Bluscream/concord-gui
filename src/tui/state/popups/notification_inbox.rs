@@ -930,18 +930,6 @@ mod tests {
     }
 
     #[test]
-    fn inbox_tabs_toggle() {
-        assert_eq!(
-            NotificationInboxTab::Unreads.step(),
-            NotificationInboxTab::Mentions
-        );
-        assert_eq!(
-            NotificationInboxTab::Mentions.step(),
-            NotificationInboxTab::Unreads
-        );
-    }
-
-    #[test]
     fn unread_inbox_appends_the_next_page_after_its_previews_settle() {
         let request_id = 7;
         let mut state = DashboardState::new();

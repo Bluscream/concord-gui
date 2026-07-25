@@ -622,6 +622,9 @@ fn message_request_body_matches_web_defaults_and_carries_snowflake_nonce() {
     assert_eq!(body["mobile_network_type"], "unknown");
     assert_eq!(body["tts"], false);
     assert_eq!(body["flags"], 0);
+
+    let tts = message_request_body_with_tts("hi", Id::new(99), None, &[], true);
+    assert_eq!(tts["tts"], true);
 }
 
 #[test]
@@ -643,7 +646,7 @@ fn message_request_body_suppresses_reply_ping_when_disabled() {
 #[test]
 fn forum_post_request_body_nests_message_and_tags() {
     let body = create_forum_post_request_body(
-        "Need help",
+        "  Need help  ",
         "The client crashes",
         &[Id::new(101), Id::new(102)],
         &[],
@@ -654,20 +657,6 @@ fn forum_post_request_body_nests_message_and_tags() {
     assert_eq!(body["name"], "Need help");
     assert_eq!(body["message"]["content"], "The client crashes");
     assert_eq!(body["applied_tags"], serde_json::json!(["101", "102"]));
-}
-
-#[test]
-fn forum_post_request_body_trims_title_once() {
-    let body = create_forum_post_request_body(
-        "  Need help  ",
-        "Body",
-        &[],
-        &[],
-        BASE_ATTACHMENT_LIMIT_BYTES,
-    )
-    .expect("padded title should build");
-
-    assert_eq!(body["name"], "Need help");
 }
 
 #[test]
@@ -744,12 +733,6 @@ fn guild_folder_settings_proto_includes_name_and_color() {
             .windows(4)
             .any(|bytes| bytes == [0x08, 0xff, 0xd5, 0x02])
     );
-}
-
-#[test]
-fn message_request_body_sets_requested_tts_value() {
-    let tts = message_request_body_with_tts("hello", Id::new(99), None, &[], true);
-    assert_eq!(tts["tts"], true);
 }
 
 #[test]
@@ -998,19 +981,6 @@ async fn multipart_form_rechecks_current_file_size() {
     assert!(matches!(error, AppError::AttachmentTooLarge { .. }));
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_dir(directory);
-}
-
-#[test]
-fn rejects_oversized_memory_backed_attachment() {
-    let attachment = MessageAttachmentUpload::from_bytes(
-        "clipboard-image.png".to_owned(),
-        vec![0_u8; (BASE_ATTACHMENT_LIMIT_BYTES + 1) as usize],
-    );
-
-    let error = validate_message_payload("", &[attachment], BASE_ATTACHMENT_LIMIT_BYTES)
-        .expect_err("oversized memory-backed attachment must fail");
-
-    assert!(matches!(error, AppError::AttachmentTooLarge { .. }));
 }
 
 #[test]

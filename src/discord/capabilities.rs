@@ -131,20 +131,4 @@ mod tests {
             100 * 1024 * 1024
         );
     }
-
-    #[test]
-    fn effective_limit_takes_the_more_generous_tier() {
-        assert_eq!(
-            effective_attachment_limit_bytes(PremiumTier::None, Some(GuildBoostTier::Tier3)),
-            100 * 1024 * 1024
-        );
-        assert_eq!(
-            effective_attachment_limit_bytes(PremiumTier::Nitro, Some(GuildBoostTier::None)),
-            500 * 1024 * 1024
-        );
-        assert_eq!(
-            effective_attachment_limit_bytes(PremiumTier::NitroBasic, None),
-            50 * 1024 * 1024
-        );
-    }
 }

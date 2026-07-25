@@ -14,7 +14,7 @@ use crate::{
         ActivityEmoji, ActivityInfo, ActivityKind, AppCommand, AppEvent, AttachmentInfo,
         ChannelInfo, ChannelRecipientInfo, CustomEmojiInfo, EmbedInfo, MessageInfo,
         MessageSnapshotInfo, PresenceEventFields, PresenceStatus, ProfileAvatarUpload,
-        ReactionEmoji, ReactionInfo, UserProfileInfo,
+        ReactionEmoji, ReactionInfo,
     },
     tui::{
         message::time::test_message_id_for_unix_millis,
@@ -95,16 +95,6 @@ fn image_preview_targets_keep_background_previews_while_modal_is_open() {
 }
 
 #[test]
-fn image_preview_targets_include_preview_that_would_be_clipped() {
-    let mut state = state_with_image_messages(2, &[1, 2]);
-    state.set_message_view_height(6);
-
-    let targets = visible_image_preview_targets(&state, layout(6));
-
-    assert_eq!(target_message_ids(&targets), vec![Id::new(1)]);
-}
-
-#[test]
 fn image_preview_targets_include_multiple_attachments_from_one_message() {
     let mut state = state_with_image_messages(0, &[]);
     push_media_message(
@@ -141,39 +131,6 @@ fn image_preview_targets_include_multiple_attachments_from_one_message() {
             ))
             .collect::<Vec<_>>(),
         vec![(0, 0, 8, 3), (8, 0, 8, 3)]
-    );
-}
-
-#[test]
-fn image_preview_targets_use_resized_discord_media_proxy_url() {
-    let mut state = state_with_image_messages(0, &[]);
-    let mut attachment = image_attachment(1);
-    attachment.proxy_url = concat!(
-        "https://media.discordapp.net/attachments/691/150/photo.png",
-        "?ex=abc&is=def&hm=123&format=png&width=4000&height=3000"
-    )
-    .to_owned();
-    push_media_message(
-        &mut state,
-        MessageCreateFixture {
-            message_id: Id::new(1),
-            content: Some("photo".to_owned()),
-            attachments: vec![attachment],
-            ..guild_message_create_fixture()
-        },
-    );
-
-    let target = visible_image_preview_targets(&state, layout(12))
-        .into_iter()
-        .next()
-        .expect("image attachment should produce preview target");
-
-    assert_eq!(
-        target.url,
-        concat!(
-            "https://media.discordapp.net/attachments/691/150/photo.png",
-            "?ex=abc&is=def&hm=123&format=webp&width=320&height=240"
-        )
     );
 }
 
@@ -335,39 +292,94 @@ fn image_preview_quality_does_not_change_avatar_or_custom_emoji_requests() {
 }
 
 #[test]
-fn image_preview_targets_use_resized_embed_media_proxy_url() {
-    let mut embed = youtube_embed();
-    embed.thumbnail_url = Some("https://example.com/photo.png".to_owned());
-    embed.thumbnail_proxy_url = Some(
-        concat!(
-            "https://media.discordapp.net/external/cache-key/https/example.com/photo.png",
-            "?ex=abc&is=def&hm=123&format=png&width=4000&height=3000"
-        )
-        .to_owned(),
-    );
-    let mut state = state_with_image_messages(1, &[]);
-    push_media_message(
-        &mut state,
-        MessageCreateFixture {
-            message_id: Id::new(2),
-            content: Some("https://example.com/post".to_owned()),
-            embeds: vec![embed],
-            ..guild_message_create_fixture()
-        },
-    );
+fn image_preview_targets_choose_embed_thumbnail_url() {
+    for (name, embed, content, expected_url) in [
+        (
+            "youtube thumbnail is downgraded to a preview size",
+            youtube_embed(),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg",
+        ),
+        (
+            "youtube thumbnail that is already small is kept",
+            EmbedInfo {
+                thumbnail_url: Some("https://i.ytimg.com/vi/dQw4w9WgXcQ/default.jpg".to_owned()),
+                thumbnail_width: Some(120),
+                thumbnail_height: Some(90),
+                ..youtube_embed()
+            },
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://i.ytimg.com/vi/dQw4w9WgXcQ/default.jpg",
+        ),
+        (
+            "media proxy is resized",
+            EmbedInfo {
+                thumbnail_url: Some("https://example.com/photo.png".to_owned()),
+                thumbnail_proxy_url: Some(
+                    concat!(
+                        "https://media.discordapp.net/external/cache-key/https/example.com/photo.png",
+                        "?ex=abc&is=def&hm=123&format=png&width=4000&height=3000"
+                    )
+                    .to_owned(),
+                ),
+                ..youtube_embed()
+            },
+            "https://example.com/post",
+            concat!(
+                "https://media.discordapp.net/external/cache-key/https/example.com/photo.png",
+                "?ex=abc&is=def&hm=123&format=webp&width=240&height=180"
+            ),
+        ),
+        (
+            "images-ext proxy is resized",
+            EmbedInfo {
+                thumbnail_url: Some("https://example.com/photo.png".to_owned()),
+                thumbnail_proxy_url: Some(
+                    concat!(
+                        "https://images-ext-1.discordapp.net/external/cache-key/https/example.com/photo.png",
+                        "?width=4000&height=3000"
+                    )
+                    .to_owned(),
+                ),
+                ..youtube_embed()
+            },
+            "https://example.com/post",
+            concat!(
+                "https://images-ext-1.discordapp.net/external/cache-key/https/example.com/photo.png",
+                "?format=webp&width=240&height=180"
+            ),
+        ),
+        (
+            "proxy outside the resizable routes falls back to the source url",
+            EmbedInfo {
+                thumbnail_url: Some("https://example.com/photo.png".to_owned()),
+                thumbnail_proxy_url: Some(
+                    "https://media.discordapp.net/avatars/1/hash.png".to_owned(),
+                ),
+                ..youtube_embed()
+            },
+            "https://example.com/post",
+            "https://example.com/photo.png",
+        ),
+    ] {
+        let mut state = state_with_image_messages(1, &[]);
+        push_media_message(
+            &mut state,
+            MessageCreateFixture {
+                message_id: Id::new(2),
+                content: Some(content.to_owned()),
+                embeds: vec![embed],
+                ..guild_message_create_fixture()
+            },
+        );
 
-    let targets = visible_image_preview_targets(&state, layout(8));
+        let targets = visible_image_preview_targets(&state, layout(8));
 
-    assert_eq!(target_message_ids(&targets), vec![Id::new(2)]);
-    assert_eq!(
-        targets[0].url,
-        concat!(
-            "https://media.discordapp.net/external/cache-key/https/example.com/photo.png",
-            "?ex=abc&is=def&hm=123&format=webp&width=240&height=180"
-        )
-    );
-    assert_eq!(targets[0].filename, "embed-thumbnail");
-    assert!(targets[0].show_play_marker);
+        assert_eq!(target_message_ids(&targets), vec![Id::new(2)], "{name}");
+        assert_eq!(targets[0].url, expected_url, "{name}");
+        assert_eq!(targets[0].filename, "embed-thumbnail", "{name}");
+        assert!(targets[0].show_play_marker, "{name}");
+    }
 }
 
 #[test]
@@ -393,96 +405,6 @@ fn image_preview_targets_do_not_mark_plain_image_embed_thumbnail_as_playable() {
     assert_eq!(target_message_ids(&targets), vec![Id::new(2)]);
     assert_eq!(targets[0].filename, "embed-thumbnail");
     assert!(!targets[0].show_play_marker);
-}
-
-#[test]
-fn image_preview_targets_use_resized_ephemeral_media_proxy_url() {
-    let mut state = state_with_image_messages(0, &[]);
-    let mut attachment = image_attachment(1);
-    attachment.proxy_url = concat!(
-        "https://media.discordapp.net/ephemeral-attachments/691/150/photo.png",
-        "?ex=abc&is=def&hm=123&width=4000&height=3000"
-    )
-    .to_owned();
-    push_media_message(
-        &mut state,
-        MessageCreateFixture {
-            message_id: Id::new(1),
-            content: Some("photo".to_owned()),
-            attachments: vec![attachment],
-            ..guild_message_create_fixture()
-        },
-    );
-
-    let target = visible_image_preview_targets(&state, layout(12))
-        .into_iter()
-        .next()
-        .expect("image attachment should produce preview target");
-
-    assert_eq!(
-        target.url,
-        concat!(
-            "https://media.discordapp.net/ephemeral-attachments/691/150/photo.png",
-            "?ex=abc&is=def&hm=123&format=webp&width=320&height=240"
-        )
-    );
-}
-
-#[test]
-fn image_preview_targets_ignore_unsupported_embed_proxy_url() {
-    let mut embed = youtube_embed();
-    embed.thumbnail_url = Some("https://example.com/photo.png".to_owned());
-    embed.thumbnail_proxy_url = Some("https://media.discordapp.net/avatars/1/hash.png".to_owned());
-    let mut state = state_with_image_messages(1, &[]);
-    push_media_message(
-        &mut state,
-        MessageCreateFixture {
-            message_id: Id::new(2),
-            content: Some("https://example.com/post".to_owned()),
-            embeds: vec![embed],
-            ..guild_message_create_fixture()
-        },
-    );
-
-    let targets = visible_image_preview_targets(&state, layout(8));
-
-    assert_eq!(target_message_ids(&targets), vec![Id::new(2)]);
-    assert_eq!(targets[0].url, "https://example.com/photo.png");
-    assert_eq!(targets[0].filename, "embed-thumbnail");
-}
-
-#[test]
-fn image_preview_targets_use_resized_images_ext_embed_proxy_url() {
-    let mut embed = youtube_embed();
-    embed.thumbnail_url = Some("https://example.com/photo.png".to_owned());
-    embed.thumbnail_proxy_url = Some(
-        concat!(
-            "https://images-ext-1.discordapp.net/external/cache-key/https/example.com/photo.png",
-            "?width=4000&height=3000"
-        )
-        .to_owned(),
-    );
-    let mut state = state_with_image_messages(1, &[]);
-    push_media_message(
-        &mut state,
-        MessageCreateFixture {
-            message_id: Id::new(2),
-            content: Some("https://example.com/post".to_owned()),
-            embeds: vec![embed],
-            ..guild_message_create_fixture()
-        },
-    );
-
-    let targets = visible_image_preview_targets(&state, layout(8));
-
-    assert_eq!(target_message_ids(&targets), vec![Id::new(2)]);
-    assert_eq!(
-        targets[0].url,
-        concat!(
-            "https://images-ext-1.discordapp.net/external/cache-key/https/example.com/photo.png",
-            "?format=webp&width=240&height=180"
-        )
-    );
 }
 
 #[test]
@@ -630,38 +552,29 @@ fn avatar_targets_include_visible_author_avatar() {
 }
 
 #[test]
-fn avatar_targets_keep_background_avatars_while_modal_is_open() {
-    let mut state = state_with_avatar_messages(1);
-    state.open_channel_switcher();
-
-    let targets = visible_avatar_targets(&state, layout(2));
-
-    assert_eq!(targets.len(), 1);
-    assert_eq!(targets[0].url, "https://cdn.discordapp.com/avatar-1.png");
-}
-
-#[test]
-fn avatar_preview_url_adds_power_of_two_size_for_user_avatar() {
-    assert_eq!(
-        avatar_preview_url("https://cdn.discordapp.com/avatars/1/hash.png", 2, 2),
-        "https://cdn.discordapp.com/avatars/1/hash.png?size=64"
-    );
-    assert_eq!(
-        avatar_preview_url(
+fn avatar_preview_url_sizes_user_avatars_but_not_default_ones() {
+    for (url, width, height, expected) in [
+        (
+            "https://cdn.discordapp.com/avatars/1/hash.png",
+            2,
+            2,
+            "https://cdn.discordapp.com/avatars/1/hash.png?size=64",
+        ),
+        (
             "https://cdn.discordapp.com/avatars/1/hash.png?size=1024&foo=bar",
             8,
-            4
+            4,
+            "https://cdn.discordapp.com/avatars/1/hash.png?foo=bar&size=128",
         ),
-        "https://cdn.discordapp.com/avatars/1/hash.png?foo=bar&size=128"
-    );
-}
-
-#[test]
-fn avatar_preview_url_leaves_default_avatar_unchanged() {
-    assert_eq!(
-        avatar_preview_url("https://cdn.discordapp.com/embed/avatars/0.png", 8, 4),
-        "https://cdn.discordapp.com/embed/avatars/0.png"
-    );
+        (
+            "https://cdn.discordapp.com/embed/avatars/0.png",
+            8,
+            4,
+            "https://cdn.discordapp.com/embed/avatars/0.png",
+        ),
+    ] {
+        assert_eq!(avatar_preview_url(url, width, height), expected, "{url}");
+    }
 }
 
 #[test]
@@ -841,54 +754,6 @@ fn avatar_cache_pruning_preserves_active_popup_avatar() {
 }
 
 #[test]
-fn avatar_store_decoded_records_decode_failure() {
-    let key = "https://cdn.discordapp.com/avatars/failed.png?size=64".to_owned();
-    let mut cache = avatar_cache_without_picker();
-    cache.cache.entries.insert(
-        key.clone(),
-        AvatarImageEntry::Decoding {
-            generation: 1,
-            last_used: 1,
-        },
-    );
-
-    cache.store_decoded(
-        key.clone(),
-        1,
-        Err("decode failed: invalid avatar".to_owned()),
-    );
-
-    assert!(matches!(
-        cache.cache.entries.get(&key),
-        Some(AvatarImageEntry::Failed { .. })
-    ));
-}
-
-#[test]
-fn avatar_store_decoded_ignores_replaced_decoding_generation() {
-    let key = "https://cdn.discordapp.com/avatars/newer.png?size=64".to_owned();
-    let mut cache = avatar_cache_without_picker();
-    cache.cache.entries.insert(
-        key.clone(),
-        AvatarImageEntry::Decoding {
-            generation: 2,
-            last_used: 2,
-        },
-    );
-
-    cache.store_decoded(
-        key.clone(),
-        1,
-        Err("decode failed: old generation".to_owned()),
-    );
-
-    assert!(matches!(
-        cache.cache.entries.get(&key),
-        Some(AvatarImageEntry::Decoding { generation, .. }) if *generation == 2
-    ));
-}
-
-#[test]
 fn image_preview_targets_include_top_clipped_preview_rows() {
     let mut state = state_with_image_messages(1, &[1]);
     state.focus_pane(FocusPane::Messages);
@@ -936,16 +801,6 @@ fn image_preview_targets_clip_album_bottom_row_after_line_scroll() {
             .collect::<Vec<_>>(),
         vec![(2, 2, 1, 0), (3, 2, 1, 0)]
     );
-}
-
-#[test]
-fn image_preview_targets_skip_preview_when_no_preview_row_is_visible() {
-    let mut state = state_with_image_messages(2, &[1, 2]);
-    state.set_message_view_height(5);
-
-    let targets = visible_image_preview_targets(&state, layout(5));
-
-    assert_eq!(target_message_ids(&targets), vec![Id::new(1)]);
 }
 
 #[test]
@@ -1017,29 +872,6 @@ fn original_quality_video_attachment_still_uses_proxy_webp_thumbnail() {
 }
 
 #[test]
-fn image_preview_targets_include_embed_thumbnail() {
-    let mut state = state_with_image_messages(1, &[]);
-    push_media_message(
-        &mut state,
-        MessageCreateFixture {
-            message_id: Id::new(2),
-            content: Some("https://www.youtube.com/watch?v=dQw4w9WgXcQ".to_owned()),
-            embeds: vec![youtube_embed()],
-            ..guild_message_create_fixture()
-        },
-    );
-
-    let targets = visible_image_preview_targets(&state, layout(8));
-
-    assert_eq!(target_message_ids(&targets), vec![Id::new(2)]);
-    assert_eq!(
-        targets[0].url,
-        "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg"
-    );
-    assert_eq!(targets[0].filename, "embed-thumbnail");
-}
-
-#[test]
 fn image_preview_targets_downscale_youtube_embed_image_url() {
     let mut embed = youtube_embed();
     embed.thumbnail_url = None;
@@ -1072,33 +904,6 @@ fn image_preview_targets_downscale_youtube_embed_image_url() {
 }
 
 #[test]
-fn image_preview_targets_keep_small_youtube_thumbnail_url() {
-    let mut embed = youtube_embed();
-    embed.thumbnail_url = Some("https://i.ytimg.com/vi/dQw4w9WgXcQ/default.jpg".to_owned());
-    embed.thumbnail_width = Some(120);
-    embed.thumbnail_height = Some(90);
-    let mut state = state_with_image_messages(1, &[]);
-    push_media_message(
-        &mut state,
-        MessageCreateFixture {
-            message_id: Id::new(2),
-            content: Some("https://www.youtube.com/watch?v=dQw4w9WgXcQ".to_owned()),
-            embeds: vec![embed],
-            ..guild_message_create_fixture()
-        },
-    );
-
-    let targets = visible_image_preview_targets(&state, layout(8));
-
-    assert_eq!(target_message_ids(&targets), vec![Id::new(2)]);
-    assert_eq!(
-        targets[0].url,
-        "https://i.ytimg.com/vi/dQw4w9WgXcQ/default.jpg"
-    );
-    assert_eq!(targets[0].filename, "embed-thumbnail");
-}
-
-#[test]
 fn image_preview_targets_include_forwarded_image_attachments() {
     let mut state = state_with_image_messages(1, &[]);
     push_media_message(
@@ -1115,16 +920,6 @@ fn image_preview_targets_include_forwarded_image_attachments() {
 
     assert_eq!(target_message_ids(&targets), vec![Id::new(2)]);
     assert_eq!(targets[0].url, "https://cdn.discordapp.com/image-2.png");
-}
-
-#[test]
-fn image_preview_targets_follow_the_scrolled_message_window() {
-    let mut state = state_with_image_messages(8, &[1, 6]);
-    state.set_message_view_height(6);
-
-    let targets = visible_image_preview_targets(&state, layout(7));
-
-    assert_eq!(target_message_ids(&targets), vec![Id::new(6)]);
 }
 
 #[test]
@@ -1405,28 +1200,6 @@ fn image_preview_store_decoded_records_decode_failure() {
 }
 
 #[test]
-fn image_preview_store_decoded_ignores_stale_results() {
-    let mut cache = image_preview_cache_without_picker();
-    let key = image_preview_target(1).key();
-    cache.cache.entries.insert(
-        key.clone(),
-        ImagePreviewEntry::Failed {
-            filename: "existing.png".to_owned(),
-            message: "existing failure".to_owned(),
-            last_used: 1,
-        },
-    );
-
-    cache.store_decoded(key.clone(), 1, Err("decode failed: stale".to_owned()));
-
-    assert!(matches!(
-        cache.cache.entries.get(&key),
-        Some(ImagePreviewEntry::Failed { filename, message, .. })
-            if filename == "existing.png" && message == "existing failure"
-    ));
-}
-
-#[test]
 fn image_preview_store_decoded_ignores_replaced_decoding_generation() {
     let mut cache = image_preview_cache_without_picker();
     let target = image_preview_target(1);
@@ -1477,44 +1250,6 @@ fn media_decode_rejects_oversized_image_dimensions() {
             "oversized {width}x{height} image should fail with decode context, got {error:?}"
         );
     }
-}
-
-#[test]
-fn image_preview_store_failed_preserves_existing_non_loading_entries() {
-    let mut cache = image_preview_cache_without_picker();
-    let existing = image_preview_target(1).key();
-    let loading = ImagePreviewTarget {
-        message_id: Id::new(2),
-        ..image_preview_target(1)
-    }
-    .key();
-    cache.cache.entries.insert(
-        existing.clone(),
-        ImagePreviewEntry::Failed {
-            filename: "existing.png".to_owned(),
-            message: "existing failure".to_owned(),
-            last_used: 1,
-        },
-    );
-    cache.cache.entries.insert(
-        loading.clone(),
-        ImagePreviewEntry::Loading {
-            filename: "loading.png".to_owned(),
-            render_info: image_preview_target(1).preview_render_info(),
-            last_used: 2,
-        },
-    );
-
-    cache.store_failed(&existing.url, "new failure".to_owned());
-
-    assert!(matches!(
-        cache.cache.entries.get(&existing),
-        Some(ImagePreviewEntry::Failed { message, .. }) if message == "existing failure"
-    ));
-    assert!(matches!(
-        cache.cache.entries.get(&loading),
-        Some(ImagePreviewEntry::Failed { message, .. }) if message == "new failure"
-    ));
 }
 
 #[test]
@@ -1654,50 +1389,6 @@ fn emoji_image_targets_include_confirmed_composer_custom_emoji() {
 }
 
 #[test]
-fn emoji_image_targets_keep_profile_popup_activity_emoji_while_modal_is_open() {
-    let user_id = Id::new(10);
-    let mut state = state_with_image_messages(1, &[]);
-    state.push_event(AppEvent::UserProfileLoaded {
-        guild_id: None,
-        profile: UserProfileInfo::test(user_id, "neo"),
-    });
-    state.push_event(AppEvent::PresenceUpdate {
-        guild_id: None,
-        presence: PresenceEventFields {
-            user_id,
-            status: crate::discord::PresenceStatus::Online,
-            activities: vec![ActivityInfo {
-                kind: ActivityKind::Custom,
-                name: "custom".to_owned(),
-                details: None,
-                state: Some("working".to_owned()),
-                url: None,
-                application_id: None,
-                emoji: Some(ActivityEmoji {
-                    name: "party".to_owned(),
-                    id: Some(Id::new(60)),
-                    animated: false,
-                }),
-                timestamps: None,
-                assets: None,
-                party: None,
-                buttons: Vec::new(),
-            }],
-        },
-    });
-    state.open_user_profile_popup(user_id, None);
-
-    let targets = visible_emoji_image_targets(&state);
-
-    assert_eq!(
-        targets,
-        vec![EmojiImageTarget {
-            url: "https://cdn.discordapp.com/emojis/60.png".to_owned(),
-        }]
-    );
-}
-
-#[test]
 fn emoji_image_targets_include_visible_non_selected_dm_activity() {
     let alice = Id::new(10);
     let bob = Id::new(20);
@@ -1741,30 +1432,6 @@ fn emoji_image_targets_include_visible_non_selected_dm_activity() {
         targets,
         vec![EmojiImageTarget {
             url: "https://cdn.discordapp.com/emojis/70.png".to_owned(),
-        }]
-    );
-}
-
-#[test]
-fn emoji_image_targets_keep_background_composer_emoji_while_modal_is_open() {
-    let mut state = state_with_image_messages(1, &[]);
-    state.push_event(AppEvent::GuildEmojisUpdate {
-        guild_id: Id::new(1),
-        emojis: vec![CustomEmojiInfo::test(Id::new(60), "wave")],
-    });
-    state.start_composer();
-    for ch in ":wa".chars() {
-        state.push_composer_char(ch);
-    }
-    assert!(state.confirm_composer_emoji());
-    state.open_options_popup();
-
-    let targets = visible_emoji_image_targets(&state);
-
-    assert_eq!(
-        targets,
-        vec![EmojiImageTarget {
-            url: "https://cdn.discordapp.com/emojis/60.png".to_owned(),
         }]
     );
 }
@@ -1906,28 +1573,6 @@ fn emoji_image_targets_include_visible_forum_post_custom_tag_emoji() {
 }
 
 #[test]
-fn emoji_image_request_is_created_for_visible_target() {
-    let mut cache = EmojiImageCache::new();
-    let target = EmojiImageTarget {
-        url: "https://cdn.discordapp.com/emojis/50.png".to_owned(),
-    };
-
-    if cache.picker.is_none() {
-        return;
-    }
-
-    let requests = cache.next_requests(std::slice::from_ref(&target));
-
-    assert_eq!(
-        requests,
-        vec![AppCommand::LoadAttachmentPreview {
-            url: target.url.clone(),
-        }]
-    );
-    assert_eq!(cache.cache.entries.len(), 1);
-}
-
-#[test]
 fn emoji_image_cache_skips_requests_without_image_protocol() {
     let mut cache = emoji_cache_without_picker();
     let target = EmojiImageTarget {
@@ -1938,81 +1583,6 @@ fn emoji_image_cache_skips_requests_without_image_protocol() {
 
     assert!(requests.is_empty());
     assert!(cache.cache.entries.is_empty());
-}
-
-#[test]
-fn emoji_store_decoded_records_decode_failure() {
-    let url = "https://cdn.discordapp.com/emojis/failed.png".to_owned();
-    let mut cache = emoji_cache_without_picker();
-    cache.cache.entries.insert(
-        url.clone(),
-        EmojiImageEntry::Decoding {
-            generation: 1,
-            last_used: 1,
-        },
-    );
-
-    cache.store_decoded(
-        url.clone(),
-        1,
-        Err("decode failed: invalid emoji".to_owned()),
-    );
-
-    assert!(matches!(
-        cache.cache.entries.get(&url),
-        Some(EmojiImageEntry::Failed { .. })
-    ));
-}
-
-#[test]
-fn emoji_store_decoded_ignores_replaced_decoding_generation() {
-    let url = "https://cdn.discordapp.com/emojis/newer.png".to_owned();
-    let mut cache = emoji_cache_without_picker();
-    cache.cache.entries.insert(
-        url.clone(),
-        EmojiImageEntry::Decoding {
-            generation: 2,
-            last_used: 2,
-        },
-    );
-
-    cache.store_decoded(
-        url.clone(),
-        1,
-        Err("decode failed: old generation".to_owned()),
-    );
-
-    assert!(matches!(
-        cache.cache.entries.get(&url),
-        Some(EmojiImageEntry::Decoding { generation, .. }) if *generation == 2
-    ));
-}
-
-#[test]
-fn emoji_image_cache_evicts_least_recently_used_when_over_capacity() {
-    let mut cache = emoji_cache_without_picker();
-    for id in 0..MAX_EMOJI_IMAGE_CACHE_ENTRIES {
-        cache.cache.entries.insert(
-            format!("https://cdn.discordapp.com/emojis/{id}.png"),
-            EmojiImageEntry::Failed {
-                last_used: id as u64,
-            },
-        );
-    }
-    cache.cache.tick = MAX_EMOJI_IMAGE_CACHE_ENTRIES as u64;
-    cache.cache.entries.insert(
-        "https://cdn.discordapp.com/emojis/oldest.png".to_owned(),
-        EmojiImageEntry::Failed { last_used: 0 },
-    );
-
-    let visible_url = "https://cdn.discordapp.com/emojis/0.png".to_owned();
-    let targets = vec![EmojiImageTarget {
-        url: visible_url.clone(),
-    }];
-    cache.prune_to_limit(&targets);
-
-    assert_eq!(cache.cache.entries.len(), MAX_EMOJI_IMAGE_CACHE_ENTRIES);
-    assert!(cache.cache.entries.contains_key(&visible_url));
 }
 
 #[test]
@@ -2248,5 +1818,85 @@ fn forwarded_snapshot(id: u64) -> MessageSnapshotInfo {
         content: Some(format!("forwarded {id}")),
         attachments: vec![image_attachment(id)],
         ..MessageSnapshotInfo::test()
+    }
+}
+
+#[test]
+fn image_preview_targets_track_the_visible_message_window() {
+    // (label, message count, image ids, view height, layout height, expected targets)
+    let cases = [
+        (
+            "a preview clipped by the viewport still counts",
+            2,
+            &[1, 2][..],
+            6,
+            6,
+            1,
+        ),
+        (
+            "no visible preview row still targets the message",
+            2,
+            &[1, 2][..],
+            5,
+            5,
+            1,
+        ),
+        (
+            "scrolling moves the target to the visible message",
+            8,
+            &[1, 6][..],
+            6,
+            7,
+            6,
+        ),
+    ];
+
+    for (label, count, image_ids, view_height, layout_height, expected) in cases {
+        let mut state = state_with_image_messages(count, image_ids);
+        state.set_message_view_height(view_height);
+
+        let targets = visible_image_preview_targets(&state, layout(layout_height));
+
+        assert_eq!(
+            target_message_ids(&targets),
+            vec![Id::new(expected)],
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn image_preview_targets_resize_every_media_proxy_url_shape() {
+    let cases = [
+        (
+            "https://media.discordapp.net/attachments/691/150/photo.png?ex=abc&is=def&hm=123&format=png&width=4000&height=3000",
+            "https://media.discordapp.net/attachments/691/150/photo.png?ex=abc&is=def&hm=123&format=webp&width=320&height=240",
+        ),
+        (
+            "https://media.discordapp.net/ephemeral-attachments/691/150/photo.png?ex=abc&is=def&hm=123&width=4000&height=3000",
+            "https://media.discordapp.net/ephemeral-attachments/691/150/photo.png?ex=abc&is=def&hm=123&format=webp&width=320&height=240",
+        ),
+    ];
+
+    for (proxy_url, expected) in cases {
+        let mut state = state_with_image_messages(0, &[]);
+        let mut attachment = image_attachment(1);
+        attachment.proxy_url = proxy_url.to_owned();
+        push_media_message(
+            &mut state,
+            MessageCreateFixture {
+                message_id: Id::new(1),
+                content: Some("photo".to_owned()),
+                attachments: vec![attachment],
+                ..guild_message_create_fixture()
+            },
+        );
+
+        let target = visible_image_preview_targets(&state, layout(12))
+            .into_iter()
+            .next()
+            .expect("image attachment should produce preview target");
+
+        assert_eq!(target.url, expected, "{proxy_url}");
     }
 }

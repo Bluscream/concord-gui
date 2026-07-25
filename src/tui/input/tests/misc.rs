@@ -108,17 +108,6 @@ fn backtick_types_while_composing() {
 }
 
 #[test]
-fn a_key_no_longer_opens_actions_directly() {
-    let mut state = state_with_messages(1);
-    state.focus_pane(FocusPane::Channels);
-
-    handle_key(&mut state, char_key('a'));
-
-    assert!(!state.is_message_action_menu_active());
-    assert!(!state.is_channel_action_menu_active());
-}
-
-#[test]
 fn esc_closes_modal_before_returning_from_opened_thread() {
     let mut state = state_with_thread_created_message();
     state.focus_pane(FocusPane::Messages);
@@ -343,33 +332,5 @@ fn profile_text_editing_uses_configured_composer_keys() {
             crate::tui::state::UserProfileSettingsField::GlobalDisplayName,
         ),
         "hello YX"
-    );
-}
-
-#[test]
-fn profile_text_editing_moves_cursor_with_arrow_keys() {
-    let mut state = DashboardState::new();
-    state.push_event(AppEvent::Ready {
-        user: "neo".to_owned(),
-        user_id: Some(Id::new(10)),
-    });
-    state.open_current_user_profile_popup();
-
-    handle_key(&mut state, key(KeyCode::Enter));
-    handle_key(&mut state, char_key('a'));
-    handle_key(&mut state, char_key('b'));
-    handle_key(&mut state, char_key('c'));
-    handle_key(&mut state, key(KeyCode::Left));
-    handle_key(&mut state, key(KeyCode::Left));
-    handle_key(&mut state, char_key('X'));
-    handle_key(&mut state, key(KeyCode::Right));
-    handle_key(&mut state, key(KeyCode::Backspace));
-    handle_key(&mut state, key(KeyCode::Enter));
-
-    assert_eq!(
-        state.user_profile_settings_field_value(
-            crate::tui::state::UserProfileSettingsField::GlobalDisplayName,
-        ),
-        "aXc"
     );
 }

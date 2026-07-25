@@ -5,9 +5,9 @@ use std::{
 
 use crate::discord::ids::{Id, marker::MessageMarker};
 use crate::discord::test_builders::{
-    ForumPostsLoadedFixture, GuildCreateFixture, MessageCreateFixture, MessageHistoryLoadedFixture,
+    ForumPostsLoadedFixture, GuildCreateFixture, MessageCreateFixture,
     empty_latest_message_history_loaded_event, forum_posts_loaded_event, guild_create_event,
-    guild_message_create_fixture, message_create_event, message_history_loaded_event,
+    guild_message_create_fixture, message_create_event,
 };
 use ratatui::{
     Terminal,
@@ -30,11 +30,10 @@ use super::{
     emoji_reaction_picker_lines, emoji_reaction_picker_lines_for_width,
     emoji_reaction_picker_lines_with_own_reactions, filtered_emoji_reaction_picker_lines,
     focus_pane_at, folder_settings_input_line_for_test, format_message_sent_time,
-    forum_post_reaction_summary, forum_post_scrollbar_visible_count, forum_post_tag_rows_for_test,
-    forum_post_viewport_lines, highlight_style, inline_image_preview_area,
-    inline_image_preview_row, keymap_help_popup_lines, member_display_label, member_name_style,
-    mention_picker_lines_for_test, message_action_menu_lines,
-    message_action_menu_lines_with_keymap_options, message_author_style,
+    forum_post_reaction_summary, forum_post_tag_rows_for_test, forum_post_viewport_lines,
+    highlight_style, inline_image_preview_area, inline_image_preview_row, keymap_help_popup_lines,
+    member_display_label, member_name_style, mention_picker_lines_for_test,
+    message_action_menu_lines, message_action_menu_lines_with_keymap_options, message_author_style,
     message_body_custom_emoji_rows, message_delete_confirmation_lines, message_item_lines,
     message_pin_confirmation_lines, message_remove_embeds_confirmation_lines,
     message_url_picker_lines_for_width, message_viewport_layout, message_viewport_lines,
@@ -43,9 +42,9 @@ use super::{
     reaction_users_popup_lines, reaction_users_visible_line_count, render, render_channels,
     render_composer, render_guilds, render_header, render_members, selected_avatar_x_offset,
     selected_message_card_width, selected_message_content_x_offset, selection_marker,
-    sync_view_heights, theme, toast_area, toast_line, user_profile_popup_has_avatar,
-    user_profile_popup_lines, user_profile_popup_lines_with_activities,
-    user_profile_popup_text_geometry, verification_composer_text,
+    sync_view_heights, theme, toast_line, user_profile_popup_has_avatar, user_profile_popup_lines,
+    user_profile_popup_lines_with_activities, user_profile_popup_text_geometry,
+    verification_composer_text,
 };
 use crate::tui::message::time::{
     discord_epoch_unix_millis, format_unix_millis_with_offset, message_starts_new_day,
@@ -80,7 +79,7 @@ use crate::{
             MentionPickerTarget, MessageActionItem, MessageActionKind, PollVotePickerItem,
             presence_style,
         },
-        text::{TextHighlightKind, truncate_display_width, truncate_display_width_from},
+        text::{TextHighlightKind, truncate_display_width_from},
         ui::{MouseTarget, PopupListTarget, mouse_target_at},
     },
 };
@@ -420,24 +419,6 @@ fn state_with_unread_direct_messages() -> DashboardState {
             },
         ],
     });
-    state
-}
-
-fn state_with_unread_direct_messages_with_loaded_unread_messages(count: u64) -> DashboardState {
-    let mut state = state_with_unread_direct_messages();
-    state.push_event(message_history_loaded_event(MessageHistoryLoadedFixture {
-        channel_id: Id::new(20),
-        messages: (0..count)
-            .map(|offset| MessageInfo {
-                guild_id: None,
-                author_id: Id::new(99),
-                author: "neo".to_owned(),
-                content: Some(format!("dm {offset}")),
-                ..MessageInfo::test(Id::new(20), Id::new(101 + offset))
-            })
-            .collect(),
-        ..MessageHistoryLoadedFixture::new()
-    }));
     state
 }
 

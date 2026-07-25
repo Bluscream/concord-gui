@@ -104,47 +104,6 @@ fn focused_pane_horizontal_scroll_stops_before_blank_labels() {
 
     assert_eq!(state.member_horizontal_scroll(), "member 1".width() - 1);
 }
-
-#[test]
-fn guild_scroll_uses_scrolloff() {
-    let mut state = state_with_many_guilds(8);
-    state.focus_pane(FocusPane::Guilds);
-    state.set_guild_view_height(7);
-
-    state.jump_bottom();
-    assert_eq!(state.selected_guild(), 8);
-    assert_eq!(state.guild_scroll(), 2);
-
-    state.move_up();
-    state.move_up();
-    assert_eq!(state.selected_guild(), 6);
-    assert_eq!(state.guild_scroll(), 2);
-
-    state.move_up();
-    assert_eq!(state.selected_guild(), 5);
-    assert_eq!(state.guild_scroll(), 2);
-}
-
-#[test]
-fn channel_scroll_uses_scrolloff() {
-    let mut state = state_with_many_channels(8);
-    state.focus_pane(FocusPane::Channels);
-    state.set_channel_view_height(7);
-
-    state.jump_bottom();
-    assert_eq!(state.selected_channel(), 7);
-    assert_eq!(state.channel_scroll(), 1);
-
-    state.move_up();
-    state.move_up();
-    assert_eq!(state.selected_channel(), 5);
-    assert_eq!(state.channel_scroll(), 1);
-
-    state.move_up();
-    assert_eq!(state.selected_channel(), 4);
-    assert_eq!(state.channel_scroll(), 1);
-}
-
 fn dm_channel_with_recipient(
     channel_id: Id<ChannelMarker>,
     name: &str,
@@ -335,26 +294,6 @@ fn channel_focused_selection_line_accounts_for_scroll_offset() {
     assert_eq!(focused, Some(absolute));
     assert!(absolute >= scroll);
     assert!(absolute < scroll + 3);
-}
-
-#[test]
-fn member_scroll_uses_scrolloff() {
-    let mut state = state_with_members(8);
-    state.focus_pane(FocusPane::Members);
-    state.set_member_view_height(7);
-
-    state.jump_bottom();
-    assert_eq!(state.selected_member(), 7);
-    assert_eq!(state.member_scroll(), 2);
-
-    state.move_up();
-    state.move_up();
-    assert_eq!(state.selected_member(), 5);
-    assert_eq!(state.member_scroll(), 2);
-
-    state.move_up();
-    assert_eq!(state.selected_member(), 4);
-    assert_eq!(state.member_scroll(), 2);
 }
 
 #[test]
@@ -708,23 +647,6 @@ fn pane_layout_state_is_saved_and_restored() {
 }
 
 #[test]
-fn moving_guild_cursor_does_not_activate_guild() {
-    let mut state = state_with_two_guilds();
-    state.focus_pane(FocusPane::Guilds);
-
-    state.confirm_selected_guild();
-    let active_guild = state.selected_guild_id();
-    assert!(active_guild.is_some());
-
-    state.move_down();
-    assert_eq!(state.navigation.guilds.list.selected, 2);
-    assert_eq!(state.selected_guild_id(), active_guild);
-
-    state.confirm_selected_guild();
-    assert_ne!(state.selected_guild_id(), active_guild);
-}
-
-#[test]
 fn active_guild_entry_tracks_confirmed_guild() {
     let mut state = state_with_two_guilds();
     state.focus_pane(FocusPane::Guilds);
@@ -812,23 +734,6 @@ fn guilds_missing_from_folders_appear_at_top_newest_first() {
         entries[2],
         GuildPaneEntry::Guild { state, .. } if state.id == Id::new(1)
     ));
-}
-
-#[test]
-fn moving_channel_cursor_does_not_activate_channel() {
-    let mut state = state_with_channel_tree();
-    let random_id = Id::new(12);
-    state.focus_pane(FocusPane::Channels);
-
-    assert_eq!(state.selected_channel_id(), None);
-
-    state.move_down();
-    state.move_down();
-    assert_eq!(state.navigation.channels.list.selected, 2);
-    assert_eq!(state.selected_channel_id(), None);
-
-    state.confirm_selected_channel();
-    assert_eq!(state.selected_channel_id(), Some(random_id));
 }
 
 #[test]

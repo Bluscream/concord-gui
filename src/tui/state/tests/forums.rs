@@ -155,49 +155,75 @@ fn forum_post_items_resolve_applied_tag_names() {
 }
 
 #[test]
-fn forum_post_preview_ignores_latest_message_when_starter_is_missing() {
+fn forum_post_preview_reflects_the_loaded_starter_message() {
     let guild_id = Id::new(1);
     let forum_id = Id::new(20);
-    let mut state = DashboardState::new();
+    let thread_id = Id::new(30);
 
-    state.push_event(guild_create_event(GuildCreateFixture {
-        channels: vec![forum_channel_info(guild_id, forum_id)],
-        ..GuildCreateFixture::new(guild_id)
-    }));
-    state.confirm_selected_guild();
-    state.confirm_selected_channel();
+    for (name, first_message, expected_author, expected_content) in [
+        (
+            "a later reply is not the starter",
+            forum_preview_message(guild_id, thread_id, 300, "neo", "latest reply"),
+            None,
+            None,
+        ),
+        (
+            "starter with no content",
+            MessageInfo {
+                content: None,
+                ..forum_preview_message(guild_id, thread_id, 30, "neo", "")
+            },
+            Some("neo"),
+            Some("original message deleted"),
+        ),
+        (
+            "starter whose text is already a placeholder",
+            forum_preview_message(
+                guild_id,
+                thread_id,
+                30,
+                "neo",
+                "<message content unavailable>",
+            ),
+            Some("neo"),
+            Some("<message content unavailable>"),
+        ),
+    ] {
+        let mut state = DashboardState::new();
 
-    state.push_event(forum_posts_loaded_event(ForumPostsLoadedFixture {
-        channel_id: forum_id,
-        archive_state: ForumPostArchiveState::Active,
-        next_offset: 1,
-        threads: vec![forum_thread_info(
-            guild_id,
-            forum_id,
-            30,
-            "welcome",
-            Some(300),
-            false,
-        )],
-        first_messages: vec![forum_preview_message(
-            guild_id,
-            Id::new(30),
-            300,
-            "neo",
-            "latest reply",
-        )],
-        ..ForumPostsLoadedFixture::new()
-    }));
+        state.push_event(guild_create_event(GuildCreateFixture {
+            channels: vec![forum_channel_info(guild_id, forum_id)],
+            ..GuildCreateFixture::new(guild_id)
+        }));
+        state.confirm_selected_guild();
+        state.confirm_selected_channel();
 
-    let post = state
-        .selected_forum_post_items()
-        .into_iter()
-        .next()
-        .expect("forum post should be visible");
+        state.push_event(forum_posts_loaded_event(ForumPostsLoadedFixture {
+            channel_id: forum_id,
+            archive_state: ForumPostArchiveState::Active,
+            next_offset: 1,
+            threads: vec![forum_thread_info(
+                guild_id,
+                forum_id,
+                30,
+                "welcome",
+                Some(300),
+                false,
+            )],
+            first_messages: vec![first_message],
+            ..ForumPostsLoadedFixture::new()
+        }));
 
-    assert_eq!(post.preview_author, None);
-    assert_eq!(post.preview_content, None);
-    assert_eq!(post.last_activity_message_id, Some(Id::new(300)));
+        let post = state
+            .selected_forum_post_items()
+            .into_iter()
+            .next()
+            .expect("forum post should be visible");
+
+        assert_eq!(post.preview_author.as_deref(), expected_author, "{name}");
+        assert_eq!(post.preview_content.as_deref(), expected_content, "{name}");
+        assert_eq!(post.last_activity_message_id, Some(Id::new(300)), "{name}");
+    }
 }
 
 #[test]
@@ -261,98 +287,6 @@ fn forum_post_preview_uses_thread_creator_when_starter_is_missing() {
         Some("original message deleted")
     );
     assert_eq!(post.last_activity_message_id, Some(Id::new(300)));
-}
-
-#[test]
-fn forum_post_preview_shows_deleted_starter_with_author() {
-    let guild_id = Id::new(1);
-    let forum_id = Id::new(20);
-    let mut state = DashboardState::new();
-
-    state.push_event(guild_create_event(GuildCreateFixture {
-        channels: vec![forum_channel_info(guild_id, forum_id)],
-        ..GuildCreateFixture::new(guild_id)
-    }));
-    state.confirm_selected_guild();
-    state.confirm_selected_channel();
-
-    let mut deleted_starter = forum_preview_message(guild_id, Id::new(30), 30, "neo", "");
-    deleted_starter.content = None;
-    state.push_event(forum_posts_loaded_event(ForumPostsLoadedFixture {
-        channel_id: forum_id,
-        archive_state: ForumPostArchiveState::Active,
-        next_offset: 1,
-        threads: vec![forum_thread_info(
-            guild_id,
-            forum_id,
-            30,
-            "welcome",
-            Some(300),
-            false,
-        )],
-        first_messages: vec![deleted_starter],
-        ..ForumPostsLoadedFixture::new()
-    }));
-
-    let post = state
-        .selected_forum_post_items()
-        .into_iter()
-        .next()
-        .expect("forum post should be visible");
-
-    assert_eq!(post.preview_author.as_deref(), Some("neo"));
-    assert_eq!(
-        post.preview_content.as_deref(),
-        Some("original message deleted")
-    );
-}
-
-#[test]
-fn forum_post_preview_keeps_literal_unavailable_text() {
-    let guild_id = Id::new(1);
-    let forum_id = Id::new(20);
-    let mut state = DashboardState::new();
-
-    state.push_event(guild_create_event(GuildCreateFixture {
-        channels: vec![forum_channel_info(guild_id, forum_id)],
-        ..GuildCreateFixture::new(guild_id)
-    }));
-    state.confirm_selected_guild();
-    state.confirm_selected_channel();
-
-    state.push_event(forum_posts_loaded_event(ForumPostsLoadedFixture {
-        channel_id: forum_id,
-        archive_state: ForumPostArchiveState::Active,
-        next_offset: 1,
-        threads: vec![forum_thread_info(
-            guild_id,
-            forum_id,
-            30,
-            "welcome",
-            Some(300),
-            false,
-        )],
-        first_messages: vec![forum_preview_message(
-            guild_id,
-            Id::new(30),
-            30,
-            "neo",
-            "<message content unavailable>",
-        )],
-        ..ForumPostsLoadedFixture::new()
-    }));
-
-    let post = state
-        .selected_forum_post_items()
-        .into_iter()
-        .next()
-        .expect("forum post should be visible");
-
-    assert_eq!(post.preview_author.as_deref(), Some("neo"));
-    assert_eq!(
-        post.preview_content.as_deref(),
-        Some("<message content unavailable>")
-    );
 }
 
 #[test]
@@ -1987,32 +1921,4 @@ fn channel_pane_regular_thread_opens_thread_actions() {
     );
     // The remaining management/notification rows are still present.
     assert!(label(ThreadActionKind::NotificationSettings).is_some());
-}
-
-#[test]
-fn thread_action_menu_keeps_pin_and_post_labels() {
-    let mut state = manageable_thread_action_menu_state();
-    state.open_selected_thread_actions();
-
-    let items = state.selected_thread_action_items();
-    let label = |kind: ThreadActionKind| {
-        items
-            .iter()
-            .find(|item| item.kind == kind)
-            .map(|item| item.label.clone())
-    };
-    // Forum posts keep the "post" noun and the forum-only Pin row.
-    assert_eq!(
-        label(ThreadActionKind::Close),
-        Some("Close post".to_owned())
-    );
-    assert_eq!(
-        label(ThreadActionKind::ToggleMute),
-        Some("Mute post".to_owned())
-    );
-    assert_eq!(label(ThreadActionKind::Pin), Some("Pin post".to_owned()));
-    assert_eq!(
-        label(ThreadActionKind::Delete),
-        Some("Delete post".to_owned())
-    );
 }

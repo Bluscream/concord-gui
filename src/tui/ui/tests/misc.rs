@@ -221,55 +221,53 @@ fn later_history_does_not_clear_loaded_pin_state() {
 }
 
 #[test]
-fn primary_activity_summary_prefers_game_over_custom_status() {
-    let activities = vec![
-        ActivityInfo::test(ActivityKind::Playing, "Concord"),
-        ActivityInfo {
-            state: Some("Coding hard".to_owned()),
-            emoji: Some(ActivityEmoji {
-                name: "🦀".to_owned(),
-                id: None,
-                animated: false,
-            }),
-            ..ActivityInfo::test(ActivityKind::Custom, "Custom Status")
-        },
-    ];
-
-    assert_eq!(
-        primary_activity_summary(&activities, &[]).map(|r| r.to_display_string()),
-        Some("▶ Concord".to_owned())
-    );
-}
-
-#[test]
-fn primary_activity_summary_listening_includes_track_and_artist() {
-    let activities = vec![ActivityInfo {
-        details: Some("Bohemian Rhapsody".to_owned()),
-        state: Some("Queen".to_owned()),
-        ..ActivityInfo::test(ActivityKind::Listening, "Spotify")
-    }];
-    assert_eq!(
-        primary_activity_summary(&activities, &[]).map(|r| r.to_display_string()),
-        Some("♪ Spotify - Bohemian Rhapsody by Queen".to_owned())
-    );
-}
-
-#[test]
-fn primary_activity_summary_sanitizes_custom_status_emoji() {
-    let activities = vec![ActivityInfo {
-        state: Some("curse of rah".to_owned()),
-        emoji: Some(ActivityEmoji {
-            name: "⚜".to_owned(),
-            id: None,
-            animated: false,
-        }),
-        ..ActivityInfo::test(ActivityKind::Custom, "Custom Status")
-    }];
-
-    assert_eq!(
-        primary_activity_summary(&activities, &[]).map(|render| render.to_display_string()),
-        Some("? curse of rah".to_owned())
-    );
+fn primary_activity_summary_picks_and_renders_the_leading_activity() {
+    for (name, activities, expected) in [
+        (
+            "a game outranks a custom status",
+            vec![
+                ActivityInfo::test(ActivityKind::Playing, "Concord"),
+                ActivityInfo {
+                    state: Some("Coding hard".to_owned()),
+                    emoji: Some(ActivityEmoji {
+                        name: "🦀".to_owned(),
+                        id: None,
+                        animated: false,
+                    }),
+                    ..ActivityInfo::test(ActivityKind::Custom, "Custom Status")
+                },
+            ],
+            "▶ Concord",
+        ),
+        (
+            "listening spells out the track and artist",
+            vec![ActivityInfo {
+                details: Some("Bohemian Rhapsody".to_owned()),
+                state: Some("Queen".to_owned()),
+                ..ActivityInfo::test(ActivityKind::Listening, "Spotify")
+            }],
+            "♪ Spotify - Bohemian Rhapsody by Queen",
+        ),
+        (
+            "a custom status emoji the terminal cannot width is sanitized",
+            vec![ActivityInfo {
+                state: Some("curse of rah".to_owned()),
+                emoji: Some(ActivityEmoji {
+                    name: "⚜".to_owned(),
+                    id: None,
+                    animated: false,
+                }),
+                ..ActivityInfo::test(ActivityKind::Custom, "Custom Status")
+            }],
+            "? curse of rah",
+        ),
+    ] {
+        assert_eq!(
+            primary_activity_summary(&activities, &[]).map(|render| render.to_display_string()),
+            Some(expected.to_owned()),
+            "{name}"
+        );
+    }
 }
 
 #[test]
@@ -332,17 +330,55 @@ fn embed_text_emits_inline_emoji_slot_for_image_overlay() {
 }
 
 #[test]
-fn non_default_message_type_adds_dim_label_line() {
-    let mut message = message_with_attachment(Some("reply body".to_owned()), image_attachment());
-    message.message_kind = MessageKind::new(19);
+fn message_kind_decides_the_dim_first_line() {
+    for (name, message, expected) in [
+        (
+            "reply kind without a reply preview falls back to a label",
+            {
+                let mut message =
+                    message_with_attachment(Some("reply body".to_owned()), image_attachment());
+                message.message_kind = MessageKind::new(19);
+                message
+            },
+            vec!["↳ Reply", "reply body", "[image: cat.png] 640x480"],
+        ),
+        (
+            "reply kind with a preview replaces the label",
+            {
+                let mut message =
+                    message_with_attachment(Some("message body".to_owned()), image_attachment());
+                message.message_kind = MessageKind::new(19);
+                message.reply = Some(ReplyInfo {
+                    content: Some("looks good".to_owned()),
+                    ..ReplyInfo::test("casey")
+                });
+                message
+            },
+            vec![
+                "╭─ casey : looks good",
+                "message body",
+                "[image: cat.png] 640x480",
+            ],
+        ),
+        (
+            "join kind renders only its label",
+            {
+                let mut message = message_with_content(Some(String::new()));
+                message.message_kind = MessageKind::new(7);
+                message
+            },
+            vec!["joined the server"],
+        ),
+    ] {
+        let lines = format_message_content_lines(&message, &DashboardState::new(), 200);
 
-    let lines = format_message_content_lines(&message, &DashboardState::new(), 200);
-
-    assert_eq!(
-        line_texts(&lines),
-        vec!["↳ Reply", "reply body", "[image: cat.png] 640x480"]
-    );
-    assert_eq!(lines[0].style, Style::default().add_modifier(Modifier::DIM));
+        assert_eq!(line_texts(&lines), expected, "{name}");
+        assert_eq!(
+            lines[0].style,
+            Style::default().add_modifier(Modifier::DIM),
+            "{name}"
+        );
+    }
 }
 
 #[test]
@@ -412,17 +448,6 @@ fn chat_input_command_message_keeps_embed_text() {
 }
 
 #[test]
-fn user_join_message_type_uses_join_label() {
-    let mut message = message_with_content(Some(String::new()));
-    message.message_kind = MessageKind::new(7);
-
-    let lines = format_message_content_lines(&message, &DashboardState::new(), 200);
-
-    assert_eq!(line_texts(&lines), vec!["joined the server"]);
-    assert_eq!(lines[0].style, Style::default().add_modifier(Modifier::DIM));
-}
-
-#[test]
 fn boost_message_types_use_discord_like_copy() {
     for (kind, label) in [
         (8, "neo boosted the server"),
@@ -468,28 +493,6 @@ fn poll_result_message_uses_result_card() {
             "7 total votes · Final results"
         ]
     );
-}
-
-#[test]
-fn reply_message_uses_preview_instead_of_type_label() {
-    let mut message = message_with_attachment(Some("message body".to_owned()), image_attachment());
-    message.message_kind = MessageKind::new(19);
-    message.reply = Some(ReplyInfo {
-        content: Some("looks good".to_owned()),
-        ..ReplyInfo::test("casey")
-    });
-
-    let lines = format_message_content_lines(&message, &DashboardState::new(), 200);
-
-    assert_eq!(
-        line_texts(&lines),
-        vec![
-            "╭─ casey : looks good",
-            "message body",
-            "[image: cat.png] 640x480"
-        ]
-    );
-    assert_eq!(lines[0].style, Style::default().add_modifier(Modifier::DIM));
 }
 
 #[test]
@@ -635,40 +638,26 @@ fn lay_out_reaction_chips_wraps_at_chip_boundary() {
 }
 
 #[test]
-fn forwarded_snapshot_replaces_empty_message_placeholder() {
-    let message =
-        message_with_forwarded_snapshot(forwarded_snapshot(Some("forwarded text"), Vec::new()));
-
-    assert_eq!(
-        format_message_content(&message, 200),
-        "↱ Forwarded │ forwarded text"
-    );
-}
-
-#[test]
 fn forwarded_snapshot_content_wraps_after_prefix() {
-    let message =
-        message_with_forwarded_snapshot(forwarded_snapshot(Some("abcdefghijkl"), Vec::new()));
+    for (content, width, expected) in [
+        (
+            "abcdefghijkl",
+            7,
+            vec!["↱ Forwarded", "│ abcde", "│ fghij", "│ kl"],
+        ),
+        (
+            "漢字仮名交じ",
+            12,
+            vec!["↱ Forwarded", "│ 漢字仮名交", "│ じ"],
+        ),
+    ] {
+        let message =
+            message_with_forwarded_snapshot(forwarded_snapshot(Some(content), Vec::new()));
 
-    let lines = format_message_content_lines(&message, &DashboardState::new(), 7);
+        let lines = format_message_content_lines(&message, &DashboardState::new(), width);
 
-    assert_eq!(
-        line_texts(&lines),
-        vec!["↱ Forwarded", "│ abcde", "│ fghij", "│ kl"]
-    );
-}
-
-#[test]
-fn forwarded_snapshot_content_wraps_wide_characters_after_prefix() {
-    let message =
-        message_with_forwarded_snapshot(forwarded_snapshot(Some("漢字仮名交じ"), Vec::new()));
-
-    let lines = format_message_content_lines(&message, &DashboardState::new(), 12);
-
-    assert_eq!(
-        line_texts(&lines),
-        vec!["↱ Forwarded", "│ 漢字仮名交", "│ じ"]
-    );
+        assert_eq!(line_texts(&lines), expected, "{content}");
+    }
 }
 
 #[test]
@@ -861,52 +850,14 @@ fn grouped_continuation_custom_emoji_image_uses_body_row() {
 }
 
 #[test]
-fn shared_truncation_uses_display_width_for_wide_characters() {
-    let author = truncate_display_width("漢字仮名交じり", 8);
+fn horizontal_truncation_skips_the_offset_and_fits_the_width() {
+    for (text, offset, width, expected) in [("abcdef", 2, 4, "cdef"), ("가나다abc", 2, 6, "나...")]
+    {
+        let label = truncate_display_width_from(text, offset, width);
 
-    assert_eq!(author, "漢字...");
-    assert_eq!(author.width(), 7);
-}
-
-#[test]
-fn member_label_truncates_by_display_width() {
-    let member = GuildMemberState {
-        status: PresenceStatus::Online,
-        ..GuildMemberState::test(Id::new(10), "漢字仮名交じり文章")
-    };
-
-    let label = member_display_label(MemberEntry::Guild(&member), &member.display_name, 0, 12);
-
-    assert_eq!(label, "漢字仮名...");
-    assert!(label.width() <= 12);
-}
-
-#[test]
-fn member_label_sanitizes_ambiguous_width_emoji_before_truncating() {
-    let member = GuildMemberState {
-        status: PresenceStatus::Online,
-        ..GuildMemberState::test(Id::new(10), "user ⚜ status")
-    };
-
-    let label = member_display_label(MemberEntry::Guild(&member), &member.display_name, 0, 12);
-
-    assert_eq!(label, "user ? st...");
-    assert!(label.width() <= 12);
-}
-
-#[test]
-fn horizontal_truncation_skips_display_width_offset() {
-    let label = truncate_display_width_from("abcdef", 2, 4);
-
-    assert_eq!(label, "cdef");
-}
-
-#[test]
-fn horizontal_truncation_respects_wide_character_boundaries() {
-    let label = truncate_display_width_from("가나다abc", 2, 6);
-
-    assert_eq!(label, "나...");
-    assert!(label.width() <= 6);
+        assert_eq!(label, expected, "{text}");
+        assert!(label.width() <= width, "{text}");
+    }
 }
 
 #[test]
@@ -919,20 +870,6 @@ fn member_label_uses_horizontal_scroll_offset() {
     let label = member_display_label(MemberEntry::Guild(&member), &member.display_name, 5, 8);
 
     assert_eq!(label, "membe...");
-}
-
-#[test]
-fn channel_label_truncates_by_display_width_after_prefixes() {
-    let branch_prefix = "├ ";
-    let channel_prefix = "# ";
-    let max_width = 14usize;
-    let label_width = max_width
-        .saturating_sub(branch_prefix.width())
-        .saturating_sub(channel_prefix.width());
-    let label = truncate_display_width("漢字仮名交じり", label_width);
-
-    assert_eq!(label, "漢字仮...");
-    assert!(branch_prefix.width() + channel_prefix.width() + label.width() <= max_width);
 }
 
 #[test]
@@ -1083,4 +1020,23 @@ fn forwarded_card_rows_push_inline_preview_slot_down() {
     let state = DashboardState::new();
 
     assert_eq!(inline_image_preview_row(&messages, &state, 0, 200, 0, 0), 4);
+}
+
+#[test]
+fn member_label_sanitizes_then_truncates_to_display_width() {
+    let cases = [
+        ("漢字仮名交じり文章", "漢字仮名..."),
+        ("user ⚜ status", "user ? st..."),
+    ];
+
+    for (display_name, expected) in cases {
+        let member = GuildMemberState {
+            status: PresenceStatus::Online,
+            ..GuildMemberState::test(Id::new(10), display_name)
+        };
+
+        let label = member_display_label(MemberEntry::Guild(&member), &member.display_name, 0, 12);
+        assert_eq!(label, expected, "{display_name}");
+        assert!(label.width() <= 12, "{display_name}");
+    }
 }

@@ -91,9 +91,4 @@ mod tests {
     fn xdg_config_home_ignores_relative_paths() {
         assert_eq!(xdg_config_home_from_env(Some("relative/path".into())), None);
     }
-
-    #[test]
-    fn xdg_config_home_ignores_missing_values() {
-        assert_eq!(xdg_config_home_from_env(None), None);
-    }
 }

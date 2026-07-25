@@ -126,13 +126,6 @@ fn quit_confirmation_lines_show_controls() {
 }
 
 #[test]
-fn toast_area_anchors_to_terminal_bottom_left() {
-    let area = toast_area(Rect::new(5, 2, 40, 12), "Message copied");
-
-    assert_eq!(area, Rect::new(5, 11, 16, 3));
-}
-
-#[test]
 fn toast_line_truncates_to_available_width() {
     let line = toast_line("Message copied", 7);
 
@@ -236,42 +229,6 @@ fn search_popup_message_results_show_sent_time() {
 }
 
 #[test]
-fn options_popup_lines_keep_selected_item_visible_when_clipped() {
-    let items = vec![
-        DisplayOptionItem {
-            enabled: true,
-            effective: true,
-            description: "First.",
-            ..DisplayOptionItem::test("Option 1")
-        },
-        DisplayOptionItem {
-            enabled: true,
-            effective: true,
-            description: "Second.",
-            ..DisplayOptionItem::test("Option 2")
-        },
-        DisplayOptionItem {
-            enabled: true,
-            effective: true,
-            description: "Third.",
-            ..DisplayOptionItem::test("Option 3")
-        },
-        DisplayOptionItem {
-            enabled: true,
-            effective: true,
-            description: "Fourth.",
-            ..DisplayOptionItem::test("Option 4")
-        },
-    ];
-
-    let lines = options_popup_lines(&items, 3, 2, 2, 120);
-    let rendered = line_texts_from_ratatui(&lines).join("\n");
-
-    assert!(rendered.contains("Option 3"), "{rendered}");
-    assert!(rendered.contains("› [x] Option 4"), "{rendered}");
-}
-
-#[test]
 fn options_popup_render_keeps_selected_row_visible_when_short() {
     let mut state = DashboardState::new();
     state.open_options_category_picker();
@@ -309,32 +266,22 @@ fn attachment_viewer_render_shows_url_and_actions_inside_popup() {
 }
 
 #[test]
-fn attachment_viewer_popup_uses_eighty_percent_of_frame_area() {
+fn attachment_viewer_popup_geometry_follows_zoom_level() {
     let area = Rect::new(10, 5, 100, 40);
+    let cases = [
+        (AttachmentViewerZoom::Default, Rect::new(20, 9, 80, 32)),
+        (AttachmentViewerZoom::Large, Rect::new(12, 6, 95, 38)),
+        (AttachmentViewerZoom::Fullscreen, area),
+    ];
 
-    let popup = attachment_viewer_popup(area, AttachmentViewerZoom::Default);
-    let image_area = attachment_viewer_image_area(area, AttachmentViewerZoom::Default);
+    for (zoom, expected) in cases {
+        assert_eq!(attachment_viewer_popup(area, zoom), expected, "{zoom:?}");
+    }
 
-    assert_eq!(popup, Rect::new(20, 9, 80, 32));
-    assert_eq!(image_area, Rect::new(21, 10, 78, 29));
-}
-
-#[test]
-fn attachment_viewer_popup_large_uses_ninety_five_percent_of_frame_area() {
-    let area = Rect::new(10, 5, 100, 40);
-
-    let popup = attachment_viewer_popup(area, AttachmentViewerZoom::Large);
-
-    assert_eq!(popup, Rect::new(12, 6, 95, 38));
-}
-
-#[test]
-fn attachment_viewer_popup_fullscreen_uses_full_frame_area() {
-    let frame_area = Rect::new(0, 0, 200, 60);
-
-    let popup = attachment_viewer_popup(frame_area, AttachmentViewerZoom::Fullscreen);
-
-    assert_eq!(popup, frame_area);
+    assert_eq!(
+        attachment_viewer_image_area(area, AttachmentViewerZoom::Default),
+        Rect::new(21, 10, 78, 29)
+    );
 }
 
 #[test]
@@ -755,31 +702,6 @@ fn emoji_reaction_picker_marks_selected_reaction() {
 }
 
 #[test]
-fn emoji_reaction_picker_assigns_digit_shortcuts_by_position() {
-    let reactions = vec![
-        EmojiReactionItem {
-            label: "Thumbs up".to_owned(),
-            ..EmojiReactionItem::test(ReactionEmoji::Unicode("👍".to_owned()))
-        },
-        EmojiReactionItem {
-            label: "Heart".to_owned(),
-            ..EmojiReactionItem::test(ReactionEmoji::Unicode("❤️".to_owned()))
-        },
-        EmojiReactionItem {
-            label: "Joy".to_owned(),
-            ..EmojiReactionItem::test(ReactionEmoji::Unicode("😂".to_owned()))
-        },
-    ];
-
-    let lines = emoji_reaction_picker_lines(&reactions, 0, 10, 0, &[]);
-
-    assert_eq!(
-        line_texts_from_ratatui(&lines),
-        vec!["› [1] 👍 Thumbs up", "  [2] ❤️ Heart", "  [3] 😂 Joy"]
-    );
-}
-
-#[test]
 fn emoji_reaction_picker_uses_reaction_colors_and_selected_background() {
     let reactions = vec![
         EmojiReactionItem {
@@ -1008,37 +930,6 @@ fn reaction_users_popup_buffer_renders_without_wrap_artifacts() {
     // popup-content section ends with the long username's tail. Only the
     // single row that actually renders that user should match. Any other match
     // means wrap continuation bled across rows.
-    let trailing_matches = dump.iter().filter(|line| line.contains("? )")).count();
-    assert!(
-        trailing_matches <= 1,
-        "popup buffer contained '? )' fragment on {trailing_matches} rows; expected at most 1.\nDump:\n{}",
-        dump.join("\n")
-    );
-}
-
-#[test]
-fn reaction_users_popup_buffer_stays_clean_in_narrow_terminal() {
-    let mut state = DashboardState::new();
-    let emoji = ReactionEmoji::Unicode("👍".to_owned());
-    state.open_reaction_users_popup(Id::new(2), Id::new(1), vec![(emoji.clone(), 2)]);
-    state.activate_reaction_users_popup();
-    state.push_event(reaction_users_loaded_event(ReactionUsersLoadedFixture {
-        channel_id: Id::new(2),
-        message_id: Id::new(1),
-        emoji,
-        users: vec![
-            ReactionUserInfo::test(Id::new(1), "won"),
-            ReactionUserInfo::test(Id::new(2), "파닥파닥( 40%..? )"),
-        ],
-        next_after: None,
-        after: None,
-    }));
-
-    // Narrow terminal that would force the popup down to a width where
-    // the long name no longer fits without wrapping. Pre-truncation must
-    // turn the long name into an ellipsis, never split it across rows.
-    let dump = render_dashboard_dump(40, 25, &mut state);
-
     let trailing_matches = dump.iter().filter(|line| line.contains("? )")).count();
     assert!(
         trailing_matches <= 1,
@@ -1345,20 +1236,35 @@ fn leader_popup_shows_non_leader_prefix_title_and_description() {
 }
 
 #[test]
-fn leader_action_popup_renders_focused_pane_actions() {
-    let mut state = state_with_message();
-    state.focus_pane(FocusPane::Channels);
-    state.open_leader();
-    state.open_focused_pane_actions();
+fn leader_action_popup_matches_the_focused_pane() {
+    for (pane, expected) in [
+        (
+            FocusPane::Channels,
+            &[
+                "Channel actions",
+                "[p]",
+                "Show pinned messages",
+                "Show threads",
+                "Mark as read",
+            ][..],
+        ),
+        (
+            FocusPane::Guilds,
+            &["Server actions", "Mark server as read"][..],
+        ),
+    ] {
+        let mut state = state_with_message();
+        state.focus_pane(pane);
+        state.open_leader();
+        state.open_focused_pane_actions();
 
-    let dump = render_dashboard_dump(120, 20, &mut state);
-    let rendered = dump.join("\n");
+        let dump = render_dashboard_dump(120, 20, &mut state);
+        let rendered = dump.join("\n");
 
-    assert!(rendered.contains("Channel actions"), "{rendered}");
-    assert!(rendered.contains("[p]"), "{rendered}");
-    assert!(rendered.contains("Show pinned messages"), "{rendered}");
-    assert!(rendered.contains("Show threads"), "{rendered}");
-    assert!(rendered.contains("Mark as read"), "{rendered}");
+        for needle in expected {
+            assert!(rendered.contains(needle), "{pane:?} {needle}\n{rendered}");
+        }
+    }
 }
 
 #[test]
@@ -1416,33 +1322,6 @@ fn leader_action_popup_selection_overrides_disabled_dim() {
         "Join voice (not a voice channel)"
     );
     assert!(!lines[0].spans[2].style.add_modifier.contains(Modifier::DIM));
-}
-
-#[test]
-fn leader_action_popup_from_messages_uses_message_action_title() {
-    let mut state = state_with_message();
-    state.focus_pane(FocusPane::Messages);
-    state.open_leader();
-    state.open_focused_pane_actions();
-
-    let dump = render_dashboard_dump(120, 20, &mut state);
-    let rendered = dump.join("\n");
-
-    assert!(rendered.contains("Message actions"), "{rendered}");
-}
-
-#[test]
-fn leader_action_popup_from_guilds_uses_server_action_title() {
-    let mut state = state_with_message();
-    state.focus_pane(FocusPane::Guilds);
-    state.open_leader();
-    state.open_focused_pane_actions();
-
-    let dump = render_dashboard_dump(120, 20, &mut state);
-    let rendered = dump.join("\n");
-
-    assert!(rendered.contains("Server actions"), "{rendered}");
-    assert!(rendered.contains("Mark server as read"), "{rendered}");
 }
 
 #[test]

@@ -1,107 +1,61 @@
 use super::*;
 
-#[test]
-fn options_popup_toggles_selected_setting() {
-    let mut state = state_with_messages(1);
-
-    state.open_options_popup();
-    handle_key(&mut state, key(KeyCode::Down));
-    handle_key(&mut state, key(KeyCode::Enter));
-
-    assert!(state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::Options));
-    assert!(!state.display_options().show_avatars);
-    assert_eq!(
-        state.take_options_save_request(),
-        Some(AppOptions {
-            display: state.display_options(),
-            composer: state.composer_options(),
-            credentials: Default::default(),
-            notifications: state.notification_options(),
-            voice: state.voice_options(),
-            presence: Default::default(),
-        })
-    );
-}
+type DisplayOptionCheck = fn(&DashboardState) -> bool;
 
 #[test]
-fn options_popup_cycles_image_preview_quality() {
-    let mut state = state_with_messages(1);
+fn options_popup_toggles_and_cycles_display_settings() {
+    // (label, rows to move down inside the Display category, expected effect).
+    // `None` stays on the category picker, where the row is a plain toggle.
+    let cases: [(&str, Option<usize>, DisplayOptionCheck); 4] = [
+        ("show avatars", None, |state| {
+            !state.display_options().show_avatars
+        }),
+        ("image preview quality", Some(3), |state| {
+            state.display_options().image_preview_quality == ImagePreviewQualityPreset::High
+        }),
+        ("attachment viewer quality", Some(4), |state| {
+            state.display_options().attachment_viewer_quality
+                == ImagePreviewQualityPreset::Efficient
+        }),
+        ("media playback", Some(7), |state| {
+            state.display_options().media_playback
+        }),
+    ];
 
-    state.open_options_popup();
-    handle_key(&mut state, key(KeyCode::Enter));
-    for _ in 0..3 {
-        handle_key(&mut state, key(KeyCode::Down));
+    for (label, rows, expected) in cases {
+        let mut state = state_with_messages(1);
+        state.open_options_popup();
+        match rows {
+            None => {
+                handle_key(&mut state, key(KeyCode::Down));
+            }
+            Some(rows) => {
+                handle_key(&mut state, key(KeyCode::Enter));
+                for _ in 0..rows {
+                    handle_key(&mut state, key(KeyCode::Down));
+                }
+            }
+        }
+        handle_key(&mut state, key(KeyCode::Enter));
+
+        assert!(
+            state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::Options),
+            "{label}"
+        );
+        assert!(expected(&state), "{label}");
+        assert_eq!(
+            state.take_options_save_request(),
+            Some(AppOptions {
+                display: state.display_options(),
+                composer: state.composer_options(),
+                credentials: Default::default(),
+                notifications: state.notification_options(),
+                voice: state.voice_options(),
+                presence: Default::default(),
+            }),
+            "{label}"
+        );
     }
-    handle_key(&mut state, key(KeyCode::Enter));
-
-    assert_eq!(
-        state.display_options().image_preview_quality,
-        ImagePreviewQualityPreset::High
-    );
-    assert_eq!(
-        state.take_options_save_request(),
-        Some(AppOptions {
-            display: state.display_options(),
-            composer: state.composer_options(),
-            credentials: Default::default(),
-            notifications: state.notification_options(),
-            voice: state.voice_options(),
-            presence: Default::default(),
-        })
-    );
-}
-
-#[test]
-fn options_popup_cycles_attachment_viewer_quality() {
-    let mut state = state_with_messages(1);
-
-    state.open_options_popup();
-    handle_key(&mut state, key(KeyCode::Enter));
-    for _ in 0..4 {
-        handle_key(&mut state, key(KeyCode::Down));
-    }
-    handle_key(&mut state, key(KeyCode::Enter));
-
-    assert_eq!(
-        state.display_options().attachment_viewer_quality,
-        ImagePreviewQualityPreset::Efficient
-    );
-    assert_eq!(
-        state.take_options_save_request(),
-        Some(AppOptions {
-            display: state.display_options(),
-            composer: state.composer_options(),
-            credentials: Default::default(),
-            notifications: state.notification_options(),
-            voice: state.voice_options(),
-            presence: Default::default(),
-        })
-    );
-}
-
-#[test]
-fn options_popup_toggles_media_playback() {
-    let mut state = state_with_messages(1);
-
-    state.open_options_popup();
-    handle_key(&mut state, key(KeyCode::Enter));
-    for _ in 0..7 {
-        handle_key(&mut state, key(KeyCode::Down));
-    }
-    handle_key(&mut state, key(KeyCode::Enter));
-
-    assert!(state.display_options().media_playback);
-    assert_eq!(
-        state.take_options_save_request(),
-        Some(AppOptions {
-            display: state.display_options(),
-            composer: state.composer_options(),
-            credentials: Default::default(),
-            notifications: state.notification_options(),
-            voice: state.voice_options(),
-            presence: Default::default(),
-        })
-    );
 }
 
 #[test]

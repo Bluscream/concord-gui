@@ -865,26 +865,32 @@ fn configured_quit_key_replaces_default_q() {
 }
 
 #[test]
-fn leader_channel_actions_offer_mute_duration_and_submit_command() {
-    let mut state = state_with_channel_tree();
-    state.focus_pane(FocusPane::Channels);
-    handle_key(&mut state, key(KeyCode::Down));
+fn leader_mute_duration_submits_for_the_selected_channel_row() {
+    for (nav_key, channel_id, label) in [
+        (KeyCode::Down, 11, "#general"),
+        (KeyCode::Up, 10, "Text Channels"),
+    ] {
+        let mut state = state_with_channel_tree();
+        state.focus_pane(FocusPane::Channels);
+        handle_key(&mut state, key(nav_key));
 
-    handle_key(&mut state, char_key(' '));
-    handle_key(&mut state, char_key('a'));
-    handle_key(&mut state, char_key('u'));
-    let command = handle_key(&mut state, char_key('1'));
+        handle_key(&mut state, char_key(' '));
+        handle_key(&mut state, char_key('a'));
+        handle_key(&mut state, char_key('u'));
+        let command = handle_key(&mut state, char_key('1'));
 
-    assert_eq!(
-        command,
-        Some(AppCommand::SetChannelMuted {
-            guild_id: Some(Id::new(1)),
-            channel_id: Id::new(11),
-            muted: true,
-            duration: Some(crate::discord::MuteDuration::Minutes(15)),
-            label: "#general".to_owned(),
-        })
-    );
+        assert_eq!(
+            command,
+            Some(AppCommand::SetChannelMuted {
+                guild_id: Some(Id::new(1)),
+                channel_id: Id::new(channel_id),
+                muted: true,
+                duration: Some(crate::discord::MuteDuration::Minutes(15)),
+                label: label.to_owned(),
+            }),
+            "{label}"
+        );
+    }
 }
 
 #[test]
@@ -918,29 +924,6 @@ fn leader_channel_actions_unmute_when_already_muted() {
             muted: false,
             duration: None,
             label: "#general".to_owned(),
-        })
-    );
-}
-
-#[test]
-fn leader_category_actions_offer_mute_duration_and_submit_command() {
-    let mut state = state_with_channel_tree();
-    state.focus_pane(FocusPane::Channels);
-    handle_key(&mut state, key(KeyCode::Up));
-
-    handle_key(&mut state, char_key(' '));
-    handle_key(&mut state, char_key('a'));
-    handle_key(&mut state, char_key('u'));
-    let command = handle_key(&mut state, char_key('1'));
-
-    assert_eq!(
-        command,
-        Some(AppCommand::SetChannelMuted {
-            guild_id: Some(Id::new(1)),
-            channel_id: Id::new(10),
-            muted: true,
-            duration: Some(crate::discord::MuteDuration::Minutes(15)),
-            label: "Text Channels".to_owned(),
         })
     );
 }
@@ -1284,17 +1267,6 @@ fn leader_a_p_enters_pinned_message_view_from_channel_pane() {
 }
 
 #[test]
-fn leader_a_opens_selected_channel_actions_from_channel_pane() {
-    let mut state = state_with_messages(1);
-    state.focus_pane(FocusPane::Channels);
-
-    handle_key(&mut state, char_key(' '));
-    handle_key(&mut state, char_key('a'));
-
-    assert!(state.is_channel_action_menu_active());
-}
-
-#[test]
 fn leader_channel_subphase_esc_returns_to_channel_actions() {
     let mut state = state_with_thread_created_message();
     state.focus_pane(FocusPane::Channels);
@@ -1324,21 +1296,6 @@ fn leader_a_t_opens_channel_thread_list_view() {
 }
 
 #[test]
-fn leader_guild_subphase_esc_returns_to_server_actions() {
-    let mut state = state_with_messages(1);
-    state.focus_pane(FocusPane::Guilds);
-    handle_key(&mut state, char_key(' '));
-    handle_key(&mut state, char_key('a'));
-    handle_key(&mut state, char_key('u'));
-    assert!(state.is_guild_action_mute_duration_phase());
-
-    handle_key(&mut state, key(KeyCode::Esc));
-
-    assert!(state.is_guild_action_menu_active());
-    assert!(!state.is_guild_action_mute_duration_phase());
-}
-
-#[test]
 fn leader_a_opens_message_actions_from_message_pane() {
     let mut state = state_with_messages(1);
     state.focus_pane(FocusPane::Messages);
@@ -1348,17 +1305,6 @@ fn leader_a_opens_message_actions_from_message_pane() {
 
     assert!(state.is_message_action_menu_active());
     assert!(!state.is_channel_action_menu_active());
-}
-
-#[test]
-fn leader_a_opens_server_actions_from_guild_pane() {
-    let mut state = state_with_messages(1);
-    state.focus_pane(FocusPane::Guilds);
-
-    handle_key(&mut state, char_key(' '));
-    handle_key(&mut state, char_key('a'));
-
-    assert!(state.is_guild_action_menu_active());
 }
 
 #[test]

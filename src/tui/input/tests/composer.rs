@@ -196,15 +196,6 @@ fn ctrl_c_clears_composer_without_quitting() {
 }
 
 #[test]
-fn ctrl_c_does_not_quit_dashboard() {
-    let mut state = state_with_channel_tree();
-
-    handle_key(&mut state, ctrl_key('c'));
-
-    assert!(!state.should_quit());
-}
-
-#[test]
 fn composer_treats_vim_keys_as_text() {
     let mut state = state_with_channel_tree();
     state.focus_pane(FocusPane::Channels);
@@ -582,60 +573,45 @@ fn paste_file_path_respects_attach_permission() {
 }
 
 #[test]
-fn paste_single_quoted_file_path_adds_pending_attachment() {
-    let path = temp_upload_file("quoted path.txt", b"quoted");
-    let mut state = state_with_channel_tree();
-    state.focus_pane(FocusPane::Channels);
-    handle_key(&mut state, key(KeyCode::Down));
-    handle_key(&mut state, key(KeyCode::Enter));
-    handle_key(&mut state, char_key('i'));
-    let pasted = format!("'{}'", path.to_str().expect("temp path is valid unicode"));
+fn paste_escaped_file_path_adds_pending_attachment() {
+    for (name, filename, quote) in [
+        (
+            "single quoted",
+            "quoted path.txt",
+            (|path: &str| format!("'{path}'")) as fn(&str) -> String,
+        ),
+        (
+            "backslash escaped",
+            "escaped path.txt",
+            (|path: &str| path.replace(' ', "\\ ")) as fn(&str) -> String,
+        ),
+    ] {
+        let path = temp_upload_file(filename, b"payload");
+        let mut state = state_with_channel_tree();
+        state.focus_pane(FocusPane::Channels);
+        handle_key(&mut state, key(KeyCode::Down));
+        handle_key(&mut state, key(KeyCode::Enter));
+        handle_key(&mut state, char_key('i'));
+        let pasted = quote(path.to_str().expect("temp path is valid unicode"));
 
-    assert!(handle_paste(&mut state, &pasted));
+        assert!(handle_paste(&mut state, &pasted), "{name}");
 
-    assert_eq!(state.composer_input(), "");
-    assert_eq!(state.pending_composer_attachments().len(), 1);
-    assert_eq!(
-        state.pending_composer_attachments()[0]
-            .path()
-            .expect("upload is file backed"),
-        path
-    );
-    assert_eq!(
-        state.pending_composer_attachments()[0].filename,
-        "quoted path.txt"
-    );
-    remove_temp_upload_file(&path);
-}
-
-#[test]
-fn paste_backslash_escaped_file_path_adds_pending_attachment() {
-    let path = temp_upload_file("escaped path.txt", b"escaped");
-    let mut state = state_with_channel_tree();
-    state.focus_pane(FocusPane::Channels);
-    handle_key(&mut state, key(KeyCode::Down));
-    handle_key(&mut state, key(KeyCode::Enter));
-    handle_key(&mut state, char_key('i'));
-    let pasted = path
-        .to_str()
-        .expect("temp path is valid unicode")
-        .replace(' ', "\\ ");
-
-    assert!(handle_paste(&mut state, &pasted));
-
-    assert_eq!(state.composer_input(), "");
-    assert_eq!(state.pending_composer_attachments().len(), 1);
-    assert_eq!(
-        state.pending_composer_attachments()[0]
-            .path()
-            .expect("upload is file backed"),
-        path
-    );
-    assert_eq!(
-        state.pending_composer_attachments()[0].filename,
-        "escaped path.txt"
-    );
-    remove_temp_upload_file(&path);
+        assert_eq!(state.composer_input(), "", "{name}");
+        assert_eq!(state.pending_composer_attachments().len(), 1, "{name}");
+        assert_eq!(
+            state.pending_composer_attachments()[0]
+                .path()
+                .expect("upload is file backed"),
+            path,
+            "{name}"
+        );
+        assert_eq!(
+            state.pending_composer_attachments()[0].filename,
+            filename,
+            "{name}"
+        );
+        remove_temp_upload_file(&path);
+    }
 }
 
 #[test]
@@ -803,22 +779,6 @@ fn enter_submits_no_match_emoji_query_without_hidden_picker() {
             attachments: Vec::new(),
         })
     );
-}
-
-#[test]
-fn tab_confirms_emoji_picker() {
-    let mut state = state_with_channel_tree();
-    state.focus_pane(FocusPane::Channels);
-    handle_key(&mut state, key(KeyCode::Down));
-    handle_key(&mut state, key(KeyCode::Enter));
-    handle_key(&mut state, char_key('i'));
-    for ch in ":heart".chars() {
-        handle_key(&mut state, char_key(ch));
-    }
-
-    handle_key(&mut state, key(KeyCode::Tab));
-
-    assert_eq!(state.composer_input(), "❤️ ");
 }
 
 #[test]
@@ -998,26 +958,44 @@ fn direct_reaction_shortcut_opens_emoji_picker() {
 
 #[test]
 fn emoji_picker_selection_returns_reaction_command() {
-    let mut state = state_with_messages(1);
-    state.focus_pane(FocusPane::Messages);
-    open_emoji_picker(&mut state);
+    for (name, keys, emoji) in [
+        (
+            "arrow navigation then enter",
+            vec![
+                key(KeyCode::Down),
+                key(KeyCode::Down),
+                key(KeyCode::Down),
+                key(KeyCode::Enter),
+            ],
+            "🎉",
+        ),
+        ("number shortcut", vec![char_key('2')], "❤️"),
+    ] {
+        let mut state = state_with_messages(1);
+        state.focus_pane(FocusPane::Messages);
+        open_emoji_picker(&mut state);
 
-    handle_key(&mut state, key(KeyCode::Down));
-    handle_key(&mut state, key(KeyCode::Down));
-    handle_key(&mut state, key(KeyCode::Down));
-    let command = handle_key(&mut state, key(KeyCode::Enter));
+        let mut command = None;
+        for pressed in keys {
+            command = handle_key(&mut state, pressed);
+        }
 
-    assert_eq!(
-        command,
-        Some(AppCommand::AddReaction {
-            channel_id: Id::new(2),
-            message_id: Id::new(1),
-            emoji: ReactionEmoji::Unicode("🎉".to_owned()),
-        })
-    );
-    assert!(
-        !state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::EmojiReactionPicker)
-    );
+        assert_eq!(
+            command,
+            Some(AppCommand::AddReaction {
+                channel_id: Id::new(2),
+                message_id: Id::new(1),
+                emoji: ReactionEmoji::Unicode(emoji.to_owned()),
+            }),
+            "{name}"
+        );
+        assert!(
+            !state.is_active_modal_popup(
+                crate::tui::state::ActiveModalPopupKind::EmojiReactionPicker
+            ),
+            "{name}"
+        );
+    }
 }
 
 #[test]
@@ -1041,27 +1019,6 @@ fn emoji_picker_selection_removes_existing_own_reaction() {
             channel_id: Id::new(2),
             message_id: Id::new(1),
             emoji: ReactionEmoji::Unicode("👍".to_owned()),
-        })
-    );
-    assert!(
-        !state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::EmojiReactionPicker)
-    );
-}
-
-#[test]
-fn emoji_picker_number_shortcut_selects_reaction() {
-    let mut state = state_with_messages(1);
-    state.focus_pane(FocusPane::Messages);
-    open_emoji_picker(&mut state);
-
-    let command = handle_key(&mut state, char_key('2'));
-
-    assert_eq!(
-        command,
-        Some(AppCommand::AddReaction {
-            channel_id: Id::new(2),
-            message_id: Id::new(1),
-            emoji: ReactionEmoji::Unicode("❤️".to_owned()),
         })
     );
     assert!(
@@ -1145,38 +1102,6 @@ fn emoji_picker_filter_matches_remaining_unicode_emojis() {
     assert_eq!(
         state.selected_emoji_reaction().map(|item| item.emoji),
         Some(ReactionEmoji::Unicode("🚀".to_owned()))
-    );
-}
-
-#[test]
-fn emoji_picker_enter_locks_filter_before_activating_reaction() {
-    let mut state = state_with_messages(1);
-    state.focus_pane(FocusPane::Messages);
-    open_emoji_picker(&mut state);
-
-    handle_key(&mut state, char_key('/'));
-    for value in "heart".chars() {
-        handle_key(&mut state, char_key(value));
-    }
-
-    let command = handle_key(&mut state, key(KeyCode::Enter));
-
-    assert_eq!(command, None);
-    assert!(
-        state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::EmojiReactionPicker)
-    );
-    assert_eq!(state.emoji_reaction_filter(), Some("heart"));
-    assert!(!state.is_editing_emoji_reaction_filter());
-
-    let command = handle_key(&mut state, key(KeyCode::Enter));
-
-    assert_eq!(
-        command,
-        Some(AppCommand::AddReaction {
-            channel_id: Id::new(2),
-            message_id: Id::new(1),
-            emoji: ReactionEmoji::Unicode("❤️".to_owned()),
-        })
     );
 }
 

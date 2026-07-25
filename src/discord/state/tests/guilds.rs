@@ -131,16 +131,20 @@ fn guild_emojis_update_replaces_cached_custom_emojis() {
 }
 
 #[test]
-fn guild_update_replaces_custom_emojis_when_field_is_present() {
+fn guild_update_replaces_custom_emojis_only_when_the_field_is_present() {
     let guild_id = Id::new(1);
-    let mut state = DiscordState::default();
+    let cached = || {
+        let mut state = DiscordState::default();
+        state.apply_event(&guild_create_event(GuildCreateFixture {
+            guild_id,
+            emojis: vec![CustomEmojiInfo::test(Id::new(50), "party")],
+            ..GuildCreateFixture::new(guild_id)
+        }));
+        state
+    };
 
-    state.apply_event(&guild_create_event(GuildCreateFixture {
-        guild_id,
-        emojis: vec![CustomEmojiInfo::test(Id::new(50), "party")],
-        ..GuildCreateFixture::new(guild_id)
-    }));
-    state.apply_event(&guild_update_event(GuildUpdateFixture {
+    let mut replaced = cached();
+    replaced.apply_event(&guild_update_event(GuildUpdateFixture {
         guild_id,
         name: "guild renamed".to_owned(),
         emojis: Some(vec![CustomEmojiInfo {
@@ -149,30 +153,19 @@ fn guild_update_replaces_custom_emojis_when_field_is_present() {
         }]),
         ..GuildUpdateFixture::new()
     }));
-
-    let emojis = state.custom_emojis_for_guild(guild_id);
+    let emojis = replaced.custom_emojis_for_guild(guild_id);
     assert_eq!(emojis.len(), 1);
     assert_eq!(emojis[0].id, Id::new(70));
     assert_eq!(emojis[0].name, "dance");
-}
 
-#[test]
-fn guild_update_without_emoji_field_keeps_cached_custom_emojis() {
-    let guild_id = Id::new(1);
-    let mut state = DiscordState::default();
-
-    state.apply_event(&guild_create_event(GuildCreateFixture {
-        guild_id,
-        emojis: vec![CustomEmojiInfo::test(Id::new(50), "party")],
-        ..GuildCreateFixture::new(guild_id)
-    }));
-    state.apply_event(&guild_update_event(GuildUpdateFixture {
+    // A rename that omits `emojis` must not be read as "the guild has none".
+    let mut renamed_only = cached();
+    renamed_only.apply_event(&guild_update_event(GuildUpdateFixture {
         guild_id,
         name: "guild renamed".to_owned(),
         ..GuildUpdateFixture::new()
     }));
-
-    let emojis = state.custom_emojis_for_guild(guild_id);
+    let emojis = renamed_only.custom_emojis_for_guild(guild_id);
     assert_eq!(emojis.len(), 1);
     assert_eq!(emojis[0].name, "party");
 }

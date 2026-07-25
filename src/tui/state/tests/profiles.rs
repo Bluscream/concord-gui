@@ -98,82 +98,69 @@ fn user_profile_load_failure_ignores_stale_popup() {
 }
 
 #[test]
-fn user_profile_popup_status_uses_cached_guild_member_status() {
+fn user_profile_popup_status_resolves_from_the_best_available_source() {
     let user_id: Id<UserMarker> = Id::new(10);
     let guild_id: Id<GuildMarker> = Id::new(1);
-    let mut state = DashboardState::new();
 
-    state.push_event(guild_create_event(GuildCreateFixture {
+    let cached_presence = |state: &mut DashboardState| {
+        state.push_event(AppEvent::PresenceUpdate {
+            guild_id: None,
+            presence: crate::discord::PresenceEventFields {
+                user_id,
+                status: PresenceStatus::Idle,
+                activities: Vec::new(),
+            },
+        });
+    };
+    let dm_recipient = |state: &mut DashboardState, status: PresenceStatus| {
+        state.push_event(AppEvent::ChannelUpsert(ChannelInfo {
+            recipients: Some(vec![ChannelRecipientInfo {
+                status: Some(status),
+                ..ChannelRecipientInfo::test(user_id, "neo")
+            }]),
+            ..dm_channel_info(Id::new(20), "neo")
+        }));
+    };
+
+    // Guild member presence, DM recipient status, and the standalone presence
+    // cache each answer on their own. When a recipient only reports `Unknown`,
+    // the cached presence has to win instead of showing an offline dot.
+    let mut guild_member = DashboardState::new();
+    guild_member.push_event(guild_create_event(GuildCreateFixture {
         members: vec![member_info(user_id, "neo")],
         presences: vec![(user_id, PresenceStatus::DoNotDisturb)],
         ..GuildCreateFixture::new(guild_id)
     }));
-    state.open_user_profile_popup(user_id, Some(guild_id));
-
+    guild_member.open_user_profile_popup(user_id, Some(guild_id));
     assert_eq!(
-        state.user_profile_popup_status(),
+        guild_member.user_profile_popup_status(),
         PresenceStatus::DoNotDisturb
     );
-}
 
-#[test]
-fn user_profile_popup_status_uses_dm_recipient_status_without_guild() {
-    let user_id: Id<UserMarker> = Id::new(10);
-    let mut state = DashboardState::new();
+    let mut recipient_only = DashboardState::new();
+    dm_recipient(&mut recipient_only, PresenceStatus::Idle);
+    recipient_only.open_user_profile_popup(user_id, None);
+    assert_eq!(
+        recipient_only.user_profile_popup_status(),
+        PresenceStatus::Idle
+    );
 
-    state.push_event(AppEvent::ChannelUpsert(ChannelInfo {
-        recipients: Some(vec![ChannelRecipientInfo {
-            status: Some(PresenceStatus::Idle),
-            ..ChannelRecipientInfo::test(user_id, "neo")
-        }]),
-        ..dm_channel_info(Id::new(20), "neo")
-    }));
-    state.open_user_profile_popup(user_id, None);
+    let mut presence_only = DashboardState::new();
+    cached_presence(&mut presence_only);
+    presence_only.open_user_profile_popup(user_id, None);
+    assert_eq!(
+        presence_only.user_profile_popup_status(),
+        PresenceStatus::Idle
+    );
 
-    assert_eq!(state.user_profile_popup_status(), PresenceStatus::Idle);
-}
-
-#[test]
-fn user_profile_popup_status_uses_cached_presence_without_guild() {
-    let user_id: Id<UserMarker> = Id::new(10);
-    let mut state = DashboardState::new();
-
-    state.push_event(AppEvent::PresenceUpdate {
-        guild_id: None,
-        presence: crate::discord::PresenceEventFields {
-            user_id,
-            status: PresenceStatus::Idle,
-            activities: Vec::new(),
-        },
-    });
-    state.open_user_profile_popup(user_id, None);
-
-    assert_eq!(state.user_profile_popup_status(), PresenceStatus::Idle);
-}
-
-#[test]
-fn user_profile_popup_status_prefers_cached_presence_over_unknown_recipient() {
-    let user_id: Id<UserMarker> = Id::new(10);
-    let mut state = DashboardState::new();
-
-    state.push_event(AppEvent::PresenceUpdate {
-        guild_id: None,
-        presence: crate::discord::PresenceEventFields {
-            user_id,
-            status: PresenceStatus::Idle,
-            activities: Vec::new(),
-        },
-    });
-    state.push_event(AppEvent::ChannelUpsert(ChannelInfo {
-        recipients: Some(vec![ChannelRecipientInfo {
-            status: Some(PresenceStatus::Unknown),
-            ..ChannelRecipientInfo::test(user_id, "test-user")
-        }]),
-        ..dm_channel_info(Id::new(20), "test-user")
-    }));
-    state.open_user_profile_popup(user_id, None);
-
-    assert_eq!(state.user_profile_popup_status(), PresenceStatus::Idle);
+    let mut unknown_recipient = DashboardState::new();
+    cached_presence(&mut unknown_recipient);
+    dm_recipient(&mut unknown_recipient, PresenceStatus::Unknown);
+    unknown_recipient.open_user_profile_popup(user_id, None);
+    assert_eq!(
+        unknown_recipient.user_profile_popup_status(),
+        PresenceStatus::Idle
+    );
 }
 
 #[test]

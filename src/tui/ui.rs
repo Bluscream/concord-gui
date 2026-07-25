@@ -99,10 +99,7 @@ use self::types::{
 pub(crate) use self::types::{MouseTarget, PopupListTarget};
 #[cfg(test)]
 use self::{
-    forum::{
-        forum_post_reaction_summary, forum_post_scrollbar_visible_count,
-        forum_post_tag_rows_for_test, forum_post_viewport_lines,
-    },
+    forum::{forum_post_reaction_summary, forum_post_tag_rows_for_test, forum_post_viewport_lines},
     message::list::{
         date_separator_line, format_message_sent_time, inline_image_preview_row,
         message_author_style, message_body_custom_emoji_rows, message_item_lines,
@@ -119,7 +116,7 @@ use self::{
         message_pin_confirmation_lines, message_remove_embeds_confirmation_lines,
         message_url_picker_lines_for_width, options_popup_lines, poll_vote_picker_lines,
         quit_confirmation_lines, reaction_list_lines_with_ready_urls, reaction_users_popup_lines,
-        toast_area, toast_line, user_profile_popup_lines, user_profile_popup_lines_with_activities,
+        toast_line, user_profile_popup_lines, user_profile_popup_lines_with_activities,
     },
 };
 use super::theme;

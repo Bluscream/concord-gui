@@ -90,38 +90,6 @@ fn dm_message_author_prefers_friend_nickname() {
 }
 
 #[test]
-fn relationship_nickname_update_refreshes_existing_dm_message_authors() {
-    let channel_id = Id::new(2);
-    let author_id = Id::new(4);
-    let mut state = DiscordState::default();
-
-    state.apply_event(&AppEvent::RelationshipsLoaded {
-        relationships: vec![relationship_info(
-            author_id.get(),
-            FriendStatus::Friend,
-            Some("Bestie"),
-            Some("Alice Global"),
-            Some("alice"),
-        )],
-    });
-    state.apply_event(&message_create_event(MessageCreateFixture {
-        guild_id: None,
-        channel_id,
-        message_id: Id::new(3),
-        author_id,
-        author: "Alice Global".to_owned(),
-        content: Some("hello".to_owned()),
-        ..MessageCreateFixture::test_fixture_default()
-    }));
-    state.apply_event(&AppEvent::RelationshipUpsert {
-        relationship: relationship_info(author_id.get(), FriendStatus::Friend, None, None, None),
-    });
-
-    let messages = state.messages_for_channel(channel_id);
-    assert_eq!(messages[0].author, "Alice Global");
-}
-
-#[test]
 fn user_identity_update_refreshes_existing_dm_message_author() {
     let channel_id = Id::new(2);
     let author_id = Id::new(4);

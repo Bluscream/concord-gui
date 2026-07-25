@@ -21,7 +21,7 @@ impl DashboardState {
     }
 
     pub fn open_keymap_help_popup(&mut self) {
-        self.popups.modal = Some(ModalPopup::Keymap(KeymapPopupState {
+        self.popups.modal = Some(ModalPopup::KeymapHelp(KeymapPopupState {
             scroll: Default::default(),
         }));
     }

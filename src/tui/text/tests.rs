@@ -110,24 +110,6 @@ fn rendered_replacer_is_a_noop_without_emoji_markup() {
 }
 
 #[test]
-fn replaces_animated_custom_emoji_markup() {
-    let text = replace_custom_emoji_markup("<a:partying_face:42> woo");
-    assert_eq!(text, ":partying_face: woo");
-}
-
-#[test]
-fn ignores_malformed_custom_emoji_markup() {
-    let text = replace_custom_emoji_markup("<:no_id:> <:bad-name:1> <@10> <:ok:7>");
-    assert_eq!(text, "<:no_id:> <:bad-name:1> <@10> :ok:");
-}
-
-#[test]
-fn preserves_unicode_around_custom_emoji_markup() {
-    let text = replace_custom_emoji_markup("héllo<:emoji_48:1146289325491892225>!");
-    assert_eq!(text, "héllo:emoji_48:!");
-}
-
-#[test]
 fn truncates_long_text() {
     assert_eq!(truncate_text("abcdef", 3), "abc...");
 }
@@ -141,50 +123,16 @@ fn truncates_by_display_width() {
 }
 
 #[test]
-fn sanitize_replaces_misc_symbol_emoji_with_placeholder() {
-    let sanitized = sanitize_for_display_width("⚜ ok");
-    assert_eq!(sanitized, "? ok");
-}
-
-#[test]
-fn sanitize_keeps_ascii_and_cjk_unchanged() {
-    assert_eq!(sanitize_for_display_width("hello world"), "hello world");
-    assert_eq!(sanitize_for_display_width("漢字テスト"), "漢字テスト");
-}
-
-#[test]
-fn sanitize_keeps_modern_emoji_blocks_unchanged() {
-    assert_eq!(sanitize_for_display_width("🦀 ferris"), "🦀 ferris");
-}
-
-#[test]
-fn sanitize_replaces_lone_regional_indicator() {
-    let sanitized = sanitize_for_display_width("hi \u{1F1F6}!");
-    assert_eq!(sanitized, "hi ?!");
-}
-
-#[test]
-fn renders_deprecated_nickname_mentions_like_user_mentions() {
-    let text = render_user_mentions(
-        "hello <@!10>",
-        |user_id| (user_id == 10).then(|| "alice".to_owned()),
-        |_| None,
-        |_| None,
-    );
-
-    assert_eq!(text, "hello @alice");
-}
-
-#[test]
-fn keeps_zero_user_mentions_raw() {
-    let text = render_user_mentions(
-        "hello <@0>",
-        |user_id| (user_id == 0).then(|| "nobody".to_owned()),
-        |_| None,
-        |_| None,
-    );
-
-    assert_eq!(text, "hello <@0>");
+fn sanitize_replaces_only_glyphs_the_terminal_cannot_width_correctly() {
+    for (input, expected) in [
+        ("hello world", "hello world"),
+        ("漢字テスト", "漢字テスト"),
+        ("🦀 ferris", "🦀 ferris"),
+        ("⚜ ok", "? ok"),
+        ("hi \u{1F1F6}!", "hi ?!"),
+    ] {
+        assert_eq!(sanitize_for_display_width(input), expected, "{input}");
+    }
 }
 
 #[test]
@@ -233,25 +181,38 @@ fn keeps_overflowing_user_mentions_raw() {
 }
 
 #[test]
-fn renders_user_mentions_next_to_unicode() {
-    let text = render_user_mentions(
-        "café<@10>!",
-        |user_id| (user_id == 10).then(|| "alice".to_owned()),
-        |_| None,
-        |_| None,
-    );
+fn user_mentions_render_only_when_the_markup_is_well_formed() {
+    let cases = [
+        ("hello <@10>", "hello @alice"),
+        ("hello <@!10>", "hello @alice"),
+        ("café<@10>!", "café@alice!"),
+        ("hello <@0>", "hello <@0>"),
+        ("hello <@abc> <@10", "hello <@abc> <@10"),
+    ];
 
-    assert_eq!(text, "café@alice!");
+    for (input, expected) in cases {
+        let text = render_user_mentions(
+            input,
+            |user_id| (user_id == 10).then(|| "alice".to_owned()),
+            |_| None,
+            |_| None,
+        );
+        assert_eq!(text, expected, "{input}");
+    }
 }
 
 #[test]
-fn keeps_malformed_user_mentions_raw() {
-    let text = render_user_mentions(
-        "hello <@abc> <@10",
-        |user_id| (user_id == 10).then(|| "alice".to_owned()),
-        |_| None,
-        |_| None,
-    );
+fn custom_emoji_markup_collapses_to_its_shortcode_when_well_formed() {
+    let cases = [
+        ("<a:partying_face:42> woo", ":partying_face: woo"),
+        ("héllo<:emoji_48:1146289325491892225>!", "héllo:emoji_48:!"),
+        (
+            "<:no_id:> <:bad-name:1> <@10> <:ok:7>",
+            "<:no_id:> <:bad-name:1> <@10> :ok:",
+        ),
+    ];
 
-    assert_eq!(text, "hello <@abc> <@10");
+    for (input, expected) in cases {
+        assert_eq!(replace_custom_emoji_markup(input), expected, "{input}");
+    }
 }

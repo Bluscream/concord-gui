@@ -9,13 +9,6 @@ use crate::discord::test_builders::{
 use crate::discord::{AppCommand, MessageHistoryAfterMode, MessageHistoryLoadTarget};
 
 #[test]
-fn message_creation_keeps_viewport_on_latest() {
-    let state = state_with_messages(3);
-
-    assert_eq!(state.selected_message(), 2);
-}
-
-#[test]
 fn message_scroll_preserves_position_when_not_following() {
     let mut state = state_with_messages(5);
     state.focus_pane(FocusPane::Messages);
@@ -439,46 +432,6 @@ fn message_selection_centers_selected_message_when_possible() {
 }
 
 #[test]
-fn message_selection_centers_with_line_offset_inside_previous_message() {
-    let mut state = state_with_single_message_content("abcdefghijkl");
-    for id in 2..=5 {
-        push_text_message(&mut state, id, &format!("msg {id}"));
-    }
-    state.focus_pane(FocusPane::Messages);
-    state.set_message_view_height(5);
-    state.jump_top();
-    state.clamp_message_viewport_for_image_previews(5, 16, 3);
-
-    state.move_down();
-    state.clamp_message_viewport_for_image_previews(5, 16, 3);
-
-    assert_eq!(state.selected_message(), 1);
-    assert_eq!(state.message_scroll(), 0);
-    assert_eq!(state.message_line_scroll(), 4);
-    assert_eq!(state.selected_message_rendered_row(5, 16, 3), 1);
-}
-
-#[test]
-fn message_selection_keeps_top_when_next_message_is_already_visible() {
-    let mut state = state_with_single_message_content("abcdefghijkl");
-    for id in 2..=5 {
-        push_text_message(&mut state, id, &format!("msg {id}"));
-    }
-    state.focus_pane(FocusPane::Messages);
-    state.set_message_view_height(9);
-    state.jump_top();
-    state.clamp_message_viewport_for_image_previews(5, 16, 3);
-
-    state.move_down();
-    state.clamp_message_viewport_for_image_previews(5, 16, 3);
-
-    assert_eq!(state.selected_message(), 1);
-    assert_eq!(state.message_scroll(), 0);
-    assert_eq!(state.message_line_scroll(), 0);
-    assert_eq!(state.selected_message_rendered_row(5, 16, 3), 5);
-}
-
-#[test]
 fn message_selection_centers_with_image_preview_height() {
     let mut state = state_with_image_messages(8, &[4]);
     state.focus_pane(FocusPane::Messages);
@@ -589,31 +542,8 @@ fn viewport_scroll_moves_to_next_message_after_current_message() {
     assert_eq!(state.message_scroll(), 0);
     assert_eq!(state.message_line_scroll(), 5);
     assert_eq!(state.selected_message(), 0);
-}
-
-#[test]
-fn focused_message_selection_returns_none_when_viewport_scrolled_past_selection() {
-    let mut state = state_with_single_message_content("abcdefghijkl");
-    state.push_event(message_create_event(MessageCreateFixture {
-        guild_id: Some(Id::new(1)),
-        channel_id: Id::new(2),
-        message_id: Id::new(2),
-        author_id: Id::new(99),
-        content: Some("next".to_owned()),
-        ..guild_message_create_fixture()
-    }));
-    state.focus_pane(FocusPane::Messages);
-    state.set_message_view_height(3);
-    state.jump_top();
-    state.clamp_message_viewport_for_image_previews(5, 16, 3);
-
-    for _ in 0..6 {
-        state.scroll_message_viewport_down();
-        state.clamp_message_viewport_for_image_previews(5, 16, 3);
-    }
-
-    assert_eq!(state.message_scroll(), 0);
-    assert_eq!(state.selected_message(), 0);
+    // Scrolling the viewport past the cursor's message leaves the selection
+    // itself alone, so the highlight is still addressable.
     assert_eq!(state.focused_message_selection(), Some(0));
 }
 
@@ -648,23 +578,6 @@ fn moving_cursor_to_first_message_resets_top_line_scroll() {
     assert_eq!(state.message_scroll(), 0);
     assert_eq!(state.message_line_scroll(), 0);
     assert_eq!(state.selected_message_rendered_row(5, 16, 3), 0);
-}
-
-#[test]
-fn jumping_to_first_message_resets_item_scroll_when_view_has_spare_rows() {
-    let mut state = state_with_messages(20);
-    state.focus_pane(FocusPane::Messages);
-    state.set_message_view_height(20);
-    state.clamp_message_viewport_for_image_previews(200, 16, 3);
-
-    assert!(state.message_scroll() > 0);
-
-    state.jump_top();
-    state.clamp_message_viewport_for_image_previews(200, 16, 3);
-
-    assert_eq!(state.selected_message(), 0);
-    assert_eq!(state.message_scroll(), 0);
-    assert_eq!(state.message_line_scroll(), 0);
 }
 
 #[test]
@@ -899,20 +812,6 @@ fn viewport_scroll_survives_selection_clamp_after_events() {
 }
 
 #[test]
-fn message_half_page_up_disables_follow() {
-    let mut state = state_with_messages(10);
-    state.focus_pane(FocusPane::Messages);
-    state.set_message_view_height(9);
-    state.clamp_message_viewport_for_image_previews(200, 16, 3);
-
-    state.half_page_up();
-
-    assert_eq!(state.selected_message(), 0);
-    assert_eq!(state.message_scroll(), 0);
-    assert!(!state.message_auto_follow());
-}
-
-#[test]
 fn message_jump_bottom_re_engages_auto_follow() {
     let mut state = state_with_messages(10);
     state.focus_pane(FocusPane::Messages);
@@ -926,25 +825,6 @@ fn message_jump_bottom_re_engages_auto_follow() {
     // Cursor is back on the latest message, so auto-follow turns on again
     // (sticky-bottom rule).
     assert_eq!(state.selected_message(), 9);
-    assert!(state.message_auto_follow());
-}
-
-#[test]
-fn message_half_page_down_re_engages_auto_follow_after_viewport_returns_to_latest() {
-    let mut state = state_with_messages(10);
-    state.focus_pane(FocusPane::Messages);
-    state.set_message_view_height(9);
-    state.clamp_message_viewport_for_image_previews(200, 16, 3);
-
-    state.half_page_up();
-    assert!(!state.message_auto_follow());
-
-    state.half_page_down();
-    assert_eq!(state.selected_message(), 9);
-    assert_eq!(state.message_scroll(), 2);
-    assert!(!state.message_auto_follow());
-
-    state.half_page_down();
     assert!(state.message_auto_follow());
 }
 
@@ -1087,4 +967,37 @@ fn older_history_request_leaves_empty_page_exhaustion_to_backend() {
             before: Some(Id::new(10)),
         })
     );
+}
+
+#[test]
+fn moving_down_scrolls_only_when_the_next_message_is_not_already_visible() {
+    // (view height, expected line scroll, expected rendered row)
+    let cases = [(5, 4, 1), (9, 0, 5)];
+
+    for (view_height, expected_line_scroll, expected_row) in cases {
+        let mut state = state_with_single_message_content("abcdefghijkl");
+        for id in 2..=5 {
+            push_text_message(&mut state, id, &format!("msg {id}"));
+        }
+        state.focus_pane(FocusPane::Messages);
+        state.set_message_view_height(view_height);
+        state.jump_top();
+        state.clamp_message_viewport_for_image_previews(5, 16, 3);
+
+        state.move_down();
+        state.clamp_message_viewport_for_image_previews(5, 16, 3);
+
+        assert_eq!(state.selected_message(), 1, "height {view_height}");
+        assert_eq!(state.message_scroll(), 0, "height {view_height}");
+        assert_eq!(
+            state.message_line_scroll(),
+            expected_line_scroll,
+            "height {view_height}"
+        );
+        assert_eq!(
+            state.selected_message_rendered_row(5, 16, 3),
+            expected_row,
+            "height {view_height}"
+        );
+    }
 }

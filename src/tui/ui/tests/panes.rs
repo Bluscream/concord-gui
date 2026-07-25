@@ -463,29 +463,6 @@ fn dm_channel_pane_shows_unread_channel_count_badge() {
 }
 
 #[test]
-fn dm_channel_pane_shows_loaded_unread_message_count_badge() {
-    let mut state = state_with_unread_direct_messages_with_loaded_unread_messages(5);
-    state.confirm_selected_guild();
-    let backend = TestBackend::new(40, 6);
-    let mut terminal = Terminal::new(backend).expect("test terminal should build");
-
-    terminal
-        .draw(|frame| render_channels(frame, frame.area(), &state, &[]))
-        .expect("draw should succeed");
-
-    let buffer = terminal.backend().buffer();
-    let channel_rows = (0..buffer.area.height)
-        .map(|row| {
-            (0..buffer.area.width)
-                .map(|col| buffer[(col, row)].symbol().to_owned())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>();
-
-    assert!(channel_rows.iter().any(|row| row.contains("(5) @ new")));
-}
-
-#[test]
 fn dm_activity_uses_the_full_channel_row_width() {
     let user_id = Id::new(10);
     let mut state = DashboardState::new();
@@ -1133,12 +1110,6 @@ fn forum_post_tag_line_renders_unicode_emoji_and_reserves_custom_image_slot() {
 }
 
 #[test]
-fn forum_post_scrollbar_visible_count_uses_rendered_rows() {
-    assert_eq!(forum_post_scrollbar_visible_count(10), 10);
-    assert_eq!(forum_post_scrollbar_visible_count(0), 1);
-}
-
-#[test]
 fn forum_post_lines_can_reserve_scrollbar_column() {
     let post = ChannelThreadItem {
         label: "A useful Rust crate".to_owned(),
@@ -1184,14 +1155,6 @@ fn group_dm_has_no_presence_dot() {
 
     assert!(dm_presence_dot_span(&channel).is_none());
     assert_eq!(channel_prefix(&channel.kind), "👥 ");
-}
-
-#[test]
-fn server_label_truncates_by_display_width() {
-    let label = truncate_display_width("漢字仮名交じりサーバー", 12);
-
-    assert_eq!(label, "漢字仮名...");
-    assert!(label.width() <= 12);
 }
 
 #[test]

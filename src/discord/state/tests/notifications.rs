@@ -237,119 +237,118 @@ fn muted_channel_does_not_add_numeric_notification_badge() {
 }
 
 #[test]
-fn muted_parent_category_does_not_add_server_sidebar_unread() {
+fn explicit_channel_override_beats_a_muted_parent_category() {
+    struct Case {
+        name: &'static str,
+        channel_override: bool,
+        muted: bool,
+        unread_count: usize,
+        unread: ChannelUnreadState,
+        sidebar: ChannelUnreadState,
+        guild_sidebar: ChannelUnreadState,
+    }
+
     let guild_id = Id::new(1);
     let category_id = Id::new(2);
     let channel_id = Id::new(3);
     let current_user_id = Id::new(10);
     let author_id = Id::new(20);
-    let mut state = DiscordState::default();
-    let mut settings = notification_settings(guild_id, NotificationLevel::AllMessages);
-    settings
-        .channel_overrides
-        .push(ChannelNotificationOverrideInfo {
-            message_notifications: Some(NotificationLevel::AllMessages),
+
+    for case in [
+        Case {
+            name: "muted category only",
+            channel_override: false,
             muted: true,
-            ..ChannelNotificationOverrideInfo::test(category_id)
+            unread_count: 0,
+            unread: ChannelUnreadState::Unread,
+            sidebar: ChannelUnreadState::Seen,
+            guild_sidebar: ChannelUnreadState::Seen,
+        },
+        Case {
+            name: "channel override under a muted category",
+            channel_override: true,
+            muted: false,
+            unread_count: 1,
+            unread: ChannelUnreadState::Notified(1),
+            sidebar: ChannelUnreadState::Notified(1),
+            guild_sidebar: ChannelUnreadState::Notified(1),
+        },
+    ] {
+        let mut state = DiscordState::default();
+        let mut settings = notification_settings(guild_id, NotificationLevel::AllMessages);
+        settings
+            .channel_overrides
+            .push(ChannelNotificationOverrideInfo {
+                message_notifications: Some(NotificationLevel::AllMessages),
+                muted: true,
+                ..ChannelNotificationOverrideInfo::test(category_id)
+            });
+        if case.channel_override {
+            settings
+                .channel_overrides
+                .push(ChannelNotificationOverrideInfo {
+                    message_notifications: Some(NotificationLevel::AllMessages),
+                    ..ChannelNotificationOverrideInfo::test(channel_id)
+                });
+        }
+
+        state.apply_event(&AppEvent::Ready {
+            user: "me".to_owned(),
+            user_id: Some(current_user_id),
         });
+        state.apply_event(&guild_create_event(GuildCreateFixture {
+            guild_id,
+            channels: vec![
+                guild_category_channel(guild_id, category_id, "category", 0),
+                ChannelInfo {
+                    last_message_id: Some(Id::new(30)),
+                    ..guild_child_text_channel(guild_id, channel_id, category_id, "general", 1)
+                },
+            ],
+            ..GuildCreateFixture::new(guild_id)
+        }));
+        state.apply_event(&user_guild_settings_init(vec![settings]));
 
-    state.apply_event(&AppEvent::Ready {
-        user: "me".to_owned(),
-        user_id: Some(current_user_id),
-    });
-    state.apply_event(&guild_create_event(GuildCreateFixture {
-        guild_id,
-        channels: vec![
-            guild_category_channel(guild_id, category_id, "category", 0),
-            ChannelInfo {
-                last_message_id: Some(Id::new(30)),
-                ..guild_child_text_channel(guild_id, channel_id, category_id, "general", 1)
-            },
-        ],
-        ..GuildCreateFixture::new(guild_id)
-    }));
-    state.apply_event(&user_guild_settings_init(vec![settings]));
+        state.apply_event(&message_create(
+            Some(guild_id),
+            channel_id,
+            Id::new(30),
+            author_id,
+            "hello",
+            Vec::new(),
+        ));
 
-    state.apply_event(&message_create(
-        Some(guild_id),
-        channel_id,
-        Id::new(30),
-        author_id,
-        "hello",
-        Vec::new(),
-    ));
-
-    assert!(state.channel_notification_muted(channel_id));
-    assert_eq!(state.channel_unread(channel_id), ChannelUnreadState::Unread);
-    assert_eq!(
-        state.channel_sidebar_unread(channel_id),
-        ChannelUnreadState::Seen
-    );
-    assert_eq!(
-        state.guild_sidebar_unread(guild_id),
-        ChannelUnreadState::Seen
-    );
-}
-
-#[test]
-fn explicit_channel_unmute_override_beats_muted_parent_category() {
-    let guild_id = Id::new(1);
-    let category_id = Id::new(2);
-    let channel_id = Id::new(3);
-    let current_user_id = Id::new(10);
-    let author_id = Id::new(20);
-    let mut state = DiscordState::default();
-    let mut settings = notification_settings(guild_id, NotificationLevel::AllMessages);
-    settings
-        .channel_overrides
-        .push(ChannelNotificationOverrideInfo {
-            message_notifications: Some(NotificationLevel::AllMessages),
-            muted: true,
-            ..ChannelNotificationOverrideInfo::test(category_id)
-        });
-    settings
-        .channel_overrides
-        .push(ChannelNotificationOverrideInfo {
-            message_notifications: Some(NotificationLevel::AllMessages),
-            ..ChannelNotificationOverrideInfo::test(channel_id)
-        });
-
-    state.apply_event(&AppEvent::Ready {
-        user: "me".to_owned(),
-        user_id: Some(current_user_id),
-    });
-    state.apply_event(&guild_create_event(GuildCreateFixture {
-        guild_id,
-        channels: vec![
-            guild_category_channel(guild_id, category_id, "category", 0),
-            ChannelInfo {
-                last_message_id: Some(Id::new(30)),
-                ..guild_child_text_channel(guild_id, channel_id, category_id, "general", 1)
-            },
-        ],
-        ..GuildCreateFixture::new(guild_id)
-    }));
-    state.apply_event(&user_guild_settings_init(vec![settings]));
-
-    state.apply_event(&message_create(
-        Some(guild_id),
-        channel_id,
-        Id::new(30),
-        author_id,
-        "hello",
-        Vec::new(),
-    ));
-
-    assert!(!state.channel_notification_muted(channel_id));
-    assert_eq!(state.channel_unread_message_count(channel_id), 1);
-    assert_eq!(
-        state.channel_unread(channel_id),
-        ChannelUnreadState::Notified(1)
-    );
-    assert_eq!(
-        state.channel_sidebar_unread(channel_id),
-        ChannelUnreadState::Notified(1)
-    );
+        assert_eq!(
+            state.channel_notification_muted(channel_id),
+            case.muted,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            state.channel_unread_message_count(channel_id),
+            case.unread_count,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            state.channel_unread(channel_id),
+            case.unread,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            state.channel_sidebar_unread(channel_id),
+            case.sidebar,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            state.guild_sidebar_unread(guild_id),
+            case.guild_sidebar,
+            "{}",
+            case.name
+        );
+    }
 }
 
 #[test]
@@ -474,77 +473,72 @@ fn private_all_messages_settings_show_numeric_badge() {
 }
 
 #[test]
-fn private_channel_override_no_messages_suppresses_numeric_badge() {
+fn silenced_private_channel_override_suppresses_numeric_badge() {
     let channel_id = Id::new(2);
     let current_user_id = Id::new(10);
     let author_id = Id::new(20);
-    let mut state = DiscordState::default();
-    let mut settings = private_notification_settings(NotificationLevel::AllMessages);
-    settings
-        .channel_overrides
-        .push(ChannelNotificationOverrideInfo {
-            message_notifications: Some(NotificationLevel::NoMessages),
-            ..ChannelNotificationOverrideInfo::test(channel_id)
+
+    // Both overrides drop the per-channel numeric badge, but only muting also
+    // clears the sidebar dot and the direct-message total. A no-messages
+    // channel still advertises that it moved.
+    for (name, channel_override, sidebar_unread, direct_message_unread) in [
+        (
+            "no-messages level",
+            ChannelNotificationOverrideInfo {
+                message_notifications: Some(NotificationLevel::NoMessages),
+                ..ChannelNotificationOverrideInfo::test(channel_id)
+            },
+            ChannelUnreadState::Unread,
+            1,
+        ),
+        (
+            "muted",
+            ChannelNotificationOverrideInfo {
+                message_notifications: Some(NotificationLevel::AllMessages),
+                muted: true,
+                ..ChannelNotificationOverrideInfo::test(channel_id)
+            },
+            ChannelUnreadState::Seen,
+            0,
+        ),
+    ] {
+        let mut state = DiscordState::default();
+        let mut settings = private_notification_settings(NotificationLevel::AllMessages);
+        settings.channel_overrides.push(channel_override);
+
+        state.apply_event(&AppEvent::Ready {
+            user: "me".to_owned(),
+            user_id: Some(current_user_id),
         });
+        state.apply_event(&AppEvent::ChannelUpsert(dm_channel(channel_id, "dm")));
+        state.apply_event(&user_guild_settings_init(vec![settings]));
 
-    state.apply_event(&AppEvent::Ready {
-        user: "me".to_owned(),
-        user_id: Some(current_user_id),
-    });
-    state.apply_event(&AppEvent::ChannelUpsert(dm_channel(channel_id, "dm")));
-    state.apply_event(&user_guild_settings_init(vec![settings]));
+        state.apply_event(&message_create(
+            None,
+            channel_id,
+            Id::new(30),
+            author_id,
+            "hello",
+            Vec::new(),
+        ));
 
-    state.apply_event(&message_create(
-        None,
-        channel_id,
-        Id::new(30),
-        author_id,
-        "hello",
-        Vec::new(),
-    ));
-
-    assert_eq!(state.channel_unread_message_count(channel_id), 0);
-    assert_eq!(state.channel_unread(channel_id), ChannelUnreadState::Unread);
-}
-
-#[test]
-fn muted_private_channel_override_suppresses_numeric_badge() {
-    let channel_id = Id::new(2);
-    let current_user_id = Id::new(10);
-    let author_id = Id::new(20);
-    let mut state = DiscordState::default();
-    let mut settings = private_notification_settings(NotificationLevel::AllMessages);
-    settings
-        .channel_overrides
-        .push(ChannelNotificationOverrideInfo {
-            message_notifications: Some(NotificationLevel::AllMessages),
-            muted: true,
-            ..ChannelNotificationOverrideInfo::test(channel_id)
-        });
-
-    state.apply_event(&AppEvent::Ready {
-        user: "me".to_owned(),
-        user_id: Some(current_user_id),
-    });
-    state.apply_event(&AppEvent::ChannelUpsert(dm_channel(channel_id, "dm")));
-    state.apply_event(&user_guild_settings_init(vec![settings]));
-
-    state.apply_event(&message_create(
-        None,
-        channel_id,
-        Id::new(30),
-        author_id,
-        "hello",
-        Vec::new(),
-    ));
-
-    assert_eq!(state.channel_unread_message_count(channel_id), 0);
-    assert_eq!(state.channel_unread(channel_id), ChannelUnreadState::Unread);
-    assert_eq!(
-        state.channel_sidebar_unread(channel_id),
-        ChannelUnreadState::Seen
-    );
-    assert_eq!(state.direct_message_unread_count(), 0);
+        assert_eq!(state.channel_unread_message_count(channel_id), 0, "{name}");
+        assert_eq!(
+            state.channel_unread(channel_id),
+            ChannelUnreadState::Unread,
+            "{name}"
+        );
+        assert_eq!(
+            state.channel_sidebar_unread(channel_id),
+            sidebar_unread,
+            "{name}"
+        );
+        assert_eq!(
+            state.direct_message_unread_count(),
+            direct_message_unread,
+            "{name}"
+        );
+    }
 }
 
 #[test]

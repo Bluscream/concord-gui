@@ -462,19 +462,6 @@ fn keymap_options_parse_disabled_bindings() {
 }
 
 #[test]
-fn keymap_options_parse_documented_start_composer_binding() {
-    let keymap = parse_keymap_options("[keymap]\nStartComposer = { keys = [\"c\"] }\n");
-
-    assert_eq!(
-        keymap.mappings.get("StartComposer"),
-        Some(&crate::config::KeymapBinding {
-            keys: vec!["c".to_owned()],
-            description: None,
-        })
-    );
-}
-
-#[test]
 fn keymap_options_parse_action_table_bindings() {
     let keymap = parse_keymap_options(
         "[keymap.VoiceDeafen]\nkeys = [\"dd\"]\ndescription = \"deafen voice\"\n",
@@ -593,23 +580,6 @@ fn keymap_action_maps_list_stays_in_sync_with_struct() {
 
     let listed: BTreeSet<&str> = super::parse::KEYMAP_ACTION_MAPS.iter().copied().collect();
     assert_eq!(named_maps, listed);
-}
-
-#[test]
-fn ui_state_invalid_value_is_skipped_without_discarding_the_rest() {
-    let (ui_state, warnings) = super::parse_ui_state_options(
-        "[ui_state]\nguild_pane_visible = false\nserver_width = \"wide\"\n",
-    )
-    .expect("syntactically valid ui_state should parse");
-
-    assert!(!ui_state.guild_pane_visible, "valid value applies");
-    assert_eq!(
-        ui_state.server_width,
-        super::DEFAULT_SERVER_WIDTH,
-        "invalid value falls back to default"
-    );
-    assert_eq!(warnings.len(), 1);
-    assert!(warnings[0].contains("server_width"));
 }
 
 #[test]

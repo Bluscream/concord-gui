@@ -37,8 +37,6 @@ use avatar::{AvatarImageEntry, AvatarProtocolKey, MAX_AVATAR_IMAGE_CACHE_ENTRIES
 #[cfg(test)]
 use decode::{MAX_DECODED_IMAGE_HEIGHT, MAX_DECODED_IMAGE_WIDTH};
 #[cfg(test)]
-use emoji::{EmojiImageEntry, MAX_EMOJI_IMAGE_CACHE_ENTRIES};
-#[cfg(test)]
 use preview::{ImagePreviewEntry, MAX_IMAGE_PREVIEW_CACHE_ENTRIES, decode_original_preview_image};
 
 #[cfg(test)]

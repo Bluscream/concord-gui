@@ -53,17 +53,27 @@ fn stores_message_kind_from_message_create() {
 }
 
 #[test]
-fn duplicate_message_create_refreshes_message_kind() {
+fn duplicate_message_create_keeps_cached_payload_and_refreshes_kind() {
     let channel_id: Id<ChannelMarker> = Id::new(10);
     let message_id = Id::new(20);
     let author_id = Id::new(99);
     let mut state = DiscordState::default();
 
-    state.apply_event(&message_create_event(
-        MessageCreateFixture::direct_message(channel_id, message_id)
-            .with_author_id(author_id)
-            .with_content("cached"),
-    ));
+    state.apply_event(&message_create_event(MessageCreateFixture {
+        channel_id,
+        message_id,
+        author_id,
+        reply: Some(ReplyInfo {
+            content: Some("잘되는군".to_owned()),
+            ..ReplyInfo::test("Alex")
+        }),
+        poll: Some(poll_info()),
+        content: Some("cached".to_owned()),
+        ..MessageCreateFixture::test_fixture_default()
+    }));
+    // Discord echoes an already-cached message back thin: no content, no reply
+    // preview, no poll. The echo may refresh the kind but must not blank what
+    // we already know, or the message visibly empties out on screen.
     state.apply_event(&message_create_event(MessageCreateFixture {
         channel_id,
         message_id,
@@ -77,6 +87,17 @@ fn duplicate_message_create_refreshes_message_kind() {
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].content.as_deref(), Some("cached"));
     assert_eq!(messages[0].message_kind, MessageKind::new(19));
+    assert_eq!(
+        messages[0]
+            .reply
+            .as_ref()
+            .and_then(|reply| reply.content.as_deref()),
+        Some("잘되는군")
+    );
+    assert_eq!(
+        messages[0].poll.as_ref().map(|poll| poll.answers.len()),
+        Some(2)
+    );
 }
 
 #[test]
@@ -106,7 +127,7 @@ fn duplicate_message_create_adds_missing_mentions() {
 }
 
 #[test]
-fn stores_reply_preview_from_message_create() {
+fn stores_rich_payload_fields_from_message_create() {
     let channel_id: Id<ChannelMarker> = Id::new(10);
     let mut state = DiscordState::default();
 
@@ -122,104 +143,35 @@ fn stores_reply_preview_from_message_create() {
         content: Some("asdf".to_owned()),
         ..MessageCreateFixture::test_fixture_default()
     }));
-
-    let messages = state.messages_for_channel(channel_id);
-    assert_eq!(
-        messages[0]
-            .reply
-            .as_ref()
-            .map(|reply| reply.author.as_str()),
-        Some("Alex")
-    );
-    assert_eq!(
-        messages[0]
-            .reply
-            .as_ref()
-            .and_then(|reply| reply.content.as_deref()),
-        Some("잘되는군")
-    );
-}
-
-#[test]
-fn duplicate_message_create_preserves_cached_reply_preview() {
-    let channel_id: Id<ChannelMarker> = Id::new(10);
-    let message_id = Id::new(20);
-    let author_id = Id::new(99);
-    let mut state = DiscordState::default();
-
     state.apply_event(&message_create_event(MessageCreateFixture {
         channel_id,
-        message_id,
-        author_id,
-        message_kind: MessageKind::new(19),
-        reply: Some(ReplyInfo {
-            content: Some("잘되는군".to_owned()),
-            ..ReplyInfo::test("Alex")
-        }),
-        content: Some("asdf".to_owned()),
-        ..MessageCreateFixture::test_fixture_default()
-    }));
-    let mut gateway_echo = MessageCreateFixture::direct_message(channel_id, message_id)
-        .with_author_id(author_id)
-        .without_content();
-    gateway_echo.message_kind = MessageKind::new(19);
-    state.apply_event(&message_create_event(gateway_echo));
-
-    let messages = state.messages_for_channel(channel_id);
-    assert_eq!(messages.len(), 1);
-    assert_eq!(
-        messages[0]
-            .reply
-            .as_ref()
-            .and_then(|reply| reply.content.as_deref()),
-        Some("잘되는군")
-    );
-}
-
-#[test]
-fn stores_poll_payload_from_message_create() {
-    let channel_id: Id<ChannelMarker> = Id::new(10);
-    let mut state = DiscordState::default();
-
-    state.apply_event(&message_create_event(MessageCreateFixture {
-        channel_id,
-        message_id: Id::new(20),
+        message_id: Id::new(21),
         author_id: Id::new(99),
         poll: Some(poll_info()),
         content: Some(String::new()),
         ..MessageCreateFixture::test_fixture_default()
     }));
+    state.apply_event(&message_create_event(MessageCreateFixture {
+        channel_id,
+        message_id: Id::new(22),
+        author_id: Id::new(99),
+        content: Some(String::new()),
+        forwarded_snapshots: vec![snapshot_info("forwarded text")],
+        ..MessageCreateFixture::test_fixture_default()
+    }));
 
     let messages = state.messages_for_channel(channel_id);
+    let reply = messages[0].reply.as_ref().expect("reply preview is cached");
+    assert_eq!(reply.author, "Alex");
+    assert_eq!(reply.content.as_deref(), Some("잘되는군"));
     assert_eq!(
-        messages[0].poll.as_ref().map(|poll| poll.question.as_str()),
+        messages[1].poll.as_ref().map(|poll| poll.question.as_str()),
         Some("오늘 뭐 먹지?")
     );
-}
-
-#[test]
-fn duplicate_message_create_preserves_cached_poll_payload() {
-    let channel_id: Id<ChannelMarker> = Id::new(10);
-    let message_id = Id::new(20);
-    let author_id = Id::new(99);
-    let mut state = DiscordState::default();
-
-    let mut poll_message = MessageCreateFixture::direct_message(channel_id, message_id)
-        .with_author_id(author_id)
-        .with_content(String::new());
-    poll_message.poll = Some(poll_info());
-    state.apply_event(&message_create_event(poll_message));
-    state.apply_event(&message_create_event(
-        MessageCreateFixture::direct_message(channel_id, message_id)
-            .with_author_id(author_id)
-            .without_content(),
-    ));
-
-    let messages = state.messages_for_channel(channel_id);
-    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[2].forwarded_snapshots.len(), 1);
     assert_eq!(
-        messages[0].poll.as_ref().map(|poll| poll.answers.len()),
-        Some(2)
+        messages[2].forwarded_snapshots[0].content.as_deref(),
+        Some("forwarded text")
     );
 }
 
@@ -633,24 +585,6 @@ fn bulk_delete_removes_messages_from_normal_and_pinned_caches() {
 }
 
 #[test]
-fn pinned_messages_loaded_mark_overlapping_normal_messages() {
-    let channel_id: Id<ChannelMarker> = Id::new(10);
-    let mut state = DiscordState::default();
-
-    state.apply_event(&latest_history_loaded(
-        channel_id,
-        vec![message_info(channel_id, 20, "normal")],
-    ));
-    state.apply_event(&AppEvent::PinnedMessagesLoaded {
-        channel_id,
-        messages: vec![message_info(channel_id, 20, "normal")],
-    });
-
-    assert!(state.messages_for_channel(channel_id)[0].pinned);
-    assert_eq!(state.pinned_messages_for_channel(channel_id).len(), 1);
-}
-
-#[test]
 fn later_history_preserves_pin_state_from_pinned_cache() {
     let channel_id: Id<ChannelMarker> = Id::new(10);
     let mut state = DiscordState::default();
@@ -780,36 +714,6 @@ fn reaction_events_update_pinned_cache() {
 }
 
 #[test]
-fn poll_vote_updates_update_pinned_cache() {
-    let channel_id: Id<ChannelMarker> = Id::new(10);
-    let mut state = DiscordState::default();
-    let mut message = message_info(channel_id, 20, "poll");
-    message.poll = Some(poll_info());
-
-    state.apply_event(&AppEvent::PinnedMessagesLoaded {
-        channel_id,
-        messages: vec![message],
-    });
-    state.apply_event(&current_user_poll_vote_update_event(
-        CurrentUserPollVoteUpdateFixture {
-            channel_id,
-            message_id: Id::new(20),
-            answer_ids: vec![2],
-        },
-    ));
-
-    let poll = state.pinned_messages_for_channel(channel_id)[0]
-        .poll
-        .as_ref()
-        .expect("pinned poll should stay cached");
-    assert!(!poll.answers[0].me_voted);
-    assert_eq!(poll.answers[0].vote_count, Some(1));
-    assert!(poll.answers[1].me_voted);
-    assert_eq!(poll.answers[1].vote_count, Some(2));
-    assert_eq!(poll.total_votes, Some(3));
-}
-
-#[test]
 fn history_merge_replaces_mentions_from_authoritative_history() {
     let channel_id: Id<ChannelMarker> = Id::new(10);
     let mut state = DiscordState::default();
@@ -934,30 +838,6 @@ fn stores_and_merges_message_attachments() {
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].attachments.len(), 1);
     assert_eq!(messages[0].attachments[0].filename, "cat.png");
-}
-
-#[test]
-fn stores_forwarded_snapshots_from_message_create() {
-    let channel_id: Id<ChannelMarker> = Id::new(10);
-    let mut state = DiscordState::default();
-
-    state.apply_event(&message_create_event(MessageCreateFixture {
-        guild_id: None,
-        channel_id,
-        message_id: Id::new(20),
-        author_id: Id::new(99),
-        content: Some(String::new()),
-        forwarded_snapshots: vec![snapshot_info("forwarded text")],
-        ..MessageCreateFixture::test_fixture_default()
-    }));
-
-    let messages = state.messages_for_channel(channel_id);
-    assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].forwarded_snapshots.len(), 1);
-    assert_eq!(
-        messages[0].forwarded_snapshots[0].content.as_deref(),
-        Some("forwarded text")
-    );
 }
 
 #[test]

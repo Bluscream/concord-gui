@@ -67,24 +67,14 @@ mod tests {
     use super::{CliCommand, cli_command_from_args};
 
     #[test]
-    fn cli_command_detects_version() {
-        assert_eq!(
-            cli_command_from_args(["--version".into()]),
-            CliCommand::Version
-        );
-    }
-
-    #[test]
-    fn cli_command_detects_config_check() {
-        assert_eq!(
-            cli_command_from_args(["--check-config".into()]),
-            CliCommand::CheckConfig
-        );
-    }
-
-    #[test]
-    fn cli_command_defaults_to_app_run() {
-        assert_eq!(cli_command_from_args([]), CliCommand::Run);
-        assert_eq!(cli_command_from_args(["--unknown".into()]), CliCommand::Run);
+    fn cli_command_maps_arguments_to_commands() {
+        for (args, expected) in [
+            (vec!["--version".into()], CliCommand::Version),
+            (vec!["--check-config".into()], CliCommand::CheckConfig),
+            (vec![], CliCommand::Run),
+            (vec!["--unknown".into()], CliCommand::Run),
+        ] {
+            assert_eq!(cli_command_from_args(args.clone()), expected, "{args:?}");
+        }
     }
 }

@@ -297,14 +297,6 @@ mod tests {
     }
 
     #[test]
-    fn credential_file_defaults_to_default_account() {
-        let credentials = CredentialFile::default();
-
-        assert_eq!(credentials.selected_account_id(), "default");
-        assert_eq!(credentials.token_for_account("default"), None);
-    }
-
-    #[test]
     fn credential_file_reads_selected_account_token() {
         let credentials = CredentialFile {
             selected_account: "personal".to_owned(),

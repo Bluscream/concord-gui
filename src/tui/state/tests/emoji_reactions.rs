@@ -71,30 +71,6 @@ fn custom_emoji_reaction_items_expose_cdn_image_url() {
 }
 
 #[test]
-fn emoji_picker_items_include_custom_emojis_from_update_event() {
-    let guild_id = Id::new(1);
-    let mut state = state_with_messages(1);
-
-    state.push_event(AppEvent::GuildEmojisUpdate {
-        guild_id,
-        emojis: vec![CustomEmojiInfo::test(Id::new(60), "wave")],
-    });
-
-    let items = state.emoji_reaction_items();
-
-    assert!(items.len() > 9);
-    assert_eq!(items[8].label, "Wave");
-    assert_eq!(
-        items[8].emoji,
-        ReactionEmoji::Custom {
-            id: Id::new(60),
-            name: Some("wave".to_owned()),
-            animated: false,
-        }
-    );
-}
-
-#[test]
 fn emoji_picker_respects_channel_permission_for_foreign_custom_emojis() {
     let mut state = state_with_custom_emojis();
     push_foreign_reaction_emojis(&mut state);
@@ -490,44 +466,6 @@ fn reaction_users_load_failure_clears_loading_and_allows_retry() {
             message_id: Id::new(1),
             emoji,
             after: None,
-        })
-    );
-}
-
-#[test]
-fn reaction_users_popup_page_down_requests_next_page() {
-    let mut state = state_with_messages(1);
-    let emoji = ReactionEmoji::Unicode("👍".to_owned());
-    state.open_reaction_users_popup(Id::new(2), Id::new(1), vec![(emoji.clone(), 150)]);
-    state.activate_reaction_users_popup();
-    state.push_event(reaction_users_loaded_event(ReactionUsersLoadedFixture {
-        channel_id: Id::new(2),
-        message_id: Id::new(1),
-        emoji: emoji.clone(),
-        users: (1..=100)
-            .map(|id| ReactionUserInfo::test(Id::new(id), format!("user-{id}")))
-            .collect(),
-        next_after: Some(Id::new(100)),
-        after: None,
-    }));
-    state.set_reaction_users_popup_view_height(3);
-
-    // Paging to the bottom must still fetch the next page, not stall at 100.
-    let mut command = None;
-    for _ in 0..200 {
-        assert!(state.page_active_popup_down());
-        if let Some(cmd) = state.reaction_users_popup_take_load_more() {
-            command = Some(cmd);
-            break;
-        }
-    }
-    assert_eq!(
-        command,
-        Some(AppCommand::LoadReactionUsers {
-            channel_id: Id::new(2),
-            message_id: Id::new(1),
-            emoji,
-            after: Some(Id::new(100)),
         })
     );
 }

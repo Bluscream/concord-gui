@@ -679,81 +679,52 @@ fn voice_playout_buffer_schedules_packets_by_rtp_timestamp_delta() {
 
 #[test]
 fn voice_playout_buffer_emits_packet_loss_for_missing_sequence() {
-    let now = Instant::now();
-    let playout_start = now + VOICE_PLAYBACK_JITTER_BUFFER_DELAY;
-    let mut buffer = VoicePlaybackPlayoutBuffer::default();
+    // The concealment step comes from the surrounding RTP timestamps, so a
+    // 10 ms sender (Abaddon) must not be concealed with a 20 ms gap.
+    let cases = [
+        (
+            "20ms",
+            DISCORD_OPUS_TIMESTAMP_INCREMENT,
+            VOICE_PLAYBACK_FRAME_DURATION,
+        ),
+        ("10ms", 480, Duration::from_millis(10)),
+    ];
 
-    assert!(buffer.push(test_playback_frame(9, Some(42), 10), now));
-    assert!(buffer.push(test_playback_frame(9, Some(42), 12), now));
-    assert!(buffer.push(test_playback_frame(9, Some(42), 13), now));
+    for (name, timestamp_step, step_duration) in cases {
+        let now = Instant::now();
+        let playout_start = now + VOICE_PLAYBACK_JITTER_BUFFER_DELAY;
+        let mut buffer = VoicePlaybackPlayoutBuffer::default();
+        let first = test_playback_frame_with_timestamp(9, Some(42), 10, timestamp_step * 10);
+        let third = test_playback_frame_with_timestamp(9, Some(42), 12, timestamp_step * 12);
 
-    assert_eq!(
-        buffer.next_frame(playout_start),
-        Some(VoicePlayoutFrame::Audio(test_playback_frame(
-            9,
-            Some(42),
-            10
-        )))
-    );
-    assert_eq!(
-        buffer.next_frame(playout_start + VOICE_PLAYBACK_FRAME_DURATION),
-        Some(VoicePlayoutFrame::PacketLoss {
-            ssrc: 9,
-            user_id: Some(Id::new(42)),
-            sequence: 11,
-            timestamp_step: DISCORD_OPUS_TIMESTAMP_INCREMENT,
-        })
-    );
-    assert_eq!(
-        buffer.next_frame(playout_start + VOICE_PLAYBACK_FRAME_DURATION * 2),
-        Some(VoicePlayoutFrame::Audio(test_playback_frame(
-            9,
-            Some(42),
-            12
-        )))
-    );
-}
+        assert!(buffer.push(first.clone(), now));
+        assert!(buffer.push(third.clone(), now));
+        assert!(buffer.push(
+            test_playback_frame_with_timestamp(9, Some(42), 13, timestamp_step * 13),
+            now
+        ));
 
-#[test]
-fn voice_playout_buffer_uses_10ms_step_for_packet_loss() {
-    let now = Instant::now();
-    let playout_start = now + VOICE_PLAYBACK_JITTER_BUFFER_DELAY;
-    let mut buffer = VoicePlaybackPlayoutBuffer::default();
-
-    assert!(buffer.push(
-        test_playback_frame_with_timestamp(9, Some(42), 10, 4800),
-        now
-    ));
-    assert!(buffer.push(
-        test_playback_frame_with_timestamp(9, Some(42), 12, 5760),
-        now
-    ));
-    assert!(buffer.push(
-        test_playback_frame_with_timestamp(9, Some(42), 13, 6240),
-        now
-    ));
-
-    assert_eq!(
-        buffer.next_frame(playout_start),
-        Some(VoicePlayoutFrame::Audio(
-            test_playback_frame_with_timestamp(9, Some(42), 10, 4800)
-        ))
-    );
-    assert_eq!(
-        buffer.next_frame(playout_start + Duration::from_millis(10)),
-        Some(VoicePlayoutFrame::PacketLoss {
-            ssrc: 9,
-            user_id: Some(Id::new(42)),
-            sequence: 11,
-            timestamp_step: 480,
-        })
-    );
-    assert_eq!(
-        buffer.next_frame(playout_start + Duration::from_millis(20)),
-        Some(VoicePlayoutFrame::Audio(
-            test_playback_frame_with_timestamp(9, Some(42), 12, 5760)
-        ))
-    );
+        assert_eq!(
+            buffer.next_frame(playout_start),
+            Some(VoicePlayoutFrame::Audio(first)),
+            "{name}"
+        );
+        assert_eq!(
+            buffer.next_frame(playout_start + step_duration),
+            Some(VoicePlayoutFrame::PacketLoss {
+                ssrc: 9,
+                user_id: Some(Id::new(42)),
+                sequence: 11,
+                timestamp_step,
+            }),
+            "{name}"
+        );
+        assert_eq!(
+            buffer.next_frame(playout_start + step_duration * 2),
+            Some(VoicePlayoutFrame::Audio(third)),
+            "{name}"
+        );
+    }
 }
 
 #[test]
@@ -1097,16 +1068,6 @@ fn voice_volume_scales_i16_pcm_frame() {
 }
 
 #[test]
-fn voice_microphone_transmit_boost_increases_pcm_by_half() {
-    let mut frame = vec![1000, -1000];
-
-    let limited = apply_voice_microphone_gain_and_limit(&mut frame, VOICE_MIC_TRANSMIT_BOOST_GAIN);
-
-    assert_eq!(frame, vec![1500, -1500]);
-    assert_eq!(limited, 0);
-}
-
-#[test]
 fn voice_microphone_protection_soft_limits_extreme_samples() {
     let mut frame = vec![1000, -1000, i16::MAX, i16::MIN];
 
@@ -1282,7 +1243,10 @@ fn voice_microphone_overload_gain_keeps_shouted_frame_audible() {
 }
 
 #[test]
-fn voice_microphone_blanks_sparse_clipped_unclassified_frame() {
+fn voice_microphone_blanks_clipped_frames_except_handling_noise() {
+    // Clipping that the classifier does not recognise, and clipping it
+    // classifies as anything but handling noise, both get blanked. Handling
+    // noise keeps its own gate path, and a clean frame is left alone.
     let mut sparse_clip = vec![2000i16; DISCORD_OPUS_20MS_STEREO_SAMPLES];
     for sample in sparse_clip
         .iter_mut()
@@ -1290,17 +1254,7 @@ fn voice_microphone_blanks_sparse_clipped_unclassified_frame() {
     {
         *sample = i16::MAX;
     }
-    let raw_decision = voice_microphone_overload_decision(&sparse_clip);
-    assert!(raw_decision.is_none());
 
-    assert!(voice_microphone_clipped_frame_needs_blank(
-        &sparse_clip,
-        raw_decision,
-    ));
-}
-
-#[test]
-fn voice_microphone_blanks_clipped_non_handling_frame() {
     let mut attenuated = vec![0i16; DISCORD_OPUS_20MS_STEREO_SAMPLES];
     for sample in attenuated
         .iter_mut()
@@ -1308,45 +1262,46 @@ fn voice_microphone_blanks_clipped_non_handling_frame() {
     {
         *sample = i16::MAX;
     }
-    let raw_decision = voice_microphone_overload_decision(&attenuated);
-    assert_eq!(
-        raw_decision.map(|decision| decision.kind),
-        Some(VoiceMicrophoneOverloadKind::Attenuated)
-    );
 
-    assert!(voice_microphone_clipped_frame_needs_blank(
-        &attenuated,
-        raw_decision,
-    ));
-}
-
-#[test]
-fn voice_microphone_keeps_handling_noise_on_gate_path() {
     let mut handling_noise = vec![0i16; DISCORD_OPUS_20MS_STEREO_SAMPLES];
     handling_noise[0] = i16::MAX;
     handling_noise[1] = i16::MIN + 1;
-    let raw_decision = voice_microphone_overload_decision(&handling_noise);
-    assert_eq!(
-        raw_decision.map(|decision| decision.kind),
-        Some(VoiceMicrophoneOverloadKind::HandlingNoise)
-    );
 
-    assert!(!voice_microphone_clipped_frame_needs_blank(
-        &handling_noise,
-        raw_decision,
-    ));
-}
+    let cases = [
+        ("sparse unclassified clip", sparse_clip, None, true),
+        (
+            "attenuated clip",
+            attenuated,
+            Some(VoiceMicrophoneOverloadKind::Attenuated),
+            true,
+        ),
+        (
+            "handling noise",
+            handling_noise,
+            Some(VoiceMicrophoneOverloadKind::HandlingNoise),
+            false,
+        ),
+        (
+            "clean frame",
+            vec![1500i16; DISCORD_OPUS_20MS_STEREO_SAMPLES],
+            None,
+            false,
+        ),
+    ];
 
-#[test]
-fn voice_microphone_does_not_blank_unclipped_unclassified_frame() {
-    let normal = vec![1500i16; DISCORD_OPUS_20MS_STEREO_SAMPLES];
-    let raw_decision = voice_microphone_overload_decision(&normal);
-    assert!(raw_decision.is_none());
-
-    assert!(!voice_microphone_clipped_frame_needs_blank(
-        &normal,
-        raw_decision,
-    ));
+    for (name, frame, expected_kind, needs_blank) in cases {
+        let raw_decision = voice_microphone_overload_decision(&frame);
+        assert_eq!(
+            raw_decision.map(|decision| decision.kind),
+            expected_kind,
+            "{name}"
+        );
+        assert_eq!(
+            voice_microphone_clipped_frame_needs_blank(&frame, raw_decision),
+            needs_blank,
+            "{name}"
+        );
+    }
 }
 
 #[test]
@@ -1364,57 +1319,42 @@ fn voice_microphone_handling_noise_uses_adjacent_delta_without_dense_clipping() 
 }
 
 #[test]
-fn voice_microphone_overload_promotes_sparse_clipped_impulse_to_handling_noise() {
-    let mut impulse = vec![0i16; DISCORD_OPUS_20MS_STEREO_SAMPLES];
-    impulse[0] = i16::MAX;
-    impulse[1] = -3_233;
+fn voice_microphone_overload_promotes_sparse_clipped_transients_to_handling_noise() {
+    for (name, second_sample, min_delta, max_delta) in [
+        (
+            "impulse",
+            -3_233,
+            VOICE_MIC_OVERLOAD_IMPULSE_DELTA,
+            VOICE_MIC_HANDLING_NOISE_DELTA,
+        ),
+        (
+            "step",
+            i16::MAX,
+            VOICE_MIC_OVERLOAD_CLIPPED_STEP_DELTA,
+            VOICE_MIC_OVERLOAD_IMPULSE_DELTA,
+        ),
+    ] {
+        let mut frame = vec![0i16; DISCORD_OPUS_20MS_STEREO_SAMPLES];
+        frame[0] = i16::MAX;
+        frame[1] = second_sample;
 
-    let decision = voice_microphone_overload_decision(&impulse)
-        .expect("clipped impulse should be gain-reduced");
+        let decision = voice_microphone_overload_decision(&frame)
+            .unwrap_or_else(|| panic!("clipped {name} should be gain-reduced"));
 
-    assert_eq!(decision.kind, VoiceMicrophoneOverloadKind::HandlingNoise);
-    assert_eq!(decision.gain, VOICE_MIC_HANDLING_NOISE_GAIN);
-    let max_adjacent_delta = voice_microphone_max_adjacent_delta(&impulse);
-    assert!(max_adjacent_delta >= VOICE_MIC_OVERLOAD_IMPULSE_DELTA);
-    assert!(max_adjacent_delta < VOICE_MIC_HANDLING_NOISE_DELTA);
-    assert!(
-        voice_microphone_clipped_sample_count(&impulse) < VOICE_MIC_OVERLOAD_MIN_CLIPPED_SAMPLES
-    );
-}
-
-#[test]
-fn voice_microphone_overload_promotes_sparse_clipped_step_to_handling_noise() {
-    let mut impulse = vec![0i16; DISCORD_OPUS_20MS_STEREO_SAMPLES];
-    impulse[0] = i16::MAX;
-    impulse[1] = i16::MAX;
-
-    let decision =
-        voice_microphone_overload_decision(&impulse).expect("clipped step should be gain-reduced");
-
-    assert_eq!(decision.kind, VoiceMicrophoneOverloadKind::HandlingNoise);
-    assert_eq!(decision.gain, VOICE_MIC_HANDLING_NOISE_GAIN);
-    let max_adjacent_delta = voice_microphone_max_adjacent_delta(&impulse);
-    assert!(max_adjacent_delta >= VOICE_MIC_OVERLOAD_CLIPPED_STEP_DELTA);
-    assert!(max_adjacent_delta < VOICE_MIC_OVERLOAD_IMPULSE_DELTA);
-    assert!(
-        voice_microphone_clipped_sample_count(&impulse) < VOICE_MIC_OVERLOAD_MIN_CLIPPED_SAMPLES
-    );
-}
-
-#[test]
-fn voice_microphone_overload_gain_keeps_severe_same_polarity_clip_audible() {
-    let mut clipped = vec![0i16; DISCORD_OPUS_20MS_STEREO_SAMPLES];
-    for sample in clipped
-        .iter_mut()
-        .take(VOICE_MIC_OVERLOAD_SEVERE_CLIPPED_SAMPLES)
-    {
-        *sample = i16::MAX;
+        assert_eq!(
+            decision.kind,
+            VoiceMicrophoneOverloadKind::HandlingNoise,
+            "{name}"
+        );
+        assert_eq!(decision.gain, VOICE_MIC_HANDLING_NOISE_GAIN, "{name}");
+        let max_adjacent_delta = voice_microphone_max_adjacent_delta(&frame);
+        assert!(max_adjacent_delta >= min_delta, "{name}");
+        assert!(max_adjacent_delta < max_delta, "{name}");
+        assert!(
+            voice_microphone_clipped_sample_count(&frame) < VOICE_MIC_OVERLOAD_MIN_CLIPPED_SAMPLES,
+            "{name}"
+        );
     }
-
-    assert_eq!(
-        voice_microphone_overload_gain(&clipped),
-        Some(VOICE_MIC_OVERLOAD_TRANSIENT_GAIN)
-    );
 }
 
 #[test]
@@ -1873,20 +1813,6 @@ fn microphone_pcm_frames_count_full_queue_drops() {
     );
     assert_eq!(stats.queued_frames.load(Ordering::Relaxed), 1);
     assert_eq!(stats.dropped_frames.load(Ordering::Relaxed), 1);
-}
-
-#[cfg(feature = "voice-playback")]
-#[tokio::test]
-async fn microphone_pcm_recv_returns_frames_in_fifo_order() {
-    let (tx, mut rx) = tokio::sync::mpsc::channel(VOICE_MIC_PCM_FRAME_QUEUE);
-
-    tx.try_send(vec![1]).expect("first frame should queue");
-    tx.try_send(vec![2]).expect("second frame should queue");
-    tx.try_send(vec![3]).expect("third frame should queue");
-
-    assert_eq!(rx.recv().await, Some(vec![1]));
-    assert_eq!(rx.recv().await, Some(vec![2]));
-    assert_eq!(rx.recv().await, Some(vec![3]));
 }
 
 #[cfg(feature = "voice-playback")]

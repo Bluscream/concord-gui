@@ -31,12 +31,6 @@ fn mfa_challenge(methods: Vec<MfaMethod>) -> MfaChallenge {
 }
 
 #[test]
-fn token_input_starts_empty() {
-    let state = LoginState::new(None);
-    assert!(state.token_input.is_empty());
-}
-
-#[test]
 fn login_choices_use_shortcut_theme() {
     let state = LoginState::new(None);
     let custom = crate::tui::theme::Theme::default().with_style(

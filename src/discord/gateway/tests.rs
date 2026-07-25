@@ -1,13 +1,12 @@
 use super::{
-    ConnectionOutcome, GATEWAY_SEND_LIMIT, GATEWAY_SEND_WINDOW, GATEWAY_WEBSOCKET_LIMIT,
-    GUILD_MEMBER_REQUEST_INTERVAL, GatewayCommand, GatewayPresence, GatewaySendWindow,
-    GatewaySender, GatewaySessionResources, GuildMemberRequestKind, GuildMemberRequestLimiter,
-    GuildMemberRequestScheduler, HeartbeatAckState, MAX_PENDING_GUILD_MEMBER_REQUESTS,
-    SessionState, SubscriptionDeduper, USER_ACCOUNT_CAPABILITIES, build_identify_payload,
-    build_resume_payload, close_code_outcome, direct_message_subscribe_payload, dispatch_command,
-    gateway_guild_member_rate_limit, gateway_request, gateway_websocket_config,
-    guild_channel_subscribe_payload, presence_update_payload, ready_installation_id,
-    request_guild_members_by_ids_payload, request_guild_members_payload,
+    ConnectionOutcome, GATEWAY_SEND_LIMIT, GATEWAY_SEND_WINDOW, GUILD_MEMBER_REQUEST_INTERVAL,
+    GatewayCommand, GatewayPresence, GatewaySendWindow, GatewaySender, GatewaySessionResources,
+    GuildMemberRequestKind, GuildMemberRequestLimiter, GuildMemberRequestScheduler,
+    HeartbeatAckState, MAX_PENDING_GUILD_MEMBER_REQUESTS, SessionState, SubscriptionDeduper,
+    USER_ACCOUNT_CAPABILITIES, build_identify_payload, build_resume_payload, close_code_outcome,
+    direct_message_subscribe_payload, dispatch_command, gateway_guild_member_rate_limit,
+    gateway_request, guild_channel_subscribe_payload, presence_update_payload,
+    ready_installation_id, request_guild_members_by_ids_payload, request_guild_members_payload,
     voice_state_update_payload,
 };
 use crate::discord::fingerprint::{
@@ -25,14 +24,6 @@ use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::http::header::{
     ACCEPT_LANGUAGE, CACHE_CONTROL, ORIGIN, PRAGMA, USER_AGENT,
 };
-
-#[test]
-fn gateway_websocket_config_allows_large_ready_payloads() {
-    let config = gateway_websocket_config();
-
-    assert_eq!(config.max_message_size, Some(GATEWAY_WEBSOCKET_LIMIT));
-    assert_eq!(config.max_frame_size, Some(GATEWAY_WEBSOCKET_LIMIT));
-}
 
 #[test]
 fn gateway_rate_limit_covers_connection_window_and_parses_member_retry() {

@@ -199,19 +199,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn presence_marker_shows_empty_circle_for_offline_like_statuses() {
-        assert_eq!(presence_marker(PresenceStatus::Offline), '○');
-        assert_eq!(presence_marker(PresenceStatus::Unknown), '○');
-    }
-
-    #[test]
-    fn presence_marker_shows_filled_circle_for_online_like_statuses() {
-        for status in [
-            PresenceStatus::Online,
-            PresenceStatus::Idle,
-            PresenceStatus::DoNotDisturb,
+    fn presence_marker_fills_the_circle_only_for_online_like_statuses() {
+        for (status, marker) in [
+            (PresenceStatus::Offline, '○'),
+            (PresenceStatus::Unknown, '○'),
+            (PresenceStatus::Online, '●'),
+            (PresenceStatus::Idle, '●'),
+            (PresenceStatus::DoNotDisturb, '●'),
         ] {
-            assert_eq!(presence_marker(status), '●');
+            assert_eq!(presence_marker(status), marker, "{status:?}");
         }
     }
 }

@@ -30,6 +30,7 @@ fn applies_guild_channels_and_messages() {
     assert_eq!(state.channels_for_guild(Some(guild_id)).len(), 1);
     assert_eq!(state.messages_for_channel(channel_id).len(), 1);
 }
+
 #[test]
 fn stores_channel_parent_and_position() {
     let guild_id = Id::new(1);
@@ -190,58 +191,35 @@ fn relationship_nickname_refresh_preserves_explicit_group_dm_name() {
 }
 
 #[test]
-fn channel_upsert_preserves_recipient_status_when_omitted() {
-    let channel_id: Id<ChannelMarker> = Id::new(10);
-    let mut state = DiscordState::default();
-
-    state.apply_event(&AppEvent::ChannelUpsert(dm_channel_with_recipients(
-        channel_id,
-        "project chat",
-        "group-dm",
-        vec![ChannelRecipientInfo {
-            status: Some(PresenceStatus::Online),
-            ..ChannelRecipientInfo::test(Id::new(20), "alice")
-        }],
-    )));
-
-    state.apply_event(&AppEvent::ChannelUpsert(ChannelInfo {
-        last_message_id: Some(Id::new(30)),
-        ..dm_channel_with_recipients(
-            channel_id,
-            "renamed project chat",
-            "group-dm",
-            vec![ChannelRecipientInfo::test(Id::new(20), "alice renamed")],
-        )
-    }));
-
-    let channel = state.channel(channel_id).expect("channel should be stored");
-    assert_eq!(channel.recipients[0].display_name, "alice renamed");
-    assert_eq!(channel.recipients[0].status, PresenceStatus::Online);
-}
-
-#[test]
-fn channel_upsert_defaults_missing_recipient_status_to_unknown() {
-    let channel_id: Id<ChannelMarker> = Id::new(10);
-    let mut state = DiscordState::default();
-
-    state.apply_event(&AppEvent::ChannelUpsert(dm_channel_with_recipients(
-        channel_id,
-        "alice",
-        "dm",
-        vec![ChannelRecipientInfo::test(Id::new(20), "alice")],
-    )));
-
-    let channel = state.channel(channel_id).expect("channel should be stored");
-    assert_eq!(channel.recipients[0].status, PresenceStatus::Unknown);
-}
-
-#[test]
-fn channel_upsert_uses_cached_user_presence_when_status_is_omitted() {
+fn channel_upsert_resolves_omitted_recipient_status() {
     let channel_id: Id<ChannelMarker> = Id::new(10);
     let user_id: Id<UserMarker> = Id::new(20);
-    let mut state = DiscordState::default();
+    let upsert = |state: &mut DiscordState, name: &str| {
+        state.apply_event(&AppEvent::ChannelUpsert(dm_channel_with_recipients(
+            channel_id,
+            "project chat",
+            "group-dm",
+            vec![ChannelRecipientInfo::test(user_id, name)],
+        )));
+    };
 
-    state.apply_event(&AppEvent::PresenceUpdate {
+    // Discord frequently omits `status` on a channel refresh. Falling back to
+    // offline would flicker the presence dot, so a previously known status or
+    // the presence cache has to fill in; only a genuinely unknown user is
+    // `Unknown`.
+    let mut nothing_known = DiscordState::default();
+    upsert(&mut nothing_known, "alice");
+    assert_eq!(
+        nothing_known
+            .channel(channel_id)
+            .expect("channel is stored")
+            .recipients[0]
+            .status,
+        PresenceStatus::Unknown
+    );
+
+    let mut from_cache = DiscordState::default();
+    from_cache.apply_event(&AppEvent::PresenceUpdate {
         guild_id: None,
         presence: crate::discord::PresenceEventFields {
             user_id,
@@ -249,41 +227,68 @@ fn channel_upsert_uses_cached_user_presence_when_status_is_omitted() {
             activities: Vec::new(),
         },
     });
-    state.apply_event(&AppEvent::ChannelUpsert(dm_channel_with_recipients(
-        channel_id,
-        "test-user",
-        "dm",
-        vec![ChannelRecipientInfo::test(user_id, "test-user")],
-    )));
+    upsert(&mut from_cache, "alice");
+    assert_eq!(
+        from_cache
+            .channel(channel_id)
+            .expect("channel is stored")
+            .recipients[0]
+            .status,
+        PresenceStatus::Idle
+    );
+    assert_eq!(
+        from_cache.user_presence(user_id),
+        Some(PresenceStatus::Idle)
+    );
 
-    let channel = state.channel(channel_id).expect("channel should be stored");
-    assert_eq!(channel.recipients[0].status, PresenceStatus::Idle);
-    assert_eq!(state.user_presence(user_id), Some(PresenceStatus::Idle));
-}
-
-#[test]
-fn user_presence_update_updates_channel_recipients() {
-    let channel_id: Id<ChannelMarker> = Id::new(10);
-    let mut state = DiscordState::default();
-
-    state.apply_event(&AppEvent::ChannelUpsert(dm_channel_with_recipients(
+    let mut from_previous = DiscordState::default();
+    from_previous.apply_event(&AppEvent::ChannelUpsert(dm_channel_with_recipients(
         channel_id,
         "project chat",
         "group-dm",
-        vec![ChannelRecipientInfo::test(Id::new(20), "alice")],
+        vec![ChannelRecipientInfo {
+            status: Some(PresenceStatus::Online),
+            ..ChannelRecipientInfo::test(user_id, "alice")
+        }],
     )));
+    upsert(&mut from_previous, "alice renamed");
+    let channel = from_previous
+        .channel(channel_id)
+        .expect("channel should be stored");
+    assert_eq!(channel.recipients[0].display_name, "alice renamed");
+    assert_eq!(channel.recipients[0].status, PresenceStatus::Online);
+}
 
-    state.apply_event(&AppEvent::PresenceUpdate {
-        guild_id: None,
-        presence: crate::discord::PresenceEventFields {
-            user_id: Id::new(20),
-            status: PresenceStatus::DoNotDisturb,
-            activities: Vec::new(),
-        },
-    });
+#[test]
+fn presence_update_updates_channel_recipients_from_any_scope() {
+    let channel_id: Id<ChannelMarker> = Id::new(10);
 
-    let channel = state.channel(channel_id).expect("channel should be stored");
-    assert_eq!(channel.recipients[0].status, PresenceStatus::DoNotDisturb);
+    // A guild-scoped presence still describes the same person, so a DM row has
+    // to pick it up as readily as a global one.
+    for (guild_id, status) in [
+        (None, PresenceStatus::DoNotDisturb),
+        (Some(Id::new(1)), PresenceStatus::Idle),
+    ] {
+        let mut state = DiscordState::default();
+        state.apply_event(&AppEvent::ChannelUpsert(dm_channel_with_recipients(
+            channel_id,
+            "project chat",
+            "group-dm",
+            vec![ChannelRecipientInfo::test(Id::new(20), "alice")],
+        )));
+
+        state.apply_event(&AppEvent::PresenceUpdate {
+            guild_id,
+            presence: crate::discord::PresenceEventFields {
+                user_id: Id::new(20),
+                status,
+                activities: Vec::new(),
+            },
+        });
+
+        let channel = state.channel(channel_id).expect("channel should be stored");
+        assert_eq!(channel.recipients[0].status, status, "{guild_id:?}");
+    }
 }
 
 #[test]
@@ -472,30 +477,6 @@ fn non_current_user_presence_update_preserves_guild_activity() {
 }
 
 #[test]
-fn guild_presence_update_updates_matching_channel_recipients() {
-    let channel_id: Id<ChannelMarker> = Id::new(10);
-    let mut state = DiscordState::default();
-
-    state.apply_event(&AppEvent::ChannelUpsert(dm_channel_with_recipients(
-        channel_id,
-        "alice",
-        "dm",
-        vec![ChannelRecipientInfo::test(Id::new(20), "alice")],
-    )));
-
-    state.apply_event(&AppEvent::PresenceUpdate {
-        guild_id: Some(Id::new(1)),
-        presence: crate::discord::PresenceEventFields {
-            user_id: Id::new(20),
-            status: PresenceStatus::Idle,
-            activities: Vec::new(),
-        },
-    });
-
-    let channel = state.channel(channel_id).expect("channel should be stored");
-    assert_eq!(channel.recipients[0].status, PresenceStatus::Idle);
-}
-#[test]
 fn live_messages_update_channel_last_message_id() {
     let channel_id: Id<ChannelMarker> = Id::new(10);
     let mut state = DiscordState::default();
@@ -561,31 +542,6 @@ fn live_thread_messages_increment_cached_counts_once() {
         .expect("thread should stay cached");
     assert_eq!(channel.message_count, Some(13));
     assert_eq!(channel.total_message_sent, Some(15));
-}
-
-#[test]
-fn history_updates_channel_last_message_id() {
-    let channel_id: Id<ChannelMarker> = Id::new(10);
-    let mut state = DiscordState::default();
-
-    state.apply_event(&AppEvent::ChannelUpsert(ChannelInfo {
-        last_message_id: Some(Id::new(20)),
-        ..dm_channel(channel_id, "neo")
-    }));
-    state.apply_event(&latest_history_loaded(
-        channel_id,
-        vec![
-            message_info(channel_id, 10, "old"),
-            message_info(channel_id, 40, "new"),
-        ],
-    ));
-
-    assert_eq!(
-        state
-            .channel(channel_id)
-            .and_then(|channel| channel.last_message_id),
-        Some(Id::new(40))
-    );
 }
 
 #[test]

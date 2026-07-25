@@ -410,62 +410,87 @@ mod tests {
     use super::*;
 
     #[test]
-    fn message_history_loaded_enqueues_missing_author_member_request() {
+    fn events_carrying_unloaded_authors_enqueue_a_member_request() {
         let guild_id = Id::new(1);
         let channel_id = Id::new(2);
-        let author_id = Id::new(99);
-        let mut state = DashboardState::new();
-        push_guild_with_channel(
-            &mut state,
-            guild_id,
-            channel_info(guild_id, channel_id, None, "general", "GuildText"),
-        );
-
-        process_effect_in_default_context(
-            &mut state,
-            message_history_loaded_event(MessageHistoryLoadedFixture {
-                channel_id,
-                messages: vec![message_info(guild_id, channel_id, Id::new(20), author_id)],
-                ..MessageHistoryLoadedFixture::new()
-            }),
-        );
-
-        assert_eq!(
-            state.drain_pending_commands(),
-            vec![AppCommand::LoadGuildMembersByIds {
-                guild_id,
-                user_ids: vec![author_id],
-            }]
-        );
-    }
-
-    #[test]
-    fn notification_inbox_message_events_enqueue_missing_author_member_request() {
-        let guild_id = Id::new(1);
-        let channel_id = Id::new(2);
+        let thread_id = Id::new(3);
         let author_id = Id::new(99);
         let message_id = Id::new(20);
-        let events = [
-            AppEvent::InboxMentionsLoaded {
-                request_id: 1,
-                before: None,
-                messages: vec![message_info(guild_id, channel_id, message_id, author_id)],
-                has_more: false,
-            },
-            AppEvent::InboxChannelMessagesLoaded {
-                request_id: 1,
-                channel_id,
-                messages: vec![message_info(guild_id, channel_id, message_id, author_id)],
-            },
+        let text_channel = || channel_info(guild_id, channel_id, None, "general", "GuildText");
+        let forum_channel = || channel_info(guild_id, channel_id, None, "forum", "forum");
+        let forum_thread = || {
+            channel_info(
+                guild_id,
+                thread_id,
+                Some(channel_id),
+                "welcome",
+                "GuildPublicThread",
+            )
+        };
+
+        // Every route that surfaces a message or thread authored by someone the
+        // member cache has never seen must ask for that member, or the row
+        // renders with a raw id instead of a name.
+        let cases = [
+            (
+                "message history",
+                text_channel(),
+                message_history_loaded_event(MessageHistoryLoadedFixture {
+                    channel_id,
+                    messages: vec![message_info(guild_id, channel_id, message_id, author_id)],
+                    ..MessageHistoryLoadedFixture::new()
+                }),
+            ),
+            (
+                "inbox mentions",
+                text_channel(),
+                AppEvent::InboxMentionsLoaded {
+                    request_id: 1,
+                    before: None,
+                    messages: vec![message_info(guild_id, channel_id, message_id, author_id)],
+                    has_more: false,
+                },
+            ),
+            (
+                "inbox channel messages",
+                text_channel(),
+                AppEvent::InboxChannelMessagesLoaded {
+                    request_id: 1,
+                    channel_id,
+                    messages: vec![message_info(guild_id, channel_id, message_id, author_id)],
+                },
+            ),
+            (
+                "forum post preview author",
+                forum_channel(),
+                forum_posts_loaded_event(ForumPostsLoadedFixture {
+                    channel_id,
+                    archive_state: ForumPostArchiveState::Active,
+                    next_offset: 1,
+                    threads: vec![forum_thread()],
+                    first_messages: vec![message_info(guild_id, thread_id, message_id, author_id)],
+                    ..ForumPostsLoadedFixture::new()
+                }),
+            ),
+            (
+                "forum post thread owner",
+                forum_channel(),
+                forum_posts_loaded_event(ForumPostsLoadedFixture {
+                    channel_id,
+                    archive_state: ForumPostArchiveState::Active,
+                    next_offset: 1,
+                    threads: vec![ChannelInfo {
+                        owner_id: Some(author_id),
+                        ..forum_thread()
+                    }],
+                    ..ForumPostsLoadedFixture::new()
+                }),
+            ),
         ];
 
-        for event in events {
+        for (label, channel, event) in cases {
             let mut state = DashboardState::new();
-            push_guild_with_channel(
-                &mut state,
-                guild_id,
-                channel_info(guild_id, channel_id, None, "general", "GuildText"),
-            );
+            push_guild_with_channel(&mut state, guild_id, channel);
 
             process_effect_in_default_context(&mut state, event);
 
@@ -474,91 +499,10 @@ mod tests {
                 vec![AppCommand::LoadGuildMembersByIds {
                     guild_id,
                     user_ids: vec![author_id],
-                }]
+                }],
+                "{label}"
             );
         }
-    }
-
-    #[test]
-    fn forum_posts_loaded_enqueues_missing_preview_author_member_request() {
-        let guild_id = Id::new(1);
-        let forum_id = Id::new(2);
-        let thread_id = Id::new(3);
-        let author_id = Id::new(99);
-        let mut state = DashboardState::new();
-        push_guild_with_channel(
-            &mut state,
-            guild_id,
-            channel_info(guild_id, forum_id, None, "forum", "forum"),
-        );
-
-        process_effect_in_default_context(
-            &mut state,
-            forum_posts_loaded_event(ForumPostsLoadedFixture {
-                channel_id: forum_id,
-                archive_state: ForumPostArchiveState::Active,
-                next_offset: 1,
-                threads: vec![channel_info(
-                    guild_id,
-                    thread_id,
-                    Some(forum_id),
-                    "welcome",
-                    "GuildPublicThread",
-                )],
-                first_messages: vec![message_info(guild_id, thread_id, Id::new(20), author_id)],
-                ..ForumPostsLoadedFixture::new()
-            }),
-        );
-
-        assert_eq!(
-            state.drain_pending_commands(),
-            vec![AppCommand::LoadGuildMembersByIds {
-                guild_id,
-                user_ids: vec![author_id],
-            }]
-        );
-    }
-
-    #[test]
-    fn forum_posts_loaded_enqueues_missing_thread_owner_member_request() {
-        let guild_id = Id::new(1);
-        let forum_id = Id::new(2);
-        let thread_id = Id::new(3);
-        let owner_id = Id::new(99);
-        let mut state = DashboardState::new();
-        push_guild_with_channel(
-            &mut state,
-            guild_id,
-            channel_info(guild_id, forum_id, None, "forum", "forum"),
-        );
-
-        process_effect_in_default_context(
-            &mut state,
-            forum_posts_loaded_event(ForumPostsLoadedFixture {
-                channel_id: forum_id,
-                archive_state: ForumPostArchiveState::Active,
-                next_offset: 1,
-                threads: vec![ChannelInfo {
-                    owner_id: Some(owner_id),
-                    ..channel_info(
-                        guild_id,
-                        thread_id,
-                        Some(forum_id),
-                        "welcome",
-                        "GuildPublicThread",
-                    )
-                }],
-                ..ForumPostsLoadedFixture::new()
-            }),
-        );
-
-        assert_eq!(
-            state.drain_pending_commands(),
-            vec![AppCommand::LoadGuildMembersByIds {
-                guild_id,
-                user_ids: vec![owner_id],
-            }]
-        );
     }
 
     #[test]

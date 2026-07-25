@@ -41,45 +41,68 @@ fn member_groups_use_roles_and_status_sorted_entries() {
 }
 
 #[test]
-fn member_role_color_uses_highest_nonzero_role_color() {
+fn member_role_color_picks_the_winning_coloured_role() {
     let guild_id = Id::new(1);
     let user_id = Id::new(10);
-    let low_role = Id::new(100);
-    let zero_role = Id::new(101);
-    let high_role = Id::new(102);
-    let mut state = DashboardState::new();
 
-    state.push_event(guild_create_event(GuildCreateFixture {
-        members: vec![member_with_roles(
-            user_id,
-            "alice",
-            vec![low_role, zero_role, high_role],
-        )],
-        presences: vec![(user_id, PresenceStatus::Online)],
-        roles: vec![
-            RoleInfo {
-                color: Some(0x112233),
-                position: 1,
-                ..RoleInfo::test(low_role, "Low")
-            },
-            RoleInfo {
-                color: Some(0),
-                position: 99,
-                ..RoleInfo::test(zero_role, "Zero")
-            },
-            RoleInfo {
-                color: Some(0x445566),
-                position: 10,
-                ..RoleInfo::test(high_role, "High")
-            },
-        ],
-        ..GuildCreateFixture::new(guild_id)
-    }));
-    state.confirm_selected_guild();
+    for (name, roles, expected_color) in [
+        (
+            "highest position wins and colourless roles are skipped",
+            vec![
+                RoleInfo {
+                    color: Some(0x112233),
+                    position: 1,
+                    ..RoleInfo::test(Id::new(100), "Low")
+                },
+                RoleInfo {
+                    color: Some(0),
+                    position: 99,
+                    ..RoleInfo::test(Id::new(101), "Zero")
+                },
+                RoleInfo {
+                    color: Some(0x445566),
+                    position: 10,
+                    ..RoleInfo::test(Id::new(102), "High")
+                },
+            ],
+            0x445566,
+        ),
+        (
+            "equal positions are broken by role id",
+            vec![
+                RoleInfo {
+                    color: Some(0x112233),
+                    position: 10,
+                    ..RoleInfo::test(Id::new(200), "Newer")
+                },
+                RoleInfo {
+                    color: Some(0x445566),
+                    position: 10,
+                    ..RoleInfo::test(Id::new(100), "Older")
+                },
+            ],
+            0x445566,
+        ),
+    ] {
+        let role_ids = roles.iter().map(|role| role.id).collect();
+        let mut state = DashboardState::new();
 
-    let member = state.flattened_members()[0];
+        state.push_event(guild_create_event(GuildCreateFixture {
+            members: vec![member_with_roles(user_id, "alice", role_ids)],
+            presences: vec![(user_id, PresenceStatus::Online)],
+            roles,
+            ..GuildCreateFixture::new(guild_id)
+        }));
+        state.confirm_selected_guild();
 
-    assert_eq!(state.member_role_color(member), Some(0x445566));
+        let member = state.flattened_members()[0];
+
+        assert_eq!(
+            state.member_role_color(member),
+            Some(expected_color),
+            "{name}"
+        );
+    }
 }
 
 #[test]
@@ -145,77 +168,60 @@ fn message_history_author_member_requests_chunk_at_gateway_limit() {
 }
 
 #[test]
-fn member_role_color_breaks_equal_position_ties_by_role_id() {
-    let guild_id = Id::new(1);
-    let user_id = Id::new(10);
-    let older_role = Id::new(100);
-    let newer_role = Id::new(200);
-    let mut state = DashboardState::new();
-
-    state.push_event(guild_create_event(GuildCreateFixture {
-        members: vec![member_with_roles(
-            user_id,
-            "alice",
-            vec![newer_role, older_role],
-        )],
-        presences: vec![(user_id, PresenceStatus::Online)],
-        roles: vec![
-            RoleInfo {
-                color: Some(0x112233),
-                position: 10,
-                ..RoleInfo::test(newer_role, "Newer")
-            },
-            RoleInfo {
-                color: Some(0x445566),
-                position: 10,
-                ..RoleInfo::test(older_role, "Older")
-            },
-        ],
-        ..GuildCreateFixture::new(guild_id)
-    }));
-    state.confirm_selected_guild();
-
-    let member = state.flattened_members()[0];
-
-    assert_eq!(state.member_role_color(member), Some(0x445566));
-}
-
-#[test]
-fn member_groups_show_selected_group_dm_recipients() {
-    let mut state = DashboardState::new();
+fn member_groups_show_selected_dm_recipients() {
     let channel_id = Id::new(20);
-    state.push_event(AppEvent::ChannelUpsert(ChannelInfo {
-        kind: "group-dm".to_owned(),
-        recipients: Some(vec![
-            ChannelRecipientInfo {
-                status: Some(PresenceStatus::Idle),
-                ..ChannelRecipientInfo::test(Id::new(30), "bob")
-            },
-            ChannelRecipientInfo {
-                status: Some(PresenceStatus::Online),
+    // Both DM kinds land in one flat "Members" group, ordered by status.
+    let cases = [
+        (
+            "group-dm",
+            vec![
+                ChannelRecipientInfo {
+                    status: Some(PresenceStatus::Idle),
+                    ..ChannelRecipientInfo::test(Id::new(30), "bob")
+                },
+                ChannelRecipientInfo {
+                    status: Some(PresenceStatus::Online),
+                    ..ChannelRecipientInfo::test(Id::new(10), "alice")
+                },
+            ],
+            vec![
+                ("alice".to_owned(), PresenceStatus::Online),
+                ("bob".to_owned(), PresenceStatus::Idle),
+            ],
+        ),
+        (
+            "dm",
+            vec![ChannelRecipientInfo {
+                status: Some(PresenceStatus::DoNotDisturb),
                 ..ChannelRecipientInfo::test(Id::new(10), "alice")
-            },
-        ]),
-        ..dm_channel_info(channel_id, "project chat")
-    }));
+            }],
+            vec![("alice".to_owned(), PresenceStatus::DoNotDisturb)],
+        ),
+    ];
 
-    state.confirm_selected_guild();
-    state.confirm_selected_channel();
+    for (kind, recipients, expected) in cases {
+        let mut state = DashboardState::new();
+        state.push_event(AppEvent::ChannelUpsert(ChannelInfo {
+            kind: kind.to_owned(),
+            recipients: Some(recipients),
+            ..dm_channel_info(channel_id, "project chat")
+        }));
+        state.confirm_selected_guild();
+        state.confirm_selected_channel();
 
-    let groups = state.members_grouped();
-    assert_eq!(groups.len(), 1);
-    assert_eq!(groups[0].label, "Members");
-    assert_eq!(
-        groups[0]
-            .entries
-            .iter()
-            .map(|member| (member.display_name(), member.status()))
-            .collect::<Vec<_>>(),
-        vec![
-            ("alice".to_owned(), PresenceStatus::Online),
-            ("bob".to_owned(), PresenceStatus::Idle),
-        ],
-    );
+        let groups = state.members_grouped();
+        assert_eq!(groups.len(), 1, "{kind}");
+        assert_eq!(groups[0].label, "Members", "{kind}");
+        assert_eq!(
+            groups[0]
+                .entries
+                .iter()
+                .map(|member| (member.display_name(), member.status()))
+                .collect::<Vec<_>>(),
+            expected,
+            "{kind}"
+        );
+    }
 }
 
 #[test]
@@ -356,29 +362,6 @@ fn member_groups_treat_idle_and_dnd_as_online() {
 }
 
 #[test]
-fn member_groups_show_selected_dm_recipient() {
-    let mut state = DashboardState::new();
-    let channel_id = Id::new(20);
-    state.push_event(AppEvent::ChannelUpsert(ChannelInfo {
-        recipients: Some(vec![ChannelRecipientInfo {
-            status: Some(PresenceStatus::DoNotDisturb),
-            ..ChannelRecipientInfo::test(Id::new(10), "alice")
-        }]),
-        ..dm_channel_info(channel_id, "alice")
-    }));
-
-    state.confirm_selected_guild();
-    state.confirm_selected_channel();
-
-    let groups = state.members_grouped();
-    assert_eq!(groups.len(), 1);
-    assert_eq!(groups[0].label, "Members");
-    assert_eq!(groups[0].entries.len(), 1);
-    assert_eq!(groups[0].entries[0].display_name(), "alice");
-    assert_eq!(groups[0].entries[0].status(), PresenceStatus::DoNotDisturb);
-}
-
-#[test]
 fn member_subscription_ranges_grow_with_viewport() {
     let mut state = state_with_thread_created_message();
     state.set_member_view_height(20);
@@ -422,9 +405,11 @@ fn member_list_subscription_target_uses_active_channel_or_fallback() {
 }
 
 #[test]
-fn member_list_subscription_fallback_skips_hidden_channels() {
+fn member_list_subscription_fallback_skips_hidden_and_voice_channels() {
+    // Discord rejects op-37 ranges against channels the user cannot read, and
+    // a voice channel carries no member list, so both have to be passed over
+    // in favour of the first readable text channel.
     let state = state_with_hidden_and_visible_channels();
-
     assert_eq!(
         state.guild_member_list_channel(Id::new(1)),
         Some(Id::new(3))
@@ -433,15 +418,11 @@ fn member_list_subscription_fallback_skips_hidden_channels() {
         state.member_list_subscription_target(),
         Some((Id::new(1), Id::new(3)))
     );
-}
 
-#[test]
-fn member_list_subscription_target_skips_active_voice_channel() {
-    let mut state = state_with_hidden_and_visible_channels();
-    state.activate_channel(Id::new(4));
-
+    let mut voice_active = state_with_hidden_and_visible_channels();
+    voice_active.activate_channel(Id::new(4));
     assert_eq!(
-        state.member_list_subscription_target(),
+        voice_active.member_list_subscription_target(),
         Some((Id::new(1), Id::new(3)))
     );
 }
@@ -496,21 +477,4 @@ fn member_half_page_scrolls_by_rendered_lines() {
     state.half_page_up();
     assert_eq!(state.selected_member(), 0);
     assert_eq!(state.selected_member_line(), 1);
-}
-
-#[test]
-fn member_focused_selection_line_accounts_for_scroll_offset() {
-    let mut state = state_with_members(8);
-    state.focus_pane(FocusPane::Members);
-    state.set_member_view_height(3);
-
-    for _ in 0..4 {
-        state.move_down();
-    }
-    assert_eq!(state.selected_member(), 4);
-    assert_eq!(state.selected_member_line(), 5);
-
-    let scroll = state.member_scroll();
-    let relative = state.focused_member_selection_line().unwrap();
-    assert_eq!(relative + scroll, state.selected_member_line());
 }

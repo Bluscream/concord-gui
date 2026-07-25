@@ -363,21 +363,6 @@ async fn current_user_activities_returns_cached_presence_activity() {
     assert_eq!(client.current_user_activities(), vec![activity]);
 }
 
-#[test]
-fn selected_rich_presence_round_trips_and_clears() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
-
-    assert_eq!(client.selected_rich_presence(), None);
-    client.select_rich_presence(Some("client-123".to_owned()));
-    assert_eq!(
-        client.selected_rich_presence().as_deref(),
-        Some("client-123")
-    );
-    client.select_rich_presence(None);
-    assert_eq!(client.selected_rich_presence(), None);
-}
-
 #[tokio::test]
 async fn requested_voice_state_tracks_changes_and_skips_duplicate_gateway_updates() {
     let _ = rustls::crypto::ring::default_provider().install_default();

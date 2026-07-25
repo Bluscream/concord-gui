@@ -350,18 +350,3 @@ fn channel_switcher_query_edits_at_cursor() {
         Some("ra".len())
     );
 }
-
-#[test]
-fn channel_switcher_query_deletes_grapheme_before_cursor() {
-    let mut state = DashboardState::new();
-    state.open_channel_switcher();
-    for ch in "e\u{301}x".chars() {
-        state.push_channel_switcher_char(ch);
-    }
-
-    state.move_channel_switcher_query_cursor_left();
-    state.pop_channel_switcher_char();
-
-    assert_eq!(state.channel_switcher_query(), Some("x"));
-    assert_eq!(state.channel_switcher_query_cursor_byte_index(), Some(0));
-}

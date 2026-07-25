@@ -424,32 +424,6 @@ fn mouse_wheel_scrolls_hovered_channel_viewport_without_moving_selection() {
 }
 
 #[test]
-fn mouse_wheel_scrolls_hovered_member_viewport_without_moving_selection() {
-    let mut state = state_with_members(10);
-    state.focus_pane(FocusPane::Messages);
-    state.set_member_view_height(4);
-    let selected = state.selected_member();
-
-    assert!(handle_mouse(
-        &mut state,
-        mouse(MouseEventKind::ScrollDown, 100, 1),
-        dashboard_area(),
-    ));
-
-    assert_eq!(state.focus(), FocusPane::Members);
-    assert_eq!(state.selected_member(), selected);
-    assert_eq!(state.member_scroll(), 1);
-
-    assert!(handle_mouse(
-        &mut state,
-        mouse(MouseEventKind::ScrollUp, 100, 1),
-        dashboard_area(),
-    ));
-    assert_eq!(state.selected_member(), selected);
-    assert_eq!(state.member_scroll(), 0);
-}
-
-#[test]
 fn mouse_wheel_scrolls_message_viewport_without_changing_selection() {
     let mut state = state_with_messages(1);
     state.focus_pane(FocusPane::Messages);

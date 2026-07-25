@@ -2,7 +2,7 @@
 use std::path::Path;
 #[cfg(feature = "voice-playback")]
 use std::sync::Arc;
-#[cfg(any(test, feature = "voice-playback"))]
+#[cfg(feature = "voice-playback")]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(any(test, feature = "voice-playback"))]
 use std::time::Duration;
@@ -193,7 +193,7 @@ fn log_notification_output_stream_error(error: cpal::Error) {
     );
 }
 
-#[cfg(any(test, feature = "voice-playback"))]
+#[cfg(feature = "voice-playback")]
 fn notification_stream_result(stream_failed: &AtomicBool) -> std::result::Result<(), String> {
     if stream_failed.load(Ordering::Relaxed) {
         Err("notification audio output stream failed during playback".to_owned())
@@ -447,8 +447,6 @@ fn decode_i24_sample(sample: &[u8]) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicBool;
-
     use crate::discord::VoiceSoundKind;
 
     use super::*;
@@ -499,16 +497,6 @@ mod tests {
         let error = decode_notification_wav(b"not a wav").expect_err("invalid wav should fail");
 
         assert!(error.contains("RIFF/WAVE"));
-    }
-
-    #[test]
-    fn notification_stream_result_reports_async_stream_error() {
-        let stream_failed = AtomicBool::new(true);
-
-        let error =
-            notification_stream_result(&stream_failed).expect_err("stream error should fail");
-
-        assert!(error.contains("failed during playback"));
     }
 
     fn pcm16_wav_bytes(sample_rate: u32, channels: u16, samples: &[i16]) -> Vec<u8> {

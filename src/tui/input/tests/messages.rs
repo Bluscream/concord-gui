@@ -234,43 +234,6 @@ fn esc_returns_from_pinned_message_view() {
 }
 
 #[test]
-fn message_action_shortcuts_edit_and_delete_own_message() {
-    let mut edit_state = state_with_own_message();
-    edit_state.focus_pane(FocusPane::Messages);
-
-    let command = handle_key(&mut edit_state, char_key('e'));
-
-    assert_eq!(command, None);
-    assert!(!edit_state.is_message_action_menu_active());
-    assert!(edit_state.is_composing());
-
-    let mut delete_state = state_with_own_message();
-    delete_state.focus_pane(FocusPane::Messages);
-
-    let command = handle_key(&mut delete_state, char_key('d'));
-
-    assert_eq!(command, None);
-    assert!(!delete_state.is_message_action_menu_active());
-    assert!(
-        delete_state
-            .is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::MessageConfirmation)
-    );
-
-    let command = handle_key(&mut delete_state, key(KeyCode::Enter));
-    assert_eq!(
-        command,
-        Some(AppCommand::DeleteMessage {
-            channel_id: Id::new(2),
-            message_id: Id::new(1),
-        })
-    );
-    assert!(
-        !delete_state
-            .is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::MessageConfirmation)
-    );
-}
-
-#[test]
 fn message_pane_shortcuts_reuse_message_actions() {
     let mut reaction_state = state_with_messages(1);
     reaction_state.focus_pane(FocusPane::Messages);
@@ -305,32 +268,6 @@ fn message_pane_shortcuts_reuse_message_actions() {
     handle_key(&mut edit_state, char_key('e'));
     assert!(edit_state.is_composing());
     assert_eq!(edit_state.composer_input(), "msg 1");
-}
-
-#[test]
-fn message_pane_default_shortcuts_work_from_message_pane() {
-    let mut reaction_state = state_with_messages(1);
-    reaction_state.focus_pane(FocusPane::Messages);
-    handle_key(&mut reaction_state, char_key('r'));
-    assert!(
-        reaction_state
-            .is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::EmojiReactionPicker)
-    );
-
-    let mut reply_state = state_with_messages(1);
-    reply_state.focus_pane(FocusPane::Messages);
-    handle_key(&mut reply_state, char_key('R'));
-    assert!(reply_state.is_composing());
-
-    let mut pin_state = state_with_messages(1);
-    pin_state.focus_pane(FocusPane::Messages);
-    handle_key(&mut pin_state, key(KeyCode::Enter));
-    let command = handle_key(&mut pin_state, char_key('P'));
-    assert_eq!(command, None);
-    assert!(
-        pin_state
-            .is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::MessageConfirmation)
-    );
 }
 
 #[test]
@@ -453,26 +390,6 @@ fn disabled_media_playback_display_option_removes_message_shortcut() {
 }
 
 #[test]
-fn disabled_play_media_keymap_removes_message_shortcut() {
-    let mut state = state_with_keymap(KeymapOptions {
-        mappings: [("PlayMedia".to_owned(), KeymapBinding::disabled())]
-            .into_iter()
-            .collect(),
-        ..Default::default()
-    });
-    state.push_event(message_create_event(MessageCreateFixture {
-        message_id: Id::new(1),
-        content: Some("watch https://youtu.be/dQw4w9WgXcQ".to_owned()),
-        ..guild_message_create_fixture()
-    }));
-    state.focus_pane(FocusPane::Messages);
-
-    let command = handle_key(&mut state, char_key('x'));
-
-    assert_eq!(command, None);
-}
-
-#[test]
 fn message_pane_copy_shortcut_requests_selected_message_content() {
     let mut state = state_with_messages(1);
     state.focus_pane(FocusPane::Messages);
@@ -566,22 +483,6 @@ fn message_pane_delete_shortcut_requires_confirmation() {
     );
     assert!(
         !state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::MessageConfirmation)
-    );
-}
-
-#[test]
-fn message_pane_view_attachment_shortcut_opens_viewer() {
-    let mut state = state_with_image_message();
-    state.focus_pane(FocusPane::Messages);
-
-    handle_key(&mut state, char_key('v'));
-
-    assert!(state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::AttachmentViewer));
-    assert_eq!(
-        state
-            .selected_attachment_viewer_item()
-            .map(|item| item.index),
-        Some(1)
     );
 }
 

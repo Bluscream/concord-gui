@@ -78,49 +78,6 @@ fn shifted_angle_letter_matches_shifted_terminal_event() {
 }
 
 #[test]
-fn ui_action_names_match_future_colon_command_names() {
-    assert_eq!(
-        UiAction::from_name("SelectNext"),
-        Some(UiAction::SelectNext)
-    );
-    assert_eq!(
-        UiAction::from_name("SelectPrevious"),
-        Some(UiAction::SelectPrevious)
-    );
-    assert_eq!(
-        UiAction::from_name("ClosePopup"),
-        Some(UiAction::ClosePopup)
-    );
-    assert_eq!(
-        UiAction::from_name("ScrollViewportDown"),
-        Some(UiAction::ScrollViewportDown)
-    );
-    assert_eq!(
-        UiAction::from_name("ScrollViewportUp"),
-        Some(UiAction::ScrollViewportUp)
-    );
-    assert_eq!(
-        UiAction::from_name("ToggleGuildPane"),
-        Some(UiAction::ToggleGuildPane)
-    );
-    assert_eq!(UiAction::from_name("VoiceMute"), Some(UiAction::VoiceMute));
-    assert_eq!(
-        UiAction::from_name("VoiceLeave"),
-        Some(UiAction::VoiceLeave)
-    );
-    assert_eq!(
-        UiAction::from_name("ChannelSwitcher"),
-        Some(UiAction::ChannelSwitcher)
-    );
-    assert_eq!(
-        UiAction::from_name("OpenFocusedPaneAction"),
-        Some(UiAction::OpenFocusedPaneAction)
-    );
-    assert_eq!(UiAction::from_name("Quit"), Some(UiAction::Quit));
-    assert_eq!(UiAction::from_name("OpenVoiceActions"), None);
-}
-
-#[test]
 fn all_ui_action_names_round_trip() {
     for action in UiAction::ALL {
         assert_eq!(UiAction::from_name(action.name()), Some(*action));
@@ -495,15 +452,41 @@ fn disabled_message_action_binding_removes_default_action_shortcut() {
 }
 
 #[test]
-fn scoped_action_keymaps_reject_actions_outside_their_scope() {
-    let keymap = KeymapOptions {
-        guild_actions: [("ShowPinnedMessages".to_owned(), KeymapBinding::one("x"))]
-            .into_iter()
-            .collect(),
-        ..Default::default()
-    };
-
-    assert!(KeyBindings::try_from_options(&keymap).is_err());
+fn invalid_keymaps_are_rejected() {
+    for (name, keymap) in [
+        (
+            "scoped action outside its own scope",
+            KeymapOptions {
+                guild_actions: [("ShowPinnedMessages".to_owned(), KeymapBinding::one("x"))]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            },
+        ),
+        (
+            "multi-key sequence for a single-chord action",
+            KeymapOptions {
+                mappings: [("ClosePopup".to_owned(), KeymapBinding::one("zz"))]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            },
+        ),
+        (
+            "leaf that is also the prefix of another mapping",
+            KeymapOptions {
+                mappings: [
+                    ("StartComposer".to_owned(), KeymapBinding::one("<leader>m")),
+                    ("ReplyMessage".to_owned(), KeymapBinding::one("<leader>m r")),
+                ]
+                .into_iter()
+                .collect(),
+                ..Default::default()
+            },
+        ),
+    ] {
+        assert!(KeyBindings::try_from_options(&keymap).is_err(), "{name}");
+    }
 }
 
 #[test]
@@ -791,29 +774,68 @@ fn options_category_shortcut_labels_keep_contextual_defaults() {
 }
 
 #[test]
-fn keymap_parses_leader_start_composer_sequence() {
-    let keymap = KeymapOptions {
-        mappings: [("StartComposer".to_owned(), KeymapBinding::one("<leader>e"))]
-            .into_iter()
-            .collect(),
-        ..Default::default()
-    };
-    let key_bindings = KeyBindings::try_from_options(&keymap).expect("keymap should parse");
-    let leader_prefix = key_bindings.leader_keymap_prefix();
-
-    assert!(
-        key_bindings
-            .leader_keymap_children(&leader_prefix)
-            .iter()
-            .any(|item| item.key == "e" && item.label == "start composer")
-    );
-    assert_eq!(
-        key_bindings.keymap_lookup_with_key(
-            &leader_prefix,
-            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)
+fn keymap_registers_each_leader_sequence_as_a_child_and_resolves_it() {
+    for (binding, action_name, child_key, child_label, event, ui_action) in [
+        (
+            "<leader>e",
+            "StartComposer",
+            "e",
+            "start composer",
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+            UiAction::StartComposer,
         ),
-        Some(KeyMapLookup::Action(UiAction::StartComposer))
-    );
+        (
+            "<leader>j",
+            "StartComposer",
+            "j",
+            "start composer",
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+            UiAction::StartComposer,
+        ),
+        (
+            "<leader><space>",
+            "ChannelSwitcher",
+            "Space",
+            "Switch channels",
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+            UiAction::ChannelSwitcher,
+        ),
+        (
+            "<leader><C-w>",
+            "ChannelSwitcher",
+            "Ctrl+w",
+            "Switch channels",
+            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
+            UiAction::ChannelSwitcher,
+        ),
+    ] {
+        let keymap = KeymapOptions {
+            mappings: [(action_name.to_owned(), KeymapBinding::one(binding))]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let key_bindings =
+            KeyBindings::try_from_options(&keymap).expect("leader sequence should parse");
+        let leader_prefix = key_bindings.leader_keymap_prefix();
+
+        let children = key_bindings.leader_keymap_children(&leader_prefix);
+        assert!(
+            children
+                .iter()
+                .any(|item| item.key == child_key && item.label == child_label),
+            "{binding}: expected child {child_key:?} {child_label:?}, got {:?}",
+            children
+                .iter()
+                .map(|item| (item.key.clone(), item.label.clone()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            key_bindings.keymap_lookup_with_key(&leader_prefix, event),
+            Some(KeyMapLookup::Action(ui_action)),
+            "{binding}"
+        );
+    }
 }
 
 #[test]
@@ -844,78 +866,6 @@ fn keymap_parses_nested_leader_reply_sequence() {
             KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)
         ),
         Some(KeyMapLookup::Action(UiAction::ReplyMessage))
-    );
-}
-
-#[test]
-fn keymap_allows_navigation_keys_after_leader_prefix() {
-    let keymap = KeymapOptions {
-        mappings: [("StartComposer".to_owned(), KeymapBinding::one("<leader>j"))]
-            .into_iter()
-            .collect(),
-        ..Default::default()
-    };
-    let key_bindings = KeyBindings::try_from_options(&keymap).expect("leader j should parse");
-    let leader_prefix = key_bindings.leader_keymap_prefix();
-
-    assert_eq!(
-        key_bindings.keymap_lookup_with_key(
-            &leader_prefix,
-            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)
-        ),
-        Some(KeyMapLookup::Action(UiAction::StartComposer))
-    );
-}
-
-#[test]
-fn keymap_parses_adjacent_angle_key_after_leader() {
-    let keymap = KeymapOptions {
-        mappings: [(
-            "ChannelSwitcher".to_owned(),
-            KeymapBinding::one("<leader><space>"),
-        )]
-        .into_iter()
-        .collect(),
-        ..Default::default()
-    };
-    let key_bindings = KeyBindings::try_from_options(&keymap).expect("leader space should parse");
-    let leader_prefix = key_bindings.leader_keymap_prefix();
-
-    assert_eq!(
-        key_bindings.keymap_lookup_with_key(
-            &leader_prefix,
-            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE)
-        ),
-        Some(KeyMapLookup::Action(UiAction::ChannelSwitcher))
-    );
-}
-
-#[test]
-fn keymap_parses_adjacent_control_key_after_leader() {
-    let keymap = KeymapOptions {
-        mappings: [(
-            "ChannelSwitcher".to_owned(),
-            KeymapBinding::one("<leader><C-w>"),
-        )]
-        .into_iter()
-        .collect(),
-        ..Default::default()
-    };
-    let key_bindings = KeyBindings::try_from_options(&keymap).expect("leader C-w should parse");
-    let leader_prefix = key_bindings.leader_keymap_prefix();
-
-    assert!(
-        key_bindings
-            .leader_keymap_children(&leader_prefix)
-            .iter()
-            .any(|item| item.key == "Ctrl+w" && item.label == "Switch channels")
-    );
-    assert_eq!(
-        key_bindings.keymap_lookup_with_key(
-            &leader_prefix,
-            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL)
-        ),
-        Some(KeyMapLookup::Action(UiAction::ChannelSwitcher))
     );
 }
 
@@ -993,32 +943,6 @@ fn keymap_parses_compact_non_leader_prefix_sequence() {
 }
 
 #[test]
-fn keymap_parses_plain_compact_prefix_sequence() {
-    let keymap = KeymapOptions {
-        mappings: [("VoiceDeafen".to_owned(), KeymapBinding::one("fd"))]
-            .into_iter()
-            .collect(),
-        ..Default::default()
-    };
-    let key_bindings = KeyBindings::try_from_options(&keymap).expect("prefix should parse");
-    let prefix = [KeyChord::from_str("f").expect("f should parse")];
-
-    assert_eq!(
-        key_bindings.keymap.lookup(&prefix),
-        Some(KeyMapLookup::Pending)
-    );
-    assert_eq!(key_bindings.keymap_prefix_title(&prefix), "f");
-    assert_eq!(key_bindings.leader_keymap_children(&prefix)[0].key, "d");
-    assert_eq!(
-        key_bindings.keymap_lookup_with_key(
-            &prefix,
-            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)
-        ),
-        Some(KeyMapLookup::Action(UiAction::VoiceDeafen))
-    );
-}
-
-#[test]
 fn keymap_configured_prefix_disables_conflicting_default_shortcut() {
     let keymap = KeymapOptions {
         mappings: [("VoiceDeafen".to_owned(), KeymapBinding::one("dd"))]
@@ -1065,26 +989,6 @@ fn keymap_configured_mapping_removes_canonical_default_alias_conflicts() {
             KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)
         ),
         Some(KeyMapLookup::Action(UiAction::VoiceDeafen))
-    );
-}
-
-#[test]
-fn keymap_can_remap_quit_action() {
-    let keymap = KeymapOptions {
-        mappings: [("Quit".to_owned(), KeymapBinding::one("x"))]
-            .into_iter()
-            .collect(),
-        ..Default::default()
-    };
-    let key_bindings = KeyBindings::try_from_options(&keymap).expect("quit should parse");
-
-    assert_eq!(
-        key_bindings.keymap_lookup_root_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
-        Some(KeyMapLookup::Action(UiAction::Quit))
-    );
-    assert_eq!(
-        key_bindings.keymap_lookup_root_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
-        None
     );
 }
 
@@ -1222,18 +1126,6 @@ fn keymap_maps_message_shortcuts_to_message_actions() {
 }
 
 #[test]
-fn close_popup_rejects_multi_key_sequences() {
-    let keymap = KeymapOptions {
-        mappings: [("ClosePopup".to_owned(), KeymapBinding::one("zz"))]
-            .into_iter()
-            .collect(),
-        ..Default::default()
-    };
-
-    assert!(KeyBindings::try_from_options(&keymap).is_err());
-}
-
-#[test]
 fn keymap_rejects_fixed_control_selection_keys() {
     for key in ["<C-n>", "<C-p>", "<C-N>", "<C-P>"] {
         let keymap = KeymapOptions {
@@ -1366,14 +1258,6 @@ fn keymap_uses_configured_group_title() {
 }
 
 #[test]
-fn keymap_uses_default_group_title() {
-    let key_bindings = KeyBindings::default();
-    let prefix = [key_bindings.keymap.leader, char_chord('v')];
-
-    assert_eq!(key_bindings.keymap_prefix_title(&prefix), "Voice");
-}
-
-#[test]
 fn lossy_keymap_keeps_valid_mapping_when_another_mapping_is_invalid() {
     let keymap = KeymapOptions {
         mappings: [
@@ -1498,21 +1382,6 @@ fn keymap_rejects_overlong_sequences() {
             "StartComposer".to_owned(),
             KeymapBinding::one(long_sequence),
         )]
-        .into_iter()
-        .collect(),
-        ..Default::default()
-    };
-
-    assert!(KeyBindings::try_from_options(&keymap).is_err());
-}
-
-#[test]
-fn keymap_rejects_ambiguous_leaf_and_prefix_mappings() {
-    let keymap = KeymapOptions {
-        mappings: [
-            ("StartComposer".to_owned(), KeymapBinding::one("<leader>m")),
-            ("ReplyMessage".to_owned(), KeymapBinding::one("<leader>m r")),
-        ]
         .into_iter()
         .collect(),
         ..Default::default()

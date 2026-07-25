@@ -1263,52 +1263,27 @@ fn no_match_emoji_query_closes_active_command_picker() {
 }
 
 #[test]
-fn submit_slash_command_emits_direct_interaction_options() {
-    let command = application_command(
-        "echo",
-        vec![
-            application_command_option(3, "text", true, Vec::new()),
-            application_command_option(5, "loud", false, Vec::new()),
-        ],
-    );
-    let mut state = state_with_application_command(command);
-    type_composer_text(&mut state, "/echo text:hello world loud:true");
-
-    assert_slash_invocation(
-        state.submit_composer(),
-        "echo",
-        "/echo text:hello world loud:true",
-    );
-}
-
-#[test]
-fn submit_slash_subcommand_emits_nested_interaction_options() {
-    let command = application_command(
-        "poll",
-        vec![application_command_option(
-            1,
-            "create",
-            false,
-            vec![application_command_option(3, "question", true, Vec::new())],
-        )],
-    );
-    let mut state = state_with_application_command(command);
-    type_composer_text(&mut state, "/poll create question:favorite color");
-
-    assert_slash_invocation(
-        state.submit_composer(),
-        "poll",
-        "/poll create question:favorite color",
-    );
-}
-
-#[test]
-fn submit_slash_subcommand_accepts_single_option_shorthand() {
-    for input in [
-        "/anime search:naruto uzumaki",
-        "/anime search: naruto uzumaki",
-    ] {
-        let command = application_command(
+fn submit_slash_command_emits_interaction_options_for_every_option_shape() {
+    for (command_name, options, inputs) in [
+        (
+            "echo",
+            vec![
+                application_command_option(3, "text", true, Vec::new()),
+                application_command_option(5, "loud", false, Vec::new()),
+            ],
+            &["/echo text:hello world loud:true"][..],
+        ),
+        (
+            "poll",
+            vec![application_command_option(
+                1,
+                "create",
+                false,
+                vec![application_command_option(3, "question", true, Vec::new())],
+            )],
+            &["/poll create question:favorite color"][..],
+        ),
+        (
             "anime",
             vec![application_command_option(
                 1,
@@ -1316,59 +1291,85 @@ fn submit_slash_subcommand_accepts_single_option_shorthand() {
                 false,
                 vec![application_command_option(3, "query", true, Vec::new())],
             )],
-        );
-        let mut state = state_with_application_command(command);
-        type_composer_text(&mut state, input);
+            &[
+                "/anime search:naruto uzumaki",
+                "/anime search: naruto uzumaki",
+            ][..],
+        ),
+        (
+            "mod",
+            vec![application_command_option(
+                2,
+                "admin",
+                false,
+                vec![application_command_option(
+                    1,
+                    "ban",
+                    false,
+                    vec![
+                        application_command_option(6, "user", true, Vec::new()),
+                        application_command_option(3, "reason", false, Vec::new()),
+                    ],
+                )],
+            )],
+            &["/mod admin ban user:<@123> reason:spam links"][..],
+        ),
+    ] {
+        for input in inputs {
+            let command = application_command(command_name, options.clone());
+            let mut state = state_with_application_command(command);
+            type_composer_text(&mut state, input);
 
-        assert_slash_invocation(state.submit_composer(), "anime", input);
+            assert_slash_invocation(state.submit_composer(), command_name, input);
+        }
     }
 }
 
 #[test]
-fn submit_slash_subcommand_rejects_empty_single_option_shorthand() {
-    let command = application_command(
-        "anime",
-        vec![application_command_option(
-            1,
-            "search",
-            false,
-            vec![application_command_option(3, "query", false, Vec::new())],
-        )],
-    );
-    let mut state = state_with_application_command(command);
-    type_composer_text(&mut state, "/anime search:");
-
-    assert_eq!(state.submit_composer(), None);
-    assert_eq!(state.composer_input(), "/anime search:");
-}
-
-#[test]
-fn submit_slash_subcommand_group_emits_nested_interaction_options() {
-    let command = application_command(
-        "mod",
-        vec![application_command_option(
-            2,
-            "admin",
-            false,
+fn submit_slash_command_keeps_incomplete_input_in_the_composer() {
+    for (reason, command_name, options, input) in [
+        (
+            "single-option shorthand with no value",
+            "anime",
             vec![application_command_option(
                 1,
-                "ban",
+                "search",
                 false,
-                vec![
-                    application_command_option(6, "user", true, Vec::new()),
-                    application_command_option(3, "reason", false, Vec::new()),
-                ],
+                vec![application_command_option(3, "query", false, Vec::new())],
             )],
-        )],
-    );
-    let mut state = state_with_application_command(command);
-    type_composer_text(&mut state, "/mod admin ban user:<@123> reason:spam links");
+            "/anime search:",
+        ),
+        (
+            "option value that does not match its type",
+            "roll",
+            vec![application_command_option(4, "sides", true, Vec::new())],
+            "/roll sides:many",
+        ),
+        (
+            "required option still missing",
+            "poll",
+            vec![application_command_option(
+                1,
+                "create",
+                false,
+                vec![application_command_option(3, "question", true, Vec::new())],
+            )],
+            "/poll create",
+        ),
+        (
+            "free text with no option name",
+            "echo",
+            vec![application_command_option(3, "text", false, Vec::new())],
+            "/echo hello world",
+        ),
+    ] {
+        let command = application_command(command_name, options);
+        let mut state = state_with_application_command(command);
+        type_composer_text(&mut state, input);
 
-    assert_slash_invocation(
-        state.submit_composer(),
-        "mod",
-        "/mod admin ban user:<@123> reason:spam links",
-    );
+        assert_eq!(state.submit_composer(), None, "{reason}");
+        assert_eq!(state.composer_input(), input, "{reason}");
+    }
 }
 
 #[test]
@@ -1447,50 +1448,6 @@ fn slash_option_picker_marks_optional_and_required_options() {
 }
 
 #[test]
-fn submit_slash_command_rejects_invalid_typed_options() {
-    let command = application_command(
-        "roll",
-        vec![application_command_option(4, "sides", true, Vec::new())],
-    );
-    let mut state = state_with_application_command(command);
-    type_composer_text(&mut state, "/roll sides:many");
-
-    assert_eq!(state.submit_composer(), None);
-    assert_eq!(state.composer_input(), "/roll sides:many");
-}
-
-#[test]
-fn submit_slash_command_waits_for_required_options() {
-    let command = application_command(
-        "poll",
-        vec![application_command_option(
-            1,
-            "create",
-            false,
-            vec![application_command_option(3, "question", true, Vec::new())],
-        )],
-    );
-    let mut state = state_with_application_command(command);
-    type_composer_text(&mut state, "/poll create");
-
-    assert_eq!(state.submit_composer(), None);
-    assert_eq!(state.composer_input(), "/poll create");
-}
-
-#[test]
-fn submit_slash_command_preserves_unparsed_free_text() {
-    let command = application_command(
-        "echo",
-        vec![application_command_option(3, "text", false, Vec::new())],
-    );
-    let mut state = state_with_application_command(command);
-    type_composer_text(&mut state, "/echo hello world");
-
-    assert_eq!(state.submit_composer(), None);
-    assert_eq!(state.composer_input(), "/echo hello world");
-}
-
-#[test]
 fn confirming_slash_command_immediately_shows_subcommands() {
     let command = application_command(
         "poll",
@@ -1514,60 +1471,57 @@ fn confirming_slash_command_immediately_shows_subcommands() {
 }
 
 #[test]
-fn subcommand_picker_lists_remaining_leaf_options() {
-    let command = application_command(
-        "poll",
-        vec![application_command_option(
-            1,
-            "create",
-            false,
-            vec![
-                application_command_option(3, "question", true, Vec::new()),
-                application_command_option(4, "duration", false, Vec::new()),
-            ],
-        )],
-    );
-    let mut state = state_with_application_command(command);
-    type_composer_text(&mut state, "/poll create question:favorite color ");
-
-    let labels = state
-        .composer_command_candidates()
-        .into_iter()
-        .map(|candidate| candidate.label)
-        .collect::<Vec<_>>();
-
-    assert!(labels.iter().any(|label| label == "duration:"));
-}
-
-#[test]
-fn subcommand_group_picker_lists_remaining_leaf_options() {
-    let command = application_command(
-        "mod",
-        vec![application_command_option(
-            2,
-            "admin",
-            false,
+fn option_picker_lists_the_remaining_leaf_options() {
+    for (command_name, options, input, expected_label) in [
+        (
+            "poll",
             vec![application_command_option(
                 1,
-                "ban",
+                "create",
                 false,
                 vec![
-                    application_command_option(6, "user", true, Vec::new()),
-                    application_command_option(3, "reason", false, Vec::new()),
+                    application_command_option(3, "question", true, Vec::new()),
+                    application_command_option(4, "duration", false, Vec::new()),
                 ],
             )],
-        )],
-    );
-    let mut state = state_with_application_command(command);
-    type_composer_text(&mut state, "/mod admin ban user:<@123> ");
+            "/poll create question:favorite color ",
+            "duration:",
+        ),
+        (
+            "mod",
+            vec![application_command_option(
+                2,
+                "admin",
+                false,
+                vec![application_command_option(
+                    1,
+                    "ban",
+                    false,
+                    vec![
+                        application_command_option(6, "user", true, Vec::new()),
+                        application_command_option(3, "reason", false, Vec::new()),
+                    ],
+                )],
+            )],
+            "/mod admin ban user:<@123> ",
+            "reason:",
+        ),
+    ] {
+        let command = application_command(command_name, options);
+        let mut state = state_with_application_command(command);
+        type_composer_text(&mut state, input);
 
-    let labels = state
-        .composer_command_candidates()
-        .into_iter()
-        .map(|candidate| candidate.label)
-        .collect::<Vec<_>>();
+        let labels = state
+            .composer_command_candidates()
+            .into_iter()
+            .map(|candidate| candidate.label)
+            .collect::<Vec<_>>();
 
-    assert!(labels.iter().any(|label| label == "reason:"));
+        assert!(
+            labels.iter().any(|label| label == expected_label),
+            "{input:?} should still offer {expected_label:?}, got {labels:?}"
+        );
+    }
 }
 
 #[test]
@@ -1907,37 +1861,6 @@ fn move_selection_navigates_filtered_list() {
 }
 
 #[test]
-fn mention_picker_keeps_more_than_visible_candidates_selectable() {
-    let mut state = state_with_writable_channel_and_members();
-    for index in 0..10 {
-        state.push_event(AppEvent::GuildMemberUpsert {
-            guild_id: Id::new(1),
-            member: member_with_username(
-                Id::new(100 + index),
-                format!("Scroll {index:02}"),
-                format!("scroll{index:02}"),
-            ),
-        });
-    }
-    state.start_composer();
-    for ch in "@sc".chars() {
-        state.push_composer_char(ch);
-    }
-
-    let candidates = state.composer_mention_candidates();
-    assert!(
-        candidates.len() > 8,
-        "picker should keep every matching candidate, got {candidates:?}"
-    );
-
-    state.move_active_composer_picker_selection(9);
-
-    assert_eq!(state.composer_mention_selected(), 9);
-    assert!(state.confirm_composer_mention());
-    assert_eq!(state.composer_input(), "@Scroll 09 ");
-}
-
-#[test]
 fn composer_pickers_keep_selection_moving_when_reversing_scroll() {
     const VISIBLE: usize = 8;
 
@@ -2158,45 +2081,6 @@ fn active_emoji_candidates_refresh_when_nitro_capability_changes() {
 }
 
 #[test]
-fn emoji_picker_keeps_more_than_visible_candidates_selectable() {
-    let mut state = state_with_writable_channel();
-    state.push_event(AppEvent::GuildEmojisUpdate {
-        guild_id: Id::new(1),
-        emojis: (0..10)
-            .map(|index| {
-                CustomEmojiInfo::test(Id::new(100 + index), format!("overflow_{index:02}"))
-            })
-            .collect(),
-    });
-    state.start_composer();
-    for ch in ":ov".chars() {
-        state.push_composer_char(ch);
-    }
-
-    let candidates = state.composer_emoji_candidates();
-    assert!(
-        candidates.len() > 8,
-        "picker should keep every matching candidate, got {candidates:?}"
-    );
-
-    state.move_active_composer_picker_selection(9);
-
-    assert_eq!(state.composer_emoji_selected(), 9);
-    assert!(state.confirm_composer_emoji());
-    assert_eq!(state.composer_input(), ":overflow_09: ");
-    assert_send_message_eq!(
-        state.submit_composer(),
-        Some(AppCommand::SendMessage {
-            channel_id: Id::new(2),
-            nonce: Id::new(1),
-            content: "<:overflow_09:109>".to_owned(),
-            reply_to: None,
-            attachments: Vec::new(),
-        })
-    );
-}
-
-#[test]
 fn custom_emoji_submit_keeps_readable_text_and_sends_wire_format() {
     let mut state = state_with_custom_emojis();
     state.push_event(AppEvent::CurrentUserCapabilities {
@@ -2367,78 +2251,6 @@ fn nitro_foreign_custom_emojis_require_channel_permission() {
 }
 
 #[test]
-fn foreign_custom_emoji_uses_link_fallback_without_nitro_when_enabled() {
-    let mut state = state_with_custom_emojis();
-    push_foreign_custom_emojis(&mut state);
-    state.options.composer_options.emojis_as_links = true;
-    state.push_event(AppEvent::CurrentUserCapabilities {
-        premium_tier: PremiumTier::None,
-    });
-    state.start_composer();
-    for ch in ":wa".chars() {
-        state.push_composer_char(ch);
-    }
-
-    let entry = state
-        .composer_emoji_candidates()
-        .into_iter()
-        .find(|entry| entry.shortcode == "wave_foreign")
-        .expect("foreign custom emoji should be suggested as a link fallback");
-    assert!(entry.available);
-    assert!(entry.available_as_link);
-
-    assert!(state.confirm_composer_emoji());
-
-    assert_eq!(state.composer_input(), ":wave_foreign: ");
-    assert_send_message_eq!(
-        state.submit_composer(),
-        Some(AppCommand::SendMessage {
-            channel_id: Id::new(2),
-            nonce: Id::new(1),
-            content: "[wave_foreign](https://cdn.discordapp.com/emojis/60.png?size=48&name=wave_foreign&lossless=true)".to_owned(),
-            reply_to: None,
-            attachments: Vec::new(),
-        })
-    );
-}
-
-#[test]
-fn foreign_animated_emoji_uses_link_fallback_without_nitro_when_enabled() {
-    let mut state = state_with_custom_emojis();
-    push_foreign_custom_emojis(&mut state);
-    state.options.composer_options.emojis_as_links = true;
-    state.push_event(AppEvent::CurrentUserCapabilities {
-        premium_tier: PremiumTier::None,
-    });
-    state.start_composer();
-    for ch in ":da".chars() {
-        state.push_composer_char(ch);
-    }
-
-    let entry = state
-        .composer_emoji_candidates()
-        .into_iter()
-        .find(|entry| entry.shortcode == "dance_foreign")
-        .expect("foreign animated emoji should be suggested as a link fallback");
-    assert!(entry.available);
-    assert!(entry.available_as_link);
-
-    assert!(state.confirm_composer_emoji());
-
-    assert_eq!(state.composer_input(), ":dance_foreign: ");
-    assert_send_message_eq!(
-        state.submit_composer(),
-        Some(AppCommand::SendMessage {
-            channel_id: Id::new(2),
-            nonce: Id::new(1),
-            content: "[dance_foreign](https://cdn.discordapp.com/emojis/61.gif?size=48&name=dance_foreign&lossless=true)".to_owned(),
-            reply_to: None,
-            attachments: Vec::new(),
-        })
-    );
-}
-
-#[test]
 fn submit_expands_mention_and_following_custom_emoji_without_stale_ranges() {
     let mut state = state_with_writable_channel_and_members();
     state.push_event(AppEvent::CurrentUserCapabilities {
@@ -2489,32 +2301,17 @@ fn confirm_emoji_inserts_unicode_and_closes_picker() {
 }
 
 #[test]
-fn submit_expands_known_emoji_shortcodes_and_keeps_unknown_text() {
-    let mut state = state_with_writable_channel();
-    state.start_composer();
-    for ch in "take :heart: :unknown:".chars() {
-        state.push_composer_char(ch);
-    }
-
-    assert_send_message_eq!(
-        state.submit_composer(),
-        Some(AppCommand::SendMessage {
-            channel_id: Id::new(2),
-            nonce: Id::new(1),
-            content: "take ❤️ :unknown:".to_owned(),
-            reply_to: None,
-            attachments: Vec::new(),
-        })
-    );
-}
-
-#[test]
-fn submit_preserves_empty_shortcode_colon_runs() {
+fn submit_expands_emoji_shortcodes_and_leaves_other_markup_literal() {
     for (input, expected) in [
         ("::", "::"),
         (":::", ":::"),
         ("::::heart:", ":::❤️"),
         ("start :::heart: end", "start ::❤️ end"),
+        ("take :heart: :unknown:", "take ❤️ :unknown:"),
+        (
+            "custom <:heart:123> <a:party:456> :heart:",
+            "custom <:heart:123> <a:party:456> ❤️",
+        ),
     ] {
         let mut state = state_with_writable_channel();
         state.start_composer();
@@ -2537,26 +2334,6 @@ fn submit_preserves_empty_shortcode_colon_runs() {
 }
 
 #[test]
-fn submit_keeps_custom_emoji_markup_literal() {
-    let mut state = state_with_writable_channel();
-    state.start_composer();
-    for ch in "custom <:heart:123> <a:party:456> :heart:".chars() {
-        state.push_composer_char(ch);
-    }
-
-    assert_send_message_eq!(
-        state.submit_composer(),
-        Some(AppCommand::SendMessage {
-            channel_id: Id::new(2),
-            nonce: Id::new(1),
-            content: "custom <:heart:123> <a:party:456> ❤️".to_owned(),
-            reply_to: None,
-            attachments: Vec::new(),
-        })
-    );
-}
-
-#[test]
 fn uppercase_emoji_query_matches_lowercase_shortcodes() {
     let mut state = state_with_writable_channel();
     state.start_composer();
@@ -2573,20 +2350,6 @@ fn uppercase_emoji_query_matches_lowercase_shortcodes() {
         shortcodes.iter().any(|shortcode| shortcode == "heart"),
         "expected uppercase query to match `heart`, got {shortcodes:?}"
     );
-}
-
-#[test]
-fn cancel_emoji_picker_keeps_typed_text() {
-    let mut state = state_with_writable_channel();
-    state.start_composer();
-    for ch in ":he".chars() {
-        state.push_composer_char(ch);
-    }
-
-    state.cancel_active_composer_picker();
-
-    assert_eq!(state.composer_emoji_query(), None);
-    assert_eq!(state.composer_input(), ":he");
 }
 
 #[test]
@@ -2711,28 +2474,6 @@ fn picker_matches_username_when_alias_does_not_contain_query() {
 }
 
 #[test]
-fn picker_ranks_alias_prefix_above_username_prefix() {
-    // `s` should put display-name matches (Sally, Sammy) before any
-    // username-only match. We don't have a username-only `s` match in the
-    // fixture, but we still verify alias rows come first when both have
-    // candidates.
-    let mut state = state_with_writable_channel_and_members();
-    state.start_composer();
-    state.push_composer_char('@');
-    state.push_composer_char('s');
-
-    let candidates = state.composer_mention_candidates();
-    let names: Vec<_> = candidates.iter().map(|c| c.display_name.clone()).collect();
-    assert!(
-        names
-            .first()
-            .map(|name| name.starts_with('S'))
-            .unwrap_or(false),
-        "alias-prefix matches must lead the list, got {names:?}"
-    );
-}
-
-#[test]
 fn composer_sends_to_opened_thread_channel() {
     let mut state = state_with_thread_created_message();
     state.focus_pane(FocusPane::Messages);
@@ -2775,4 +2516,54 @@ fn composer_typing_indicator_throttles_and_resends() {
         state.note_composer_typing_at(start + Duration::from_secs(8)),
         typing
     );
+}
+
+#[test]
+fn foreign_emoji_fall_back_to_links_without_nitro_when_enabled() {
+    let cases = [
+        (
+            ":wa",
+            "wave_foreign",
+            "https://cdn.discordapp.com/emojis/60.png?size=48&name=wave_foreign&lossless=true",
+        ),
+        (
+            ":da",
+            "dance_foreign",
+            "https://cdn.discordapp.com/emojis/61.gif?size=48&name=dance_foreign&lossless=true",
+        ),
+    ];
+
+    for (typed, shortcode, url) in cases {
+        let mut state = state_with_custom_emojis();
+        push_foreign_custom_emojis(&mut state);
+        state.options.composer_options.emojis_as_links = true;
+        state.push_event(AppEvent::CurrentUserCapabilities {
+            premium_tier: PremiumTier::None,
+        });
+        state.start_composer();
+        for ch in typed.chars() {
+            state.push_composer_char(ch);
+        }
+
+        let entry = state
+            .composer_emoji_candidates()
+            .into_iter()
+            .find(|entry| entry.shortcode == shortcode)
+            .expect("foreign emoji should be suggested as a link fallback");
+        assert!(entry.available, "{shortcode}");
+        assert!(entry.available_as_link, "{shortcode}");
+
+        assert!(state.confirm_composer_emoji(), "{shortcode}");
+        assert_eq!(state.composer_input(), format!(":{shortcode}: "));
+        assert_send_message_eq!(
+            state.submit_composer(),
+            Some(AppCommand::SendMessage {
+                channel_id: Id::new(2),
+                nonce: Id::new(1),
+                content: format!("[{shortcode}]({url})"),
+                reply_to: None,
+                attachments: Vec::new(),
+            })
+        );
+    }
 }

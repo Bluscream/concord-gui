@@ -140,19 +140,6 @@ impl DashboardState {
         )
     }
 
-    #[cfg(test)]
-    pub fn new_with_notification_options(notification_options: NotificationOptions) -> Self {
-        Self::new_with_options(
-            DisplayOptions::default(),
-            ComposerOptions::default(),
-            CredentialOptions::default(),
-            notification_options,
-            VoiceOptions::default(),
-            KeymapOptions::default(),
-            UiStateOptions::default(),
-        )
-    }
-
     pub fn notification_options(&self) -> NotificationOptions {
         self.options.notification_options.clone()
     }

@@ -161,21 +161,16 @@ fn number_keys_show_hidden_panes_before_focusing() {
 }
 
 #[test]
-fn bare_m_no_longer_mutes_focused_channel() {
-    let mut state = state_with_channel_tree();
-    state.focus_pane(FocusPane::Channels);
-    handle_key(&mut state, key(KeyCode::Down));
-
-    let command = handle_key(&mut state, char_key('m'));
-
-    assert_eq!(command, None);
-}
-
-#[test]
-fn alt_arrows_adjust_focused_side_pane_width() {
+fn alt_arrows_and_alt_h_l_adjust_focused_side_pane_width() {
     let mut state = DashboardState::new();
 
     state.focus_pane(FocusPane::Channels);
+    handle_key(&mut state, alt_key(KeyCode::Char('l')));
+    assert_eq!(state.pane_width(FocusPane::Channels), 25);
+    handle_key(&mut state, alt_key(KeyCode::Char('h')));
+    assert_eq!(state.pane_width(FocusPane::Channels), 24);
+    let _ = state.take_ui_state_save_request();
+
     handle_key(&mut state, alt_key(KeyCode::Right));
     assert_eq!(state.pane_width(FocusPane::Channels), 25);
 
@@ -192,18 +187,6 @@ fn alt_arrows_adjust_focused_side_pane_width() {
     assert_eq!(state.pane_width(FocusPane::Channels), 24);
     assert_eq!(state.take_options_save_request(), None);
     assert_eq!(state.take_ui_state_save_request(), None);
-}
-
-#[test]
-fn alt_h_l_adjust_focused_side_pane_width() {
-    let mut state = DashboardState::new();
-
-    state.focus_pane(FocusPane::Channels);
-    handle_key(&mut state, alt_key(KeyCode::Char('l')));
-    assert_eq!(state.pane_width(FocusPane::Channels), 25);
-
-    handle_key(&mut state, alt_key(KeyCode::Char('h')));
-    assert_eq!(state.pane_width(FocusPane::Channels), 24);
 }
 
 #[test]

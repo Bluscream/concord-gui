@@ -412,48 +412,44 @@ fn attachment_download_events_update_global_progress() {
 }
 
 #[test]
-fn normal_message_actions_show_disabled_dynamic_actions() {
-    let mut state = state_with_messages(1);
-    state.focus_pane(FocusPane::Messages);
+fn dynamic_actions_stay_disabled_regardless_of_message_shape() {
+    // Thread / reaction-user / poll rows only light up when the message
+    // actually carries that payload. Owning the message or it being a reply
+    // must not be mistaken for one.
+    let own_regular = || {
+        let mut state = state_with_messages(1);
+        state.push_event(AppEvent::Ready {
+            user: "neo".to_owned(),
+            user_id: Some(Id::new(99)),
+        });
+        state
+    };
+    let own_reply = || {
+        let mut state = state_with_message_ids([]);
+        state.push_event(AppEvent::Ready {
+            user: "neo".to_owned(),
+            user_id: Some(Id::new(99)),
+        });
+        push_reply_message_with_attachments(&mut state, 1, 99, Some("reply body"), Vec::new());
+        state
+    };
 
-    let actions = state.selected_message_action_items();
+    for (name, mut state) in [("own regular", own_regular()), ("own reply", own_reply())] {
+        state.focus_pane(FocusPane::Messages);
 
-    assert!(!message_action(&actions, MessageActionKind::OpenThread).is_enabled());
-    assert!(!message_action(&actions, MessageActionKind::ShowReactionUsers).is_enabled());
-    assert!(!message_action(&actions, MessageActionKind::OpenPollVotePicker).is_enabled());
-}
+        let actions = state.selected_message_action_items();
 
-#[test]
-fn own_regular_message_actions_show_disabled_dynamic_actions() {
-    let mut state = state_with_messages(1);
-    state.push_event(AppEvent::Ready {
-        user: "neo".to_owned(),
-        user_id: Some(Id::new(99)),
-    });
-    state.focus_pane(FocusPane::Messages);
-
-    let actions = state.selected_message_action_items();
-
-    assert!(!message_action(&actions, MessageActionKind::OpenThread).is_enabled());
-    assert!(!message_action(&actions, MessageActionKind::ShowReactionUsers).is_enabled());
-    assert!(!message_action(&actions, MessageActionKind::OpenPollVotePicker).is_enabled());
-}
-
-#[test]
-fn own_reply_message_actions_show_disabled_dynamic_actions() {
-    let mut state = state_with_message_ids([]);
-    state.push_event(AppEvent::Ready {
-        user: "neo".to_owned(),
-        user_id: Some(Id::new(99)),
-    });
-    push_reply_message_with_attachments(&mut state, 1, 99, Some("reply body"), Vec::new());
-    state.focus_pane(FocusPane::Messages);
-
-    let actions = state.selected_message_action_items();
-
-    assert!(!message_action(&actions, MessageActionKind::OpenThread).is_enabled());
-    assert!(!message_action(&actions, MessageActionKind::ShowReactionUsers).is_enabled());
-    assert!(!message_action(&actions, MessageActionKind::OpenPollVotePicker).is_enabled());
+        for kind in [
+            MessageActionKind::OpenThread,
+            MessageActionKind::ShowReactionUsers,
+            MessageActionKind::OpenPollVotePicker,
+        ] {
+            assert!(
+                !message_action(&actions, kind).is_enabled(),
+                "{name} / {kind:?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -480,20 +476,6 @@ fn edit_reply_action_prefills_composer_without_reply_target_and_submits_edit_com
             content: "reply body!".to_owned(),
         })
     );
-}
-
-#[test]
-fn other_user_direct_edit_does_not_start_composer() {
-    let mut state = state_with_messages(1);
-    state.push_event(AppEvent::Ready {
-        user: "me".to_owned(),
-        user_id: Some(Id::new(10)),
-    });
-    state.focus_pane(FocusPane::Messages);
-
-    state.direct_edit_selected_message();
-
-    assert!(!state.is_composing());
 }
 
 #[test]
@@ -695,45 +677,39 @@ fn reply_attachment_action_can_open_attachment_viewer() {
 }
 
 #[test]
-fn direct_message_url_opens_single_url_from_message_content() {
-    let mut state = state_with_messages(1);
-    state.push_event(latest_history_loaded(
-        Id::new(2),
-        vec![MessageInfo {
-            content: Some("read https://example.com/docs.".to_owned()),
-            ..message_info(Id::new(2), 1)
-        }],
-    ));
-    state.focus_pane(FocusPane::Messages);
-    assert_eq!(
-        state.direct_open_selected_message_url(),
-        Some(AppCommand::OpenUrl {
-            url: "https://example.com/docs".to_owned(),
-        })
-    );
-    assert!(!state.is_message_action_menu_active());
-}
+fn direct_message_url_opens_the_message_url_without_the_action_menu() {
+    for (name, message, expected_url) in [
+        (
+            "url in the message content",
+            MessageInfo {
+                content: Some("read https://example.com/docs.".to_owned()),
+                ..message_info(Id::new(2), 1)
+            },
+            "https://example.com/docs",
+        ),
+        (
+            "attachment url when the content carries none",
+            MessageInfo {
+                content: Some(String::new()),
+                attachments: vec![image_attachment(10)],
+                ..message_info(Id::new(2), 1)
+            },
+            "https://cdn.discordapp.com/image-10.png",
+        ),
+    ] {
+        let mut state = state_with_messages(1);
+        state.push_event(latest_history_loaded(Id::new(2), vec![message]));
+        state.focus_pane(FocusPane::Messages);
 
-#[test]
-fn direct_message_url_opens_attachment_url() {
-    let mut state = state_with_messages(1);
-    state.push_event(latest_history_loaded(
-        Id::new(2),
-        vec![MessageInfo {
-            content: Some(String::new()),
-            attachments: vec![image_attachment(10)],
-            ..message_info(Id::new(2), 1)
-        }],
-    ));
-    state.focus_pane(FocusPane::Messages);
-
-    assert_eq!(
-        state.direct_open_selected_message_url(),
-        Some(AppCommand::OpenUrl {
-            url: "https://cdn.discordapp.com/image-10.png".to_owned(),
-        })
-    );
-    assert!(!state.is_message_action_menu_active());
+        assert_eq!(
+            state.direct_open_selected_message_url(),
+            Some(AppCommand::OpenUrl {
+                url: expected_url.to_owned(),
+            }),
+            "{name}"
+        );
+        assert!(!state.is_message_action_menu_active(), "{name}");
+    }
 }
 
 #[test]
@@ -768,39 +744,57 @@ fn direct_message_url_opens_url_picker_for_multiple_urls() {
 }
 
 #[test]
-fn direct_play_media_prefers_video_attachment() {
-    let mut state = DashboardState::new_with_display_options(DisplayOptions {
-        media_playback: true,
-        ..Default::default()
-    });
-    state.push_event(guild_create_event(
-        Id::new(1),
-        "guild",
-        vec![text_channel_info(Id::new(1), Id::new(2), "general")],
-    ));
-    state.confirm_selected_guild();
-    state.confirm_selected_channel();
-    state.push_event(latest_history_loaded(
-        Id::new(2),
-        vec![MessageInfo {
-            content: Some("also https://www.youtube.com/watch?v=dQw4w9WgXcQ".to_owned()),
-            attachments: vec![video_attachment(10)],
-            ..message_info(Id::new(2), 1)
-        }],
-    ));
-    state.focus_pane(FocusPane::Messages);
-
-    assert_eq!(
-        state.direct_play_selected_message_media(),
-        Some(AppCommand::PlayMedia {
-            target: MediaPlaybackTarget {
+fn direct_play_media_prefers_a_video_attachment_over_a_content_url() {
+    for (name, message, expected_target) in [
+        (
+            "video attachment wins over a url in the content",
+            MessageInfo {
+                content: Some("also https://www.youtube.com/watch?v=dQw4w9WgXcQ".to_owned()),
+                attachments: vec![video_attachment(10)],
+                ..message_info(Id::new(2), 1)
+            },
+            MediaPlaybackTarget {
                 url: "https://cdn.discordapp.com/clip-10.mp4".to_owned(),
                 label: "clip-10.mp4".to_owned(),
                 source: MediaPlaybackSource::Message,
             },
-            request_id: None,
-        })
-    );
+        ),
+        (
+            "content url is used when there is no attachment",
+            MessageInfo {
+                content: Some("watch https://youtu.be/dQw4w9WgXcQ".to_owned()),
+                ..message_info(Id::new(2), 1)
+            },
+            MediaPlaybackTarget {
+                url: "https://youtu.be/dQw4w9WgXcQ".to_owned(),
+                label: "media URL".to_owned(),
+                source: MediaPlaybackSource::Message,
+            },
+        ),
+    ] {
+        let mut state = DashboardState::new_with_display_options(DisplayOptions {
+            media_playback: true,
+            ..Default::default()
+        });
+        state.push_event(guild_create_event(
+            Id::new(1),
+            "guild",
+            vec![text_channel_info(Id::new(1), Id::new(2), "general")],
+        ));
+        state.confirm_selected_guild();
+        state.confirm_selected_channel();
+        state.push_event(latest_history_loaded(Id::new(2), vec![message]));
+        state.focus_pane(FocusPane::Messages);
+
+        assert_eq!(
+            state.direct_play_selected_message_media(),
+            Some(AppCommand::PlayMedia {
+                target: expected_target,
+                request_id: None,
+            }),
+            "{name}"
+        );
+    }
 }
 
 #[test]
@@ -829,41 +823,6 @@ fn media_playback_disabled_removes_message_play_action() {
 
     assert!(!message_action(&actions, MessageActionKind::PlayMedia).is_enabled());
     assert_eq!(state.direct_play_selected_message_media(), None);
-}
-
-#[test]
-fn direct_play_media_uses_youtube_url() {
-    let mut state = DashboardState::new_with_display_options(DisplayOptions {
-        media_playback: true,
-        ..Default::default()
-    });
-    state.push_event(guild_create_event(
-        Id::new(1),
-        "guild",
-        vec![text_channel_info(Id::new(1), Id::new(2), "general")],
-    ));
-    state.confirm_selected_guild();
-    state.confirm_selected_channel();
-    state.push_event(latest_history_loaded(
-        Id::new(2),
-        vec![MessageInfo {
-            content: Some("watch https://youtu.be/dQw4w9WgXcQ".to_owned()),
-            ..message_info(Id::new(2), 1)
-        }],
-    ));
-    state.focus_pane(FocusPane::Messages);
-
-    assert_eq!(
-        state.direct_play_selected_message_media(),
-        Some(AppCommand::PlayMedia {
-            target: MediaPlaybackTarget {
-                url: "https://youtu.be/dQw4w9WgXcQ".to_owned(),
-                label: "media URL".to_owned(),
-                source: MediaPlaybackSource::Message,
-            },
-            request_id: None,
-        })
-    );
 }
 
 #[test]

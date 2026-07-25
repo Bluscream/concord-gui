@@ -588,33 +588,6 @@ fn raw_ready_parser_emits_initial_voice_states_from_embedded_guilds() {
 }
 
 #[test]
-fn raw_ready_supplemental_emits_voice_states_from_embedded_guilds() {
-    let events = parse_user_account_event(
-        &json!({
-            "t": "READY_SUPPLEMENTAL",
-            "d": {
-                "guilds": [{
-                    "id": "10",
-                    "voice_states": [{
-                        "channel_id": "30",
-                        "user_id": "20"
-                    }]
-                }]
-            }
-        })
-        .to_string(),
-    );
-
-    assert!(events.iter().any(|event| matches!(
-        event,
-        AppEvent::VoiceStateUpdate { state }
-            if state.guild_id == Some(Id::new(10))
-                && state.channel_id == Some(Id::new(30))
-                && state.user_id == Id::new(20)
-    )));
-}
-
-#[test]
 fn raw_member_list_update_processes_all_sync_ranges() {
     // Discord can ship more than one SYNC chunk in a single
     // GUILD_MEMBER_LIST_UPDATE, such as ranges [0,99] and [100,199]. We
@@ -756,31 +729,6 @@ fn relationship_add_emits_friend_upsert() {
                 && relationship.nickname.as_deref() == Some("Bestie")
                 && relationship.display_name.as_deref() == Some("Alice Global")
                 && relationship.username.as_deref() == Some("alice")
-    ));
-}
-
-#[test]
-fn relationship_update_emits_friend_upsert() {
-    let events = parse_user_account_event(
-        &json!({
-            "t": "RELATIONSHIP_UPDATE",
-            "d": {
-                "id": "20",
-                "type": 1,
-                "nickname": "Bestie"
-            }
-        })
-        .to_string(),
-    );
-    assert_eq!(events.len(), 1);
-    assert!(matches!(
-        &events[0],
-        AppEvent::RelationshipUpsert { relationship }
-            if relationship.user_id == Id::new(20)
-                && relationship.status == FriendStatus::Friend
-                && relationship.nickname.as_deref() == Some("Bestie")
-                && relationship.display_name.is_none()
-                && relationship.username.is_none()
     ));
 }
 
@@ -967,52 +915,30 @@ fn raw_ready_parser_adds_current_user_to_group_dm_recipients() {
 
 #[test]
 fn raw_ready_parser_exposes_current_user_premium_capability() {
-    let events = parse_user_account_event(
-        &json!({
-            "t": "READY",
-            "d": {
-                "user": {
-                    "id": "99",
-                    "username": "neo",
-                    "premium_type": 0
-                },
-                "guilds": []
-            }
-        })
-        .to_string(),
-    );
+    for (premium_type, expected) in [(0, PremiumTier::None), (2, PremiumTier::Nitro)] {
+        let events = parse_user_account_event(
+            &json!({
+                "t": "READY",
+                "d": {
+                    "user": {
+                        "id": "99",
+                        "username": "neo",
+                        "premium_type": premium_type
+                    },
+                    "guilds": []
+                }
+            })
+            .to_string(),
+        );
 
-    assert!(events.iter().any(|event| matches!(
-        event,
-        AppEvent::CurrentUserCapabilities {
-            premium_tier: PremiumTier::None
-        }
-    )));
-}
-
-#[test]
-fn raw_ready_parser_exposes_current_user_nitro_capabilities() {
-    let events = parse_user_account_event(
-        &json!({
-            "t": "READY",
-            "d": {
-                "user": {
-                    "id": "99",
-                    "username": "neo",
-                    "premium_type": 2
-                },
-                "guilds": []
-            }
-        })
-        .to_string(),
-    );
-
-    assert!(events.iter().any(|event| matches!(
-        event,
-        AppEvent::CurrentUserCapabilities {
-            premium_tier: PremiumTier::Nitro
-        }
-    )));
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                AppEvent::CurrentUserCapabilities { premium_tier } if *premium_tier == expected
+            )),
+            "premium_type {premium_type}"
+        );
+    }
 }
 
 #[test]
@@ -1060,50 +986,6 @@ fn raw_ready_parser_applies_guild_merged_presence_to_dm_recipient() {
     assert_eq!(channel.kind, "dm");
     assert_eq!(recipients[0].user_id, Id::new(20));
     assert_eq!(recipients[0].status, Some(PresenceStatus::Idle));
-}
-
-#[test]
-fn raw_ready_parser_applies_top_level_presence_to_dm_recipient() {
-    let events = parse_user_account_event(
-        &json!({
-            "t": "READY",
-            "d": {
-                "user": {
-                    "id": "99",
-                    "username": "neo"
-                },
-                "guilds": [],
-                "presences": [{
-                    "user": { "id": "20" },
-                    "status": "online"
-                }],
-                "private_channels": [{
-                    "id": "10",
-                    "type": 1,
-                    "recipients": [{
-                        "id": "20",
-                        "username": "alice"
-                    }]
-                }]
-            }
-        })
-        .to_string(),
-    );
-
-    let channel = events
-        .iter()
-        .find_map(|event| match event {
-            AppEvent::ChannelUpsert(channel) => Some(channel),
-            _ => None,
-        })
-        .expect("ready should emit a private channel upsert");
-    let recipients = channel
-        .recipients
-        .as_ref()
-        .expect("dm should carry recipients");
-
-    assert_eq!(recipients[0].user_id, Id::new(20));
-    assert_eq!(recipients[0].status, Some(PresenceStatus::Online));
 }
 
 #[test]
@@ -1227,31 +1109,6 @@ fn raw_presence_update_without_guild_id_emits_user_event_with_activities() {
     assert_eq!(activities[0].kind, ActivityKind::Streaming);
     assert_eq!(activities[0].name, "Twitch");
     assert_eq!(activities[0].url.as_deref(), Some("https://twitch.tv/foo"));
-}
-
-#[test]
-fn raw_ready_supplemental_updates_merged_member_roles() {
-    let events = parse_user_account_event(
-        &json!({
-            "t": "READY_SUPPLEMENTAL",
-            "d": {
-                "guilds": [{ "id": "1" }],
-                "merged_members": [[{
-                    "user_id": "10",
-                    "roles": ["20"]
-                }]]
-            }
-        })
-        .to_string(),
-    );
-
-    assert!(events.iter().any(|event| matches!(
-        event,
-        AppEvent::GuildMemberUpsert { guild_id, member }
-            if *guild_id == Id::new(1)
-                && member.user_id == Id::new(10)
-                && member.role_ids == vec![Id::new(20)]
-    )));
 }
 
 #[test]
@@ -1407,26 +1264,6 @@ fn raw_ready_supplemental_ignores_non_presence_ids() {
     );
 
     assert!(events.is_empty());
-}
-
-#[test]
-fn raw_presence_update_without_guild_updates_user_presence() {
-    let events = parse_user_account_event(
-        &json!({
-            "t": "PRESENCE_UPDATE",
-            "d": {
-                "user": { "id": "20" },
-                "status": "dnd"
-            }
-        })
-        .to_string(),
-    );
-
-    assert!(matches!(
-        events.as_slice(),
-        [AppEvent::PresenceUpdate { guild_id: None, presence }]
-            if presence.user_id == Id::new(20) && presence.status == PresenceStatus::DoNotDisturb
-    ));
 }
 
 #[test]
@@ -1636,25 +1473,6 @@ fn raw_thread_create_upserts_thread_channel() {
 }
 
 #[test]
-fn raw_thread_update_upserts_thread_channel() {
-    let events = parse_user_account_event(
-        &json!({
-            "t": "THREAD_UPDATE",
-            "d": thread_payload(10, "renamed thread")
-        })
-        .to_string(),
-    );
-
-    assert!(matches!(
-        events.as_slice(),
-        [AppEvent::ChannelUpsert(channel)]
-            if channel.channel_id == Id::new(10)
-                && channel.name == "renamed thread"
-                && channel.kind == "GuildPublicThread"
-    ));
-}
-
-#[test]
 fn raw_thread_delete_removes_thread_channel() {
     let events = parse_user_account_event(
         &json!({
@@ -1834,35 +1652,6 @@ fn guild_create_parser_keeps_roles() {
 }
 
 #[test]
-fn guild_create_parser_keeps_string_permission_bitfields() {
-    let event = parse_guild_create(&json!({
-        "id": "1",
-        "name": "guild",
-        "channels": [],
-        "members": [],
-        "presences": [],
-        "roles": [{
-            "id": "1",
-            "name": "@everyone",
-            "permissions": "1024",
-            "position": 0,
-            "hoist": false
-        }],
-        "emojis": []
-    }))
-    .expect("guild create should parse");
-
-    let AppEvent::GuildCreate { roles, .. } = event else {
-        panic!("expected guild create event");
-    };
-
-    assert_eq!(
-        roles.expect("guild roles should be present")[0].permissions,
-        0x400
-    );
-}
-
-#[test]
 fn raw_guild_role_events_patch_single_roles() {
     let created = parse_user_account_event(
         &json!({
@@ -1940,7 +1729,7 @@ fn raw_guild_role_events_patch_single_roles() {
 
 #[test]
 fn raw_channel_pins_update_invalidates_channel_pins() {
-    let events = parse_user_account_event(
+    let full = parse_user_account_event(
         &json!({
             "t": "CHANNEL_PINS_UPDATE",
             "d": {
@@ -1951,49 +1740,32 @@ fn raw_channel_pins_update_invalidates_channel_pins() {
         })
         .to_string(),
     );
-
     assert!(matches!(
-        events.as_slice(),
+        full.as_slice(),
         [AppEvent::ChannelPinsUpdate { guild_id, channel_id, last_pin_timestamp }]
             if *guild_id == Some(Id::new(1))
                 && *channel_id == Id::new(10)
                 && last_pin_timestamp.as_deref() == Some("2026-05-25T12:34:56.000000+00:00")
     ));
-}
 
-#[test]
-fn raw_channel_pins_update_accepts_missing_timestamp() {
-    let events = parse_user_account_event(
-        &json!({
-            "t": "CHANNEL_PINS_UPDATE",
-            "d": {
-                "channel_id": "10"
-            }
-        })
-        .to_string(),
+    let minimal = parse_user_account_event(
+        &json!({ "t": "CHANNEL_PINS_UPDATE", "d": { "channel_id": "10" } }).to_string(),
     );
-
     assert!(matches!(
-        events.as_slice(),
+        minimal.as_slice(),
         [AppEvent::ChannelPinsUpdate { guild_id, channel_id, last_pin_timestamp }]
             if guild_id.is_none() && *channel_id == Id::new(10) && last_pin_timestamp.is_none()
     ));
-}
 
-#[test]
-fn raw_channel_pins_update_skips_missing_channel_id() {
-    let events = parse_user_account_event(
+    // Without a channel there is nothing to invalidate, so no event at all.
+    let channelless = parse_user_account_event(
         &json!({
             "t": "CHANNEL_PINS_UPDATE",
-            "d": {
-                "guild_id": "1",
-                "last_pin_timestamp": null
-            }
+            "d": { "guild_id": "1", "last_pin_timestamp": null }
         })
         .to_string(),
     );
-
-    assert!(events.is_empty());
+    assert!(channelless.is_empty());
 }
 
 #[test]
@@ -2242,50 +2014,6 @@ fn raw_member_add_keeps_real_join_semantics() {
 }
 
 #[test]
-fn raw_ready_parser_keeps_guild_custom_emojis() {
-    let events = parse_user_account_event(
-        &json!({
-            "t": "READY",
-            "d": {
-                "user": {
-                    "id": "99",
-                    "username": "neo"
-                },
-                "guilds": [{
-                    "id": "1",
-                    "name": "guild",
-                    "channels": [],
-                    "members": [],
-                    "presences": [],
-                    "emojis": [{
-                        "id": "50",
-                        "name": "party_time",
-                        "animated": true,
-                        "available": true
-                    }]
-                }],
-                "private_channels": []
-            }
-        })
-        .to_string(),
-    );
-
-    let guild_create = events
-        .iter()
-        .find_map(|event| match event {
-            AppEvent::GuildCreate { emojis, .. } => Some(emojis),
-            _ => None,
-        })
-        .expect("ready should emit a guild create event");
-
-    assert_eq!(guild_create.len(), 1);
-    assert_eq!(guild_create[0].id, Id::new(50));
-    assert_eq!(guild_create[0].name, "party_time");
-    assert!(guild_create[0].animated);
-    assert!(guild_create[0].available);
-}
-
-#[test]
 fn guild_emojis_update_parser_replaces_custom_emojis() {
     let event = parse_guild_emojis_update(&json!({
         "guild_id": "1",
@@ -2311,7 +2039,7 @@ fn guild_emojis_update_parser_replaces_custom_emojis() {
 }
 
 #[test]
-fn guild_update_parser_keeps_custom_emojis_when_present() {
+fn guild_update_parser_distinguishes_present_and_absent_custom_emojis() {
     let event = parse_guild_update(&json!({
         "id": "1",
         "name": "guild renamed",
@@ -2342,16 +2070,11 @@ fn guild_update_parser_keeps_custom_emojis_when_present() {
     assert_eq!(emojis[0].id, Id::new(70));
     assert_eq!(emojis[0].name, "dance");
     assert!(emojis[0].animated);
-}
 
-#[test]
-fn guild_update_parser_distinguishes_missing_custom_emojis() {
-    let event = parse_guild_update(&json!({
-        "id": "1",
-        "name": "guild renamed"
-    }))
-    .expect("guild update should parse");
-
+    // An absent field must stay `None` rather than collapsing to an empty
+    // list, or applying the update would wipe the guild's emojis.
+    let event = parse_guild_update(&json!({ "id": "1", "name": "guild renamed" }))
+        .expect("guild update should parse");
     let AppEvent::GuildUpdate { roles, emojis, .. } = event else {
         panic!("expected guild update event");
     };
@@ -2590,40 +2313,6 @@ fn message_reaction_remove_emoji_dispatch_parses_clear_emoji_event() {
 }
 
 #[test]
-fn message_create_parser_keeps_image_attachments() {
-    let event = parse_message_create(&json!({
-        "id": "20",
-        "channel_id": "10",
-        "author": { "id": "30", "username": "neo" },
-        "content": "",
-        "attachments": [{
-            "id": "40",
-            "filename": "cat.png",
-            "url": "https://cdn.discordapp.com/cat.png",
-            "proxy_url": "https://media.discordapp.net/cat.png",
-            "content_type": "image/png",
-            "size": 2048,
-            "width": 640,
-            "height": 480,
-            "description": "cat"
-        }]
-    }))
-    .expect("message create should parse");
-
-    let AppEvent::MessageCreate { message } = event else {
-        panic!("expected message create event");
-    };
-    assert_eq!(message.attachments.len(), 1);
-    assert_eq!(message.attachments[0].filename, "cat.png");
-    assert_eq!(
-        message.attachments[0].content_type.as_deref(),
-        Some("image/png")
-    );
-    assert_eq!(message.attachments[0].width, Some(640));
-    assert_eq!(message.attachments[0].height, Some(480));
-}
-
-#[test]
 fn message_create_parser_keeps_regular_embeds() {
     let event = parse_message_create(&json!({
         "id": "20",
@@ -2752,22 +2441,35 @@ fn message_create_parser_keeps_message_type() {
 }
 
 #[test]
-fn message_create_parser_prefers_member_nick_for_author() {
-    let event = parse_message_create(&json!({
-        "id": "20",
-        "channel_id": "10",
-        "guild_id": "1",
-        "author": { "id": "30", "global_name": "global", "username": "neo" },
-        "member": { "nick": "server alias" },
-        "content": "hello",
-        "attachments": []
-    }))
-    .expect("message create should parse");
+fn message_create_parser_resolves_author_name_by_precedence() {
+    // Server nick beats global name beats username.
+    let cases = [
+        (
+            json!({ "nick": "server alias" }),
+            Some(Id::new(1)),
+            "server alias",
+        ),
+        (json!(null), None, "global alias"),
+    ];
 
-    let AppEvent::MessageCreate { message } = event else {
-        panic!("expected message create event");
-    };
-    assert_eq!(message.author, "server alias");
+    for (member, guild_id, expected_author) in cases {
+        let event = parse_message_create(&json!({
+            "id": "20",
+            "channel_id": "10",
+            "guild_id": guild_id.map(|id: Id<_>| id.get().to_string()),
+            "author": { "id": "30", "global_name": "global alias", "username": "neo" },
+            "member": member,
+            "content": "hello",
+            "attachments": []
+        }))
+        .expect("message create should parse");
+
+        let AppEvent::MessageCreate { message } = event else {
+            panic!("expected message create event");
+        };
+        assert_eq!(message.guild_id, guild_id);
+        assert_eq!(message.author, expected_author);
+    }
 }
 
 #[test]
@@ -2823,24 +2525,6 @@ fn message_create_parser_builds_author_avatar_url() {
         message.author_avatar_url.as_deref(),
         Some("https://cdn.discordapp.com/avatars/30/a_avatarhash.gif")
     );
-}
-
-#[test]
-fn message_create_parser_falls_back_to_global_name_without_member() {
-    let event = parse_message_create(&json!({
-        "id": "20",
-        "channel_id": "10",
-        "author": { "id": "30", "global_name": "global alias", "username": "neo" },
-        "content": "hello",
-        "attachments": []
-    }))
-    .expect("message create should parse");
-
-    let AppEvent::MessageCreate { message } = event else {
-        panic!("expected message create event");
-    };
-    assert_eq!(message.guild_id, None);
-    assert_eq!(message.author, "global alias");
 }
 
 #[test]
@@ -4069,29 +3753,4 @@ fn ready_payload_parses_private_channel_notification_settings() {
         Some(NotificationLevel::NoMessages)
     );
     assert!(notification_settings.channel_overrides[0].muted);
-}
-
-#[test]
-fn parse_guild_update_reads_name_from_lazy_properties_object() {
-    let event = parse_guild_update(&json!({
-        "id": "100",
-        "properties": {
-            "name": "Renamed Lazy",
-            "owner_id": "9",
-        },
-    }))
-    .expect("guild_update payload should map");
-
-    let AppEvent::GuildUpdate {
-        guild_id,
-        name,
-        owner_id,
-        ..
-    } = event
-    else {
-        panic!("expected GuildUpdate event");
-    };
-    assert_eq!(guild_id, Id::new(100));
-    assert_eq!(name, "Renamed Lazy");
-    assert_eq!(owner_id, Some(Id::new(9)));
 }

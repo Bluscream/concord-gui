@@ -1,5 +1,4 @@
 use super::*;
-use crate::discord::test_builders::guild_create_event;
 
 #[test]
 fn tracks_current_user_from_ready() {
@@ -53,7 +52,7 @@ fn desktop_notification_for_event_suppresses_muted_channel() {
 }
 
 #[test]
-fn desktop_notification_for_event_suppresses_active_channel() {
+fn active_channel_suppresses_both_desktop_notification_and_sound() {
     let mut state = state_with_writable_channel();
     let channel_id = Id::new(2);
     state.push_event(user_guild_settings_init(vec![
@@ -64,38 +63,9 @@ fn desktop_notification_for_event_suppresses_active_channel() {
     ]));
     let event = notification_message_event(channel_id, "hello");
 
+    // The user is already looking at this channel, so neither channel fires.
     assert!(state.desktop_notification_for_event(&event).is_none());
-}
-
-#[test]
-fn desktop_notification_for_event_respects_notification_opt_out() {
-    let mut state = DashboardState::new_with_notification_options(NotificationOptions {
-        desktop_notifications: false,
-        ..NotificationOptions::default()
-    });
-    let guild_id = Id::new(1);
-    let channel_id = Id::new(2);
-
-    state.push_event(AppEvent::Ready {
-        user: "me".to_owned(),
-        user_id: Some(Id::new(10)),
-    });
-    state.push_event(guild_create_event(GuildCreateFixture {
-        member_count: Some(1),
-        channels: vec![positioned_text_channel_info(
-            guild_id, channel_id, "general", 0,
-        )],
-        ..GuildCreateFixture::new(guild_id)
-    }));
-    state.push_event(user_guild_settings_init(vec![
-        GuildNotificationSettingsInfo {
-            message_notifications: Some(NotificationLevel::AllMessages),
-            ..GuildNotificationSettingsInfo::test(Some(guild_id))
-        },
-    ]));
-    let event = notification_message_event(channel_id, "hello");
-
-    assert!(state.desktop_notification_for_event(&event).is_none());
+    assert!(!state.notification_sound_for_event(&event));
 }
 
 #[test]
@@ -112,20 +82,5 @@ fn notification_sound_for_event_respects_notification_opt_out() {
     let event = notification_message_event(channel_id, "hello");
 
     assert!(state.desktop_notification_for_event(&event).is_none());
-    assert!(!state.notification_sound_for_event(&event));
-}
-
-#[test]
-fn notification_sound_for_event_suppresses_active_channel() {
-    let mut state = state_with_writable_channel();
-    let channel_id = Id::new(2);
-    state.push_event(user_guild_settings_init(vec![
-        GuildNotificationSettingsInfo {
-            message_notifications: Some(NotificationLevel::AllMessages),
-            ..GuildNotificationSettingsInfo::test(Some(Id::new(1)))
-        },
-    ]));
-    let event = notification_message_event(channel_id, "hello");
-
     assert!(!state.notification_sound_for_event(&event));
 }

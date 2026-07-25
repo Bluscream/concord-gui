@@ -864,11 +864,6 @@ pub(crate) mod test_builders {
             self.content = Some(content.into());
             self
         }
-
-        pub(crate) fn without_content(mut self) -> Self {
-            self.content = None;
-            self
-        }
     }
 
     pub(crate) fn guild_message_create_fixture() -> MessageCreateFixture {

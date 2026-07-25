@@ -152,35 +152,59 @@ fn selected_message_avatar_stays_in_fixed_gutter() {
     assert_eq!(selected_avatar_x_offset(Some(1), 0), 2);
 }
 
+// The three rects are only readable next to each other. An embed accent bar
+// pushes x from 18 to 22, and a negative row offset clips height instead of
+// moving the preview above the list.
 #[test]
-fn inline_image_preview_slot_follows_image_message_content() {
-    let area = Rect::new(10, 5, 80, 12);
-
-    assert_eq!(
-        inline_image_preview_area(area, 2, 0, 77, 4, None, MESSAGE_AVATAR_OFFSET),
-        Some(Rect::new(18, 8, 72, 4))
-    );
-}
-
-#[test]
-fn embed_image_preview_area_leaves_room_for_gutter() {
-    let area = Rect::new(10, 5, 80, 12);
-
-    assert_eq!(
-        inline_image_preview_area(area, 2, 0, 77, 4, Some(0xff0000), MESSAGE_AVATAR_OFFSET),
-        Some(Rect::new(22, 8, 68, 4))
-    );
-}
-
-#[test]
-fn selected_inline_image_preview_area_keeps_fixed_content_column() {
-    let area = Rect::new(10, 5, 80, 12);
-    let selected_offset = selected_message_content_x_offset(true);
-
-    assert_eq!(
-        inline_image_preview_area(area, 2, selected_offset, 77, 4, None, MESSAGE_AVATAR_OFFSET),
-        Some(Rect::new(18, 8, 72, 4))
-    );
+fn inline_image_preview_area_places_the_preview_in_the_content_column() {
+    for (name, area, row_offset, x_offset, accent, expected) in [
+        (
+            "plain preview under a message",
+            Rect::new(10, 5, 80, 12),
+            2,
+            0,
+            None,
+            Rect::new(18, 8, 72, 4),
+        ),
+        (
+            "embed accent bar leaves room for the gutter",
+            Rect::new(10, 5, 80, 12),
+            2,
+            0,
+            Some(0xff0000),
+            Rect::new(22, 8, 68, 4),
+        ),
+        (
+            "selected row keeps the same content column",
+            Rect::new(10, 5, 80, 12),
+            2,
+            selected_message_content_x_offset(true),
+            None,
+            Rect::new(18, 8, 72, 4),
+        ),
+        (
+            "negative offset clips at the list top",
+            Rect::new(10, 5, 80, 6),
+            -2,
+            0,
+            None,
+            Rect::new(18, 5, 72, 3),
+        ),
+    ] {
+        assert_eq!(
+            inline_image_preview_area(
+                area,
+                row_offset,
+                x_offset,
+                77,
+                4,
+                accent,
+                MESSAGE_AVATAR_OFFSET
+            ),
+            Some(expected),
+            "{name}"
+        );
+    }
 }
 
 #[test]
@@ -217,27 +241,7 @@ fn inline_image_preview_row_ignores_reaction_footer_for_current_message() {
 }
 
 #[test]
-fn inline_image_preview_area_clips_preview_at_list_bottom() {
-    let area = Rect::new(10, 5, 80, 6);
-
-    assert_eq!(
-        inline_image_preview_area(area, 3, 0, 77, 4, None, MESSAGE_AVATAR_OFFSET),
-        Some(Rect::new(18, 9, 72, 2))
-    );
-}
-
-#[test]
-fn inline_image_preview_area_clips_preview_at_list_top() {
-    let area = Rect::new(10, 5, 80, 6);
-
-    assert_eq!(
-        inline_image_preview_area(area, -2, 0, 77, 4, None, MESSAGE_AVATAR_OFFSET),
-        Some(Rect::new(18, 5, 72, 3))
-    );
-}
-
-#[test]
-fn modal_overlay_registry_occludes_different_popup_kinds() {
+fn overlay_registry_occludes_modal_and_non_modal_popups() {
     let frame_area = Rect::new(0, 0, 120, 50);
     let mut options_state = DashboardState::new();
     options_state.open_options_popup();
@@ -245,24 +249,20 @@ fn modal_overlay_registry_occludes_different_popup_kinds() {
     keymap_state.open_keymap_help_popup();
     let mut search_state = state_with_message();
     search_state.open_search_popup_for_focus(FocusPane::Messages);
+    // Folder settings is a non-modal overlay and still has to occlude media.
+    let folder_settings_state = state_with_folder_settings();
 
-    for state in [&options_state, &keymap_state, &search_state] {
+    for state in [
+        &options_state,
+        &keymap_state,
+        &search_state,
+        &folder_settings_state,
+    ] {
         let areas = background_media_occlusion_areas(frame_area, state);
 
         assert_eq!(areas.len(), 1, "{areas:?}");
         assert!(!areas[0].is_empty(), "{areas:?}");
     }
-}
-
-#[test]
-fn non_modal_overlay_registry_occludes_folder_settings() {
-    let frame_area = Rect::new(0, 0, 120, 50);
-    let state = state_with_folder_settings();
-
-    let areas = background_media_occlusion_areas(frame_area, &state);
-
-    assert_eq!(areas.len(), 1, "{areas:?}");
-    assert!(!areas[0].is_empty(), "{areas:?}");
 }
 
 #[test]
@@ -289,5 +289,21 @@ fn loading_image_preview_at_message_offset(preview_y_offset_rows: usize) -> Imag
         state: ImagePreviewState::Loading {
             filename: "cat.png".to_owned(),
         },
+    }
+}
+
+#[test]
+fn inline_image_preview_area_follows_content_and_clips_at_the_list_bottom() {
+    let cases = [
+        (Rect::new(10, 5, 80, 12), 2, Rect::new(18, 8, 72, 4)),
+        (Rect::new(10, 5, 80, 6), 3, Rect::new(18, 9, 72, 2)),
+    ];
+
+    for (area, row, expected) in cases {
+        assert_eq!(
+            inline_image_preview_area(area, row, 0, 77, 4, None, MESSAGE_AVATAR_OFFSET),
+            Some(expected),
+            "{area:?} row {row}"
+        );
     }
 }

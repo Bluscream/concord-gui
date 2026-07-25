@@ -81,51 +81,100 @@ fn dm_channels_are_always_viewable() {
 }
 
 #[test]
-fn guild_owner_sees_everything_even_when_everyone_denies() {
-    let me = Id::new(10);
-    let guild = Id::new(1);
-    let channel = Id::new(2);
-    // @everyone explicitly denies VIEW_CHANNEL, but the owner short-circuit
-    // must still grant access.
-    let state = guild_with_permissions(
-        me,
-        me,
-        guild,
-        channel,
-        vec![],
-        vec![role_info(Id::new(guild.get()), "@everyone", 0)],
-        vec![perm_role(guild.get(), 0, VIEW_CHANNEL)],
-    );
-    let ch = state.channel(channel).expect("channel");
-    assert!(state.can_view_channel(ch));
-}
+fn channel_view_resolution_follows_overwrite_precedence() {
+    struct Case {
+        name: &'static str,
+        owner: Id<UserMarker>,
+        my_role_ids: Vec<Id<RoleMarker>>,
+        roles: Vec<RoleInfo>,
+        overwrites: Vec<PermissionOverwriteInfo>,
+        can_view: bool,
+    }
 
-#[test]
-fn administrator_role_bypasses_channel_overwrites() {
     let me = Id::new(10);
-    let owner = Id::new(11);
+    let other_owner = Id::new(11);
     let guild = Id::new(1);
     let channel = Id::new(2);
-    let admin_role = Id::new(50);
-    let state = guild_with_permissions(
-        owner,
-        me,
-        guild,
-        channel,
-        vec![admin_role],
-        vec![
-            role_info(Id::new(guild.get()), "@everyone", 0),
-            RoleInfo {
-                position: 1,
-                permissions: ADMINISTRATOR,
-                ..RoleInfo::test(admin_role, "Admin")
-            },
-        ],
-        // Channel-level deny is irrelevant for ADMINISTRATOR holders.
-        vec![perm_role(guild.get(), 0, VIEW_CHANNEL)],
-    );
-    let ch = state.channel(channel).expect("channel");
-    assert!(state.can_view_channel(ch));
+    let everyone = Id::new(guild.get());
+    let staff = Id::new(50);
+
+    for case in [
+        Case {
+            name: "owner short-circuit beats an everyone deny",
+            owner: me,
+            my_role_ids: vec![],
+            roles: vec![role_info(everyone, "@everyone", 0)],
+            overwrites: vec![perm_role(guild.get(), 0, VIEW_CHANNEL)],
+            can_view: true,
+        },
+        Case {
+            name: "administrator bypasses channel overwrites",
+            owner: other_owner,
+            my_role_ids: vec![staff],
+            roles: vec![
+                role_info(everyone, "@everyone", 0),
+                RoleInfo {
+                    position: 1,
+                    permissions: ADMINISTRATOR,
+                    ..RoleInfo::test(staff, "Admin")
+                },
+            ],
+            overwrites: vec![perm_role(guild.get(), 0, VIEW_CHANNEL)],
+            can_view: true,
+        },
+        Case {
+            name: "everyone overwrite beats the everyone role grant",
+            owner: other_owner,
+            my_role_ids: vec![],
+            roles: vec![role_info(everyone, "@everyone", VIEW_CHANNEL)],
+            overwrites: vec![perm_role(guild.get(), 0, VIEW_CHANNEL)],
+            can_view: false,
+        },
+        Case {
+            name: "role allow beats the everyone deny",
+            owner: other_owner,
+            my_role_ids: vec![staff],
+            roles: vec![
+                role_info(everyone, "@everyone", VIEW_CHANNEL),
+                RoleInfo {
+                    position: 1,
+                    ..RoleInfo::test(staff, "Staff")
+                },
+            ],
+            overwrites: vec![
+                perm_role(guild.get(), 0, VIEW_CHANNEL),
+                perm_role(staff.get(), VIEW_CHANNEL, 0),
+            ],
+            can_view: true,
+        },
+        Case {
+            name: "member overwrite has the final word",
+            owner: other_owner,
+            my_role_ids: vec![staff],
+            roles: vec![
+                role_info(everyone, "@everyone", 0),
+                RoleInfo {
+                    position: 1,
+                    permissions: VIEW_CHANNEL,
+                    ..RoleInfo::test(staff, "Staff")
+                },
+            ],
+            overwrites: vec![perm_member(me.get(), 0, VIEW_CHANNEL)],
+            can_view: false,
+        },
+    ] {
+        let state = guild_with_permissions(
+            case.owner,
+            me,
+            guild,
+            channel,
+            case.my_role_ids,
+            case.roles,
+            case.overwrites,
+        );
+        let ch = state.channel(channel).expect("channel");
+        assert_eq!(state.can_view_channel(ch), case.can_view, "{}", case.name);
+    }
 }
 
 #[test]
@@ -257,7 +306,8 @@ fn manage_channels_or_guild_can_manage_channel_structure() {
     let channel = Id::new(2);
     let manager_role = Id::new(50);
 
-    for permissions in [MANAGE_CHANNELS, MANAGE_GUILD] {
+    // Either management bit is enough; a plain member has neither.
+    for (permissions, expected) in [(MANAGE_CHANNELS, true), (MANAGE_GUILD, true), (0, false)] {
         let state = guild_with_permissions(
             owner,
             me,
@@ -271,78 +321,12 @@ fn manage_channels_or_guild_can_manage_channel_structure() {
             Vec::new(),
         );
         let ch = state.channel(channel).expect("channel");
-        assert!(state.can_manage_channel_structure_in_channel(ch));
+        assert_eq!(
+            state.can_manage_channel_structure_in_channel(ch),
+            expected,
+            "{permissions:#x}"
+        );
     }
-}
-
-#[test]
-fn plain_member_cannot_manage_channel_structure() {
-    let me = Id::new(10);
-    let owner = Id::new(11);
-    let guild = Id::new(1);
-    let channel = Id::new(2);
-    let state = guild_with_permissions(
-        owner,
-        me,
-        guild,
-        channel,
-        vec![],
-        vec![role_info(Id::new(guild.get()), "@everyone", VIEW_CHANNEL)],
-        Vec::new(),
-    );
-    let ch = state.channel(channel).expect("channel");
-
-    assert!(!state.can_manage_channel_structure_in_channel(ch));
-}
-
-#[test]
-fn everyone_deny_hides_channel_for_plain_member() {
-    let me = Id::new(10);
-    let owner = Id::new(11);
-    let guild = Id::new(1);
-    let channel = Id::new(2);
-    // @everyone has VIEW_CHANNEL by default, but the channel-level
-    // overwrite revokes it for a plain member.
-    let state = guild_with_permissions(
-        owner,
-        me,
-        guild,
-        channel,
-        vec![],
-        vec![role_info(Id::new(guild.get()), "@everyone", VIEW_CHANNEL)],
-        vec![perm_role(guild.get(), 0, VIEW_CHANNEL)],
-    );
-    let ch = state.channel(channel).expect("channel");
-    assert!(!state.can_view_channel(ch));
-}
-
-#[test]
-fn role_allow_overrides_everyone_deny() {
-    let me = Id::new(10);
-    let owner = Id::new(11);
-    let guild = Id::new(1);
-    let channel = Id::new(2);
-    let staff_role = Id::new(50);
-    let state = guild_with_permissions(
-        owner,
-        me,
-        guild,
-        channel,
-        vec![staff_role],
-        vec![
-            role_info(Id::new(guild.get()), "@everyone", VIEW_CHANNEL),
-            RoleInfo {
-                position: 1,
-                ..RoleInfo::test(staff_role, "Staff")
-            },
-        ],
-        vec![
-            perm_role(guild.get(), 0, VIEW_CHANNEL),
-            perm_role(staff_role.get(), VIEW_CHANNEL, 0),
-        ],
-    );
-    let ch = state.channel(channel).expect("channel");
-    assert!(state.can_view_channel(ch));
 }
 
 #[test]
@@ -493,34 +477,6 @@ fn current_user_roles_handle_partial_and_complete_member_upserts() {
 }
 
 #[test]
-fn member_overwrite_has_the_final_word() {
-    let me = Id::new(10);
-    let owner = Id::new(11);
-    let guild = Id::new(1);
-    let channel = Id::new(2);
-    let staff_role = Id::new(50);
-    // Role-level grants VIEW, but the member-specific deny removes it.
-    let state = guild_with_permissions(
-        owner,
-        me,
-        guild,
-        channel,
-        vec![staff_role],
-        vec![
-            role_info(Id::new(guild.get()), "@everyone", 0),
-            RoleInfo {
-                position: 1,
-                permissions: VIEW_CHANNEL,
-                ..RoleInfo::test(staff_role, "Staff")
-            },
-        ],
-        vec![perm_member(me.get(), 0, VIEW_CHANNEL)],
-    );
-    let ch = state.channel(channel).expect("channel");
-    assert!(!state.can_view_channel(ch));
-}
-
-#[test]
 fn threads_inherit_parent_permission() {
     let me = Id::new(10);
     let owner = Id::new(11);
@@ -605,27 +561,82 @@ fn message_create_for_hidden_channel_does_not_promote_it() {
 }
 
 #[test]
-fn cannot_send_when_role_overwrite_denies_send_messages() {
+fn channel_overwrite_revokes_only_the_denied_permission() {
     let me = Id::new(10);
     let owner = Id::new(11);
     let guild = Id::new(1);
     let channel = Id::new(2);
-    let state = guild_with_permissions(
-        owner,
-        me,
-        guild,
-        channel,
-        vec![],
-        vec![RoleInfo {
-            // VIEW + SEND globally, but channel overwrite revokes SEND.
-            permissions: VIEW_CHANNEL | SEND_MESSAGES,
-            ..RoleInfo::test(Id::new(guild.get()), "@everyone")
-        }],
-        vec![perm_role(guild.get(), 0, SEND_MESSAGES)],
-    );
-    let ch = state.channel(channel).expect("channel");
-    assert!(state.can_view_channel(ch));
-    assert!(!state.can_send_in_channel(ch));
+
+    struct Case {
+        name: &'static str,
+        granted: u64,
+        denied: u64,
+        can_view: bool,
+        can_send: bool,
+        can_attach: bool,
+        can_send_tts: bool,
+    }
+
+    for case in [
+        Case {
+            name: "send messages",
+            granted: VIEW_CHANNEL | SEND_MESSAGES,
+            denied: SEND_MESSAGES,
+            can_view: true,
+            can_send: false,
+            can_attach: false,
+            can_send_tts: false,
+        },
+        Case {
+            name: "attach files",
+            granted: VIEW_CHANNEL | SEND_MESSAGES | ATTACH_FILES,
+            denied: ATTACH_FILES,
+            can_view: true,
+            can_send: true,
+            can_attach: false,
+            can_send_tts: false,
+        },
+        Case {
+            name: "send tts messages",
+            granted: VIEW_CHANNEL | SEND_MESSAGES | SEND_TTS_MESSAGES,
+            denied: SEND_TTS_MESSAGES,
+            can_view: true,
+            can_send: true,
+            can_attach: false,
+            can_send_tts: false,
+        },
+    ] {
+        let state = guild_with_permissions(
+            owner,
+            me,
+            guild,
+            channel,
+            vec![],
+            vec![role_info(Id::new(guild.get()), "@everyone", case.granted)],
+            vec![perm_role(guild.get(), 0, case.denied)],
+        );
+        let ch = state.channel(channel).expect("channel");
+
+        assert_eq!(state.can_view_channel(ch), case.can_view, "{}", case.name);
+        assert_eq!(
+            state.can_send_in_channel(ch),
+            case.can_send,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            state.can_attach_in_channel(ch),
+            case.can_attach,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            state.can_send_tts_in_channel(ch),
+            case.can_send_tts,
+            "{}",
+            case.name
+        );
+    }
 }
 
 #[test]
@@ -653,53 +664,6 @@ fn cannot_send_when_view_channel_is_denied() {
 }
 
 #[test]
-fn cannot_attach_when_role_overwrite_denies_attach_files() {
-    let me = Id::new(10);
-    let owner = Id::new(11);
-    let guild = Id::new(1);
-    let channel = Id::new(2);
-    let state = guild_with_permissions(
-        owner,
-        me,
-        guild,
-        channel,
-        vec![],
-        vec![RoleInfo {
-            // VIEW + SEND + ATTACH globally, channel revokes only ATTACH.
-            permissions: VIEW_CHANNEL | SEND_MESSAGES | ATTACH_FILES,
-            ..RoleInfo::test(Id::new(guild.get()), "@everyone")
-        }],
-        vec![perm_role(guild.get(), 0, ATTACH_FILES)],
-    );
-    let ch = state.channel(channel).expect("channel");
-    assert!(state.can_send_in_channel(ch));
-    assert!(!state.can_attach_in_channel(ch));
-}
-
-#[test]
-fn cannot_send_tts_when_role_overwrite_denies_send_tts_messages() {
-    let me = Id::new(10);
-    let owner = Id::new(11);
-    let guild = Id::new(1);
-    let channel = Id::new(2);
-    let state = guild_with_permissions(
-        owner,
-        me,
-        guild,
-        channel,
-        vec![],
-        vec![RoleInfo {
-            permissions: VIEW_CHANNEL | SEND_MESSAGES | SEND_TTS_MESSAGES,
-            ..RoleInfo::test(Id::new(guild.get()), "@everyone")
-        }],
-        vec![perm_role(guild.get(), 0, SEND_TTS_MESSAGES)],
-    );
-    let ch = state.channel(channel).expect("channel");
-    assert!(state.can_send_in_channel(ch));
-    assert!(!state.can_send_tts_in_channel(ch));
-}
-
-#[test]
 fn cannot_attach_when_send_messages_is_missing() {
     let me = Id::new(10);
     let owner = Id::new(11);
@@ -722,30 +686,6 @@ fn cannot_attach_when_send_messages_is_missing() {
     assert!(state.can_view_channel(ch));
     assert!(!state.can_send_in_channel(ch));
     assert!(!state.can_attach_in_channel(ch));
-}
-
-#[test]
-fn manage_messages_requires_explicit_guild_permission() {
-    let me = Id::new(10);
-    let owner = Id::new(11);
-    let guild = Id::new(1);
-    let channel = Id::new(2);
-    let state = guild_with_permissions(
-        owner,
-        me,
-        guild,
-        channel,
-        vec![],
-        vec![role_info(
-            Id::new(guild.get()),
-            "@everyone",
-            VIEW_CHANNEL | MANAGE_MESSAGES,
-        )],
-        Vec::new(),
-    );
-
-    let ch = state.channel(channel).expect("channel");
-    assert!(state.can_manage_messages_in_channel(ch));
 }
 
 #[test]

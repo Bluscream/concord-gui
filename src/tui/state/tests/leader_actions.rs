@@ -403,47 +403,45 @@ fn guild_action_menu_toggle_mute_opens_duration_then_dispatches_command() {
 }
 
 #[test]
-fn current_guild_leave_confirmation_dispatches_leave_command() {
-    let mut state = state_with_many_guilds(1);
-    state.activate_guild(super::ActiveGuildScope::Guild(Id::new(1)));
+fn guild_leave_confirmation_targets_the_active_guild_or_the_cursor() {
+    let mut active = state_with_many_guilds(1);
+    active.activate_guild(super::ActiveGuildScope::Guild(Id::new(1)));
 
-    state.open_current_guild_leave_confirmation();
+    active.open_current_guild_leave_confirmation();
 
     assert!(
-        state
+        active
             .is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::GuildLeaveConfirmation)
     );
     assert_eq!(
-        state.guild_leave_confirmation_name(),
+        active.guild_leave_confirmation_name(),
         Some("guild 1".to_owned())
     );
     assert_eq!(
-        state.confirm_guild_leave(),
+        active.confirm_guild_leave(),
         Some(AppCommand::LeaveGuild {
             guild_id: Id::new(1),
             label: "guild 1".to_owned(),
         })
     );
     assert!(
-        !state
+        !active
             .is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::GuildLeaveConfirmation)
     );
-}
 
-#[test]
-fn focused_guild_cursor_leave_confirmation_does_not_require_active_guild() {
-    let mut state = state_with_many_guilds(1);
-    state.focus_pane(FocusPane::Guilds);
-    state.move_down();
+    // Nothing is open yet: the highlighted guild in the pane is enough.
+    let mut cursor_only = state_with_many_guilds(1);
+    cursor_only.focus_pane(FocusPane::Guilds);
+    cursor_only.move_down();
 
-    state.open_current_guild_leave_confirmation();
+    cursor_only.open_current_guild_leave_confirmation();
 
     assert!(
-        state
+        cursor_only
             .is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::GuildLeaveConfirmation)
     );
     assert_eq!(
-        state.confirm_guild_leave(),
+        cursor_only.confirm_guild_leave(),
         Some(AppCommand::LeaveGuild {
             guild_id: Id::new(1),
             label: "guild 1".to_owned(),

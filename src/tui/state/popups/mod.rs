@@ -75,8 +75,35 @@ impl ConfirmationButton {
     }
 }
 
-#[derive(Debug)]
-pub(super) enum ModalPopup {
+/// Declares the modal popup enum and its payload-free companion from one list,
+/// the way `define_app_event_kinds!` does for `AppEvent`. Writing the variants
+/// once is what keeps the two enums and `kind()` from drifting apart.
+macro_rules! define_modal_popups {
+    ($($variant:ident $(($state:ty))?,)*) => {
+        #[derive(Debug)]
+        pub(super) enum ModalPopup {
+            $($variant $(($state))?,)*
+        }
+
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub(in crate::tui) enum ActiveModalPopupKind {
+            $($variant,)*
+        }
+
+        impl ModalPopup {
+            fn kind(&self) -> ActiveModalPopupKind {
+                match self {
+                    $(define_modal_popups!(@pattern $variant $(($state))?)
+                        => ActiveModalPopupKind::$variant,)*
+                }
+            }
+        }
+    };
+    (@pattern $variant:ident ($state:ty)) => { Self::$variant(_) };
+    (@pattern $variant:ident) => { Self::$variant };
+}
+
+define_modal_popups! {
     MessageActionMenu(MessageActionMenuState),
     GuildActionMenu(GuildActionMenuState),
     ChannelActionMenu(ChannelActionMenuState),
@@ -93,7 +120,7 @@ pub(super) enum ModalPopup {
     PollVotePicker(PollVotePickerState),
     ReactionUsers(ReactionUsersPopupState),
     DebugLog,
-    Keymap(KeymapPopupState),
+    KeymapHelp(KeymapPopupState),
     ChannelSwitcher(ChannelSwitcherState),
     NotificationInbox(NotificationInboxState),
     Search(SearchPopupState),
@@ -102,67 +129,6 @@ pub(super) enum ModalPopup {
     ThreadActionMenu(ThreadActionMenuState),
     ThreadDeleteConfirmation(ThreadDeleteConfirmationState),
     VoiceParticipantAudio(VoiceParticipantAudioPopupState),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::tui) enum ActiveModalPopupKind {
-    MessageActionMenu,
-    GuildActionMenu,
-    ChannelActionMenu,
-    MemberActionMenu,
-    MessageUrlPicker,
-    MessageConfirmation,
-    QuitConfirmation,
-    GuildLeaveConfirmation,
-    Options,
-    AttachmentViewer,
-    Leader,
-    UserProfile,
-    EmojiReactionPicker,
-    PollVotePicker,
-    ReactionUsers,
-    DebugLog,
-    KeymapHelp,
-    ChannelSwitcher,
-    NotificationInbox,
-    Search,
-    ForumPostComposer,
-    ThreadEdit,
-    ThreadActionMenu,
-    ThreadDeleteConfirmation,
-    VoiceParticipantAudio,
-}
-
-impl ModalPopup {
-    fn kind(&self) -> ActiveModalPopupKind {
-        match self {
-            Self::MessageActionMenu(_) => ActiveModalPopupKind::MessageActionMenu,
-            Self::GuildActionMenu(_) => ActiveModalPopupKind::GuildActionMenu,
-            Self::ChannelActionMenu(_) => ActiveModalPopupKind::ChannelActionMenu,
-            Self::MemberActionMenu(_) => ActiveModalPopupKind::MemberActionMenu,
-            Self::MessageUrlPicker(_) => ActiveModalPopupKind::MessageUrlPicker,
-            Self::MessageConfirmation(_) => ActiveModalPopupKind::MessageConfirmation,
-            Self::QuitConfirmation => ActiveModalPopupKind::QuitConfirmation,
-            Self::GuildLeaveConfirmation(_) => ActiveModalPopupKind::GuildLeaveConfirmation,
-            Self::Options(_) => ActiveModalPopupKind::Options,
-            Self::AttachmentViewer(_) => ActiveModalPopupKind::AttachmentViewer,
-            Self::Leader(_) => ActiveModalPopupKind::Leader,
-            Self::UserProfile(_) => ActiveModalPopupKind::UserProfile,
-            Self::EmojiReactionPicker(_) => ActiveModalPopupKind::EmojiReactionPicker,
-            Self::PollVotePicker(_) => ActiveModalPopupKind::PollVotePicker,
-            Self::ReactionUsers(_) => ActiveModalPopupKind::ReactionUsers,
-            Self::DebugLog => ActiveModalPopupKind::DebugLog,
-            Self::Keymap(_) => ActiveModalPopupKind::KeymapHelp,
-            Self::ChannelSwitcher(_) => ActiveModalPopupKind::ChannelSwitcher,
-            Self::NotificationInbox(_) => ActiveModalPopupKind::NotificationInbox,
-            Self::Search(_) => ActiveModalPopupKind::Search,
-            Self::ForumPostComposer(_) => ActiveModalPopupKind::ForumPostComposer,
-            Self::ThreadEdit(_) => ActiveModalPopupKind::ThreadEdit,
-            Self::ThreadActionMenu(_) => ActiveModalPopupKind::ThreadActionMenu,
-            Self::ThreadDeleteConfirmation(_) => ActiveModalPopupKind::ThreadDeleteConfirmation,
-            Self::VoiceParticipantAudio(_) => ActiveModalPopupKind::VoiceParticipantAudio,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1344,7 +1310,7 @@ impl PopupUiState {
     modal_popup_accessors!(
         keymap_popup,
         keymap_popup_mut,
-        Keymap,
+        KeymapHelp,
         KeymapPopupState,
         popup
     );

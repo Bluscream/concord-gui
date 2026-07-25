@@ -631,54 +631,51 @@ fn guild_role_events_patch_cached_roles() {
 }
 
 #[test]
-fn message_author_role_color_uses_history_author_roles_when_member_is_missing() {
+fn message_author_role_color_falls_back_only_while_the_member_is_missing() {
     let guild_id = Id::new(1);
     let channel_id = Id::new(2);
     let message_id = Id::new(3);
     let role_id = Id::new(90);
     let user_id = Id::new(10);
-    let mut state = DiscordState::default();
 
-    state.apply_event(&guild_create_event(GuildCreateFixture {
-        roles: vec![RoleInfo {
-            color: Some(0xCC0000),
-            position: 10,
-            hoist: true,
-            ..RoleInfo::test(role_id, "Red")
-        }],
-        ..GuildCreateFixture::new(guild_id)
-    }));
-    let mut message = message_info(channel_id, message_id.get(), "hello");
-    message.guild_id = Some(guild_id);
-    message.author_id = user_id;
-    message.author_role_ids = vec![role_id];
-    state.apply_event(&latest_history_loaded(channel_id, vec![message]));
+    let guild = |members: Vec<MemberInfo>| {
+        let mut state = DiscordState::default();
+        state.apply_event(&guild_create_event(GuildCreateFixture {
+            members,
+            roles: vec![RoleInfo {
+                color: Some(0xCC0000),
+                position: 10,
+                hoist: true,
+                ..RoleInfo::test(role_id, "Red")
+            }],
+            ..GuildCreateFixture::new(guild_id)
+        }));
+        state
+    };
+    let history_message = |role_ids: Vec<Id<RoleMarker>>| {
+        let mut message = message_info(channel_id, message_id.get(), "hello");
+        message.guild_id = Some(guild_id);
+        message.author_id = user_id;
+        message.author_role_ids = role_ids;
+        message
+    };
 
+    // Until the member list arrives the message's own role ids, and then the
+    // loaded profile, stand in. Once the member is cached it is authoritative,
+    // so the message's (possibly stale) role ids must be ignored entirely.
+    let mut from_history = guild(Vec::new());
+    from_history.apply_event(&latest_history_loaded(
+        channel_id,
+        vec![history_message(vec![role_id])],
+    ));
     assert_eq!(
-        state.message_author_role_color(guild_id, channel_id, message_id, user_id),
-        Some(0xCC0000)
+        from_history.message_author_role_color(guild_id, channel_id, message_id, user_id),
+        Some(0xCC0000),
+        "history author roles"
     );
-}
 
-#[test]
-fn message_author_role_color_uses_live_author_roles_when_member_is_missing() {
-    let guild_id = Id::new(1);
-    let channel_id = Id::new(2);
-    let message_id = Id::new(3);
-    let role_id = Id::new(90);
-    let user_id = Id::new(10);
-    let mut state = DiscordState::default();
-
-    state.apply_event(&guild_create_event(GuildCreateFixture {
-        roles: vec![RoleInfo {
-            color: Some(0xCC0000),
-            position: 10,
-            hoist: true,
-            ..RoleInfo::test(role_id, "Red")
-        }],
-        ..GuildCreateFixture::new(guild_id)
-    }));
-    state.apply_event(&message_create_event(MessageCreateFixture {
+    let mut from_live = guild(Vec::new());
+    from_live.apply_event(&message_create_event(MessageCreateFixture {
         guild_id: Some(guild_id),
         channel_id,
         message_id,
@@ -688,76 +685,38 @@ fn message_author_role_color_uses_live_author_roles_when_member_is_missing() {
         content: Some("hello".to_owned()),
         ..MessageCreateFixture::test_fixture_default()
     }));
-
     assert_eq!(
-        state.message_author_role_color(guild_id, channel_id, message_id, user_id),
-        Some(0xCC0000)
+        from_live.message_author_role_color(guild_id, channel_id, message_id, user_id),
+        Some(0xCC0000),
+        "live author roles"
     );
-}
 
-#[test]
-fn message_author_role_color_uses_profile_roles_when_message_roles_are_missing() {
-    let guild_id = Id::new(1);
-    let channel_id = Id::new(2);
-    let message_id = Id::new(3);
-    let role_id = Id::new(90);
-    let user_id = Id::new(10);
-    let mut state = DiscordState::default();
-
-    state.apply_event(&guild_create_event(GuildCreateFixture {
-        roles: vec![RoleInfo {
-            color: Some(0xCC0000),
-            position: 10,
-            hoist: true,
-            ..RoleInfo::test(role_id, "Red")
-        }],
-        ..GuildCreateFixture::new(guild_id)
-    }));
-    let mut message = message_info(channel_id, message_id.get(), "hello");
-    message.guild_id = Some(guild_id);
-    message.author_id = user_id;
-    state.apply_event(&latest_history_loaded(channel_id, vec![message]));
+    let mut from_profile = guild(Vec::new());
+    from_profile.apply_event(&latest_history_loaded(
+        channel_id,
+        vec![history_message(Vec::new())],
+    ));
     let mut profile = profile_info(user_id.get(), Some("test-user"));
     profile.role_ids = vec![role_id];
-    state.apply_event(&AppEvent::UserProfileLoaded {
+    from_profile.apply_event(&AppEvent::UserProfileLoaded {
         guild_id: Some(guild_id),
         profile,
     });
-
     assert_eq!(
-        state.message_author_role_color(guild_id, channel_id, message_id, user_id),
-        Some(0xCC0000)
+        from_profile.message_author_role_color(guild_id, channel_id, message_id, user_id),
+        Some(0xCC0000),
+        "loaded profile roles"
     );
-}
 
-#[test]
-fn message_author_role_color_does_not_use_message_roles_when_member_is_cached() {
-    let guild_id = Id::new(1);
-    let channel_id = Id::new(2);
-    let message_id = Id::new(3);
-    let stale_role_id = Id::new(90);
-    let user_id = Id::new(10);
-    let mut state = DiscordState::default();
-
-    state.apply_event(&guild_create_event(GuildCreateFixture {
-        members: vec![member_info(user_id, "test-user")],
-        roles: vec![RoleInfo {
-            color: Some(0xCC0000),
-            position: 10,
-            hoist: true,
-            ..RoleInfo::test(stale_role_id, "Old Red")
-        }],
-        ..GuildCreateFixture::new(guild_id)
-    }));
-    let mut message = message_info(channel_id, message_id.get(), "hello");
-    message.guild_id = Some(guild_id);
-    message.author_id = user_id;
-    message.author_role_ids = vec![stale_role_id];
-    state.apply_event(&latest_history_loaded(channel_id, vec![message]));
-
+    let mut cached_member = guild(vec![member_info(user_id, "test-user")]);
+    cached_member.apply_event(&latest_history_loaded(
+        channel_id,
+        vec![history_message(vec![role_id])],
+    ));
     assert_eq!(
-        state.message_author_role_color(guild_id, channel_id, message_id, user_id),
-        None
+        cached_member.message_author_role_color(guild_id, channel_id, message_id, user_id),
+        None,
+        "cached member wins over stale message roles"
     );
 }
 
@@ -800,6 +759,7 @@ fn chunk_style_member_upserts_populate_member_list() {
         Some(PresenceStatus::Unknown)
     );
 }
+
 #[test]
 fn member_upsert_preserves_existing_status() {
     let guild_id = Id::new(1);
