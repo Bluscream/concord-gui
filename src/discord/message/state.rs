@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use crate::discord::ids::{
     Id,
@@ -12,7 +12,10 @@ use crate::discord::{
 use crate::discord::{
     member::{selected_member_role_color, selected_role_ids_color},
     profile::UserProfileCacheKey,
-    state::{DiscordState, OLDER_HISTORY_EXTRA_WINDOW_MULTIPLIER, is_fallback_identity},
+    state::{
+        ChannelMessageTimeline, DiscordState, MessageSegment, MessageTimelineFocus,
+        OLDER_HISTORY_EXTRA_WINDOW_MULTIPLIER, is_fallback_identity,
+    },
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -178,24 +181,457 @@ impl MessageState {
 pub(in crate::discord) type MessageAuthorRoleIds =
     BTreeMap<(Id<ChannelMarker>, Id<MessageMarker>), Vec<Id<RoleMarker>>>;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::discord) struct MessageHistoryGap {
-    pub(in crate::discord) lower_id: Id<MessageMarker>,
-    pub(in crate::discord) upper_id: Id<MessageMarker>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum MessageHistoryTrimPolicy {
-    LatestWindow,
-    OlderWindow,
-    NewerGap,
-}
-
 pub(in crate::discord) struct MessageUpdateFields {
     pub(in crate::discord) body: MessageUpdateEventFields,
     pub(in crate::discord) pinned: Option<bool>,
     pub(in crate::discord) reactions: Option<Vec<ReactionInfo>>,
     pub(in crate::discord) retain_body: bool,
+}
+
+impl ChannelMessageTimeline {
+    fn message_history_gap_after(&self, lower_id: Id<MessageMarker>) -> Option<Id<MessageMarker>> {
+        let index = self
+            .segments
+            .iter()
+            .position(|segment| segment.message_ids.back() == Some(&lower_id))?;
+        self.segments
+            .get(index.saturating_add(1))?
+            .message_ids
+            .front()
+            .copied()
+    }
+
+    fn contains_message(&self, message_id: Id<MessageMarker>) -> bool {
+        self.messages.iter().any(|message| message.id == message_id)
+    }
+
+    fn merge_messages(&mut self, incoming: Vec<MessageState>) -> Vec<Id<MessageMarker>> {
+        let incoming_ids = incoming
+            .iter()
+            .map(|message| message.id)
+            .collect::<Vec<_>>();
+        let mut by_id = self
+            .messages
+            .drain(..)
+            .map(|message| (message.id, message))
+            .collect::<BTreeMap<_, _>>();
+
+        for message in incoming {
+            by_id
+                .entry(message.id)
+                .and_modify(|existing| merge_message(existing, &message))
+                .or_insert(message);
+        }
+
+        self.messages = by_id.into_values().collect();
+        incoming_ids
+    }
+
+    fn replace_latest(&mut self, message_ids: &[Id<MessageMarker>]) {
+        self.segments.clear();
+        self.historical_mode = false;
+        self.active_focus = MessageTimelineFocus::Newest;
+        if !message_ids.is_empty() {
+            self.segments.push_back(MessageSegment {
+                message_ids: sorted_message_ids(message_ids),
+                active: true,
+                reaches_live_edge: true,
+            });
+        }
+    }
+
+    fn merge_latest(
+        &mut self,
+        message_ids: &[Id<MessageMarker>],
+        recent_limit: usize,
+    ) -> Vec<Id<MessageMarker>> {
+        if message_ids.is_empty() {
+            return self.trim_to_retention_limit(recent_limit);
+        }
+
+        let mut merge_indexes = self.overlapping_segment_indexes(message_ids);
+        if let Some(live_index) = self.live_segment_index() {
+            merge_indexes.insert(live_index);
+        }
+        let make_active = !self.segments.iter().any(|segment| segment.active);
+        self.merge_segment_ids(message_ids, merge_indexes, make_active, true);
+        if self.segments.len() > 1 {
+            self.historical_mode = true;
+        }
+        self.trim_to_retention_limit(recent_limit)
+    }
+
+    fn merge_older(
+        &mut self,
+        before: Id<MessageMarker>,
+        message_ids: &[Id<MessageMarker>],
+        recent_limit: usize,
+    ) -> Vec<Id<MessageMarker>> {
+        self.historical_mode = true;
+        self.active_focus = MessageTimelineFocus::Oldest;
+        let mut merge_indexes = self.overlapping_segment_indexes(message_ids);
+        if let Some(anchor_index) = self.segment_index_containing(before) {
+            merge_indexes.insert(anchor_index);
+        }
+        self.merge_segment_ids(message_ids, merge_indexes, true, false);
+        self.trim_to_retention_limit(recent_limit)
+    }
+
+    fn merge_around(
+        &mut self,
+        target: Id<MessageMarker>,
+        message_ids: &[Id<MessageMarker>],
+        recent_limit: usize,
+    ) -> Vec<Id<MessageMarker>> {
+        self.historical_mode = true;
+        self.active_focus = MessageTimelineFocus::Around(target);
+        let mut merge_indexes = self.overlapping_segment_indexes(message_ids);
+        if let Some(target_index) = self.segment_index_containing(target) {
+            merge_indexes.insert(target_index);
+        }
+        self.merge_segment_ids(message_ids, merge_indexes, true, false);
+        self.trim_to_retention_limit(recent_limit)
+    }
+
+    fn merge_detached(
+        &mut self,
+        message_ids: &[Id<MessageMarker>],
+        recent_limit: usize,
+    ) -> Vec<Id<MessageMarker>> {
+        let merge_indexes = self.overlapping_segment_indexes(message_ids);
+        let make_active = !self.segments.iter().any(|segment| segment.active);
+        self.merge_segment_ids(message_ids, merge_indexes, make_active, false);
+        if self.segments.len() > 1 {
+            self.historical_mode = true;
+        }
+        self.trim_to_retention_limit(recent_limit)
+    }
+
+    fn merge_newer(
+        &mut self,
+        after: Id<MessageMarker>,
+        message_ids: &[Id<MessageMarker>],
+        has_more: bool,
+        recent_limit: usize,
+    ) -> Vec<Id<MessageMarker>> {
+        self.historical_mode = true;
+        self.active_focus = MessageTimelineFocus::Around(after);
+
+        let Some(anchor_index) = self.segment_index_containing(after) else {
+            let merge_indexes = self.overlapping_segment_indexes(message_ids);
+            self.merge_segment_ids(message_ids, merge_indexes, true, !has_more);
+            return self.trim_to_retention_limit(recent_limit);
+        };
+
+        let next_index = (anchor_index + 1 < self.segments.len()).then_some(anchor_index + 1);
+        let reached_next = next_index.is_some_and(|index| {
+            self.segments[index]
+                .message_ids
+                .iter()
+                .any(|message_id| message_ids.contains(message_id))
+        });
+        let closes_boundary = message_ids.is_empty() || reached_next || !has_more;
+
+        let mut merge_indexes = self.overlapping_segment_indexes(message_ids);
+        merge_indexes.insert(anchor_index);
+        if closes_boundary && let Some(next_index) = next_index {
+            merge_indexes.insert(next_index);
+        }
+        let reaches_live_edge = next_index.is_none() && !has_more;
+        self.merge_segment_ids(message_ids, merge_indexes, true, reaches_live_edge);
+        self.trim_to_retention_limit(recent_limit)
+    }
+
+    fn insert_live_message(
+        &mut self,
+        message_id: Id<MessageMarker>,
+        inserted: bool,
+        recent_limit: usize,
+    ) -> Vec<Id<MessageMarker>> {
+        if inserted {
+            let mut merge_indexes = BTreeSet::new();
+            if let Some(live_index) = self.live_segment_index() {
+                merge_indexes.insert(live_index);
+            }
+            let make_active = !self.segments.iter().any(|segment| segment.active);
+            self.merge_segment_ids(
+                std::slice::from_ref(&message_id),
+                merge_indexes,
+                make_active,
+                true,
+            );
+        }
+        if self.segments.len() > 1 {
+            self.historical_mode = true;
+        }
+        self.trim_to_retention_limit(recent_limit)
+    }
+
+    fn remove_messages(&mut self, message_ids: &[Id<MessageMarker>]) {
+        let removed = message_ids.iter().copied().collect::<BTreeSet<_>>();
+        self.messages
+            .retain(|message| !removed.contains(&message.id));
+        for segment in &mut self.segments {
+            segment
+                .message_ids
+                .retain(|message_id| !removed.contains(message_id));
+        }
+        self.segments
+            .retain(|segment| !segment.message_ids.is_empty());
+        self.ensure_active_segment();
+    }
+
+    fn segment_index_containing(&self, message_id: Id<MessageMarker>) -> Option<usize> {
+        self.segments
+            .iter()
+            .position(|segment| segment.message_ids.contains(&message_id))
+    }
+
+    fn live_segment_index(&self) -> Option<usize> {
+        self.segments
+            .iter()
+            .rposition(|segment| segment.reaches_live_edge)
+    }
+
+    fn overlapping_segment_indexes(&self, message_ids: &[Id<MessageMarker>]) -> BTreeSet<usize> {
+        self.segments
+            .iter()
+            .enumerate()
+            .filter_map(|(index, segment)| {
+                segment
+                    .message_ids
+                    .iter()
+                    .any(|message_id| message_ids.contains(message_id))
+                    .then_some(index)
+            })
+            .collect()
+    }
+
+    fn merge_segment_ids(
+        &mut self,
+        message_ids: &[Id<MessageMarker>],
+        merge_indexes: BTreeSet<usize>,
+        make_active: bool,
+        reaches_live_edge: bool,
+    ) {
+        if make_active {
+            for segment in &mut self.segments {
+                segment.active = false;
+            }
+        }
+
+        let mut merged_ids = message_ids.iter().copied().collect::<BTreeSet<_>>();
+        let mut active = make_active;
+        let mut live = reaches_live_edge;
+        for index in &merge_indexes {
+            let segment = &self.segments[*index];
+            merged_ids.extend(segment.message_ids.iter().copied());
+            active |= segment.active;
+            live |= segment.reaches_live_edge;
+        }
+        for index in merge_indexes.into_iter().rev() {
+            self.segments.remove(index);
+        }
+
+        if merged_ids.is_empty() {
+            self.ensure_active_segment();
+            return;
+        }
+
+        self.segments.push_back(MessageSegment {
+            message_ids: merged_ids.into_iter().collect(),
+            active,
+            reaches_live_edge: live,
+        });
+        self.segments
+            .make_contiguous()
+            .sort_by_key(|segment| segment.message_ids.front().copied());
+        self.ensure_active_segment();
+    }
+
+    fn trim_to_retention_limit(&mut self, recent_limit: usize) -> Vec<Id<MessageMarker>> {
+        if recent_limit == 0 {
+            return self.retain_cached_message_ids(&BTreeSet::new(), None);
+        }
+
+        if !self.historical_mode {
+            if self.messages.len() <= recent_limit {
+                return Vec::new();
+            }
+            let keep = self
+                .messages
+                .iter()
+                .rev()
+                .take(recent_limit)
+                .map(|message| message.id)
+                .collect::<BTreeSet<_>>();
+            let active_target = keep.iter().next_back().copied();
+            return self.retain_cached_message_ids(&keep, active_target);
+        }
+
+        let extended_limit = recent_limit.saturating_mul(OLDER_HISTORY_EXTRA_WINDOW_MULTIPLIER);
+        if self.messages.len() <= extended_limit {
+            return Vec::new();
+        }
+
+        let active_index = self
+            .segments
+            .iter()
+            .position(|segment| segment.active)
+            .or_else(|| self.live_segment_index())
+            .or((!self.segments.is_empty()).then_some(0));
+        let live_index = self.live_segment_index();
+        let mut keep = BTreeSet::new();
+        let mut active_target = None;
+
+        if let Some(active_index) = active_index {
+            let active_window = segment_window(
+                &self.segments[active_index].message_ids,
+                recent_limit,
+                self.active_focus,
+            );
+            active_target = focused_message_id(&active_window, self.active_focus);
+            keep.extend(active_window);
+        }
+        if let Some(live_index) = live_index {
+            keep.extend(
+                self.segments[live_index]
+                    .message_ids
+                    .iter()
+                    .rev()
+                    .take(recent_limit)
+                    .copied(),
+            );
+        }
+
+        self.retain_cached_message_ids(&keep, active_target)
+    }
+
+    fn retain_cached_message_ids(
+        &mut self,
+        keep: &BTreeSet<Id<MessageMarker>>,
+        active_target: Option<Id<MessageMarker>>,
+    ) -> Vec<Id<MessageMarker>> {
+        let evicted = self
+            .messages
+            .iter()
+            .filter(|message| !keep.contains(&message.id))
+            .map(|message| message.id)
+            .collect::<Vec<_>>();
+        if evicted.is_empty() {
+            return evicted;
+        }
+        self.messages.retain(|message| keep.contains(&message.id));
+
+        let previous_segments = std::mem::take(&mut self.segments);
+        for segment in previous_segments {
+            let mut runs = Vec::new();
+            let mut current = VecDeque::new();
+            for message_id in segment.message_ids {
+                if keep.contains(&message_id) {
+                    current.push_back(message_id);
+                } else if !current.is_empty() {
+                    runs.push(std::mem::take(&mut current));
+                }
+            }
+            if !current.is_empty() {
+                runs.push(current);
+            }
+            let final_run = runs.len().saturating_sub(1);
+            for (index, message_ids) in runs.into_iter().enumerate() {
+                self.segments.push_back(MessageSegment {
+                    message_ids,
+                    active: false,
+                    reaches_live_edge: segment.reaches_live_edge && index == final_run,
+                });
+            }
+        }
+        self.segments
+            .make_contiguous()
+            .sort_by_key(|segment| segment.message_ids.front().copied());
+
+        if let Some(active_target) = active_target
+            && let Some(index) = self.segment_index_containing(active_target)
+        {
+            self.segments[index].active = true;
+        }
+        self.ensure_active_segment();
+        evicted
+    }
+
+    fn ensure_active_segment(&mut self) {
+        if self.segments.iter().any(|segment| segment.active) {
+            return;
+        }
+        if let Some(index) = self
+            .live_segment_index()
+            .or((!self.segments.is_empty()).then_some(0))
+        {
+            self.segments[index].active = true;
+        }
+    }
+}
+
+fn sorted_message_ids(message_ids: &[Id<MessageMarker>]) -> VecDeque<Id<MessageMarker>> {
+    message_ids
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn segment_window(
+    message_ids: &VecDeque<Id<MessageMarker>>,
+    limit: usize,
+    focus: MessageTimelineFocus,
+) -> Vec<Id<MessageMarker>> {
+    if message_ids.len() <= limit {
+        return message_ids.iter().copied().collect();
+    }
+    match focus {
+        MessageTimelineFocus::Oldest => message_ids.iter().take(limit).copied().collect(),
+        MessageTimelineFocus::Newest => message_ids
+            .iter()
+            .skip(message_ids.len().saturating_sub(limit))
+            .copied()
+            .collect(),
+        MessageTimelineFocus::Around(target) => {
+            let target_index = message_ids
+                .iter()
+                .position(|message_id| *message_id == target)
+                .unwrap_or_else(|| {
+                    message_ids
+                        .iter()
+                        .position(|message_id| *message_id > target)
+                        .unwrap_or(message_ids.len().saturating_sub(1))
+                });
+            let start = target_index
+                .saturating_sub(limit / 2)
+                .min(message_ids.len().saturating_sub(limit));
+            message_ids
+                .iter()
+                .skip(start)
+                .take(limit)
+                .copied()
+                .collect()
+        }
+    }
+}
+
+fn focused_message_id(
+    message_ids: &[Id<MessageMarker>],
+    focus: MessageTimelineFocus,
+) -> Option<Id<MessageMarker>> {
+    match focus {
+        MessageTimelineFocus::Oldest => message_ids.first().copied(),
+        MessageTimelineFocus::Newest => message_ids.last().copied(),
+        MessageTimelineFocus::Around(target) => message_ids
+            .iter()
+            .copied()
+            .find(|message_id| *message_id == target)
+            .or_else(|| message_ids.first().copied()),
+    }
 }
 
 impl DiscordState {
@@ -256,17 +692,17 @@ impl DiscordState {
 
     pub fn messages_for_channel(&self, channel_id: Id<ChannelMarker>) -> Vec<&MessageState> {
         self.message_cache
-            .messages
+            .timelines
             .get(&channel_id)
-            .map(|messages| messages.iter().collect())
+            .map(|timeline| timeline.messages.iter().collect())
             .unwrap_or_default()
     }
 
     pub(crate) fn channel_has_cached_messages(&self, channel_id: Id<ChannelMarker>) -> bool {
         self.message_cache
-            .messages
+            .timelines
             .get(&channel_id)
-            .is_some_and(|messages| !messages.is_empty())
+            .is_some_and(|timeline| !timeline.messages.is_empty())
     }
 
     pub(crate) fn channel_cached_message_count_from(
@@ -275,10 +711,11 @@ impl DiscordState {
         author_id: Id<UserMarker>,
     ) -> usize {
         self.message_cache
-            .messages
+            .timelines
             .get(&channel_id)
-            .map_or(0, |messages| {
-                messages
+            .map_or(0, |timeline| {
+                timeline
+                    .messages
                     .iter()
                     .filter(|message| message.author_id == author_id)
                     .count()
@@ -291,21 +728,19 @@ impl DiscordState {
         lower_id: Id<MessageMarker>,
     ) -> Option<Id<MessageMarker>> {
         self.message_cache
-            .message_gaps
+            .timelines
             .get(&channel_id)?
-            .iter()
-            .find(|gap| gap.lower_id == lower_id)
-            .map(|gap| gap.upper_id)
+            .message_history_gap_after(lower_id)
     }
 
     pub(in crate::discord) fn redact_channel_message_bodies(
         &mut self,
         channel_id: Id<ChannelMarker>,
     ) {
-        let Some(messages) = self.message_cache.messages.get_mut(&channel_id) else {
+        let Some(timeline) = self.message_cache.timelines.get_mut(&channel_id) else {
             return;
         };
-        for message in messages {
+        for message in &mut timeline.messages {
             message.redact_body();
         }
     }
@@ -344,7 +779,7 @@ impl DiscordState {
             self.redact_channel_message_bodies(evicted_channel_id);
             if self
                 .message_cache
-                .messages
+                .timelines
                 .contains_key(&evicted_channel_id)
             {
                 self.message_cache
@@ -473,8 +908,9 @@ impl DiscordState {
     fn for_each_cached_message_mut(&mut self, mut update: impl FnMut(&mut MessageState)) {
         for messages in self
             .message_cache
-            .messages
+            .timelines
             .values_mut()
+            .map(|timeline| &mut timeline.messages)
             .chain(self.message_cache.pinned_messages.values_mut())
         {
             for message in messages {
@@ -488,8 +924,8 @@ impl DiscordState {
         channel_id: Id<ChannelMarker>,
         mut update: impl FnMut(&mut VecDeque<MessageState>),
     ) {
-        if let Some(messages) = self.message_cache.messages.get_mut(&channel_id) {
-            update(messages);
+        if let Some(timeline) = self.message_cache.timelines.get_mut(&channel_id) {
+            update(&mut timeline.messages);
         }
         if let Some(messages) = self.message_cache.pinned_messages.get_mut(&channel_id) {
             update(messages);
@@ -538,8 +974,9 @@ impl DiscordState {
 
         for messages in self
             .message_cache
-            .messages
+            .timelines
             .values_mut()
+            .map(|timeline| &mut timeline.messages)
             .chain(self.message_cache.pinned_messages.values_mut())
         {
             for message in messages.iter_mut().filter(|m| m.guild_id == Some(guild_id)) {
@@ -590,26 +1027,28 @@ impl DiscordState {
         message.guild_id = message
             .guild_id
             .or_else(|| self.channel_guild_id(channel_id));
-        let messages = self
+        let recent_limit = self.message_cache.max_messages_per_channel;
+        let timeline = self
             .message_cache
-            .messages
+            .timelines
             .entry(message.channel_id)
             .or_default();
-        let inserted =
-            if let Some(existing) = messages.iter_mut().find(|item| item.id == message.id) {
-                merge_duplicate_message_create(existing, &message);
-                false
-            } else {
-                messages.push_back(message);
-                true
-            };
-
-        let mut evicted_message_ids = Vec::new();
-        while messages.len() > self.message_cache.max_messages_per_channel {
-            if let Some(evicted) = messages.pop_front() {
-                evicted_message_ids.push(evicted.id);
-            }
-        }
+        let inserted = if let Some(existing) = timeline
+            .messages
+            .iter_mut()
+            .find(|item| item.id == message.id)
+        {
+            merge_duplicate_message_create(existing, &message);
+            false
+        } else {
+            timeline.messages.push_back(message);
+            timeline
+                .messages
+                .make_contiguous()
+                .sort_by_key(|message| message.id);
+            true
+        };
+        let evicted_message_ids = timeline.insert_live_message(message_id, inserted, recent_limit);
         for evicted_message_id in evicted_message_ids {
             self.prune_message_author_role_ids_if_unreferenced(channel_id, evicted_message_id);
         }
@@ -705,12 +1144,15 @@ impl DiscordState {
         before: Option<Id<MessageMarker>>,
         history: &[MessageInfo],
     ) {
-        let trim_policy = if before.is_none() {
-            MessageHistoryTrimPolicy::LatestWindow
-        } else {
-            MessageHistoryTrimPolicy::OlderWindow
+        let incoming = self.message_states_from_history(channel_id, history);
+        let recent_limit = self.message_cache.max_messages_per_channel;
+        let timeline = self.message_cache.timelines.entry(channel_id).or_default();
+        let incoming_ids = timeline.merge_messages(incoming);
+        let evicted = match before {
+            Some(before) => timeline.merge_older(before, &incoming_ids, recent_limit),
+            None => timeline.merge_latest(&incoming_ids, recent_limit),
         };
-        self.merge_message_history_with_trim(channel_id, trim_policy, history);
+        self.finish_message_timeline_merge(channel_id, evicted);
     }
 
     pub(in crate::discord) fn replace_message_history(
@@ -718,91 +1160,19 @@ impl DiscordState {
         channel_id: Id<ChannelMarker>,
         history: &[MessageInfo],
     ) {
-        if let Some(messages) = self.message_cache.messages.remove(&channel_id) {
-            for message in messages {
+        if let Some(timeline) = self.message_cache.timelines.remove(&channel_id) {
+            for message in timeline.messages {
                 self.prune_message_author_role_ids_if_unreferenced(channel_id, message.id);
             }
         }
-        self.message_cache.message_gaps.remove(&channel_id);
-        self.merge_message_history_with_trim(
-            channel_id,
-            MessageHistoryTrimPolicy::LatestWindow,
-            history,
-        );
+        let incoming = self.message_states_from_history(channel_id, history);
+        let recent_limit = self.message_cache.max_messages_per_channel;
+        let timeline = self.message_cache.timelines.entry(channel_id).or_default();
+        let incoming_ids = timeline.merge_messages(incoming);
+        timeline.replace_latest(&incoming_ids);
+        let evicted = timeline.trim_to_retention_limit(recent_limit);
+        self.finish_message_timeline_merge(channel_id, evicted);
         self.touch_warm_message_channel(channel_id);
-    }
-
-    fn merge_message_history_with_trim(
-        &mut self,
-        channel_id: Id<ChannelMarker>,
-        trim_policy: MessageHistoryTrimPolicy,
-        history: &[MessageInfo],
-    ) {
-        let channel_guild_id = self.channel_guild_id(channel_id);
-        let older_history_message_limit = self.older_history_message_limit();
-        let incoming_messages = history
-            .iter()
-            .filter(|message| message.channel_id == channel_id)
-            .map(|message| {
-                let mut message = self.message_state_from_info(channel_guild_id, message);
-                if self.pinned_message_known(channel_id, message.id) {
-                    message.pinned = true;
-                }
-                message
-            })
-            .collect::<Vec<_>>();
-        for message in history
-            .iter()
-            .filter(|message| message.channel_id == channel_id)
-        {
-            self.record_message_author_role_ids(message);
-        }
-        let messages = self.message_cache.messages.entry(channel_id).or_default();
-        let mut by_id: BTreeMap<Id<MessageMarker>, MessageState> = messages
-            .drain(..)
-            .map(|message| (message.id, message))
-            .collect();
-
-        for incoming in incoming_messages {
-            by_id
-                .entry(incoming.id)
-                .and_modify(|existing| merge_message(existing, &incoming))
-                .or_insert(incoming);
-        }
-
-        *messages = by_id.into_values().collect();
-        let mut evicted_message_ids = Vec::new();
-        match trim_policy {
-            MessageHistoryTrimPolicy::LatestWindow => {
-                while messages.len() > self.message_cache.max_messages_per_channel {
-                    if let Some(evicted) = messages.pop_front() {
-                        evicted_message_ids.push(evicted.id);
-                    }
-                }
-            }
-            MessageHistoryTrimPolicy::OlderWindow => {
-                while messages.len() > older_history_message_limit {
-                    if let Some(evicted) = messages.pop_back() {
-                        evicted_message_ids.push(evicted.id);
-                    }
-                }
-            }
-            MessageHistoryTrimPolicy::NewerGap => {
-                while messages.len() > older_history_message_limit.max(2) {
-                    if let Some(evicted) = messages.pop_front() {
-                        evicted_message_ids.push(evicted.id);
-                    }
-                }
-            }
-        }
-        let last_message_id = messages.back().map(|message| message.id);
-        for evicted_message_id in evicted_message_ids {
-            self.prune_message_author_role_ids_if_unreferenced(channel_id, evicted_message_id);
-        }
-        if let Some(last_message_id) = last_message_id {
-            self.record_channel_message_id(channel_id, last_message_id);
-        }
-        self.prune_message_history_gaps(channel_id);
     }
 
     pub(in crate::discord) fn merge_message_history_around(
@@ -811,15 +1181,25 @@ impl DiscordState {
         message_id: Id<MessageMarker>,
         history: &[MessageInfo],
     ) {
-        let previous_ids = self.cached_message_ids(channel_id);
-        let incoming_ids = history
-            .iter()
-            .filter(|message| message.channel_id == channel_id)
-            .map(|message| message.message_id)
-            .collect::<Vec<_>>();
+        let incoming = self.message_states_from_history(channel_id, history);
+        let recent_limit = self.message_cache.max_messages_per_channel;
+        let timeline = self.message_cache.timelines.entry(channel_id).or_default();
+        let incoming_ids = timeline.merge_messages(incoming);
+        let evicted = timeline.merge_around(message_id, &incoming_ids, recent_limit);
+        self.finish_message_timeline_merge(channel_id, evicted);
+    }
 
-        self.merge_message_history(channel_id, Some(message_id), history);
-        self.record_gap_after_loaded_window(channel_id, &previous_ids, &incoming_ids);
+    pub(in crate::discord) fn merge_detached_message_history(
+        &mut self,
+        channel_id: Id<ChannelMarker>,
+        history: &[MessageInfo],
+    ) {
+        let incoming = self.message_states_from_history(channel_id, history);
+        let recent_limit = self.message_cache.max_messages_per_channel;
+        let timeline = self.message_cache.timelines.entry(channel_id).or_default();
+        let incoming_ids = timeline.merge_messages(incoming);
+        let evicted = timeline.merge_detached(&incoming_ids, recent_limit);
+        self.finish_message_timeline_merge(channel_id, evicted);
     }
 
     pub(in crate::discord) fn merge_message_history_after(
@@ -829,172 +1209,52 @@ impl DiscordState {
         history: &[MessageInfo],
         has_more: bool,
     ) {
-        let upper_id = self.message_history_gap_after(channel_id, after);
-        let incoming_ids = history
+        let incoming = self.message_states_from_history(channel_id, history);
+        let recent_limit = self.message_cache.max_messages_per_channel;
+        let timeline = self.message_cache.timelines.entry(channel_id).or_default();
+        let incoming_ids = timeline.merge_messages(incoming);
+        let evicted = timeline.merge_newer(after, &incoming_ids, has_more, recent_limit);
+        self.finish_message_timeline_merge(channel_id, evicted);
+    }
+
+    fn message_states_from_history(
+        &mut self,
+        channel_id: Id<ChannelMarker>,
+        history: &[MessageInfo],
+    ) -> Vec<MessageState> {
+        let channel_guild_id = self.channel_guild_id(channel_id);
+        let mut incoming = Vec::new();
+        for message in history
             .iter()
             .filter(|message| message.channel_id == channel_id)
-            .map(|message| message.message_id)
-            .collect::<Vec<_>>();
-
-        self.merge_message_history_with_trim(
-            channel_id,
-            MessageHistoryTrimPolicy::NewerGap,
-            history,
-        );
-        if let Some(upper_id) = upper_id {
-            self.update_gap_after_newer_history(
-                channel_id,
-                after,
-                upper_id,
-                &incoming_ids,
-                has_more,
-            );
-        }
-    }
-
-    fn older_history_message_limit(&self) -> usize {
-        self.message_cache
-            .max_messages_per_channel
-            .saturating_mul(OLDER_HISTORY_EXTRA_WINDOW_MULTIPLIER)
-    }
-
-    fn cached_message_ids(&self, channel_id: Id<ChannelMarker>) -> Vec<Id<MessageMarker>> {
-        self.message_cache
-            .messages
-            .get(&channel_id)
-            .map(|messages| messages.iter().map(|message| message.id).collect())
-            .unwrap_or_default()
-    }
-
-    fn record_gap_after_loaded_window(
-        &mut self,
-        channel_id: Id<ChannelMarker>,
-        previous_ids: &[Id<MessageMarker>],
-        incoming_ids: &[Id<MessageMarker>],
-    ) {
-        let Some(lower_id) = incoming_ids.iter().max().copied() else {
-            return;
-        };
-        let Some(upper_id) = previous_ids
-            .iter()
-            .copied()
-            .filter(|message_id| *message_id > lower_id)
-            .min()
-        else {
-            return;
-        };
-        self.upsert_message_history_gap(channel_id, lower_id, upper_id);
-    }
-
-    fn update_gap_after_newer_history(
-        &mut self,
-        channel_id: Id<ChannelMarker>,
-        after: Id<MessageMarker>,
-        upper_id: Id<MessageMarker>,
-        incoming_ids: &[Id<MessageMarker>],
-        has_more: bool,
-    ) {
-        self.remove_message_history_gap(channel_id, after, upper_id);
-        let reached_upper = incoming_ids
-            .iter()
-            .any(|message_id| *message_id >= upper_id);
-        if incoming_ids.is_empty() || reached_upper || !has_more {
-            self.prune_message_history_gaps(channel_id);
-            return;
-        }
-        if let Some(new_lower_id) = incoming_ids
-            .iter()
-            .copied()
-            .filter(|message_id| *message_id > after && *message_id < upper_id)
-            .max()
         {
-            self.upsert_message_history_gap(channel_id, new_lower_id, upper_id);
-        }
-        self.prune_message_history_gaps(channel_id);
-    }
-
-    fn upsert_message_history_gap(
-        &mut self,
-        channel_id: Id<ChannelMarker>,
-        lower_id: Id<MessageMarker>,
-        upper_id: Id<MessageMarker>,
-    ) {
-        if lower_id >= upper_id
-            || !self.cached_message_id_exists(channel_id, lower_id)
-            || !self.cached_message_id_exists(channel_id, upper_id)
-        {
-            return;
-        }
-        let gaps = self
-            .message_cache
-            .message_gaps
-            .entry(channel_id)
-            .or_default();
-        gaps.retain(|gap| gap.lower_id != lower_id && gap.upper_id != upper_id);
-        gaps.push(MessageHistoryGap { lower_id, upper_id });
-        gaps.sort_by_key(|gap| gap.lower_id);
-    }
-
-    fn remove_message_history_gap(
-        &mut self,
-        channel_id: Id<ChannelMarker>,
-        lower_id: Id<MessageMarker>,
-        upper_id: Id<MessageMarker>,
-    ) {
-        if let Some(gaps) = self.message_cache.message_gaps.get_mut(&channel_id) {
-            gaps.retain(|gap| {
-                gap.upper_id != upper_id || gap.lower_id < lower_id || gap.lower_id >= upper_id
-            });
-        }
-    }
-
-    fn prune_message_history_gaps(&mut self, channel_id: Id<ChannelMarker>) {
-        let cached_ids = self
-            .message_cache
-            .messages
-            .get(&channel_id)
-            .map(|messages| {
-                messages
-                    .iter()
-                    .map(|message| message.id)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let mut remove_channel_gaps = false;
-        if let Some(gaps) = self.message_cache.message_gaps.get_mut(&channel_id) {
-            for gap in gaps.iter_mut() {
-                if let Some(new_lower_id) = cached_ids
-                    .iter()
-                    .copied()
-                    .filter(|message_id| *message_id > gap.lower_id && *message_id < gap.upper_id)
-                    .max()
-                {
-                    gap.lower_id = new_lower_id;
-                }
+            self.record_message_author_role_ids(message);
+            let mut state = self.message_state_from_info(channel_guild_id, message);
+            if self.pinned_message_known(channel_id, state.id) {
+                state.pinned = true;
             }
-            gaps.retain(|gap| {
-                gap.lower_id < gap.upper_id
-                    && cached_ids.contains(&gap.lower_id)
-                    && cached_ids.contains(&gap.upper_id)
-            });
-            gaps.sort_by_key(|gap| (gap.lower_id, gap.upper_id));
-            gaps.dedup();
-            remove_channel_gaps = gaps.is_empty();
+            incoming.push(state);
         }
-        if remove_channel_gaps {
-            self.message_cache.message_gaps.remove(&channel_id);
-        }
+        incoming
     }
 
-    fn cached_message_id_exists(
-        &self,
+    fn finish_message_timeline_merge(
+        &mut self,
         channel_id: Id<ChannelMarker>,
-        message_id: Id<MessageMarker>,
-    ) -> bool {
-        self.message_cache
-            .messages
+        evicted_message_ids: Vec<Id<MessageMarker>>,
+    ) {
+        for message_id in evicted_message_ids {
+            self.prune_message_author_role_ids_if_unreferenced(channel_id, message_id);
+        }
+        let last_message_id = self
+            .message_cache
+            .timelines
             .get(&channel_id)
-            .is_some_and(|messages| messages.iter().any(|message| message.id == message_id))
+            .and_then(|timeline| timeline.messages.back())
+            .map(|message| message.id);
+        if let Some(last_message_id) = last_message_id {
+            self.record_channel_message_id(channel_id, last_message_id);
+        }
     }
 
     pub(in crate::discord) fn replace_pinned_messages(
@@ -1022,11 +1282,16 @@ impl DiscordState {
             self.record_message_author_role_ids(pin);
             let mut pinned = self.message_state_from_info(channel_guild_id, pin);
             pinned.pinned = true;
-            if let Some(existing) = self
-                .message_cache
-                .messages
-                .get_mut(&channel_id)
-                .and_then(|messages| messages.iter_mut().find(|message| message.id == pinned.id))
+            if let Some(existing) =
+                self.message_cache
+                    .timelines
+                    .get_mut(&channel_id)
+                    .and_then(|timeline| {
+                        timeline
+                            .messages
+                            .iter_mut()
+                            .find(|message| message.id == pinned.id)
+                    })
             {
                 merge_message(existing, &pinned);
             }
@@ -1034,8 +1299,8 @@ impl DiscordState {
         }
 
         let loaded_pin_ids = by_id.keys().copied().collect::<Vec<_>>();
-        if let Some(messages) = self.message_cache.messages.get_mut(&channel_id) {
-            for message in messages {
+        if let Some(timeline) = self.message_cache.timelines.get_mut(&channel_id) {
+            for message in &mut timeline.messages {
                 message.pinned = loaded_pin_ids.contains(&message.id);
             }
         }
@@ -1117,10 +1382,11 @@ impl DiscordState {
     ) {
         let normal_message =
             self.message_cache
-                .messages
+                .timelines
                 .get_mut(&channel_id)
-                .and_then(|messages| {
-                    messages
+                .and_then(|timeline| {
+                    timeline
+                        .messages
                         .iter_mut()
                         .find(|message| message.id == message_id)
                         .map(|message| {
@@ -1186,9 +1452,12 @@ impl DiscordState {
         channel_id: Id<ChannelMarker>,
         message_ids: &[Id<MessageMarker>],
     ) {
-        self.update_cached_messages_in_channel(channel_id, |messages| {
+        if let Some(timeline) = self.message_cache.timelines.get_mut(&channel_id) {
+            timeline.remove_messages(message_ids);
+        }
+        if let Some(messages) = self.message_cache.pinned_messages.get_mut(&channel_id) {
             messages.retain(|message| !message_ids.contains(&message.id));
-        });
+        }
         for message_id in message_ids {
             self.message_cache
                 .message_author_role_ids
@@ -1228,9 +1497,9 @@ impl DiscordState {
     ) {
         let is_still_cached = self
             .message_cache
-            .messages
+            .timelines
             .get(&channel_id)
-            .is_some_and(|messages| messages.iter().any(|message| message.id == message_id))
+            .is_some_and(|timeline| timeline.contains_message(message_id))
             || self
                 .message_cache
                 .pinned_messages

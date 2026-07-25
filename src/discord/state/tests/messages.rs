@@ -1047,185 +1047,101 @@ fn history_respects_message_limit_after_merge() {
 }
 
 #[test]
-fn older_history_preserves_existing_messages_when_message_limit_is_reached() {
+fn segmented_history_keeps_live_messages_reachable_while_browsing_older_pages() {
     let channel_id: Id<ChannelMarker> = Id::new(10);
-    let mut state = DiscordState::new(3);
+    let mut state = DiscordState::new(6);
 
     state.apply_event(&latest_history_loaded(
         channel_id,
-        vec![
-            message_info(channel_id, 10, "old"),
-            message_info(channel_id, 11, "middle"),
-            message_info(channel_id, 12, "new"),
-        ],
+        (100..=105)
+            .map(|id| message_info(channel_id, id, &format!("live {id}")))
+            .collect(),
     ));
     state.apply_event(&message_history_loaded_event(MessageHistoryLoadedFixture {
         channel_id,
-        before: Some(Id::new(10)),
-        messages: vec![message_info(channel_id, 5, "older")],
-    }));
-
-    let messages = state.messages_for_channel(channel_id);
-    assert_eq!(
-        messages
-            .iter()
-            .map(|message| message.id.get())
-            .collect::<Vec<_>>(),
-        vec![5, 10, 11, 12]
-    );
-}
-
-#[test]
-fn older_history_is_bounded_by_extra_window() {
-    let channel_id: Id<ChannelMarker> = Id::new(10);
-    let mut state = DiscordState::new(3);
-
-    state.apply_event(&latest_history_loaded(
-        channel_id,
-        vec![
-            message_info(channel_id, 10, "old"),
-            message_info(channel_id, 11, "middle"),
-            message_info(channel_id, 12, "new"),
-        ],
-    ));
-    state.apply_event(&message_history_loaded_event(MessageHistoryLoadedFixture {
-        channel_id,
-        before: Some(Id::new(10)),
-        messages: vec![
-            message_info(channel_id, 1, "older 1"),
-            message_info(channel_id, 2, "older 2"),
-            message_info(channel_id, 3, "older 3"),
-            message_info(channel_id, 4, "older 4"),
-            message_info(channel_id, 5, "older 5"),
-        ],
-    }));
-
-    let messages = state.messages_for_channel(channel_id);
-    assert_eq!(messages.len(), 6);
-    assert_eq!(
-        messages
-            .iter()
-            .map(|message| message.id.get())
-            .collect::<Vec<_>>(),
-        vec![1, 2, 3, 4, 5, 10]
-    );
-}
-
-#[test]
-fn live_message_after_older_history_keeps_newer_window() {
-    let channel_id: Id<ChannelMarker> = Id::new(10);
-    let mut state = DiscordState::new(4);
-
-    state.apply_event(&latest_history_loaded(
-        channel_id,
-        vec![
-            message_info(channel_id, 10, "old"),
-            message_info(channel_id, 11, "middle"),
-            message_info(channel_id, 12, "new"),
-        ],
-    ));
-    state.apply_event(&message_history_loaded_event(MessageHistoryLoadedFixture {
-        channel_id,
-        before: Some(Id::new(10)),
-        messages: vec![message_info(channel_id, 5, "older")],
+        before: Some(Id::new(100)),
+        messages: (1..=7)
+            .map(|id| message_info(channel_id, id, &format!("older {id}")))
+            .collect(),
     }));
     state.apply_event(&message_create_event(MessageCreateFixture {
         guild_id: None,
         channel_id,
-        message_id: Id::new(13),
+        message_id: Id::new(106),
         author_id: Id::new(99),
-        content: Some("newest".to_owned()),
+        content: Some("new live message".to_owned()),
         ..MessageCreateFixture::test_fixture_default()
     }));
 
-    let messages = state.messages_for_channel(channel_id);
     assert_eq!(
-        messages
-            .iter()
+        state
+            .messages_for_channel(channel_id)
+            .into_iter()
             .map(|message| message.id.get())
             .collect::<Vec<_>>(),
-        vec![10, 11, 12, 13]
+        vec![1, 2, 3, 4, 5, 6, 101, 102, 103, 104, 105, 106]
     );
-}
-
-#[test]
-fn newer_history_gap_is_recorded_shrunk_and_closed() {
-    let channel_id: Id<ChannelMarker> = Id::new(10);
-    let mut state = DiscordState::new(3);
-
-    state.apply_event(&latest_history_loaded(
-        channel_id,
-        vec![
-            message_info(channel_id, 100, "newer 100"),
-            message_info(channel_id, 101, "newer 101"),
-        ],
-    ));
-    state.apply_event(&message_history_around_loaded_event(
-        MessageHistoryAroundLoadedFixture {
-            channel_id,
-            message_id: Id::new(11),
-            messages: vec![
-                message_info(channel_id, 10, "around 10"),
-                message_info(channel_id, 11, "around 11"),
-                message_info(channel_id, 12, "around 12"),
-            ],
-        },
-    ));
     assert_eq!(
-        state.message_history_gap_after(channel_id, Id::new(12)),
-        Some(Id::new(100))
+        state.message_history_gap_after(channel_id, Id::new(6)),
+        Some(Id::new(101))
     );
 
     state.apply_event(&message_history_after_loaded_event(
         MessageHistoryAfterLoadedFixture {
             channel_id,
-            after: Id::new(12),
-            messages: vec![
-                message_info(channel_id, 13, "gap 13"),
-                message_info(channel_id, 14, "gap 14"),
-                message_info(channel_id, 15, "gap 15"),
-                message_info(channel_id, 16, "gap 16"),
-            ],
+            after: Id::new(6),
+            messages: (7..=10)
+                .map(|id| message_info(channel_id, id, &format!("gap {id}")))
+                .collect(),
             has_more: true,
             mode: MessageHistoryAfterMode::GapFill,
         },
     ));
-    let messages = state.messages_for_channel(channel_id);
     assert_eq!(
-        messages
-            .iter()
-            .map(|message| message.id.get())
-            .collect::<Vec<_>>(),
-        vec![13, 14, 15, 16, 100, 101]
-    );
-    assert_eq!(
-        state.message_history_gap_after(channel_id, Id::new(16)),
-        Some(Id::new(100))
+        state.message_history_gap_after(channel_id, Id::new(8)),
+        Some(Id::new(101))
     );
 
     state.apply_event(&message_history_after_loaded_event(
         MessageHistoryAfterLoadedFixture {
             channel_id,
-            after: Id::new(16),
+            after: Id::new(8),
+            messages: (9..=12)
+                .map(|id| message_info(channel_id, id, &format!("gap {id}")))
+                .collect(),
+            has_more: true,
+            mode: MessageHistoryAfterMode::GapFill,
+        },
+    ));
+    assert_eq!(
+        state.message_history_gap_after(channel_id, Id::new(10)),
+        Some(Id::new(101))
+    );
+
+    state.apply_event(&message_history_after_loaded_event(
+        MessageHistoryAfterLoadedFixture {
+            channel_id,
+            after: Id::new(10),
             messages: vec![
-                message_info(channel_id, 17, "gap 17"),
-                message_info(channel_id, 100, "upper 100"),
+                message_info(channel_id, 11, "gap 11"),
+                message_info(channel_id, 12, "gap 12"),
+                message_info(channel_id, 101, "live boundary"),
             ],
             mode: MessageHistoryAfterMode::GapFill,
             ..MessageHistoryAfterLoadedFixture::new()
         },
     ));
 
-    let messages = state.messages_for_channel(channel_id);
     assert_eq!(
-        messages
-            .iter()
+        state
+            .messages_for_channel(channel_id)
+            .into_iter()
             .map(|message| message.id.get())
             .collect::<Vec<_>>(),
-        vec![14, 15, 16, 17, 100, 101]
+        vec![7, 8, 9, 10, 11, 12, 101, 102, 103, 104, 105, 106]
     );
     assert_eq!(
-        state.message_history_gap_after(channel_id, Id::new(17)),
+        state.message_history_gap_after(channel_id, Id::new(12)),
         None
     );
 }

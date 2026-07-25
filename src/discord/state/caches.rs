@@ -22,8 +22,7 @@ pub struct ThreadCreatorState {
 
 #[derive(Clone, Debug)]
 pub(in crate::discord) struct MessageCache {
-    pub(in crate::discord) messages: BTreeMap<Id<ChannelMarker>, VecDeque<MessageState>>,
-    pub(in crate::discord) message_gaps: BTreeMap<Id<ChannelMarker>, Vec<MessageHistoryGap>>,
+    pub(in crate::discord) timelines: BTreeMap<Id<ChannelMarker>, ChannelMessageTimeline>,
     pub(in crate::discord) cold_message_channels: BTreeSet<Id<ChannelMarker>>,
     pub(in crate::discord) warm_message_channels: VecDeque<Id<ChannelMarker>>,
     pub(in crate::discord) pinned_messages: BTreeMap<Id<ChannelMarker>, VecDeque<MessageState>>,
@@ -35,8 +34,7 @@ pub(in crate::discord) struct MessageCache {
 impl MessageCache {
     pub(super) fn new(max_messages_per_channel: usize) -> Self {
         Self {
-            messages: BTreeMap::new(),
-            message_gaps: BTreeMap::new(),
+            timelines: BTreeMap::new(),
             cold_message_channels: BTreeSet::new(),
             warm_message_channels: VecDeque::new(),
             pinned_messages: BTreeMap::new(),
@@ -45,6 +43,29 @@ impl MessageCache {
             max_warm_message_channels: DEFAULT_MAX_WARM_MESSAGE_CHANNELS,
         }
     }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(in crate::discord) struct ChannelMessageTimeline {
+    pub(in crate::discord) messages: VecDeque<MessageState>,
+    pub(in crate::discord) segments: VecDeque<MessageSegment>,
+    pub(in crate::discord) historical_mode: bool,
+    pub(in crate::discord) active_focus: MessageTimelineFocus,
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::discord) struct MessageSegment {
+    pub(in crate::discord) message_ids: VecDeque<Id<MessageMarker>>,
+    pub(in crate::discord) active: bool,
+    pub(in crate::discord) reaches_live_edge: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::discord) enum MessageTimelineFocus {
+    #[default]
+    Newest,
+    Oldest,
+    Around(Id<MessageMarker>),
 }
 
 #[derive(Clone, Debug, Default)]

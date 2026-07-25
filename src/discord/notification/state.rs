@@ -471,7 +471,7 @@ impl DiscordState {
     }
 
     fn loaded_unread_notification_counts(&self, channel_id: Id<ChannelMarker>) -> (usize, usize) {
-        let Some(messages) = self.message_cache.messages.get(&channel_id) else {
+        let Some(timeline) = self.message_cache.timelines.get(&channel_id) else {
             return (0, 0);
         };
         let last_acked = self
@@ -481,7 +481,8 @@ impl DiscordState {
             .and_then(|state| state.last_acked_message_id);
         let mut mentions = 0usize;
         let mut notifications = 0usize;
-        for message in messages
+        for message in timeline
+            .messages
             .iter()
             .filter(|message| last_acked.is_none_or(|last_acked| message.id > last_acked))
         {

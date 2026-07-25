@@ -1014,9 +1014,9 @@ fn older_history_request_emits_visible_cursor_target() {
 }
 
 #[test]
-fn older_history_request_advances_after_cache_limit_retention() {
+fn older_history_keeps_live_tail_reachable_when_new_messages_arrive() {
     let channel_id: Id<ChannelMarker> = Id::new(2);
-    let mut state = state_with_message_ids(10..=209);
+    let mut state = state_with_message_ids(1000..=1199);
     state.focus_pane(FocusPane::Messages);
     state.jump_top();
 
@@ -1024,27 +1024,37 @@ fn older_history_request_advances_after_cache_limit_retention() {
         state.next_older_history_command(),
         Some(AppCommand::LoadMessageHistory {
             channel_id,
-            before: Some(Id::new(10)),
+            before: Some(Id::new(1000)),
         })
     );
     state.push_event(message_history_loaded_event(MessageHistoryLoadedFixture {
         channel_id,
-        before: Some(Id::new(10)),
-        messages: vec![message_info(channel_id, 5)],
+        before: Some(Id::new(1000)),
+        messages: (1..=250)
+            .map(|message_id| message_info(channel_id, message_id))
+            .collect(),
     }));
 
+    assert_eq!(state.messages()[state.selected_message()].id, Id::new(1000));
+    state.move_up();
+    assert_eq!(state.messages()[state.selected_message()].id, Id::new(200));
+
+    state.push_event(message_create_event(
+        MessageCreateFixture::guild_message(Id::new(1), channel_id, Id::new(1200))
+            .with_content("new live message"),
+    ));
+
+    assert_eq!(state.messages()[state.selected_message()].id, Id::new(200));
     assert_eq!(
         state.messages().last().map(|message| message.id),
-        Some(Id::new(209))
+        Some(Id::new(1200))
     );
-
-    state.move_up();
-
     assert_eq!(
-        state.next_older_history_command(),
-        Some(AppCommand::LoadMessageHistory {
+        state.next_newer_history_command_for_down_by(1),
+        Some(AppCommand::LoadMessageHistoryAfter {
             channel_id,
-            before: Some(Id::new(5)),
+            after: Id::new(200),
+            mode: MessageHistoryAfterMode::GapFill,
         })
     );
 }

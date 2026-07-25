@@ -13,7 +13,7 @@ pub use super::channel::{ChannelRecipientState, ChannelState, ChannelVisibilityS
 pub use super::guild::GuildState;
 pub use super::member::{GuildMemberState, RoleState, TypingUserState};
 use super::member::{role_map, role_state};
-use super::message::{MessageAuthorRoleIds, MessageHistoryGap, MessageUpdateFields};
+use super::message::{MessageAuthorRoleIds, MessageUpdateFields};
 pub use super::message::{MessageCapabilities, MessageState};
 pub use super::notification::ChannelUnreadState;
 use super::notification::{
@@ -24,7 +24,7 @@ use super::read::{ChannelReadState, NonChannelReadState};
 pub use super::voice::{CurrentVoiceConnectionState, VoiceParticipantState, VoiceScope};
 use crate::discord::ids::{
     Id,
-    marker::{ChannelMarker, GuildMarker, RoleMarker, UserMarker},
+    marker::{ChannelMarker, GuildMarker, MessageMarker, RoleMarker, UserMarker},
 };
 
 use super::{
@@ -109,11 +109,11 @@ impl DiscordState {
             channels: self.navigation.channels.len(),
             messages: self
                 .message_cache
-                .messages
+                .timelines
                 .values()
-                .map(VecDeque::len)
+                .map(|timeline| timeline.messages.len())
                 .sum(),
-            message_channels: self.message_cache.messages.len(),
+            message_channels: self.message_cache.timelines.len(),
             pinned_messages: self
                 .message_cache
                 .pinned_messages
@@ -393,9 +393,8 @@ impl DiscordState {
                 }
                 self.record_thread_creators(threads);
                 for message in first_messages {
-                    self.merge_message_history(
+                    self.merge_detached_message_history(
                         message.channel_id,
-                        None,
                         std::slice::from_ref(message),
                     );
                 }
@@ -403,7 +402,7 @@ impl DiscordState {
             AppEvent::ChannelDelete { channel_id, .. } => {
                 self.navigation.channels.remove(channel_id);
                 self.navigation.thread_creators.remove(channel_id);
-                self.message_cache.messages.remove(channel_id);
+                self.message_cache.timelines.remove(channel_id);
                 self.message_cache.cold_message_channels.remove(channel_id);
                 self.message_cache
                     .warm_message_channels
@@ -447,24 +446,12 @@ impl DiscordState {
             } => {
                 self.merge_message_history_around(*channel_id, *message_id, messages);
             }
-            AppEvent::MessageSearchLoaded { page } => {
-                let mut by_channel: std::collections::BTreeMap<_, Vec<_>> =
-                    std::collections::BTreeMap::new();
-                for message in &page.messages {
-                    by_channel
-                        .entry(message.channel_id)
-                        .or_default()
-                        .push(message.clone());
-                }
-                for (channel_id, messages) in by_channel {
-                    self.merge_message_history(channel_id, None, &messages);
-                }
-            }
+            AppEvent::MessageSearchLoaded { .. } => {}
             AppEvent::ThreadPreviewLoaded {
                 channel_id,
                 message,
             } => {
-                self.merge_message_history(*channel_id, None, std::slice::from_ref(message));
+                self.merge_detached_message_history(*channel_id, std::slice::from_ref(message));
             }
             // Inbox loads keep their own snapshot (see notification_inbox) and
             // never touch the shared cache. They are handled as UI effects.
@@ -921,7 +908,7 @@ impl DiscordState {
             .thread_creators
             .retain(|channel_id, _| self.navigation.channels.contains_key(channel_id));
         self.message_cache
-            .messages
+            .timelines
             .retain(|channel_id, _| self.navigation.channels.contains_key(channel_id));
         self.message_cache
             .cold_message_channels

@@ -389,10 +389,15 @@ impl DiscordState {
         let mut authors: BTreeMap<Id<GuildMarker>, BTreeSet<Id<UserMarker>>> = BTreeMap::new();
         for message in self
             .message_cache
-            .messages
+            .timelines
             .values()
-            .chain(self.message_cache.pinned_messages.values())
-            .flat_map(|messages| messages.iter())
+            .flat_map(|timeline| timeline.messages.iter())
+            .chain(
+                self.message_cache
+                    .pinned_messages
+                    .values()
+                    .flat_map(|messages| messages.iter()),
+            )
         {
             if let Some(guild_id) = message.guild_id {
                 authors

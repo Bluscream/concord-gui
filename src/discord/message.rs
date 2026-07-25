@@ -1,6 +1,6 @@
 mod state;
 
-pub(in crate::discord) use state::{MessageAuthorRoleIds, MessageHistoryGap, MessageUpdateFields};
+pub(in crate::discord) use state::{MessageAuthorRoleIds, MessageUpdateFields};
 pub use state::{MessageCapabilities, MessageState};
 
 use crate::discord::commands::ReactionEmoji;
