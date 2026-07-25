@@ -139,17 +139,6 @@ impl DiscordState {
             .unwrap_or(false)
     }
 
-    pub fn user_voice_channel_in_guild(
-        &self,
-        guild_id: Id<GuildMarker>,
-        user_id: Id<UserMarker>,
-    ) -> Option<Id<ChannelMarker>> {
-        self.voice
-            .states
-            .get(&(VoiceScope::Guild(guild_id), user_id))
-            .map(|state| state.channel_id)
-    }
-
     pub(crate) fn voice_sound_for_state_update(
         &self,
         state: &VoiceStateInfo,
@@ -299,10 +288,12 @@ impl DiscordState {
             // Moving across scopes (DM A -> DM B, guild -> DM) changes the key,
             // and Discord sends only the new location, so drop any stale entry
             // this user still holds under a different scope.
-            self.voice.states.retain(|(state_scope, state_user_id), _| {
-                *state_user_id != user_id || *state_scope == scope
-            });
-            self.voice.states.insert(
+            self.voice_mut()
+                .states
+                .retain(|(state_scope, state_user_id), _| {
+                    *state_user_id != user_id || *state_scope == scope
+                });
+            self.voice_mut().states.insert(
                 key,
                 VoiceState {
                     channel_id,
@@ -320,12 +311,12 @@ impl DiscordState {
             // so we drop every private entry this user holds.
             match state.guild_id {
                 Some(guild_id) => {
-                    self.voice
+                    self.voice_mut()
                         .states
                         .remove(&(VoiceScope::Guild(guild_id), user_id));
                 }
                 None => {
-                    self.voice.states.retain(|(scope, state_user_id), _| {
+                    self.voice_mut().states.retain(|(scope, state_user_id), _| {
                         !(matches!(scope, VoiceScope::Private(_)) && *state_user_id == user_id)
                     });
                 }
@@ -340,7 +331,7 @@ impl DiscordState {
         user_id: Id<UserMarker>,
         speaking: bool,
     ) {
-        let Some(state) = self.voice.states.get_mut(&(scope, user_id)) else {
+        let Some(state) = self.voice_mut().states.get_mut(&(scope, user_id)) else {
             return;
         };
         if state.channel_id == channel_id {
@@ -353,13 +344,13 @@ impl DiscordState {
         guild_id: Id<GuildMarker>,
         user_id: Id<UserMarker>,
     ) {
-        self.voice
+        self.voice_mut()
             .states
             .remove(&(VoiceScope::Guild(guild_id), user_id));
     }
 
     pub(in crate::discord) fn remove_voice_states_for_guild(&mut self, guild_id: Id<GuildMarker>) {
-        self.voice
+        self.voice_mut()
             .states
             .retain(|(scope, _), _| *scope != VoiceScope::Guild(guild_id));
     }
@@ -368,7 +359,7 @@ impl DiscordState {
         &mut self,
         channel_id: Id<ChannelMarker>,
     ) {
-        self.voice
+        self.voice_mut()
             .states
             .retain(|_, state| state.channel_id != channel_id);
     }
@@ -378,7 +369,7 @@ impl DiscordState {
         scope: VoiceScope,
         channel_id: Id<ChannelMarker>,
     ) {
-        for ((state_scope, _), state) in &mut self.voice.states {
+        for ((state_scope, _), state) in &mut self.voice_mut().states {
             if *state_scope == scope && state.channel_id == channel_id {
                 state.speaking = false;
             }

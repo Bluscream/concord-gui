@@ -85,96 +85,541 @@ impl CommandDispatcher {
 
     async fn handle(&self, command: AppCommand) {
         match command {
-            command @ (AppCommand::LoadMessageHistory { .. }
-            | AppCommand::RefreshMessageHistory { .. }
-            | AppCommand::LoadMessageHistoryAfter { .. }
-            | AppCommand::LoadMessageHistoryAround { .. }
-            | AppCommand::LoadThreadPreview { .. }
-            | AppCommand::LoadForumPosts { .. }
-            | AppCommand::LoadInboxChannelHistory { .. }
-            | AppCommand::SearchMessages { .. }) => {
-                history_commands::handle(self.client.clone(), command).await;
+            AppCommand::LoadMessageHistory { channel_id, before } => {
+                history_commands::load_history(self.client.clone(), channel_id, before).await;
             }
-            command @ (AppCommand::LoadInboxMentions { .. }
-            | AppCommand::DeleteInboxMention { .. }) => {
-                inbox_commands::handle(self.client.clone(), command).await;
+            AppCommand::RefreshMessageHistory { channel_id } => {
+                history_commands::refresh_history(self.client.clone(), channel_id).await;
             }
-            command @ (AppCommand::LoadGuildMembersByIds { .. }
-            | AppCommand::SearchGuildMembers { .. }
-            | AppCommand::SetSelectedGuild { .. }
-            | AppCommand::SetSelectedMessageChannel { .. }
-            | AppCommand::SubscribeDirectMessage { .. }
-            | AppCommand::SubscribeGuildChannel { .. }
-            | AppCommand::UpdateMemberListSubscription { .. }) => {
-                gateway_commands::handle(self.client.clone(), command).await;
+            AppCommand::LoadMessageHistoryAfter {
+                channel_id,
+                after,
+                mode,
+            } => {
+                history_commands::load_history_after(self.client.clone(), channel_id, after, mode)
+                    .await;
             }
-            command @ (AppCommand::JoinVoiceChannel { .. }
-            | AppCommand::UpdateVoiceState { .. }
-            | AppCommand::UpdateVoiceCapturePermission { .. }
-            | AppCommand::UpdateVoiceParticipantPlayback { .. }
-            | AppCommand::LeaveVoiceChannel { .. }) => {
-                voice_commands::handle(self.client.clone(), command).await;
+            AppCommand::LoadMessageHistoryAround {
+                channel_id,
+                message_id,
+            } => {
+                history_commands::load_history_around(self.client.clone(), channel_id, message_id)
+                    .await;
             }
-            command @ (AppCommand::LoadAttachmentPreview { .. }
-            | AppCommand::LoadProfileAvatarPreview { .. }
-            | AppCommand::OpenUrl { .. }
-            | AppCommand::PlayMedia { .. }
-            | AppCommand::DownloadAttachment { .. }) => {
-                media_commands::handle(
+            AppCommand::LoadThreadPreview {
+                channel_id,
+                message_id,
+            } => {
+                history_commands::load_thread_preview(self.client.clone(), channel_id, message_id)
+                    .await;
+            }
+            AppCommand::LoadForumPosts {
+                guild_id,
+                channel_id,
+                archive_state,
+                offset,
+            } => {
+                history_commands::load_forum_posts(
                     self.client.clone(),
-                    command,
+                    guild_id,
+                    channel_id,
+                    archive_state,
+                    offset,
+                )
+                .await;
+            }
+            AppCommand::SearchMessages { query } => {
+                history_commands::search_messages(self.client.clone(), query).await;
+            }
+            AppCommand::LoadInboxChannelHistory {
+                channel_id,
+                request_id,
+            } => {
+                history_commands::load_inbox_channel_history(
+                    self.client.clone(),
+                    channel_id,
+                    request_id,
+                )
+                .await;
+            }
+            AppCommand::LoadInboxMentions { request_id, before } => {
+                inbox_commands::load_mentions(self.client.clone(), request_id, before).await;
+            }
+            AppCommand::DeleteInboxMention { message_id } => {
+                inbox_commands::delete_mention(self.client.clone(), message_id).await;
+            }
+            AppCommand::LoadGuildMembersByIds { guild_id, user_ids } => {
+                gateway_commands::load_members_by_ids(self.client.clone(), guild_id, user_ids)
+                    .await;
+            }
+            AppCommand::SearchGuildMembers { guild_id, query } => {
+                gateway_commands::search_members(self.client.clone(), guild_id, query).await;
+            }
+            AppCommand::SetSelectedGuild { guild_id } => {
+                gateway_commands::set_selected_guild(self.client.clone(), guild_id).await;
+            }
+            AppCommand::SetSelectedMessageChannel { channel_id } => {
+                gateway_commands::set_selected_message_channel(self.client.clone(), channel_id)
+                    .await;
+            }
+            AppCommand::SubscribeDirectMessage { channel_id } => {
+                gateway_commands::subscribe_direct_message(self.client.clone(), channel_id).await;
+            }
+            AppCommand::SubscribeGuildChannel {
+                guild_id,
+                channel_id,
+            } => {
+                gateway_commands::subscribe_guild_channel(
+                    self.client.clone(),
+                    guild_id,
+                    channel_id,
+                )
+                .await;
+            }
+            AppCommand::UpdateMemberListSubscription {
+                guild_id,
+                channel_id,
+                ranges,
+            } => {
+                gateway_commands::update_member_list_subscription(
+                    self.client.clone(),
+                    guild_id,
+                    channel_id,
+                    ranges,
+                )
+                .await;
+            }
+            AppCommand::JoinVoiceChannel {
+                scope,
+                channel_id,
+                self_mute,
+                self_deaf,
+                allow_microphone_transmit,
+                microphone_sensitivity,
+                microphone_volume,
+                voice_output_volume,
+                participant_playback_settings,
+            } => {
+                voice_commands::join_channel(
+                    self.client.clone(),
+                    voice_commands::JoinRequest {
+                        scope,
+                        channel_id,
+                        self_mute,
+                        self_deaf,
+                        allow_microphone_transmit,
+                        microphone_sensitivity,
+                        microphone_volume,
+                        voice_output_volume,
+                        participant_playback_settings,
+                    },
+                )
+                .await;
+            }
+            AppCommand::UpdateVoiceState {
+                scope,
+                channel_id,
+                self_mute,
+                self_deaf,
+            } => {
+                voice_commands::update_state(
+                    self.client.clone(),
+                    scope,
+                    channel_id,
+                    self_mute,
+                    self_deaf,
+                )
+                .await;
+            }
+            AppCommand::UpdateVoiceCapturePermission {
+                scope,
+                channel_id,
+                allow_microphone_transmit,
+                microphone_sensitivity,
+                microphone_volume,
+                voice_output_volume,
+            } => {
+                voice_commands::update_capture_permission(
+                    self.client.clone(),
+                    scope,
+                    channel_id,
+                    allow_microphone_transmit,
+                    microphone_sensitivity,
+                    microphone_volume,
+                    voice_output_volume,
+                )
+                .await;
+            }
+            AppCommand::UpdateVoiceParticipantPlayback { user_id, settings } => {
+                voice_commands::update_participant_playback(&self.client, user_id, settings);
+            }
+            AppCommand::LeaveVoiceChannel {
+                scope,
+                self_mute,
+                self_deaf,
+            } => {
+                voice_commands::leave_channel(self.client.clone(), scope, self_mute, self_deaf)
+                    .await;
+            }
+            AppCommand::LoadAttachmentPreview { url } => {
+                media_commands::load_attachment_preview(
+                    self.client.clone(),
+                    url,
                     self.attachment_preview_permits.clone(),
+                )
+                .await;
+            }
+            AppCommand::LoadProfileAvatarPreview { key, upload } => {
+                media_commands::load_profile_avatar_preview(self.client.clone(), key, upload).await;
+            }
+            AppCommand::OpenUrl { url } => {
+                media_commands::open_url(self.client.clone(), url).await;
+            }
+            AppCommand::PlayMedia { target, request_id } => {
+                media_commands::play_media(self.client.clone(), target, request_id).await;
+            }
+            AppCommand::DownloadAttachment {
+                id,
+                url,
+                filename,
+                source,
+            } => {
+                media_commands::download_attachment(
+                    self.client.clone(),
+                    id,
+                    url,
+                    filename,
+                    source,
                     self.attachment_download_permits.clone(),
                 )
                 .await;
             }
-            command @ (AppCommand::SendMessage { .. }
-            | AppCommand::TriggerTyping { .. }
-            | AppCommand::CreateForumPost { .. }
-            | AppCommand::SetThreadArchived { .. }
-            | AppCommand::SetThreadLocked { .. }
-            | AppCommand::SetThreadPinned { .. }
-            | AppCommand::DeleteThread { .. }
-            | AppCommand::EditThread { .. }
-            | AppCommand::SendTtsMessage { .. }
-            | AppCommand::LoadApplicationCommands { .. }
-            | AppCommand::RunApplicationCommand { .. }
-            | AppCommand::RequestApplicationCommandAutocomplete { .. }
-            | AppCommand::EditMessage { .. }
-            | AppCommand::DeleteMessage { .. }
-            | AppCommand::RemoveMessageEmbeds { .. }
-            | AppCommand::LeaveGuild { .. }
-            | AppCommand::AddReaction { .. }
-            | AppCommand::RemoveReaction { .. }
-            | AppCommand::LoadReactionUsers { .. }
-            | AppCommand::LoadPinnedMessages { .. }
-            | AppCommand::SetMessagePinned { .. }
-            | AppCommand::VotePoll { .. }) => {
-                message_commands::handle(self.client.clone(), command).await;
+            AppCommand::SendMessage {
+                channel_id,
+                nonce,
+                content,
+                reply_to,
+                attachments,
+            } => {
+                message_commands::send_message(
+                    self.client.clone(),
+                    channel_id,
+                    nonce,
+                    content,
+                    reply_to,
+                    attachments,
+                )
+                .await;
             }
-            command @ (AppCommand::LoadUserProfile { .. }
-            | AppCommand::LoadUserNote { .. }
-            | AppCommand::UpdateUserProfile { .. }
-            | AppCommand::UpdateCurrentUserStatus { .. }
-            | AppCommand::UpdateGuildFolderSettings { .. }
-            | AppCommand::UpdateCurrentUserActivity { .. }) => {
-                user_commands::handle(self.client.clone(), command).await;
+            AppCommand::TriggerTyping { channel_id } => {
+                message_commands::trigger_typing(self.client.clone(), channel_id).await;
             }
-            command @ (AppCommand::AckChannel { .. }
-            | AppCommand::ScheduleAckChannel { .. }
-            | AppCommand::AckChannels { .. }) => {
-                read_state_commands::handle(self.client.clone(), command).await;
+            AppCommand::SendTtsMessage {
+                channel_id,
+                nonce,
+                content,
+            } => {
+                message_commands::send_tts_message(self.client.clone(), channel_id, nonce, content)
+                    .await;
             }
-            command @ (AppCommand::SetGuildMuted { .. }
-            | AppCommand::SetChannelMuted { .. }
-            | AppCommand::SetThreadMuted { .. }
-            | AppCommand::SetThreadFollowed { .. }
-            | AppCommand::SetThreadNotificationLevel { .. }) => {
-                notification_commands::handle(self.client.clone(), command).await;
+            AppCommand::CreateForumPost { post } => {
+                message_commands::create_forum_post(self.client.clone(), post).await;
             }
-            command @ AppCommand::SignOut => {
-                session_commands::handle(self.client.clone(), command).await;
+            AppCommand::SetThreadArchived {
+                channel_id,
+                archived,
+                label,
+            } => {
+                message_commands::set_thread_archived(
+                    self.client.clone(),
+                    channel_id,
+                    archived,
+                    label,
+                )
+                .await;
             }
+            AppCommand::SetThreadLocked {
+                channel_id,
+                locked,
+                label,
+            } => {
+                message_commands::set_thread_locked(self.client.clone(), channel_id, locked, label)
+                    .await;
+            }
+            AppCommand::SetThreadPinned {
+                channel_id,
+                pinned,
+                current_flags,
+                label,
+            } => {
+                message_commands::set_thread_pinned(
+                    self.client.clone(),
+                    channel_id,
+                    pinned,
+                    current_flags,
+                    label,
+                )
+                .await;
+            }
+            AppCommand::DeleteThread { channel_id, label } => {
+                message_commands::delete_thread(self.client.clone(), channel_id, label).await;
+            }
+            AppCommand::EditThread {
+                channel_id,
+                name,
+                applied_tags,
+                rate_limit_per_user,
+                auto_archive_duration,
+                label,
+            } => {
+                message_commands::edit_thread(
+                    self.client.clone(),
+                    channel_id,
+                    name,
+                    applied_tags,
+                    rate_limit_per_user,
+                    auto_archive_duration,
+                    label,
+                )
+                .await;
+            }
+            AppCommand::LoadApplicationCommands { guild_id } => {
+                message_commands::load_application_commands(self.client.clone(), guild_id).await;
+            }
+            AppCommand::RunApplicationCommand { invocation } => {
+                message_commands::run_application_command(self.client.clone(), invocation).await;
+            }
+            AppCommand::RequestApplicationCommandAutocomplete { invocation } => {
+                message_commands::request_application_command_autocomplete(
+                    self.client.clone(),
+                    invocation,
+                )
+                .await;
+            }
+            AppCommand::EditMessage {
+                channel_id,
+                message_id,
+                content,
+            } => {
+                message_commands::edit_message(
+                    self.client.clone(),
+                    channel_id,
+                    message_id,
+                    content,
+                )
+                .await;
+            }
+            AppCommand::DeleteMessage {
+                channel_id,
+                message_id,
+            } => {
+                message_commands::delete_message(self.client.clone(), channel_id, message_id).await;
+            }
+            AppCommand::RemoveMessageEmbeds {
+                channel_id,
+                message_id,
+            } => {
+                message_commands::remove_message_embeds(
+                    self.client.clone(),
+                    channel_id,
+                    message_id,
+                )
+                .await;
+            }
+            AppCommand::LeaveGuild { guild_id, label } => {
+                message_commands::leave_guild(self.client.clone(), guild_id, label).await;
+            }
+            AppCommand::AddReaction {
+                channel_id,
+                message_id,
+                emoji,
+            } => {
+                message_commands::add_reaction(self.client.clone(), channel_id, message_id, emoji)
+                    .await;
+            }
+            AppCommand::RemoveReaction {
+                channel_id,
+                message_id,
+                emoji,
+            } => {
+                message_commands::remove_reaction(
+                    self.client.clone(),
+                    channel_id,
+                    message_id,
+                    emoji,
+                )
+                .await;
+            }
+            AppCommand::LoadReactionUsers {
+                channel_id,
+                message_id,
+                emoji,
+                after,
+            } => {
+                message_commands::load_reaction_users(
+                    self.client.clone(),
+                    channel_id,
+                    message_id,
+                    emoji,
+                    after,
+                )
+                .await;
+            }
+            AppCommand::LoadPinnedMessages { channel_id } => {
+                message_commands::load_pinned_messages(self.client.clone(), channel_id).await;
+            }
+            AppCommand::SetMessagePinned {
+                channel_id,
+                message_id,
+                pinned,
+            } => {
+                message_commands::set_message_pinned(
+                    self.client.clone(),
+                    channel_id,
+                    message_id,
+                    pinned,
+                )
+                .await;
+            }
+            AppCommand::VotePoll {
+                channel_id,
+                message_id,
+                answer_ids,
+            } => {
+                message_commands::vote_poll(
+                    self.client.clone(),
+                    channel_id,
+                    message_id,
+                    answer_ids,
+                )
+                .await;
+            }
+            AppCommand::LoadUserProfile { user_id, guild_id } => {
+                user_commands::load_profile(self.client.clone(), user_id, guild_id).await;
+            }
+            AppCommand::UpdateUserProfile { update } => {
+                user_commands::update_profile(self.client.clone(), update).await;
+            }
+            AppCommand::UpdateCurrentUserStatus { status } => {
+                user_commands::update_status(self.client.clone(), status).await;
+            }
+            AppCommand::UpdateGuildFolderSettings {
+                folder_id,
+                name,
+                color,
+            } => {
+                user_commands::update_guild_folder_settings(
+                    self.client.clone(),
+                    folder_id,
+                    name,
+                    color,
+                )
+                .await;
+            }
+            AppCommand::UpdateCurrentUserActivity {
+                status,
+                activities,
+                track_client_id,
+            } => {
+                user_commands::update_activity(
+                    self.client.clone(),
+                    status,
+                    activities,
+                    track_client_id,
+                )
+                .await;
+            }
+            AppCommand::AckChannel {
+                channel_id,
+                message_id,
+            } => {
+                read_state_commands::ack_channel(self.client.clone(), channel_id, message_id).await;
+            }
+            AppCommand::ScheduleAckChannel {
+                channel_id,
+                message_id,
+            } => {
+                read_state_commands::schedule_ack_channel(
+                    self.client.clone(),
+                    channel_id,
+                    message_id,
+                )
+                .await;
+            }
+            AppCommand::AckChannels { targets } => {
+                read_state_commands::ack_channels(self.client.clone(), targets).await;
+            }
+            AppCommand::SetGuildMuted {
+                guild_id,
+                muted,
+                duration,
+                label: _,
+            } => {
+                notification_commands::set_guild_muted(
+                    self.client.clone(),
+                    guild_id,
+                    muted,
+                    duration,
+                )
+                .await;
+            }
+            AppCommand::SetChannelMuted {
+                guild_id,
+                channel_id,
+                muted,
+                duration,
+                label: _,
+            } => {
+                notification_commands::set_channel_muted(
+                    self.client.clone(),
+                    guild_id,
+                    channel_id,
+                    muted,
+                    duration,
+                )
+                .await;
+            }
+            AppCommand::SetThreadMuted {
+                guild_id,
+                channel_id,
+                muted,
+                duration,
+                label: _,
+            } => {
+                notification_commands::set_thread_muted(
+                    self.client.clone(),
+                    guild_id,
+                    channel_id,
+                    muted,
+                    duration,
+                )
+                .await;
+            }
+            AppCommand::SetThreadNotificationLevel {
+                channel_id,
+                flags,
+                label: _,
+            } => {
+                notification_commands::set_thread_notification_level(
+                    self.client.clone(),
+                    channel_id,
+                    flags,
+                )
+                .await;
+            }
+            AppCommand::SetThreadFollowed {
+                channel_id,
+                followed,
+                label: _,
+            } => {
+                notification_commands::set_thread_followed(
+                    self.client.clone(),
+                    channel_id,
+                    followed,
+                )
+                .await;
+            }
+            AppCommand::SignOut => session_commands::sign_out(self.client.clone()).await,
         }
     }
 }

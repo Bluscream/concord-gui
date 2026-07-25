@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet, VecDeque, hash_map::DefaultHasher},
@@ -29,7 +30,7 @@ use crate::discord::ids::{
 
 use super::{
     ActivityInfo, AppEvent, ChannelInfo, CustomEmojiInfo, FriendStatus, GuildFolder, MemberInfo,
-    PremiumTier, PresenceStatus, RelationshipInfo, UserProfileInfo,
+    MessageInfo, PremiumTier, PresenceStatus, ReadStateInfo, RelationshipInfo, UserProfileInfo,
     display_name::display_name_from_parts_or_unknown,
 };
 
@@ -50,16 +51,19 @@ pub(in crate::discord) fn is_fallback_identity(username: Option<&str>, display_n
     username.is_none() && display_name == "unknown"
 }
 
+/// Caches sit behind `Arc` so a snapshot is refcount bumps, not a deep copy.
+/// Writes go through the `*_mut` accessors, which copy an area only while a
+/// live snapshot still references it.
 #[derive(Clone, Debug)]
 pub struct DiscordState {
-    pub(in crate::discord) navigation: NavigationIndex,
-    pub(in crate::discord) message_cache: MessageCache,
-    pub(in crate::discord) guild_details: GuildDetailCache,
-    pub(in crate::discord) profiles: ProfileCache,
-    pub(in crate::discord) presence: PresenceCache,
-    pub(in crate::discord) voice: VoiceStateCache,
-    pub(in crate::discord) session: SessionState,
-    pub(in crate::discord) notifications: NotificationCache,
+    pub(in crate::discord) navigation: Arc<NavigationIndex>,
+    pub(in crate::discord) message_cache: Arc<MessageCache>,
+    pub(in crate::discord) guild_details: Arc<GuildDetailCache>,
+    pub(in crate::discord) profiles: Arc<ProfileCache>,
+    pub(in crate::discord) presence: Arc<PresenceCache>,
+    pub(in crate::discord) voice: Arc<VoiceStateCache>,
+    pub(in crate::discord) session: Arc<SessionState>,
+    pub(in crate::discord) notifications: Arc<NotificationCache>,
 }
 
 impl Default for DiscordState {
@@ -71,15 +75,47 @@ impl Default for DiscordState {
 impl DiscordState {
     pub fn new(max_messages_per_channel: usize) -> Self {
         Self {
-            navigation: NavigationIndex::default(),
-            message_cache: MessageCache::new(max_messages_per_channel),
-            guild_details: GuildDetailCache::default(),
-            profiles: ProfileCache::default(),
-            presence: PresenceCache::default(),
-            voice: VoiceStateCache::default(),
-            session: SessionState::default(),
-            notifications: NotificationCache::default(),
+            navigation: Arc::default(),
+            message_cache: Arc::new(MessageCache::new(max_messages_per_channel)),
+            guild_details: Arc::default(),
+            profiles: Arc::default(),
+            presence: Arc::default(),
+            voice: Arc::default(),
+            session: Arc::default(),
+            notifications: Arc::default(),
         }
+    }
+
+    pub(in crate::discord) fn navigation_mut(&mut self) -> &mut NavigationIndex {
+        Arc::make_mut(&mut self.navigation)
+    }
+
+    pub(in crate::discord) fn message_cache_mut(&mut self) -> &mut MessageCache {
+        Arc::make_mut(&mut self.message_cache)
+    }
+
+    pub(in crate::discord) fn guild_details_mut(&mut self) -> &mut GuildDetailCache {
+        Arc::make_mut(&mut self.guild_details)
+    }
+
+    pub(in crate::discord) fn profiles_mut(&mut self) -> &mut ProfileCache {
+        Arc::make_mut(&mut self.profiles)
+    }
+
+    pub(in crate::discord) fn presence_mut(&mut self) -> &mut PresenceCache {
+        Arc::make_mut(&mut self.presence)
+    }
+
+    pub(in crate::discord) fn voice_mut(&mut self) -> &mut VoiceStateCache {
+        Arc::make_mut(&mut self.voice)
+    }
+
+    pub(in crate::discord) fn session_mut(&mut self) -> &mut SessionState {
+        Arc::make_mut(&mut self.session)
+    }
+
+    pub(in crate::discord) fn notifications_mut(&mut self) -> &mut NotificationCache {
+        Arc::make_mut(&mut self.notifications)
     }
 
     pub fn thread_creator(&self, thread_id: Id<ChannelMarker>) -> Option<ThreadCreatorState> {
@@ -97,57 +133,9 @@ impl DiscordState {
                     .get(&thread.channel_id)
                     .and_then(|channel| channel.guild_id)
             });
-            self.navigation
+            self.navigation_mut()
                 .thread_creators
                 .insert(thread.channel_id, ThreadCreatorState { guild_id, user_id });
-        }
-    }
-
-    pub fn cache_counts(&self) -> DiscordStateCacheCounts {
-        DiscordStateCacheCounts {
-            guilds: self.navigation.guilds.len(),
-            channels: self.navigation.channels.len(),
-            messages: self
-                .message_cache
-                .timelines
-                .values()
-                .map(|timeline| timeline.messages.len())
-                .sum(),
-            message_channels: self.message_cache.timelines.len(),
-            pinned_messages: self
-                .message_cache
-                .pinned_messages
-                .values()
-                .map(VecDeque::len)
-                .sum(),
-            pinned_message_channels: self.message_cache.pinned_messages.len(),
-            message_author_role_ids: self.message_cache.message_author_role_ids.len(),
-            members: self.guild_details.members.values().map(BTreeMap::len).sum(),
-            member_guilds: self.guild_details.members.len(),
-            roles: self.guild_details.roles.values().map(BTreeMap::len).sum(),
-            role_guilds: self.guild_details.roles.len(),
-            current_user_role_guilds: self.guild_details.current_user_role_ids.len(),
-            profile_role_ids: self.profiles.profile_role_ids.len(),
-            custom_emojis: self.navigation.custom_emojis.values().map(Vec::len).sum(),
-            custom_emoji_guilds: self.navigation.custom_emojis.len(),
-            guild_folders: self.navigation.guild_folders.len(),
-            user_profiles: self.profiles.user_profiles.len(),
-            fetched_notes: self.profiles.fetched_notes.len(),
-            relationships: self.profiles.relationships.len(),
-            guild_user_presences: self.presence.guild_user_presences.len(),
-            guild_user_activities: self.presence.guild_user_activities.len(),
-            user_presences: self.presence.user_presences.len(),
-            user_activities: self.presence.user_activities.len(),
-            typing_users: self.presence.typing.values().map(BTreeMap::len).sum(),
-            typing_channels: self.presence.typing.len(),
-            voice_states: self.voice.states.len(),
-            read_states: self.notifications.read_states.len(),
-            non_channel_read_states: self.notifications.non_channel_read_states.len(),
-            notification_settings: self.notifications.notification_settings.len(),
-            has_private_notification_settings: self
-                .notifications
-                .private_notification_settings
-                .is_some(),
         }
     }
 
@@ -155,25 +143,18 @@ impl DiscordState {
         DiscordSnapshot {
             revision,
             navigation: NavigationSnapshot {
-                navigation: self.navigation.clone(),
-                guild_details: self.guild_details.clone(),
-                profiles: self.profiles.clone(),
-                presence: self.presence.clone(),
-                voice: self.voice.clone(),
-                session: self.session.clone(),
-                notification_settings: self.notifications.notification_settings.clone(),
-                private_notification_settings: self
-                    .notifications
-                    .private_notification_settings
-                    .clone(),
-                user_notification_flags: self.notifications.user_notification_flags,
+                navigation: Arc::clone(&self.navigation),
+                guild_details: Arc::clone(&self.guild_details),
+                profiles: Arc::clone(&self.profiles),
+                presence: Arc::clone(&self.presence),
+                voice: Arc::clone(&self.voice),
+                session: Arc::clone(&self.session),
             },
             message: MessageSnapshot {
-                message_cache: self.message_cache.clone(),
+                message_cache: Arc::clone(&self.message_cache),
             },
             detail: DetailSnapshot {
-                read_states: self.notifications.read_states.clone(),
-                non_channel_read_states: self.notifications.non_channel_read_states.clone(),
+                notifications: Arc::clone(&self.notifications),
             },
         }
     }
@@ -184,32 +165,52 @@ impl DiscordState {
         previous_revision: SnapshotRevision,
     ) {
         let areas = snapshot.revision.changed_areas_since(previous_revision);
+        self.attach_snapshot_areas(snapshot, areas);
+    }
+
+    /// The one place that maps snapshot areas back onto cache fields, so adding
+    /// a cache cannot be half-wired between here and `DiscordSnapshot::to_state`.
+    pub(in crate::discord) fn attach_snapshot_areas(
+        &mut self,
+        snapshot: &DiscordSnapshot,
+        areas: SnapshotAreas,
+    ) {
         if areas.navigation {
-            self.navigation = snapshot.navigation.navigation.clone();
-            self.guild_details = snapshot.navigation.guild_details.clone();
-            self.profiles = snapshot.navigation.profiles.clone();
-            self.presence = snapshot.navigation.presence.clone();
-            self.voice = snapshot.navigation.voice.clone();
-            self.session = snapshot.navigation.session.clone();
-            self.notifications.notification_settings =
-                snapshot.navigation.notification_settings.clone();
-            self.notifications.private_notification_settings =
-                snapshot.navigation.private_notification_settings.clone();
-            self.notifications.user_notification_flags =
-                snapshot.navigation.user_notification_flags;
+            self.navigation = Arc::clone(&snapshot.navigation.navigation);
+            self.guild_details = Arc::clone(&snapshot.navigation.guild_details);
+            self.profiles = Arc::clone(&snapshot.navigation.profiles);
+            self.presence = Arc::clone(&snapshot.navigation.presence);
+            self.voice = Arc::clone(&snapshot.navigation.voice);
+            self.session = Arc::clone(&snapshot.navigation.session);
         }
         if areas.message {
-            self.message_cache = snapshot.message.message_cache.clone();
+            self.message_cache = Arc::clone(&snapshot.message.message_cache);
         }
-        if areas.detail {
-            self.notifications.read_states = snapshot.detail.read_states.clone();
-            self.notifications.non_channel_read_states =
-                snapshot.detail.non_channel_read_states.clone();
+        // Settings live in the navigation area, read states in detail.
+        if areas.navigation || areas.detail {
+            self.notifications = Arc::clone(&snapshot.detail.notifications);
         }
     }
 
-    pub fn snapshot_areas_for_event(event: &AppEvent) -> Option<SnapshotAreas> {
-        event.snapshot_areas()
+    /// Applies `event` and returns the revision the caller should publish.
+    ///
+    /// A MESSAGE_CREATE only counts as a detail change when it actually moved
+    /// an unread count, so the detail area is narrowed by comparing signatures
+    /// around the write. Both the client's publisher and the test harness go
+    /// through here so the two cannot drift apart.
+    pub(crate) fn apply_event_advancing(
+        &mut self,
+        event: &AppEvent,
+        mut areas: SnapshotAreas,
+        revision: SnapshotRevision,
+    ) -> SnapshotRevision {
+        let detail_before = matches!(event, AppEvent::MessageCreate { .. })
+            .then(|| self.detail_revision_signature());
+        self.apply_event(event);
+        if let Some(before) = detail_before {
+            areas.detail = self.detail_revision_signature() != before;
+        }
+        revision.advance(areas)
     }
 
     pub(crate) fn detail_revision_signature(&self) -> u64 {
@@ -247,7 +248,7 @@ impl DiscordState {
                 roles,
                 emojis,
             } => {
-                if let Some(guild) = self.navigation.guilds.get_mut(guild_id) {
+                if let Some(guild) = self.navigation_mut().guilds.get_mut(guild_id) {
                     guild.name = name.clone();
                     if let Some(owner_id) = owner_id {
                         guild.owner_id = Some(*owner_id);
@@ -272,10 +273,12 @@ impl DiscordState {
                     }
                 }
                 if let Some(roles) = roles {
-                    self.guild_details.roles.insert(*guild_id, role_map(roles));
+                    self.guild_details_mut()
+                        .roles
+                        .insert(*guild_id, role_map(roles));
                 }
                 if let Some(emojis) = emojis {
-                    self.navigation
+                    self.navigation_mut()
                         .custom_emojis
                         .insert(*guild_id, emojis.clone());
                 }
@@ -284,46 +287,52 @@ impl DiscordState {
                 guild_id,
                 onboarding,
             } => {
-                if let Some(guild) = self.navigation.guilds.get_mut(guild_id) {
+                if let Some(guild) = self.navigation_mut().guilds.get_mut(guild_id) {
                     guild.onboarding = Some(onboarding.clone());
                 }
             }
             AppEvent::GuildRolesUpdate { guild_id, roles } => {
-                self.guild_details.roles.insert(*guild_id, role_map(roles));
+                self.guild_details_mut()
+                    .roles
+                    .insert(*guild_id, role_map(roles));
             }
             AppEvent::GuildRoleUpsert { guild_id, role } => {
-                if let Some(roles) = self.guild_details.roles.get_mut(guild_id) {
+                if let Some(roles) = self.guild_details_mut().roles.get_mut(guild_id) {
                     roles.insert(role.id, role_state(role));
                 }
             }
             AppEvent::GuildRoleDelete { guild_id, role_id } => {
-                if let Some(roles) = self.guild_details.roles.get_mut(guild_id) {
+                if let Some(roles) = self.guild_details_mut().roles.get_mut(guild_id) {
                     roles.remove(role_id);
                 }
-                if let Some(members) = self.guild_details.members.get_mut(guild_id) {
+                if let Some(members) = self.guild_details_mut().members.get_mut(guild_id) {
                     for member in members.values_mut() {
                         member
                             .role_ids
                             .retain(|member_role_id| member_role_id != role_id);
                     }
                 }
-                if let Some(role_ids) = self.guild_details.current_user_role_ids.get_mut(guild_id) {
+                if let Some(role_ids) = self
+                    .guild_details_mut()
+                    .current_user_role_ids
+                    .get_mut(guild_id)
+                {
                     role_ids.retain(|member_role_id| member_role_id != role_id);
                 }
             }
             AppEvent::GuildEmojisUpdate { guild_id, emojis } => {
-                self.navigation
+                self.navigation_mut()
                     .custom_emojis
                     .insert(*guild_id, emojis.clone());
             }
-            AppEvent::GuildDelete { .. } => self.apply_guild_delete_event(event),
+            AppEvent::GuildDelete { guild_id } => self.apply_guild_delete(guild_id),
             AppEvent::GuildUnavailable { .. } => {}
             AppEvent::SelectedGuildChanged { guild_id } => {
                 self.record_selected_member_guild(*guild_id);
             }
             AppEvent::SelectedMessageChannelChanged { channel_id } => {
-                self.session.selected_message_channel_known = true;
-                self.session.selected_message_channel_id = *channel_id;
+                self.session_mut().selected_message_channel_known = true;
+                self.session_mut().selected_message_channel_id = *channel_id;
                 if let Some(channel_id) = channel_id {
                     self.touch_warm_message_channel(*channel_id);
                 }
@@ -400,20 +409,22 @@ impl DiscordState {
                 }
             }
             AppEvent::ChannelDelete { channel_id, .. } => {
-                self.navigation.channels.remove(channel_id);
-                self.navigation.thread_creators.remove(channel_id);
-                self.message_cache.timelines.remove(channel_id);
-                self.message_cache.cold_message_channels.remove(channel_id);
-                self.message_cache
+                self.navigation_mut().channels.remove(channel_id);
+                self.navigation_mut().thread_creators.remove(channel_id);
+                self.message_cache_mut().timelines.remove(channel_id);
+                self.message_cache_mut()
+                    .cold_message_channels
+                    .remove(channel_id);
+                self.message_cache_mut()
                     .warm_message_channels
                     .retain(|warm_channel_id| warm_channel_id != channel_id);
-                self.message_cache.pinned_messages.remove(channel_id);
-                self.message_cache
+                self.message_cache_mut().pinned_messages.remove(channel_id);
+                self.message_cache_mut()
                     .message_author_role_ids
                     .retain(|(message_channel_id, _), _| message_channel_id != channel_id);
                 self.remove_voice_states_for_channel(*channel_id);
             }
-            AppEvent::MessageCreate { .. } => self.apply_message_create_event(event),
+            AppEvent::MessageCreate { message } => self.apply_message_create(message),
             AppEvent::MessageHistoryLoaded {
                 channel_id,
                 before,
@@ -522,7 +533,7 @@ impl DiscordState {
                 ..
             } => {
                 self.invalidate_pinned_messages(*channel_id);
-                self.notifications
+                self.notifications_mut()
                     .read_states
                     .entry(*channel_id)
                     .or_default()
@@ -550,7 +561,7 @@ impl DiscordState {
             } => self.delete_messages(*channel_id, message_ids),
             AppEvent::GuildMemberListUpdate { update } => {
                 if let Some(online) = update.online_count
-                    && let Some(guild) = self.navigation.guilds.get_mut(&update.guild_id)
+                    && let Some(guild) = self.navigation_mut().guilds.get_mut(&update.guild_id)
                 {
                     guild.online_count = Some(online);
                 }
@@ -589,7 +600,7 @@ impl DiscordState {
                 self.refresh_message_author_display_name(*guild_id, member);
             }
             AppEvent::GuildMemberRemove { guild_id, user_id } => {
-                if let Some(entry) = self.guild_details.members.get_mut(guild_id) {
+                if let Some(entry) = self.guild_details_mut().members.get_mut(guild_id) {
                     entry.remove(user_id);
                 }
                 self.decrement_guild_member_count(*guild_id);
@@ -599,16 +610,20 @@ impl DiscordState {
                 let user_id = presence.user_id;
                 let status = presence.status;
                 if let Some(guild_id) = guild_id {
-                    self.presence
+                    self.presence_mut()
                         .guild_user_presences
                         .insert((*guild_id, user_id), status);
                     self.update_guild_user_activities(*guild_id, user_id, &presence.activities);
-                    let entry = self.guild_details.members.entry(*guild_id).or_default();
+                    let entry = self
+                        .guild_details_mut()
+                        .members
+                        .entry(*guild_id)
+                        .or_default();
                     if let Some(member) = entry.get_mut(&user_id) {
                         member.status = status;
                     }
                 }
-                self.presence.user_presences.insert(user_id, status);
+                self.presence_mut().user_presences.insert(user_id, status);
                 if guild_id.is_some()
                     && (self.session.current_user_id != Some(user_id)
                         || !presence.activities.is_empty())
@@ -653,7 +668,7 @@ impl DiscordState {
                 // channel's stale entries while we already hold the mutable
                 // borrow. Read paths see only fresh entries.
                 let now = Instant::now();
-                let bucket = self.presence.typing.entry(*channel_id).or_default();
+                let bucket = self.presence_mut().typing.entry(*channel_id).or_default();
                 bucket.insert(
                     *user_id,
                     TypingIndicator {
@@ -665,23 +680,27 @@ impl DiscordState {
                     now.duration_since(indicator.started) <= TYPING_INDICATOR_TTL
                 });
                 if bucket.is_empty() {
-                    self.presence.typing.remove(channel_id);
+                    self.presence_mut().typing.remove(channel_id);
                 }
             }
             AppEvent::UserSettingsUpdate { settings } => {
                 if let Some(folders) = &settings.guild_folders {
-                    self.navigation.guild_folders = folders.clone();
+                    self.navigation_mut().guild_folders = folders.clone();
                 }
             }
             AppEvent::UserNotificationSettingsUpdate { flags } => {
-                self.notifications.user_notification_flags = *flags;
+                self.notifications_mut().user_notification_flags = *flags;
             }
-            AppEvent::UserProfileLoaded { .. } => self.apply_user_profile_loaded_event(event),
+            AppEvent::UserProfileLoaded { guild_id, profile } => {
+                self.apply_user_profile_loaded(guild_id, profile);
+            }
             AppEvent::UserNoteLoaded { user_id, note } => {
-                self.profiles.fetched_notes.insert(*user_id, note.clone());
+                self.profiles_mut()
+                    .fetched_notes
+                    .insert(*user_id, note.clone());
                 self.remember_fetched_note(*user_id);
                 for profile in self
-                    .profiles
+                    .profiles_mut()
                     .user_profiles
                     .values_mut()
                     .filter(|profile| profile.user_id == *user_id)
@@ -689,9 +708,13 @@ impl DiscordState {
                     profile.note = note.clone();
                 }
             }
-            AppEvent::RelationshipsLoaded { .. } => self.apply_relationships_loaded_event(event),
-            AppEvent::RelationshipUpsert { .. } => self.apply_relationship_upsert_event(event),
-            AppEvent::RelationshipRemove { .. } => self.apply_relationship_remove_event(event),
+            AppEvent::RelationshipsLoaded { relationships } => {
+                self.apply_relationships_loaded(relationships);
+            }
+            AppEvent::RelationshipUpsert { relationship } => {
+                self.apply_relationship_upsert(relationship);
+            }
+            AppEvent::RelationshipRemove { user_id } => self.apply_relationship_remove(user_id),
             AppEvent::UserIdentityUpdate {
                 user_id,
                 username,
@@ -706,20 +729,20 @@ impl DiscordState {
                 *is_bot,
             ),
             AppEvent::Ready { user, user_id } => {
-                self.session.current_user = Some(user.clone());
+                self.session_mut().current_user = Some(user.clone());
                 if let Some(user_id) = user_id {
-                    self.session.current_user_id = Some(*user_id);
+                    self.session_mut().current_user_id = Some(*user_id);
                     self.refresh_current_user_role_cache();
                 }
             }
             AppEvent::ReadyUserDirectory { users } => {
-                self.session.ready_users = users
+                self.session_mut().ready_users = users
                     .iter()
                     .map(|user| (user.user_id, user.clone()))
                     .collect();
             }
             AppEvent::CurrentUserCapabilities { premium_tier } => {
-                self.session.current_user_premium_tier = Some(*premium_tier);
+                self.session_mut().current_user_premium_tier = Some(*premium_tier);
             }
             AppEvent::CurrentUserVerification {
                 email_verified,
@@ -727,17 +750,23 @@ impl DiscordState {
                 mfa_enabled,
             } => {
                 if let Some(email_verified) = email_verified {
-                    self.session.current_user_email_verified = Some(*email_verified);
+                    self.session_mut().current_user_email_verified = Some(*email_verified);
                 }
                 if let Some(phone_verified) = phone_verified {
-                    self.session.current_user_phone_verified = Some(*phone_verified);
+                    self.session_mut().current_user_phone_verified = Some(*phone_verified);
                 }
                 if let Some(mfa_enabled) = mfa_enabled {
-                    self.session.current_user_mfa_enabled = Some(*mfa_enabled);
+                    self.session_mut().current_user_mfa_enabled = Some(*mfa_enabled);
                 }
             }
-            AppEvent::ReadStateInit { .. } => self.apply_read_state_init_event(event),
-            AppEvent::MessageAck { .. } => self.apply_message_ack_event(event),
+            AppEvent::ReadStateInit { entries } => self.apply_read_state_init(entries),
+            AppEvent::MessageAck {
+                channel_id,
+                message_id,
+                mention_count,
+                flags,
+                last_viewed,
+            } => self.apply_message_ack(channel_id, message_id, mention_count, flags, last_viewed),
             AppEvent::FeatureReadStateAck {
                 read_state_type,
                 resource_id,
@@ -745,7 +774,7 @@ impl DiscordState {
                 ..
             } => {
                 let entry = self
-                    .notifications
+                    .notifications_mut()
                     .non_channel_read_states
                     .entry((*read_state_type, *resource_id))
                     .or_default();
@@ -757,7 +786,7 @@ impl DiscordState {
                 timestamp,
                 ..
             } => {
-                self.notifications
+                self.notifications_mut()
                     .read_states
                     .entry(*channel_id)
                     .or_default()
@@ -766,12 +795,13 @@ impl DiscordState {
             AppEvent::ChannelUnreadUpdate { channels, .. } => {
                 for update in channels {
                     if let Some(last_message_id) = update.last_message_id
-                        && let Some(channel) = self.navigation.channels.get_mut(&update.channel_id)
+                        && let Some(channel) =
+                            self.navigation_mut().channels.get_mut(&update.channel_id)
                     {
                         channel.last_message_id = last_message_id;
                     }
                     if let Some(last_pin_timestamp) = &update.last_pin_timestamp {
-                        self.notifications
+                        self.notifications_mut()
                             .read_states
                             .entry(update.channel_id)
                             .or_default()
@@ -780,8 +810,8 @@ impl DiscordState {
                 }
             }
             AppEvent::UserGuildSettingsInit { settings } => {
-                self.notifications.notification_settings.clear();
-                self.notifications.private_notification_settings = None;
+                self.notifications_mut().notification_settings.clear();
+                self.notifications_mut().private_notification_settings = None;
                 for setting in settings {
                     self.upsert_notification_settings(&setting.notification_settings);
                 }
@@ -821,7 +851,6 @@ impl DiscordState {
             | AppEvent::VoiceServerUpdate { .. }
             | AppEvent::VoiceConnectionStatusChanged { .. }
             | AppEvent::VoiceSound { .. }
-            | AppEvent::ActivateChannel { .. }
             | AppEvent::GatewayResumed
             | AppEvent::GatewayReidentified
             | AppEvent::GatewayClosed => {}
@@ -851,7 +880,7 @@ impl DiscordState {
         };
 
         self.remove_voice_states_for_guild(*guild_id);
-        self.navigation.guilds.insert(
+        self.navigation_mut().guilds.insert(
             *guild_id,
             GuildState {
                 id: *guild_id,
@@ -875,84 +904,101 @@ impl DiscordState {
         for member in members {
             self.upsert_guild_member(*guild_id, member);
         }
-        let entry = self.guild_details.members.entry(*guild_id).or_default();
+        let Self {
+            guild_details,
+            presence,
+            ..
+        } = self;
+        let members = Arc::make_mut(guild_details)
+            .members
+            .entry(*guild_id)
+            .or_default();
+        let presence = Arc::make_mut(presence);
         for (user_id, status) in presences {
-            self.presence
+            presence
                 .guild_user_presences
                 .insert((*guild_id, *user_id), *status);
-            self.presence.user_presences.insert(*user_id, *status);
-            if let Some(member) = entry.get_mut(user_id) {
+            presence.user_presences.insert(*user_id, *status);
+            if let Some(member) = members.get_mut(user_id) {
                 member.status = *status;
             }
         }
         if let Some(roles) = roles {
-            self.guild_details.roles.insert(*guild_id, role_map(roles));
+            self.guild_details_mut()
+                .roles
+                .insert(*guild_id, role_map(roles));
         } else {
-            self.guild_details.roles.remove(guild_id);
+            self.guild_details_mut().roles.remove(guild_id);
         }
-        self.navigation
+        self.navigation_mut()
             .custom_emojis
             .insert(*guild_id, emojis.clone());
     }
 
-    fn apply_guild_delete_event(&mut self, event: &AppEvent) {
-        let AppEvent::GuildDelete { guild_id } = event else {
-            unreachable!("guild delete helper only handles guild delete events");
-        };
-
-        self.navigation.guilds.remove(guild_id);
-        self.navigation
+    fn apply_guild_delete(&mut self, guild_id: &Id<GuildMarker>) {
+        let navigation = self.navigation_mut();
+        navigation.guilds.remove(guild_id);
+        navigation
             .channels
             .retain(|_, channel| channel.guild_id != Some(*guild_id));
-        self.navigation
+        let surviving = &navigation.channels;
+        navigation
             .thread_creators
-            .retain(|channel_id, _| self.navigation.channels.contains_key(channel_id));
-        self.message_cache
+            .retain(|channel_id, _| surviving.contains_key(channel_id));
+
+        // Split the borrow so the pruned channel index stays readable while the
+        // message caches drop everything that belonged to the deleted guild.
+        let Self {
+            navigation,
+            message_cache,
+            ..
+        } = self;
+        let surviving = &navigation.channels;
+        let message_cache = Arc::make_mut(message_cache);
+        message_cache
             .timelines
-            .retain(|channel_id, _| self.navigation.channels.contains_key(channel_id));
-        self.message_cache
+            .retain(|channel_id, _| surviving.contains_key(channel_id));
+        message_cache
             .cold_message_channels
-            .retain(|channel_id| self.navigation.channels.contains_key(channel_id));
-        self.message_cache
+            .retain(|channel_id| surviving.contains_key(channel_id));
+        message_cache
             .warm_message_channels
-            .retain(|channel_id| self.navigation.channels.contains_key(channel_id));
-        self.message_cache
+            .retain(|channel_id| surviving.contains_key(channel_id));
+        message_cache
             .pinned_messages
-            .retain(|channel_id, _| self.navigation.channels.contains_key(channel_id));
-        self.message_cache
+            .retain(|channel_id, _| surviving.contains_key(channel_id));
+        message_cache
             .message_author_role_ids
-            .retain(|(channel_id, _), _| self.navigation.channels.contains_key(channel_id));
-        self.guild_details.members.remove(guild_id);
-        self.guild_details.roles.remove(guild_id);
-        self.guild_details.current_user_role_ids.remove(guild_id);
-        self.presence
+            .retain(|(channel_id, _), _| surviving.contains_key(channel_id));
+        self.guild_details_mut().members.remove(guild_id);
+        self.guild_details_mut().roles.remove(guild_id);
+        self.guild_details_mut()
+            .current_user_role_ids
+            .remove(guild_id);
+        self.presence_mut()
             .guild_user_presences
             .retain(|(presence_guild_id, _), _| presence_guild_id != guild_id);
-        self.presence
+        self.presence_mut()
             .guild_user_activities
             .retain(|(presence_guild_id, _), _| presence_guild_id != guild_id);
         self.remove_voice_states_for_guild(*guild_id);
-        self.profiles
+        self.profiles_mut()
             .profile_role_ids
             .retain(|(profile_guild_id, _), _| profile_guild_id != guild_id);
         self.remove_profiles_for_guild(*guild_id);
-        self.navigation.custom_emojis.remove(guild_id);
+        self.navigation_mut().custom_emojis.remove(guild_id);
     }
 
-    fn apply_message_create_event(&mut self, event: &AppEvent) {
-        let AppEvent::MessageCreate { message } = event else {
-            unreachable!("message create helper only handles message create events");
-        };
-
+    fn apply_message_create(&mut self, message: &MessageInfo) {
         let remove_typing_channel =
-            if let Some(bucket) = self.presence.typing.get_mut(&message.channel_id) {
+            if let Some(bucket) = self.presence_mut().typing.get_mut(&message.channel_id) {
                 bucket.remove(&message.author_id);
                 bucket.is_empty()
             } else {
                 false
             };
         if remove_typing_channel {
-            self.presence.typing.remove(&message.channel_id);
+            self.presence_mut().typing.remove(&message.channel_id);
         }
 
         let guild_id = message
@@ -976,7 +1022,7 @@ impl DiscordState {
         }) {
             MessageNotificationKind::Mention => {
                 let entry = self
-                    .notifications
+                    .notifications_mut()
                     .read_states
                     .entry(message.channel_id)
                     .or_default();
@@ -984,7 +1030,7 @@ impl DiscordState {
             }
             MessageNotificationKind::LowImportanceMention => {
                 let entry = self
-                    .notifications
+                    .notifications_mut()
                     .read_states
                     .entry(message.channel_id)
                     .or_default();
@@ -992,7 +1038,7 @@ impl DiscordState {
             }
             MessageNotificationKind::Notify => {
                 let entry = self
-                    .notifications
+                    .notifications_mut()
                     .read_states
                     .entry(message.channel_id)
                     .or_default();
@@ -1010,11 +1056,11 @@ impl DiscordState {
             state.redact_body();
         }
         if self.retained_live_message_warms_channel(message.channel_id) {
-            self.message_cache
+            self.message_cache_mut()
                 .cold_message_channels
                 .remove(&message.channel_id);
         } else if !retain_body {
-            self.message_cache
+            self.message_cache_mut()
                 .cold_message_channels
                 .insert(message.channel_id);
         }
@@ -1024,14 +1070,14 @@ impl DiscordState {
         }
     }
 
-    fn apply_user_profile_loaded_event(&mut self, event: &AppEvent) {
-        let AppEvent::UserProfileLoaded { guild_id, profile } = event else {
-            unreachable!("user profile helper only handles user profile loaded events");
-        };
-
+    fn apply_user_profile_loaded(
+        &mut self,
+        guild_id: &Option<Id<GuildMarker>>,
+        profile: &UserProfileInfo,
+    ) {
         let mut profile = profile.clone();
         if let Some(guild_id) = guild_id {
-            self.profiles
+            self.profiles_mut()
                 .profile_role_ids
                 .insert((*guild_id, profile.user_id), profile.role_ids.clone());
         }
@@ -1049,7 +1095,9 @@ impl DiscordState {
         let username = profile.username.clone();
         let user_id = profile.user_id;
         let profile_key = UserProfileCacheKey::new(profile.user_id, *guild_id);
-        self.profiles.user_profiles.insert(profile_key, profile);
+        self.profiles_mut()
+            .user_profiles
+            .insert(profile_key, profile);
         self.remember_profile_cache_key(profile_key);
         let display_name = if guild_id.is_some() {
             profile_display_name.clone()
@@ -1068,7 +1116,7 @@ impl DiscordState {
         );
         if let Some(guild_id) = guild_id {
             if let Some(member) = self
-                .guild_details
+                .guild_details_mut()
                 .members
                 .get_mut(guild_id)
                 .and_then(|members| members.get_mut(&user_id))
@@ -1087,14 +1135,10 @@ impl DiscordState {
         }
     }
 
-    fn apply_relationships_loaded_event(&mut self, event: &AppEvent) {
-        let AppEvent::RelationshipsLoaded { relationships } = event else {
-            unreachable!("relationships helper only handles relationships loaded events");
-        };
-
-        let previous = std::mem::take(&mut self.profiles.relationships);
+    fn apply_relationships_loaded(&mut self, relationships: &[RelationshipInfo]) {
+        let previous = std::mem::take(&mut self.profiles_mut().relationships);
         for relationship in relationships {
-            self.profiles
+            self.profiles_mut()
                 .relationships
                 .insert(relationship.user_id, relationship.clone());
         }
@@ -1111,7 +1155,7 @@ impl DiscordState {
                 .map(|relationship| relationship.status)
                 .unwrap_or(FriendStatus::None);
             for profile in self
-                .profiles
+                .profiles_mut()
                 .user_profiles
                 .values_mut()
                 .filter(|profile| profile.user_id == user_id)
@@ -1128,22 +1172,18 @@ impl DiscordState {
         }
     }
 
-    fn apply_relationship_upsert_event(&mut self, event: &AppEvent) {
-        let AppEvent::RelationshipUpsert { relationship } = event else {
-            unreachable!("relationship helper only handles relationship upsert events");
-        };
-
+    fn apply_relationship_upsert(&mut self, relationship: &RelationshipInfo) {
         let previous = self
             .profiles
             .relationships
             .get(&relationship.user_id)
             .cloned();
         let relationship = merge_relationship_info(previous.as_ref(), relationship);
-        self.profiles
+        self.profiles_mut()
             .relationships
             .insert(relationship.user_id, relationship.clone());
         for profile in self
-            .profiles
+            .profiles_mut()
             .user_profiles
             .values_mut()
             .filter(|profile| profile.user_id == relationship.user_id)
@@ -1164,14 +1204,10 @@ impl DiscordState {
         );
     }
 
-    fn apply_relationship_remove_event(&mut self, event: &AppEvent) {
-        let AppEvent::RelationshipRemove { user_id } = event else {
-            unreachable!("relationship helper only handles relationship remove events");
-        };
-
-        let previous = self.profiles.relationships.remove(user_id);
+    fn apply_relationship_remove(&mut self, user_id: &Id<UserMarker>) {
+        let previous = self.profiles_mut().relationships.remove(user_id);
         for profile in self
-            .profiles
+            .profiles_mut()
             .user_profiles
             .values_mut()
             .filter(|profile| profile.user_id == *user_id)
@@ -1192,16 +1228,12 @@ impl DiscordState {
         );
     }
 
-    fn apply_read_state_init_event(&mut self, event: &AppEvent) {
-        let AppEvent::ReadStateInit { entries } = event else {
-            unreachable!("read state helper only handles read state init events");
-        };
-
-        self.notifications.read_states.clear();
-        self.notifications.non_channel_read_states.clear();
+    fn apply_read_state_init(&mut self, entries: &[ReadStateInfo]) {
+        self.notifications_mut().read_states.clear();
+        self.notifications_mut().non_channel_read_states.clear();
         for entry in entries {
             if entry.read_state_type == 0 {
-                self.notifications.read_states.insert(
+                self.notifications_mut().read_states.insert(
                     entry.channel_id,
                     ChannelReadState {
                         last_acked_message_id: entry.last_acked_message_id,
@@ -1214,7 +1246,7 @@ impl DiscordState {
                     },
                 );
             } else {
-                self.notifications.non_channel_read_states.insert(
+                self.notifications_mut().non_channel_read_states.insert(
                     (entry.read_state_type, entry.channel_id.get()),
                     NonChannelReadState {
                         last_acked_id: entry.last_acked_message_id.map(Id::get),
@@ -1225,20 +1257,16 @@ impl DiscordState {
         }
     }
 
-    fn apply_message_ack_event(&mut self, event: &AppEvent) {
-        let AppEvent::MessageAck {
-            channel_id,
-            message_id,
-            mention_count,
-            flags,
-            last_viewed,
-        } = event
-        else {
-            unreachable!("message ack helper only handles message ack events");
-        };
-
+    fn apply_message_ack(
+        &mut self,
+        channel_id: &Id<ChannelMarker>,
+        message_id: &Id<MessageMarker>,
+        mention_count: &Option<u32>,
+        flags: &Option<u64>,
+        last_viewed: &Option<u64>,
+    ) {
         let entry = self
-            .notifications
+            .notifications_mut()
             .read_states
             .entry(*channel_id)
             .or_default();
@@ -1344,11 +1372,11 @@ impl DiscordState {
 
         let display_name = display_name_from_parts_or_unknown(None, global_name, Some(username));
         if self.session.current_user_id == Some(user_id) {
-            self.session.current_user = Some(display_name.clone());
+            self.session_mut().current_user = Some(display_name.clone());
         }
 
         for profile in self
-            .profiles
+            .profiles_mut()
             .user_profiles
             .values_mut()
             .filter(|profile| profile.user_id == user_id)
@@ -1357,13 +1385,13 @@ impl DiscordState {
             profile.global_name = global_name.map(str::to_owned);
             profile.avatar_url = avatar_url.map(str::to_owned);
         }
-        if let Some(relationship) = self.profiles.relationships.get_mut(&user_id) {
+        if let Some(relationship) = self.profiles_mut().relationships.get_mut(&user_id) {
             relationship.display_name = Some(display_name.clone());
             relationship.username = Some(username.to_owned());
         }
 
         let mut refreshed_members = Vec::new();
-        for (guild_id, members) in &mut self.guild_details.members {
+        for (guild_id, members) in &mut self.guild_details_mut().members {
             let Some(member) = members.get_mut(&user_id) else {
                 continue;
             };
@@ -1440,12 +1468,14 @@ impl DiscordState {
         user_id: Id<UserMarker>,
         status: PresenceStatus,
     ) {
-        for ((_, presence_user_id), presence_status) in &mut self.presence.guild_user_presences {
+        for ((_, presence_user_id), presence_status) in
+            &mut self.presence_mut().guild_user_presences
+        {
             if *presence_user_id == user_id {
                 *presence_status = status;
             }
         }
-        for members in self.guild_details.members.values_mut() {
+        for members in self.guild_details_mut().members.values_mut() {
             if let Some(member) = members.get_mut(&user_id) {
                 member.status = status;
             }

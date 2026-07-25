@@ -336,11 +336,11 @@ impl DiscordState {
             channel_overrides: notification_override_map(&settings.channel_overrides),
         };
         if let Some(guild_id) = settings.guild_id {
-            self.notifications
+            self.notifications_mut()
                 .notification_settings
                 .insert(guild_id, state);
         } else {
-            self.notifications.private_notification_settings = Some(state);
+            self.notifications_mut().private_notification_settings = Some(state);
         }
     }
 

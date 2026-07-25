@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
     sync::{
-        Arc, Mutex, RwLock,
+        Arc, Mutex, RwLock, RwLockReadGuard,
         atomic::{AtomicU64, Ordering},
     },
     time::Instant,
@@ -189,11 +189,14 @@ impl DiscordClient {
         self.snapshots_tx.subscribe()
     }
 
-    pub fn current_discord_snapshot(&self) -> DiscordSnapshot {
-        let state = self
-            .state
+    pub(super) fn read_state(&self) -> RwLockReadGuard<'_, DiscordState> {
+        self.state
             .read()
-            .expect("discord state lock is not poisoned");
+            .expect("discord state lock is not poisoned")
+    }
+
+    pub fn current_discord_snapshot(&self) -> DiscordSnapshot {
+        let state = self.read_state();
         let revision = *self
             .revision
             .read()
@@ -202,17 +205,12 @@ impl DiscordClient {
     }
 
     pub fn current_user_id(&self) -> Option<Id<UserMarker>> {
-        self.state
-            .read()
-            .expect("discord state lock is not poisoned")
-            .current_user_id()
+        self.read_state().current_user_id()
     }
 
     pub(crate) fn update_rest_page_referer(&self, channel_id: Option<Id<ChannelMarker>>) {
         let channel = channel_id.and_then(|channel_id| {
-            self.state
-                .read()
-                .expect("discord state lock is not poisoned")
+            self.read_state()
                 .channel(channel_id)
                 .map(|channel| (channel.guild_id, channel_id))
         });
@@ -225,10 +223,7 @@ impl DiscordClient {
     /// Current user `(id, username)` for the RPC READY handshake. RPC clients read
     /// `data.user.username` from it.
     pub fn current_user_rpc_identity(&self) -> Option<(String, String)> {
-        let state = self
-            .state
-            .read()
-            .expect("discord state lock is not poisoned");
+        let state = self.read_state();
         let id = state.current_user_id()?;
         let username = state.current_user().unwrap_or_default().to_owned();
         Some((id.to_string(), username))
@@ -389,10 +384,7 @@ impl DiscordClient {
                 .filter(|voice| voice.scope == scope && voice.channel_id == channel_id)
                 .is_some();
             if manual_retry || !requested_same_channel {
-                let state = self
-                    .state
-                    .read()
-                    .expect("discord state lock is not poisoned");
+                let state = self.read_state();
                 let current_same_channel = state
                     .current_user_voice_connection()
                     .filter(|voice| voice.scope == scope && voice.channel_id == channel_id)
@@ -473,10 +465,7 @@ impl DiscordClient {
         voice_output_volume: VoiceVolumePercent,
     ) -> std::result::Result<(), String> {
         if allow_microphone_transmit && scope.guild_id().is_some() {
-            let state = self
-                .state
-                .read()
-                .expect("discord state lock is not poisoned");
+            let state = self.read_state();
             let Some(channel) = state.channel(channel_id) else {
                 return Err("cannot verify voice channel permissions".to_owned());
             };
@@ -562,10 +551,7 @@ impl DiscordClient {
     }
 
     pub fn current_user_activities(&self) -> Vec<ActivityInfo> {
-        let state = self
-            .state
-            .read()
-            .expect("discord state lock is not poisoned");
+        let state = self.read_state();
         state
             .current_user_id()
             .map(|user_id| state.user_activities(user_id).to_vec())
@@ -697,10 +683,7 @@ impl DiscordClient {
 
     /// So the RPC server can relay an activity without clobbering a manually chosen status.
     pub fn current_user_status(&self) -> PresenceStatus {
-        let state = self
-            .state
-            .read()
-            .expect("discord state lock is not poisoned");
+        let state = self.read_state();
         state
             .current_user_id()
             .and_then(|user_id| state.user_presence(user_id))
@@ -726,9 +709,7 @@ impl DiscordClient {
     }
 
     pub fn current_or_requested_voice_connection(&self) -> Option<CurrentVoiceConnectionState> {
-        self.state
-            .read()
-            .expect("discord state lock is not poisoned")
+        self.read_state()
             .current_user_voice_connection()
             .or_else(|| {
                 *self
@@ -892,7 +873,7 @@ async fn publish_app_event(
     publish_lock: &Arc<AsyncMutex<()>>,
     event: &AppEvent,
 ) {
-    let mutates_state = event.mutates_discord_state();
+    let snapshot_areas = event.snapshot_areas();
     let needs_effect_delivery = event.needs_effect_delivery();
     let voice_sound = {
         let state = state.read().expect("discord state lock is not poisoned");
@@ -908,21 +889,13 @@ async fn publish_app_event(
     {
         let _publish_guard = publish_lock.lock().await;
 
-        event_revision = if mutates_state {
+        event_revision = if let Some(areas) = snapshot_areas {
             let next_revision = {
                 let mut state = state.write().expect("discord state lock is not poisoned");
-                let detail_revision_before = matches!(event, AppEvent::MessageCreate { .. })
-                    .then(|| state.detail_revision_signature());
-                state.apply_event(event);
                 let mut revision = revision
                     .write()
                     .expect("snapshot revision lock is not poisoned");
-                if let Some(mut areas) = DiscordState::snapshot_areas_for_event(event) {
-                    if let Some(before) = detail_revision_before {
-                        areas.detail = state.detail_revision_signature() != before;
-                    }
-                    *revision = revision.advance(areas);
-                }
+                *revision = state.apply_event_advancing(event, areas, *revision);
                 *revision
             };
             let _ = snapshots_tx.send(next_revision);

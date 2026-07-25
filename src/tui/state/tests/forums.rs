@@ -442,12 +442,14 @@ fn archived_forum_posts_render_after_active_posts_without_moving_shared_active_p
         ],
         ..ForumPostsLoadedFixture::new()
     }));
+    // `/threads/search` returns a post that is on both pages with the same
+    // last message, so the archived page adds nothing new for "shared".
     state.push_event(forum_posts_loaded_event(ForumPostsLoadedFixture {
         channel_id: forum_id,
         archive_state: ForumPostArchiveState::Archived,
         next_offset: 2,
         threads: vec![
-            forum_thread_info(guild_id, forum_id, 31, "shared", Some(400), true),
+            forum_thread_info(guild_id, forum_id, 31, "shared", Some(200), true),
             forum_thread_info(guild_id, forum_id, 32, "archived", Some(100), true),
         ],
         ..ForumPostsLoadedFixture::new()

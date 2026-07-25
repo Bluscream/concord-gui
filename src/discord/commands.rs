@@ -643,9 +643,6 @@ pub enum AppCommand {
         user_id: Id<UserMarker>,
         guild_id: Option<Id<GuildMarker>>,
     },
-    LoadUserNote {
-        user_id: Id<UserMarker>,
-    },
     UpdateUserProfile {
         update: UserProfileUpdate,
     },

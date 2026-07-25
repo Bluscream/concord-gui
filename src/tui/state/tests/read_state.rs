@@ -23,9 +23,8 @@ fn background_channel_message_updates_unread_without_scheduling_ack() {
             read_state_info(Id::new(20), Some(Id::new(200)), 0),
         ],
     });
-    state.push_effect(AppEvent::ActivateChannel {
-        channel_id: Id::new(20),
-    });
+    state.activate_guild(ActiveGuildScope::DirectMessages);
+    state.activate_channel(Id::new(20));
     assert!(state.drain_pending_commands().is_empty());
 
     state.push_event(direct_message_create_event(Id::new(10), 101));
@@ -45,9 +44,8 @@ fn active_channel_read_state_coalesces_when_new_messages_arrive_at_latest() {
                 read_state_info(Id::new(20), Some(Id::new(200)), 0),
             ],
         });
-        state.push_effect(AppEvent::ActivateChannel {
-            channel_id: Id::new(20),
-        });
+        state.activate_guild(ActiveGuildScope::DirectMessages);
+        state.activate_channel(Id::new(20));
         assert!(state.drain_pending_commands().is_empty());
 
         state.push_event(direct_message_create_event(Id::new(20), 201));

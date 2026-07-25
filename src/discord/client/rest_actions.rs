@@ -5,9 +5,9 @@ use chrono::{DateTime, Utc};
 use super::DiscordClient;
 use crate::discord::{
     ActionBlockReason, ActionDecision, ApplicationCommandInvocation, DiscordAction,
-    DiscordPermission, ForumPostCreate, GuildFolder, MESSAGE_FLAG_SUPPRESS_EMBEDS,
-    MessageAttachmentUpload, MessageInfo, PermissionDecision, ReactionEmoji, ReactionUsersPage,
-    ReplyReference, UserProfileInfo, UserProfileUpdate,
+    DiscordPermission, DiscordState, ForumPostCreate, GuildFolder, MESSAGE_FLAG_SUPPRESS_EMBEDS,
+    MessageAttachmentUpload, MessageInfo, MessageState, PermissionDecision, ReactionEmoji,
+    ReactionUsersPage, ReplyReference, UserProfileInfo, UserProfileUpdate,
     commands::ForumPostArchiveState,
     ids::{
         Id,
@@ -80,17 +80,11 @@ impl DiscordClient {
     /// current user's Nitro tier and the channel's guild boost level. Reads a
     /// snapshot of the shared Discord state.
     fn attachment_size_limit(&self, channel_id: Id<ChannelMarker>) -> u64 {
-        self.state
-            .read()
-            .expect("discord state lock is not poisoned")
-            .attachment_size_limit(channel_id)
+        self.read_state().attachment_size_limit(channel_id)
     }
 
     pub(crate) fn message_slow_mode(&self, channel_id: Id<ChannelMarker>) -> Option<Duration> {
-        let state = self
-            .state
-            .read()
-            .expect("discord state lock is not poisoned");
+        let state = self.read_state();
         let channel = state.channel(channel_id)?;
         let seconds = channel.rate_limit_per_user.filter(|seconds| *seconds > 0)?;
         (!state.bypasses_slow_mode(channel)).then(|| Duration::from_secs(seconds))
@@ -102,10 +96,7 @@ impl DiscordClient {
         reply_to: Option<&ReplyReference>,
         attachments: &[MessageAttachmentUpload],
     ) -> Result<()> {
-        let state = self
-            .state
-            .read()
-            .expect("discord state lock is not poisoned");
+        let state = self.read_state();
         let channel = state.channel(channel_id).ok_or_else(|| {
             action_blocked(
                 DiscordAction::SendMessage,
@@ -133,10 +124,7 @@ impl DiscordClient {
     }
 
     pub(super) fn ensure_can_create_forum_post(&self, post: &ForumPostCreate) -> Result<()> {
-        let state = self
-            .state
-            .read()
-            .expect("discord state lock is not poisoned");
+        let state = self.read_state();
         let channel = state.channel(post.channel_id).ok_or_else(|| {
             action_blocked(
                 DiscordAction::CreateForumPost,
@@ -189,10 +177,7 @@ impl DiscordClient {
     }
 
     pub(super) fn ensure_can_send_tts_message(&self, channel_id: Id<ChannelMarker>) -> Result<()> {
-        let state = self
-            .state
-            .read()
-            .expect("discord state lock is not poisoned");
+        let state = self.read_state();
         let channel = state.channel(channel_id).ok_or_else(|| {
             action_blocked(
                 DiscordAction::SendTtsMessage,
@@ -220,10 +205,7 @@ impl DiscordClient {
         message_id: Id<MessageMarker>,
     ) -> Result<MessageInfo> {
         let flags = {
-            let state = self
-                .state
-                .read()
-                .expect("discord state lock is not poisoned");
+            let state = self.read_state();
             let channel = state.channel(channel_id).ok_or_else(|| {
                 action_blocked(
                     DiscordAction::RemoveMessageEmbeds,
@@ -276,11 +258,7 @@ impl DiscordClient {
         channel_id: Id<ChannelMarker>,
         message_id: Id<MessageMarker>,
     ) -> Result<()> {
-        let (flags, last_viewed) = self
-            .state
-            .read()
-            .expect("discord state lock is not poisoned")
-            .channel_ack_metadata(channel_id);
+        let (flags, last_viewed) = self.read_state().channel_ack_metadata(channel_id);
         self.rest
             .ack_channel(channel_id, message_id, flags, last_viewed)
             .await
@@ -304,12 +282,7 @@ impl DiscordClient {
         name: Option<String>,
         color: Option<u32>,
     ) -> Result<Vec<GuildFolder>> {
-        let mut folders = self
-            .state
-            .read()
-            .expect("discord state lock is not poisoned")
-            .guild_folders()
-            .to_vec();
+        let mut folders = self.read_state().guild_folders().to_vec();
         let Some(folder) = folders
             .iter_mut()
             .find(|folder| folder.id == Some(folder_id))
@@ -441,10 +414,7 @@ impl DiscordClient {
         applied_tags: &[Id<ForumTagMarker>],
         rate_limit_per_user: u64,
     ) -> Result<bool> {
-        let state = self
-            .state
-            .read()
-            .expect("discord state lock is not poisoned");
+        let state = self.read_state();
         let channel = state.channel(thread_id).ok_or_else(|| {
             action_blocked(
                 DiscordAction::EditThread,
@@ -677,10 +647,7 @@ impl DiscordClient {
         thread_id: Id<ChannelMarker>,
         action: DiscordAction,
     ) -> Result<()> {
-        let state = self
-            .state
-            .read()
-            .expect("discord state lock is not poisoned");
+        let state = self.read_state();
         let channel = state
             .channel(thread_id)
             .ok_or_else(|| action_blocked(action, ActionBlockReason::ChannelDataUnavailable))?;
@@ -697,10 +664,7 @@ impl DiscordClient {
         thread_id: Id<ChannelMarker>,
         joining: bool,
     ) -> Result<()> {
-        let state = self
-            .state
-            .read()
-            .expect("discord state lock is not poisoned");
+        let state = self.read_state();
         let channel = state.channel(thread_id).ok_or_else(|| {
             AppError::DiscordRequest("cannot verify thread membership permissions".to_owned())
         })?;
@@ -727,10 +691,7 @@ impl DiscordClient {
     }
 
     pub(super) fn ensure_can_reopen_thread(&self, thread_id: Id<ChannelMarker>) -> Result<()> {
-        let state = self
-            .state
-            .read()
-            .expect("discord state lock is not poisoned");
+        let state = self.read_state();
         let channel = state.channel(thread_id).ok_or_else(|| {
             AppError::DiscordRequest("cannot verify thread reopen permissions".to_owned())
         })?;
@@ -754,25 +715,12 @@ impl DiscordClient {
         channel_id: Id<ChannelMarker>,
         message_id: Id<MessageMarker>,
     ) -> Result<()> {
-        let state = self
-            .state
-            .read()
-            .expect("discord state lock is not poisoned");
+        let state = self.read_state();
         let channel = state.channel(channel_id).ok_or_else(|| {
             AppError::DiscordRequest("cannot verify permission to edit this message".to_owned())
         })?;
         ensure_channel_action_policy(&state, channel, DiscordAction::EditMessage)?;
-        let message = state
-            .messages_for_channel(channel_id)
-            .into_iter()
-            .find(|message| message.id == message_id)
-            .ok_or_else(|| {
-                AppError::DiscordRequest(format!(
-                    "message {} was not found in channel {}",
-                    message_id.get(),
-                    channel_id.get()
-                ))
-            })?;
+        let message = cached_message(&state, channel_id, message_id)?;
         if Some(message.author_id) == state.current_user_id() {
             Ok(())
         } else {
@@ -787,25 +735,12 @@ impl DiscordClient {
         channel_id: Id<ChannelMarker>,
         message_id: Id<MessageMarker>,
     ) -> Result<()> {
-        let state = self
-            .state
-            .read()
-            .expect("discord state lock is not poisoned");
+        let state = self.read_state();
         let channel = state.channel(channel_id).ok_or_else(|| {
             AppError::DiscordRequest("cannot verify permission to delete this message".to_owned())
         })?;
         ensure_channel_action_policy(&state, channel, DiscordAction::DeleteMessage)?;
-        let message = state
-            .messages_for_channel(channel_id)
-            .into_iter()
-            .find(|message| message.id == message_id)
-            .ok_or_else(|| {
-                AppError::DiscordRequest(format!(
-                    "message {} was not found in channel {}",
-                    message_id.get(),
-                    channel_id.get()
-                ))
-            })?;
+        let message = cached_message(&state, channel_id, message_id)?;
         if Some(message.author_id) == state.current_user_id() {
             return Ok(());
         }
@@ -823,10 +758,7 @@ impl DiscordClient {
         message_id: Id<MessageMarker>,
         emoji: &ReactionEmoji,
     ) -> Result<()> {
-        let state = self
-            .state
-            .read()
-            .expect("discord state lock is not poisoned");
+        let state = self.read_state();
         let channel = state.channel(channel_id).ok_or_else(|| {
             AppError::DiscordRequest("cannot verify reaction channel permissions".to_owned())
         })?;
@@ -876,10 +808,7 @@ impl DiscordClient {
         channel_id: Id<ChannelMarker>,
         action: DiscordAction,
     ) -> Result<()> {
-        let state = self
-            .state
-            .read()
-            .expect("discord state lock is not poisoned");
+        let state = self.read_state();
         let channel = state
             .channel(channel_id)
             .ok_or_else(|| action_blocked(action, ActionBlockReason::ChannelDataUnavailable))?;
@@ -930,4 +859,22 @@ pub(super) fn ensure_permission(
 
 fn action_blocked(action: DiscordAction, reason: ActionBlockReason) -> AppError {
     AppError::DiscordActionBlocked { action, reason }
+}
+
+fn cached_message(
+    state: &DiscordState,
+    channel_id: Id<ChannelMarker>,
+    message_id: Id<MessageMarker>,
+) -> Result<&MessageState> {
+    state
+        .messages_for_channel(channel_id)
+        .into_iter()
+        .find(|message| message.id == message_id)
+        .ok_or_else(|| {
+            AppError::DiscordRequest(format!(
+                "message {} was not found in channel {}",
+                message_id.get(),
+                channel_id.get()
+            ))
+        })
 }

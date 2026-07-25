@@ -14,26 +14,14 @@ pub fn load_options_with_warnings() -> Result<(AppOptions, Vec<String>)> {
     load_options_from_path(&path)
 }
 
-pub fn load_keymap_options() -> Result<KeymapOptions> {
-    Ok(load_keymap_options_with_warnings()?.0)
-}
-
 pub fn load_keymap_options_with_warnings() -> Result<(KeymapOptions, Vec<String>)> {
     let path = keymap_path()?;
     load_keymap_options_from_path(&path)
 }
 
-pub fn load_ui_state_options() -> Result<UiStateOptions> {
-    Ok(load_ui_state_options_with_warnings()?.0)
-}
-
 pub fn load_ui_state_options_with_warnings() -> Result<(UiStateOptions, Vec<String>)> {
     let path = state_path()?;
     load_ui_state_options_from_path(&path)
-}
-
-pub fn load_theme_options() -> Result<ThemeOptions> {
-    Ok(load_theme_options_with_warnings()?.0)
 }
 
 pub fn load_theme_options_with_warnings() -> Result<(ThemeOptions, Vec<String>)> {
@@ -44,16 +32,6 @@ pub fn load_theme_options_with_warnings() -> Result<(ThemeOptions, Vec<String>)>
 #[cfg(test)]
 pub(crate) fn parse_theme_options_for_test(content: &str) -> Result<(ThemeOptions, Vec<String>)> {
     parse_theme_options(content)
-}
-
-/// User-facing description of where config lives, e.g. for help text. Falls
-/// back to the legacy path string when XDG resolution fails so the message
-/// stays readable.
-pub fn config_path_display() -> String {
-    config_path()
-        .ok()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| "~/.config/concord/config.toml".to_owned())
 }
 
 fn load_options_from_path(path: &Path) -> Result<(AppOptions, Vec<String>)> {

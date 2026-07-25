@@ -117,7 +117,7 @@ fn current_user_message_create_keeps_channel_seen() {
     });
     {
         let read = state
-            .notifications
+            .notifications_mut()
             .read_states
             .get_mut(&channel_id)
             .expect("read state exists");

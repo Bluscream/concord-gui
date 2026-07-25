@@ -611,9 +611,6 @@ pub enum AppEvent {
     /// outside the gateway flow. The channel itself must already be in
     /// state (typically because a prior `ChannelUpsert` for the same id
     /// arrived first).
-    ActivateChannel {
-        channel_id: Id<ChannelMarker>,
-    },
     ReadStateInit {
         entries: Vec<ReadStateInfo>,
     },
@@ -771,7 +768,6 @@ define_app_event_kinds! {
     RelationshipsLoaded: AppEvent::RelationshipsLoaded { .. },
     RelationshipUpsert: AppEvent::RelationshipUpsert { .. },
     RelationshipRemove: AppEvent::RelationshipRemove { .. },
-    ActivateChannel: AppEvent::ActivateChannel { .. },
     ReadStateInit: AppEvent::ReadStateInit { .. },
     MessageAck: AppEvent::MessageAck { .. },
     FeatureReadStateAck: AppEvent::FeatureReadStateAck { .. },
@@ -1635,41 +1631,40 @@ pub struct SequencedAppEvent {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AppEventMetadata {
-    pub(crate) mutates_discord_state: bool,
-    pub(crate) needs_effect_delivery: bool,
+    /// `Some` means the event mutates `DiscordState` and names the areas whose
+    /// revision must advance. Applying without advancing a revision would leave
+    /// the TUI permanently unaware of the write, so the two facts are one field
+    /// rather than a bool that can drift out of step with the areas.
     pub(crate) snapshot_areas: Option<SnapshotAreas>,
+    pub(crate) needs_effect_delivery: bool,
 }
 
 impl AppEventMetadata {
     const fn mutating(snapshot_areas: SnapshotAreas) -> Self {
         Self {
-            mutates_discord_state: true,
-            needs_effect_delivery: false,
             snapshot_areas: Some(snapshot_areas),
+            needs_effect_delivery: false,
         }
     }
 
     const fn mutating_effect(snapshot_areas: SnapshotAreas) -> Self {
         Self {
-            mutates_discord_state: true,
-            needs_effect_delivery: true,
             snapshot_areas: Some(snapshot_areas),
+            needs_effect_delivery: true,
         }
     }
 
     const fn effect_only() -> Self {
         Self {
-            mutates_discord_state: false,
-            needs_effect_delivery: true,
             snapshot_areas: None,
+            needs_effect_delivery: true,
         }
     }
 
     const fn inert() -> Self {
         Self {
-            mutates_discord_state: false,
-            needs_effect_delivery: false,
             snapshot_areas: None,
+            needs_effect_delivery: false,
         }
     }
 }
@@ -1812,7 +1807,6 @@ impl AppEventKind {
             | AppEventKind::UserProfileUpdateFailed
             | AppEventKind::VoiceConnectionStatusChanged
             | AppEventKind::VoiceSound
-            | AppEventKind::ActivateChannel
             | AppEventKind::RichPresenceDetected
             | AppEventKind::GatewayResumed
             | AppEventKind::GatewayReidentified
@@ -1843,10 +1837,6 @@ impl AppEvent {
             }
             _ => self.kind().metadata(),
         }
-    }
-
-    pub fn mutates_discord_state(&self) -> bool {
-        self.metadata().mutates_discord_state
     }
 
     pub fn needs_effect_delivery(&self) -> bool {
@@ -1963,25 +1953,41 @@ mod tests {
     }
 
     #[test]
-    fn current_user_capabilities_mutate_state_and_deliver_ui_effect() {
-        let event = AppEvent::CurrentUserCapabilities {
-            premium_tier: PremiumTier::Nitro,
-        };
+    fn event_metadata_routes_each_delivery_category() {
+        let cases = [
+            (
+                "mutating, snapshot only",
+                AppEvent::MessageDeleteBulk {
+                    guild_id: Some(Id::new(1)),
+                    channel_id: Id::new(10),
+                    message_ids: vec![Id::new(20), Id::new(30)],
+                },
+                Some(SnapshotAreas::message()),
+                false,
+            ),
+            (
+                "mutating, also delivered as an effect",
+                AppEvent::CurrentUserCapabilities {
+                    premium_tier: PremiumTier::Nitro,
+                },
+                Some(SnapshotAreas::navigation()),
+                true,
+            ),
+            ("effect only", AppEvent::GatewayClosed, None, true),
+            (
+                "inert",
+                AppEvent::GuildUnavailable {
+                    guild_id: Id::new(1),
+                },
+                None,
+                false,
+            ),
+        ];
 
-        assert!(event.mutates_discord_state());
-        assert!(event.needs_effect_delivery());
-    }
-
-    #[test]
-    fn message_delete_bulk_is_snapshot_driven_state_mutation() {
-        let event = AppEvent::MessageDeleteBulk {
-            guild_id: Some(Id::new(1)),
-            channel_id: Id::new(10),
-            message_ids: vec![Id::new(20), Id::new(30)],
-        };
-
-        assert!(event.mutates_discord_state());
-        assert!(!event.needs_effect_delivery());
+        for (label, event, expected_areas, expected_effect) in cases {
+            assert_eq!(event.snapshot_areas(), expected_areas, "{label}");
+            assert_eq!(event.needs_effect_delivery(), expected_effect, "{label}");
+        }
     }
 
     fn attachment_info(filename: &str, content_type: Option<&str>) -> AttachmentInfo {

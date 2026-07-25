@@ -320,9 +320,7 @@ async fn effect_only_events_are_delivered_without_snapshots() {
         AppEvent::GatewayError {
             message: "boom".to_owned(),
         },
-        AppEvent::ActivateChannel {
-            channel_id: Id::new(42),
-        },
+        AppEvent::GatewayClosed,
     ] {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");

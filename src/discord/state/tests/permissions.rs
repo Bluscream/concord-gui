@@ -228,7 +228,7 @@ fn elevated_guild_mfa_requires_current_user_two_factor_for_moderation() {
         Vec::new(),
     );
     state
-        .navigation
+        .navigation_mut()
         .guilds
         .get_mut(&guild)
         .expect("guild")

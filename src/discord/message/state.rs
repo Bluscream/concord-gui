@@ -14,7 +14,7 @@ use crate::discord::{
     profile::UserProfileCacheKey,
     state::{
         ChannelMessageTimeline, DiscordState, MessageSegment, MessageTimelineFocus,
-        OLDER_HISTORY_EXTRA_WINDOW_MULTIPLIER, is_fallback_identity,
+        OLDER_HISTORY_EXTRA_WINDOW_MULTIPLIER, is_fallback_identity, touch_recent,
     },
 };
 
@@ -737,7 +737,7 @@ impl DiscordState {
         &mut self,
         channel_id: Id<ChannelMarker>,
     ) {
-        let Some(timeline) = self.message_cache.timelines.get_mut(&channel_id) else {
+        let Some(timeline) = self.message_cache_mut().timelines.get_mut(&channel_id) else {
             return;
         };
         for message in &mut timeline.messages {
@@ -746,13 +746,9 @@ impl DiscordState {
     }
 
     pub(in crate::discord) fn touch_warm_message_channel(&mut self, channel_id: Id<ChannelMarker>) {
-        self.message_cache
-            .warm_message_channels
-            .retain(|warm_channel_id| *warm_channel_id != channel_id);
-        self.message_cache
-            .warm_message_channels
-            .push_back(channel_id);
-        self.message_cache.cold_message_channels.remove(&channel_id);
+        let message_cache = self.message_cache_mut();
+        touch_recent(&mut message_cache.warm_message_channels, channel_id);
+        message_cache.cold_message_channels.remove(&channel_id);
         self.evict_warm_message_channels_if_needed();
     }
 
@@ -770,7 +766,7 @@ impl DiscordState {
                 break;
             };
             let Some(evicted_channel_id) = self
-                .message_cache
+                .message_cache_mut()
                 .warm_message_channels
                 .remove(evicted_index)
             else {
@@ -782,7 +778,7 @@ impl DiscordState {
                 .timelines
                 .contains_key(&evicted_channel_id)
             {
-                self.message_cache
+                self.message_cache_mut()
                     .cold_message_channels
                     .insert(evicted_channel_id);
             }
@@ -906,12 +902,12 @@ impl DiscordState {
     }
 
     fn for_each_cached_message_mut(&mut self, mut update: impl FnMut(&mut MessageState)) {
-        for messages in self
-            .message_cache
+        let message_cache = self.message_cache_mut();
+        for messages in message_cache
             .timelines
             .values_mut()
             .map(|timeline| &mut timeline.messages)
-            .chain(self.message_cache.pinned_messages.values_mut())
+            .chain(message_cache.pinned_messages.values_mut())
         {
             for message in messages {
                 update(message);
@@ -924,10 +920,14 @@ impl DiscordState {
         channel_id: Id<ChannelMarker>,
         mut update: impl FnMut(&mut VecDeque<MessageState>),
     ) {
-        if let Some(timeline) = self.message_cache.timelines.get_mut(&channel_id) {
+        if let Some(timeline) = self.message_cache_mut().timelines.get_mut(&channel_id) {
             update(&mut timeline.messages);
         }
-        if let Some(messages) = self.message_cache.pinned_messages.get_mut(&channel_id) {
+        if let Some(messages) = self
+            .message_cache_mut()
+            .pinned_messages
+            .get_mut(&channel_id)
+        {
             update(messages);
         }
     }
@@ -972,12 +972,12 @@ impl DiscordState {
             return;
         }
 
-        for messages in self
-            .message_cache
+        let message_cache = self.message_cache_mut();
+        for messages in message_cache
             .timelines
             .values_mut()
             .map(|timeline| &mut timeline.messages)
-            .chain(self.message_cache.pinned_messages.values_mut())
+            .chain(message_cache.pinned_messages.values_mut())
         {
             for message in messages.iter_mut().filter(|m| m.guild_id == Some(guild_id)) {
                 if let Some((display_name, avatar_url)) = identities.get(&message.author_id) {
@@ -1029,7 +1029,7 @@ impl DiscordState {
             .or_else(|| self.channel_guild_id(channel_id));
         let recent_limit = self.message_cache.max_messages_per_channel;
         let timeline = self
-            .message_cache
+            .message_cache_mut()
             .timelines
             .entry(message.channel_id)
             .or_default();
@@ -1138,21 +1138,41 @@ impl DiscordState {
         });
     }
 
+    /// Shared spine of every history merge: hydrate the incoming page, hand it
+    /// to the channel's timeline, then let `place` decide which segment the new
+    /// ids belong to. `place` returns the messages it evicted.
+    fn merge_history_with(
+        &mut self,
+        channel_id: Id<ChannelMarker>,
+        history: &[MessageInfo],
+        place: impl FnOnce(
+            &mut ChannelMessageTimeline,
+            &[Id<MessageMarker>],
+            usize,
+        ) -> Vec<Id<MessageMarker>>,
+    ) {
+        let incoming = self.message_states_from_history(channel_id, history);
+        let recent_limit = self.message_cache.max_messages_per_channel;
+        let timeline = self
+            .message_cache_mut()
+            .timelines
+            .entry(channel_id)
+            .or_default();
+        let incoming_ids = timeline.merge_messages(incoming);
+        let evicted = place(timeline, &incoming_ids, recent_limit);
+        self.finish_message_timeline_merge(channel_id, evicted);
+    }
+
     pub(in crate::discord) fn merge_message_history(
         &mut self,
         channel_id: Id<ChannelMarker>,
         before: Option<Id<MessageMarker>>,
         history: &[MessageInfo],
     ) {
-        let incoming = self.message_states_from_history(channel_id, history);
-        let recent_limit = self.message_cache.max_messages_per_channel;
-        let timeline = self.message_cache.timelines.entry(channel_id).or_default();
-        let incoming_ids = timeline.merge_messages(incoming);
-        let evicted = match before {
-            Some(before) => timeline.merge_older(before, &incoming_ids, recent_limit),
-            None => timeline.merge_latest(&incoming_ids, recent_limit),
-        };
-        self.finish_message_timeline_merge(channel_id, evicted);
+        self.merge_history_with(channel_id, history, |timeline, ids, limit| match before {
+            Some(before) => timeline.merge_older(before, ids, limit),
+            None => timeline.merge_latest(ids, limit),
+        });
     }
 
     pub(in crate::discord) fn replace_message_history(
@@ -1160,18 +1180,15 @@ impl DiscordState {
         channel_id: Id<ChannelMarker>,
         history: &[MessageInfo],
     ) {
-        if let Some(timeline) = self.message_cache.timelines.remove(&channel_id) {
+        if let Some(timeline) = self.message_cache_mut().timelines.remove(&channel_id) {
             for message in timeline.messages {
                 self.prune_message_author_role_ids_if_unreferenced(channel_id, message.id);
             }
         }
-        let incoming = self.message_states_from_history(channel_id, history);
-        let recent_limit = self.message_cache.max_messages_per_channel;
-        let timeline = self.message_cache.timelines.entry(channel_id).or_default();
-        let incoming_ids = timeline.merge_messages(incoming);
-        timeline.replace_latest(&incoming_ids);
-        let evicted = timeline.trim_to_retention_limit(recent_limit);
-        self.finish_message_timeline_merge(channel_id, evicted);
+        self.merge_history_with(channel_id, history, |timeline, ids, limit| {
+            timeline.replace_latest(ids);
+            timeline.trim_to_retention_limit(limit)
+        });
         self.touch_warm_message_channel(channel_id);
     }
 
@@ -1181,12 +1198,9 @@ impl DiscordState {
         message_id: Id<MessageMarker>,
         history: &[MessageInfo],
     ) {
-        let incoming = self.message_states_from_history(channel_id, history);
-        let recent_limit = self.message_cache.max_messages_per_channel;
-        let timeline = self.message_cache.timelines.entry(channel_id).or_default();
-        let incoming_ids = timeline.merge_messages(incoming);
-        let evicted = timeline.merge_around(message_id, &incoming_ids, recent_limit);
-        self.finish_message_timeline_merge(channel_id, evicted);
+        self.merge_history_with(channel_id, history, |timeline, ids, limit| {
+            timeline.merge_around(message_id, ids, limit)
+        });
     }
 
     pub(in crate::discord) fn merge_detached_message_history(
@@ -1194,12 +1208,9 @@ impl DiscordState {
         channel_id: Id<ChannelMarker>,
         history: &[MessageInfo],
     ) {
-        let incoming = self.message_states_from_history(channel_id, history);
-        let recent_limit = self.message_cache.max_messages_per_channel;
-        let timeline = self.message_cache.timelines.entry(channel_id).or_default();
-        let incoming_ids = timeline.merge_messages(incoming);
-        let evicted = timeline.merge_detached(&incoming_ids, recent_limit);
-        self.finish_message_timeline_merge(channel_id, evicted);
+        self.merge_history_with(channel_id, history, |timeline, ids, limit| {
+            timeline.merge_detached(ids, limit)
+        });
     }
 
     pub(in crate::discord) fn merge_message_history_after(
@@ -1209,12 +1220,9 @@ impl DiscordState {
         history: &[MessageInfo],
         has_more: bool,
     ) {
-        let incoming = self.message_states_from_history(channel_id, history);
-        let recent_limit = self.message_cache.max_messages_per_channel;
-        let timeline = self.message_cache.timelines.entry(channel_id).or_default();
-        let incoming_ids = timeline.merge_messages(incoming);
-        let evicted = timeline.merge_newer(after, &incoming_ids, has_more, recent_limit);
-        self.finish_message_timeline_merge(channel_id, evicted);
+        self.merge_history_with(channel_id, history, |timeline, ids, limit| {
+            timeline.merge_newer(after, ids, has_more, limit)
+        });
     }
 
     fn message_states_from_history(
@@ -1282,16 +1290,16 @@ impl DiscordState {
             self.record_message_author_role_ids(pin);
             let mut pinned = self.message_state_from_info(channel_guild_id, pin);
             pinned.pinned = true;
-            if let Some(existing) =
-                self.message_cache
-                    .timelines
-                    .get_mut(&channel_id)
-                    .and_then(|timeline| {
-                        timeline
-                            .messages
-                            .iter_mut()
-                            .find(|message| message.id == pinned.id)
-                    })
+            if let Some(existing) = self
+                .message_cache_mut()
+                .timelines
+                .get_mut(&channel_id)
+                .and_then(|timeline| {
+                    timeline
+                        .messages
+                        .iter_mut()
+                        .find(|message| message.id == pinned.id)
+                })
             {
                 merge_message(existing, &pinned);
             }
@@ -1299,13 +1307,13 @@ impl DiscordState {
         }
 
         let loaded_pin_ids = by_id.keys().copied().collect::<Vec<_>>();
-        if let Some(timeline) = self.message_cache.timelines.get_mut(&channel_id) {
+        if let Some(timeline) = self.message_cache_mut().timelines.get_mut(&channel_id) {
             for message in &mut timeline.messages {
                 message.pinned = loaded_pin_ids.contains(&message.id);
             }
         }
 
-        self.message_cache
+        self.message_cache_mut()
             .pinned_messages
             .insert(channel_id, by_id.into_values().collect());
         for previous_pin_id in previous_pin_ids {
@@ -1380,26 +1388,26 @@ impl DiscordState {
         message_id: Id<MessageMarker>,
         pinned: bool,
     ) {
-        let normal_message =
-            self.message_cache
-                .timelines
-                .get_mut(&channel_id)
-                .and_then(|timeline| {
-                    timeline
-                        .messages
-                        .iter_mut()
-                        .find(|message| message.id == message_id)
-                        .map(|message| {
-                            message.pinned = pinned;
-                            message.clone()
-                        })
-                });
+        let normal_message = self
+            .message_cache_mut()
+            .timelines
+            .get_mut(&channel_id)
+            .and_then(|timeline| {
+                timeline
+                    .messages
+                    .iter_mut()
+                    .find(|message| message.id == message_id)
+                    .map(|message| {
+                        message.pinned = pinned;
+                        message.clone()
+                    })
+            });
 
         if pinned {
             if let Some(mut message) = normal_message {
                 message.pinned = true;
                 upsert_sorted_message(
-                    self.message_cache
+                    self.message_cache_mut()
                         .pinned_messages
                         .entry(channel_id)
                         .or_default(),
@@ -1408,7 +1416,7 @@ impl DiscordState {
             }
         } else {
             let removed_from_pins = self
-                .message_cache
+                .message_cache_mut()
                 .pinned_messages
                 .get_mut(&channel_id)
                 .is_some_and(|messages| {
@@ -1424,7 +1432,7 @@ impl DiscordState {
 
     pub(in crate::discord) fn invalidate_pinned_messages(&mut self, channel_id: Id<ChannelMarker>) {
         let previous_pin_ids = self
-            .message_cache
+            .message_cache_mut()
             .pinned_messages
             .remove(&channel_id)
             .map(|messages| {
@@ -1452,14 +1460,18 @@ impl DiscordState {
         channel_id: Id<ChannelMarker>,
         message_ids: &[Id<MessageMarker>],
     ) {
-        if let Some(timeline) = self.message_cache.timelines.get_mut(&channel_id) {
+        if let Some(timeline) = self.message_cache_mut().timelines.get_mut(&channel_id) {
             timeline.remove_messages(message_ids);
         }
-        if let Some(messages) = self.message_cache.pinned_messages.get_mut(&channel_id) {
+        if let Some(messages) = self
+            .message_cache_mut()
+            .pinned_messages
+            .get_mut(&channel_id)
+        {
             messages.retain(|message| !message_ids.contains(&message.id));
         }
         for message_id in message_ids {
-            self.message_cache
+            self.message_cache_mut()
                 .message_author_role_ids
                 .remove(&(channel_id, *message_id));
         }
@@ -1481,11 +1493,13 @@ impl DiscordState {
     ) {
         let key = (channel_id, message_id);
         if author_role_ids.is_empty() {
-            self.message_cache.message_author_role_ids.remove(&key);
+            self.message_cache_mut()
+                .message_author_role_ids
+                .remove(&key);
             return;
         }
 
-        self.message_cache
+        self.message_cache_mut()
             .message_author_role_ids
             .insert(key, author_role_ids.to_vec());
     }
@@ -1506,7 +1520,7 @@ impl DiscordState {
                 .get(&channel_id)
                 .is_some_and(|messages| messages.iter().any(|message| message.id == message_id));
         if !is_still_cached {
-            self.message_cache
+            self.message_cache_mut()
                 .message_author_role_ids
                 .remove(&(channel_id, message_id));
         }

@@ -18,6 +18,13 @@ use super::{ChannelPaneCursor, DashboardState, DesktopNotification, message_noti
 #[derive(Debug, Default)]
 pub(super) struct DiscordUiState {
     pub(super) cache: DiscordState,
+    /// Test-only stand-in for the state `DiscordClient` owns in production.
+    /// Tests drive events through it so `push_event` reproduces the real
+    /// apply -> snapshot -> restore path instead of writing `cache` directly.
+    #[cfg(test)]
+    pub(super) authoritative: DiscordState,
+    #[cfg(test)]
+    pub(super) authoritative_revision: SnapshotRevision,
     pub(super) current_user: Option<String>,
     pub(super) current_user_id: Option<Id<UserMarker>>,
     pub(super) application_commands: HashMap<Option<Id<GuildMarker>>, Vec<ApplicationCommandInfo>>,

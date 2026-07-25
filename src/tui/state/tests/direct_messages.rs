@@ -55,20 +55,6 @@ fn direct_message_selection_waits_for_channel_confirmation() {
 }
 
 #[test]
-fn activate_channel_effect_moves_direct_message_cursor_to_target() {
-    let mut state = state_with_direct_messages();
-    state.confirm_selected_guild();
-    assert_eq!(state.selected_channel(), 0);
-
-    state.push_effect(AppEvent::ActivateChannel {
-        channel_id: Id::new(30),
-    });
-
-    assert_eq!(state.selected_channel_id(), Some(Id::new(30)));
-    assert_eq!(state.selected_channel(), 2);
-}
-
-#[test]
 fn direct_message_sorting_uses_channel_id_fallback() {
     let mut state = DashboardState::new();
     for (channel_id, name) in [(Id::new(10), "older-id"), (Id::new(30), "newer-id")] {

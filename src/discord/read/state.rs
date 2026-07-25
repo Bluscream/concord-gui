@@ -178,7 +178,7 @@ impl DiscordState {
         message_id: Id<MessageMarker>,
     ) {
         let entry = self
-            .notifications
+            .notifications_mut()
             .read_states
             .entry(channel_id)
             .or_default();

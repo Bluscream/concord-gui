@@ -1,19 +1,13 @@
 use crate::{
-    DiscordClient, Result, config,
-    discord::{AppCommand, AppEvent},
-    error::AppError,
-    logging, token_store,
+    DiscordClient, Result, config, discord::AppEvent, error::AppError, logging, token_store,
 };
 
 use super::command_loop::publish_app_error;
 
-pub(super) async fn handle(client: DiscordClient, command: AppCommand) {
-    match command {
-        AppCommand::SignOut => match delete_saved_credentials().await {
-            Ok(()) => client.publish_event(AppEvent::SignedOut).await,
-            Err(error) => publish_app_error(&client, "sign out failed", &error).await,
-        },
-        _ => unreachable!("non-session command routed to session handler"),
+pub(super) async fn sign_out(client: DiscordClient) {
+    match delete_saved_credentials().await {
+        Ok(()) => client.publish_event(AppEvent::SignedOut).await,
+        Err(error) => publish_app_error(&client, "sign out failed", &error).await,
     }
 }
 

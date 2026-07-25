@@ -3,364 +3,425 @@ use std::collections::BTreeMap;
 use crate::{
     AppError, DiscordClient,
     discord::{
-        AppCommand, AppEvent, AttachmentUpdate, MessageInfo, MessageUpdateDispatchInfo,
-        MessageUpdateEventFields,
-        ids::{Id, marker::ChannelMarker},
+        AppEvent, ApplicationCommandAutocompleteInvocation, ApplicationCommandInvocation,
+        AttachmentUpdate, ForumPostCreate, MessageAttachmentUpload, MessageInfo,
+        MessageUpdateDispatchInfo, MessageUpdateEventFields, ReactionEmoji, ReplyReference,
+        ids::{
+            Id,
+            marker::{ChannelMarker, ForumTagMarker, GuildMarker, MessageMarker, UserMarker},
+        },
     },
 };
 
 use super::command_loop::{log_app_error, publish_app_error};
 
-pub(super) async fn handle(client: DiscordClient, command: AppCommand) {
-    match command {
-        AppCommand::SendMessage {
-            channel_id,
-            nonce,
-            content,
-            reply_to,
-            attachments,
-        } => match client
-            .send_message(channel_id, nonce, &content, reply_to, &attachments)
-            .await
-        {
-            Ok(mut message) => {
-                message.nonce = Some(nonce);
+pub(super) async fn send_message(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    nonce: Id<MessageMarker>,
+    content: String,
+    reply_to: Option<ReplyReference>,
+    attachments: Vec<MessageAttachmentUpload>,
+) {
+    match client
+        .send_message(channel_id, nonce, &content, reply_to, &attachments)
+        .await
+    {
+        Ok(mut message) => {
+            message.nonce = Some(nonce);
+            client.publish_event(message_create_event(message)).await;
+        }
+        Err(error) => {
+            client
+                .publish_event(AppEvent::MessageSendFailed { channel_id, nonce })
+                .await;
+            publish_message_send_error(&client, channel_id, "send message failed", &error).await
+        }
+    }
+}
+
+pub(super) async fn trigger_typing(client: DiscordClient, channel_id: Id<ChannelMarker>) {
+    if let Err(error) = client.trigger_typing(channel_id) {
+        publish_app_error(&client, "show typing indicator failed", &error).await;
+    }
+}
+
+pub(super) async fn send_tts_message(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    nonce: Id<MessageMarker>,
+    content: String,
+) {
+    match client.send_tts_message(channel_id, nonce, &content).await {
+        Ok(mut message) => {
+            message.nonce = Some(nonce);
+            client.publish_event(message_create_event(message)).await;
+        }
+        Err(error) => {
+            client
+                .publish_event(AppEvent::MessageSendFailed { channel_id, nonce })
+                .await;
+            publish_message_send_error(&client, channel_id, "send tts message failed", &error).await
+        }
+    }
+}
+
+pub(super) async fn create_forum_post(client: DiscordClient, post: ForumPostCreate) {
+    match client.create_forum_post(&post).await {
+        Ok(created) => {
+            let slow_mode = client.message_slow_mode(post.channel_id);
+            client
+                .publish_event(AppEvent::ChannelUpsert(created.thread))
+                .await;
+            if let Some(message) = created.first_message {
                 client.publish_event(message_create_event(message)).await;
             }
-            Err(error) => {
+            if let Some(slow_mode) = slow_mode {
                 client
-                    .publish_event(AppEvent::MessageSendFailed { channel_id, nonce })
+                    .publish_event(AppEvent::MessageSendCooldownStarted {
+                        channel_id: post.channel_id,
+                        duration_millis: u64::try_from(slow_mode.as_millis()).unwrap_or(u64::MAX),
+                    })
                     .await;
-                publish_message_send_error(&client, channel_id, "send message failed", &error).await
-            }
-        },
-        AppCommand::TriggerTyping { channel_id } => {
-            if let Err(error) = client.trigger_typing(channel_id) {
-                publish_app_error(&client, "show typing indicator failed", &error).await;
             }
         }
-        AppCommand::SendTtsMessage {
-            channel_id,
-            nonce,
-            content,
-        } => match client.send_tts_message(channel_id, nonce, &content).await {
-            Ok(mut message) => {
-                message.nonce = Some(nonce);
-                client.publish_event(message_create_event(message)).await;
-            }
-            Err(error) => {
-                client
-                    .publish_event(AppEvent::MessageSendFailed { channel_id, nonce })
-                    .await;
-                publish_message_send_error(&client, channel_id, "send tts message failed", &error)
-                    .await
-            }
-        },
-        AppCommand::CreateForumPost { post } => match client.create_forum_post(&post).await {
-            Ok(created) => {
-                let slow_mode = client.message_slow_mode(post.channel_id);
-                client
-                    .publish_event(AppEvent::ChannelUpsert(created.thread))
-                    .await;
-                if let Some(message) = created.first_message {
-                    client.publish_event(message_create_event(message)).await;
-                }
-                if let Some(slow_mode) = slow_mode {
-                    client
-                        .publish_event(AppEvent::MessageSendCooldownStarted {
-                            channel_id: post.channel_id,
-                            duration_millis: u64::try_from(slow_mode.as_millis())
-                                .unwrap_or(u64::MAX),
-                        })
-                        .await;
-                }
-            }
-            Err(error) => {
-                publish_message_send_error(
-                    &client,
-                    post.channel_id,
-                    "create forum post failed",
-                    &error,
-                )
+        Err(error) => {
+            publish_message_send_error(&client, post.channel_id, "create forum post failed", &error)
                 .await
-            }
-        },
-        // The archive/lock/pin/delete results arrive over the gateway
-        // (THREAD_UPDATE / THREAD_DELETE), which updates the cached thread, so
-        // these only need to report failures.
-        AppCommand::SetThreadArchived {
-            channel_id,
-            archived,
-            label: _,
-        } => {
-            if let Err(error) = client.set_thread_archived(channel_id, archived).await {
-                let context = if archived {
-                    "archive thread failed"
-                } else {
-                    "reopen thread failed"
-                };
-                publish_app_error(&client, context, &error).await;
-            }
         }
-        AppCommand::SetThreadLocked {
+    }
+}
+
+/// The archive/lock/pin/delete results arrive over the gateway
+/// (THREAD_UPDATE / THREAD_DELETE), which updates the cached thread, so
+/// these only need to report failures.
+pub(super) async fn set_thread_archived(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    archived: bool,
+    _label: String,
+) {
+    if let Err(error) = client.set_thread_archived(channel_id, archived).await {
+        let context = if archived {
+            "archive thread failed"
+        } else {
+            "reopen thread failed"
+        };
+        publish_app_error(&client, context, &error).await;
+    }
+}
+
+pub(super) async fn set_thread_locked(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    locked: bool,
+    _label: String,
+) {
+    if let Err(error) = client.set_thread_locked(channel_id, locked).await {
+        let context = if locked {
+            "lock thread failed"
+        } else {
+            "unlock thread failed"
+        };
+        publish_app_error(&client, context, &error).await;
+    }
+}
+
+pub(super) async fn set_thread_pinned(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    pinned: bool,
+    current_flags: u64,
+    _label: String,
+) {
+    if let Err(error) = client
+        .set_thread_pinned(channel_id, pinned, current_flags)
+        .await
+    {
+        let context = if pinned {
+            "pin post failed"
+        } else {
+            "unpin post failed"
+        };
+        publish_app_error(&client, context, &error).await;
+    }
+}
+
+pub(super) async fn delete_thread(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    _label: String,
+) {
+    if let Err(error) = client.delete_thread(channel_id).await {
+        publish_app_error(&client, "delete thread failed", &error).await;
+    }
+}
+
+pub(super) async fn edit_thread(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    name: String,
+    applied_tags: Vec<Id<ForumTagMarker>>,
+    rate_limit_per_user: u64,
+    auto_archive_duration: u64,
+    _label: String,
+) {
+    if let Err(error) = client
+        .edit_thread_settings(
             channel_id,
-            locked,
-            label: _,
-        } => {
-            if let Err(error) = client.set_thread_locked(channel_id, locked).await {
-                let context = if locked {
-                    "lock thread failed"
-                } else {
-                    "unlock thread failed"
-                };
-                publish_app_error(&client, context, &error).await;
-            }
-        }
-        AppCommand::SetThreadPinned {
-            channel_id,
-            pinned,
-            current_flags,
-            label: _,
-        } => {
-            if let Err(error) = client
-                .set_thread_pinned(channel_id, pinned, current_flags)
-                .await
-            {
-                let context = if pinned {
-                    "pin post failed"
-                } else {
-                    "unpin post failed"
-                };
-                publish_app_error(&client, context, &error).await;
-            }
-        }
-        AppCommand::DeleteThread {
-            channel_id,
-            label: _,
-        } => {
-            if let Err(error) = client.delete_thread(channel_id).await {
-                publish_app_error(&client, "delete thread failed", &error).await;
-            }
-        }
-        AppCommand::EditThread {
-            channel_id,
-            name,
-            applied_tags,
+            &name,
+            &applied_tags,
             rate_limit_per_user,
             auto_archive_duration,
-            label: _,
-        } => {
-            if let Err(error) = client
-                .edit_thread_settings(
+        )
+        .await
+    {
+        publish_app_error(&client, "edit thread failed", &error).await;
+    }
+}
+
+pub(super) async fn load_application_commands(
+    client: DiscordClient,
+    guild_id: Option<Id<GuildMarker>>,
+) {
+    match client.load_application_commands(guild_id).await {
+        Ok(Some(commands)) => {
+            client
+                .publish_event(AppEvent::ApplicationCommandsLoaded { guild_id, commands })
+                .await;
+        }
+        Ok(None) => {}
+        Err(error) => log_app_error("load application commands failed", &error),
+    }
+}
+
+pub(super) async fn run_application_command(
+    client: DiscordClient,
+    invocation: ApplicationCommandInvocation,
+) {
+    if let Err(error) = client.run_application_command(&invocation).await {
+        publish_app_error(&client, "run application command failed", &error).await;
+    }
+}
+
+pub(super) async fn request_application_command_autocomplete(
+    client: DiscordClient,
+    invocation: ApplicationCommandAutocompleteInvocation,
+) {
+    if let Err(error) = client
+        .request_application_command_autocomplete(&invocation)
+        .await
+    {
+        log_app_error("application command autocomplete failed", &error);
+    }
+}
+
+pub(super) async fn edit_message(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    message_id: Id<MessageMarker>,
+    content: String,
+) {
+    match client.edit_message(channel_id, message_id, &content).await {
+        Ok(message) => {
+            client.publish_event(message_update_event(message)).await;
+        }
+        Err(error) => publish_app_error(&client, "edit message failed", &error).await,
+    }
+}
+
+pub(super) async fn delete_message(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    message_id: Id<MessageMarker>,
+) {
+    match client.delete_message(channel_id, message_id).await {
+        Ok(()) => {
+            client
+                .publish_event(AppEvent::MessageDelete {
+                    guild_id: None,
                     channel_id,
-                    &name,
-                    &applied_tags,
-                    rate_limit_per_user,
-                    auto_archive_duration,
-                )
-                .await
-            {
-                publish_app_error(&client, "edit thread failed", &error).await;
-            }
+                    message_id,
+                })
+                .await;
         }
-        AppCommand::LoadApplicationCommands { guild_id } => {
-            match client.load_application_commands(guild_id).await {
-                Ok(Some(commands)) => {
-                    client
-                        .publish_event(AppEvent::ApplicationCommandsLoaded { guild_id, commands })
-                        .await;
-                }
-                Ok(None) => {}
-                Err(error) => log_app_error("load application commands failed", &error),
-            }
+        Err(error) => publish_app_error(&client, "delete message failed", &error).await,
+    }
+}
+
+pub(super) async fn remove_message_embeds(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    message_id: Id<MessageMarker>,
+) {
+    match client.remove_message_embeds(channel_id, message_id).await {
+        Ok(message) => {
+            client.publish_event(message_update_event(message)).await;
         }
-        AppCommand::RunApplicationCommand { invocation } => {
-            if let Err(error) = client.run_application_command(&invocation).await {
-                publish_app_error(&client, "run application command failed", &error).await;
-            }
+        Err(error) => publish_app_error(&client, "remove message embeds failed", &error).await,
+    }
+}
+
+pub(super) async fn leave_guild(client: DiscordClient, guild_id: Id<GuildMarker>, label: String) {
+    match client.leave_guild(guild_id).await {
+        Ok(()) => {
+            client
+                .publish_event(AppEvent::GuildDelete { guild_id })
+                .await;
         }
-        AppCommand::RequestApplicationCommandAutocomplete { invocation } => {
-            if let Err(error) = client
-                .request_application_command_autocomplete(&invocation)
-                .await
-            {
-                log_app_error("application command autocomplete failed", &error);
-            }
+        Err(error) => {
+            log_app_error("leave guild failed", &error);
+            client
+                .publish_event(AppEvent::GatewayError {
+                    message: format!("leave server {label} failed: {error}"),
+                })
+                .await;
         }
-        AppCommand::EditMessage {
-            channel_id,
-            message_id,
-            content,
-        } => match client.edit_message(channel_id, message_id, &content).await {
-            Ok(message) => {
-                client.publish_event(message_update_event(message)).await;
-            }
-            Err(error) => publish_app_error(&client, "edit message failed", &error).await,
-        },
-        AppCommand::DeleteMessage {
-            channel_id,
-            message_id,
-        } => match client.delete_message(channel_id, message_id).await {
-            Ok(()) => {
-                client
-                    .publish_event(AppEvent::MessageDelete {
-                        guild_id: None,
-                        channel_id,
-                        message_id,
-                    })
-                    .await;
-            }
-            Err(error) => publish_app_error(&client, "delete message failed", &error).await,
-        },
-        AppCommand::RemoveMessageEmbeds {
-            channel_id,
-            message_id,
-        } => match client.remove_message_embeds(channel_id, message_id).await {
-            Ok(message) => {
-                client.publish_event(message_update_event(message)).await;
-            }
-            Err(error) => publish_app_error(&client, "remove message embeds failed", &error).await,
-        },
-        AppCommand::LeaveGuild { guild_id, label } => match client.leave_guild(guild_id).await {
-            Ok(()) => {
-                client
-                    .publish_event(AppEvent::GuildDelete { guild_id })
-                    .await;
-            }
-            Err(error) => {
-                log_app_error("leave guild failed", &error);
-                client
-                    .publish_event(AppEvent::GatewayError {
-                        message: format!("leave server {label} failed: {error}"),
-                    })
-                    .await;
-            }
-        },
-        AppCommand::AddReaction {
-            channel_id,
-            message_id,
-            emoji,
-        } => match client.add_reaction(channel_id, message_id, &emoji).await {
-            Ok(()) => {
-                client
-                    .publish_event(AppEvent::CurrentUserReactionAdd {
-                        channel_id,
-                        message_id,
-                        emoji: emoji.clone(),
-                    })
-                    .await;
-            }
-            Err(error) => publish_app_error(&client, "add reaction failed", &error).await,
-        },
-        AppCommand::RemoveReaction {
-            channel_id,
-            message_id,
-            emoji,
-        } => match client
-            .remove_current_user_reaction(channel_id, message_id, &emoji)
-            .await
-        {
-            Ok(()) => {
-                client
-                    .publish_event(AppEvent::CurrentUserReactionRemove {
-                        channel_id,
-                        message_id,
-                        emoji: emoji.clone(),
-                    })
-                    .await;
-            }
-            Err(error) => publish_app_error(&client, "remove reaction failed", &error).await,
-        },
-        AppCommand::LoadReactionUsers {
-            channel_id,
-            message_id,
-            emoji,
-            after,
-        } => match client
-            .load_reaction_users_page(channel_id, message_id, &emoji, after)
-            .await
-        {
-            Ok(page) => {
-                client
-                    .publish_event(AppEvent::ReactionUsersLoaded {
-                        channel_id,
-                        message_id,
-                        emoji,
-                        users: page.users,
-                        next_after: page.next_after,
-                        after,
-                    })
-                    .await;
-            }
-            Err(error) => {
-                publish_app_error(&client, "load reaction users failed", &error).await;
-                // Clears the popup's in-flight flag so the emoji can be retried.
-                client
-                    .publish_event(AppEvent::ReactionUsersLoadFailed {
-                        channel_id,
-                        message_id,
-                        emoji,
-                    })
-                    .await;
-            }
-        },
-        AppCommand::LoadPinnedMessages { channel_id } => {
-            match client.load_pinned_messages(channel_id).await {
-                Ok(messages) => {
-                    client
-                        .publish_event(AppEvent::PinnedMessagesLoaded {
-                            channel_id,
-                            messages,
-                        })
-                        .await;
-                }
-                Err(error) => {
-                    log_app_error("load pinned messages failed", &error);
-                    client
-                        .publish_event(AppEvent::PinnedMessagesLoadFailed {
-                            channel_id,
-                            message: format!("load pinned messages failed: {error}"),
-                        })
-                        .await;
-                }
-            }
+    }
+}
+
+pub(super) async fn add_reaction(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    message_id: Id<MessageMarker>,
+    emoji: ReactionEmoji,
+) {
+    match client.add_reaction(channel_id, message_id, &emoji).await {
+        Ok(()) => {
+            client
+                .publish_event(AppEvent::CurrentUserReactionAdd {
+                    channel_id,
+                    message_id,
+                    emoji: emoji.clone(),
+                })
+                .await;
         }
-        AppCommand::SetMessagePinned {
-            channel_id,
-            message_id,
-            pinned,
-        } => match client
-            .set_message_pinned(channel_id, message_id, pinned)
-            .await
-        {
-            Ok(()) => {
-                client
-                    .publish_event(AppEvent::MessagePinnedUpdate {
-                        channel_id,
-                        message_id,
-                        pinned,
-                    })
-                    .await;
-            }
-            Err(error) => publish_app_error(&client, "set pin failed", &error).await,
-        },
-        AppCommand::VotePoll {
-            channel_id,
-            message_id,
-            answer_ids,
-        } => match client.vote_poll(channel_id, message_id, &answer_ids).await {
-            Ok(()) => {
-                client
-                    .publish_event(AppEvent::CurrentUserPollVoteUpdate {
-                        channel_id,
-                        message_id,
-                        answer_ids,
-                    })
-                    .await;
-            }
-            Err(error) => publish_app_error(&client, "poll vote failed", &error).await,
-        },
-        _ => unreachable!("non-message command routed to message handler"),
+        Err(error) => publish_app_error(&client, "add reaction failed", &error).await,
+    }
+}
+
+pub(super) async fn remove_reaction(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    message_id: Id<MessageMarker>,
+    emoji: ReactionEmoji,
+) {
+    match client
+        .remove_current_user_reaction(channel_id, message_id, &emoji)
+        .await
+    {
+        Ok(()) => {
+            client
+                .publish_event(AppEvent::CurrentUserReactionRemove {
+                    channel_id,
+                    message_id,
+                    emoji: emoji.clone(),
+                })
+                .await;
+        }
+        Err(error) => publish_app_error(&client, "remove reaction failed", &error).await,
+    }
+}
+
+pub(super) async fn load_reaction_users(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    message_id: Id<MessageMarker>,
+    emoji: ReactionEmoji,
+    after: Option<Id<UserMarker>>,
+) {
+    match client
+        .load_reaction_users_page(channel_id, message_id, &emoji, after)
+        .await
+    {
+        Ok(page) => {
+            client
+                .publish_event(AppEvent::ReactionUsersLoaded {
+                    channel_id,
+                    message_id,
+                    emoji,
+                    users: page.users,
+                    next_after: page.next_after,
+                    after,
+                })
+                .await;
+        }
+        Err(error) => {
+            publish_app_error(&client, "load reaction users failed", &error).await;
+            // Clears the popup's in-flight flag so the emoji can be retried.
+            client
+                .publish_event(AppEvent::ReactionUsersLoadFailed {
+                    channel_id,
+                    message_id,
+                    emoji,
+                })
+                .await;
+        }
+    }
+}
+
+pub(super) async fn load_pinned_messages(client: DiscordClient, channel_id: Id<ChannelMarker>) {
+    match client.load_pinned_messages(channel_id).await {
+        Ok(messages) => {
+            client
+                .publish_event(AppEvent::PinnedMessagesLoaded {
+                    channel_id,
+                    messages,
+                })
+                .await;
+        }
+        Err(error) => {
+            log_app_error("load pinned messages failed", &error);
+            client
+                .publish_event(AppEvent::PinnedMessagesLoadFailed {
+                    channel_id,
+                    message: format!("load pinned messages failed: {error}"),
+                })
+                .await;
+        }
+    }
+}
+
+pub(super) async fn set_message_pinned(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    message_id: Id<MessageMarker>,
+    pinned: bool,
+) {
+    match client
+        .set_message_pinned(channel_id, message_id, pinned)
+        .await
+    {
+        Ok(()) => {
+            client
+                .publish_event(AppEvent::MessagePinnedUpdate {
+                    channel_id,
+                    message_id,
+                    pinned,
+                })
+                .await;
+        }
+        Err(error) => publish_app_error(&client, "set pin failed", &error).await,
+    }
+}
+
+pub(super) async fn vote_poll(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    message_id: Id<MessageMarker>,
+    answer_ids: Vec<u8>,
+) {
+    match client.vote_poll(channel_id, message_id, &answer_ids).await {
+        Ok(()) => {
+            client
+                .publish_event(AppEvent::CurrentUserPollVoteUpdate {
+                    channel_id,
+                    message_id,
+                    answer_ids,
+                })
+                .await;
+        }
+        Err(error) => publish_app_error(&client, "poll vote failed", &error).await,
     }
 }
 
@@ -414,5 +475,28 @@ fn message_update_event(message: MessageInfo) -> AppEvent {
             },
             extra_fields: BTreeMap::new(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn typing_in_an_uncached_channel_reports_the_block_instead_of_sending() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
+        let mut effects = client.take_effects();
+
+        trigger_typing(client.clone(), Id::new(1)).await;
+
+        let effect = effects.try_recv().expect("block reason is published");
+        let AppEvent::GatewayError { message } = effect.event else {
+            panic!("expected a gateway error, got {:?}", effect.event);
+        };
+        assert!(
+            message.contains("show typing indicator failed"),
+            "unexpected message: {message}"
+        );
     }
 }

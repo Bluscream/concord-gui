@@ -120,7 +120,7 @@ impl DiscordState {
 
     pub(in crate::discord) fn increment_guild_member_count(&mut self, guild_id: Id<GuildMarker>) {
         if let Some(count) = self
-            .navigation
+            .navigation_mut()
             .guilds
             .get_mut(&guild_id)
             .and_then(|guild| guild.member_count.as_mut())
@@ -131,7 +131,7 @@ impl DiscordState {
 
     pub(in crate::discord) fn decrement_guild_member_count(&mut self, guild_id: Id<GuildMarker>) {
         if let Some(count) = self
-            .navigation
+            .navigation_mut()
             .guilds
             .get_mut(&guild_id)
             .and_then(|guild| guild.member_count.as_mut())

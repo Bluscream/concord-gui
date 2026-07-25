@@ -293,13 +293,6 @@ impl DiscordState {
             .is_allowed()
     }
 
-    /// Discord allows an unlocked thread to be reopened with `SEND_MESSAGES`.
-    /// Reopening a locked thread requires its creator or `MANAGE_THREADS`.
-    pub fn can_reopen_thread(&self, channel: &ChannelState) -> bool {
-        self.channel_permission_decision(channel, DiscordPermission::ReopenThread)
-            .is_allowed()
-    }
-
     /// Whether the user can manage guild/channel structure around `channel`.
     /// Empty categories are only useful to users who can configure the server
     /// or channel tree, so this check is intentionally pessimistic while

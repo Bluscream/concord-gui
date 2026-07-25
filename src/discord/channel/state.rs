@@ -368,46 +368,47 @@ impl DiscordState {
             })
             .unwrap_or(false);
 
-        self.navigation.channels.insert(
-            channel.channel_id,
-            ChannelState {
-                id: channel.channel_id,
-                guild_id: channel.guild_id,
-                parent_id: channel.parent_id,
-                owner_id: channel.owner_id,
-                position: channel.position,
-                last_message_id,
-                name,
-                kind: channel.kind.clone(),
-                message_count: channel.message_count,
-                member_count: channel.member_count,
-                total_message_sent: channel.total_message_sent,
-                thread_metadata: channel.thread_metadata.clone(),
-                flags: channel.flags,
-                rate_limit_per_user: channel
-                    .rate_limit_per_user
-                    .or_else(|| existing.and_then(|existing| existing.rate_limit_per_user)),
-                available_tags: channel.available_tags.clone(),
-                applied_tags: channel.applied_tags.clone(),
-                current_user_joined_thread,
-                current_user_thread_notification_flags: channel
-                    .current_user_thread_notification_flags
-                    .or_else(|| {
-                        existing
-                            .and_then(|existing| existing.current_user_thread_notification_flags)
-                    }),
-                recipients,
-                permission_overwrites,
-                // Preserve across upserts: a partial CHANNEL_UPDATE that omits
-                // these must not silently unlock a request/spam DM.
-                is_message_request: channel
-                    .is_message_request
-                    .or_else(|| existing.and_then(|existing| existing.is_message_request)),
-                is_spam: channel
-                    .is_spam
-                    .or_else(|| existing.and_then(|existing| existing.is_spam)),
-            },
-        );
+        // Build the row before touching the index so the `existing` borrow ends
+        // before the copy-on-write mutable borrow starts.
+        let state = ChannelState {
+            id: channel.channel_id,
+            guild_id: channel.guild_id,
+            parent_id: channel.parent_id,
+            owner_id: channel.owner_id,
+            position: channel.position,
+            last_message_id,
+            name,
+            kind: channel.kind.clone(),
+            message_count: channel.message_count,
+            member_count: channel.member_count,
+            total_message_sent: channel.total_message_sent,
+            thread_metadata: channel.thread_metadata.clone(),
+            flags: channel.flags,
+            rate_limit_per_user: channel
+                .rate_limit_per_user
+                .or_else(|| existing.and_then(|existing| existing.rate_limit_per_user)),
+            available_tags: channel.available_tags.clone(),
+            applied_tags: channel.applied_tags.clone(),
+            current_user_joined_thread,
+            current_user_thread_notification_flags: channel
+                .current_user_thread_notification_flags
+                .or_else(|| {
+                    existing.and_then(|existing| existing.current_user_thread_notification_flags)
+                }),
+            recipients,
+            permission_overwrites,
+            // Preserve across upserts: a partial CHANNEL_UPDATE that omits
+            // these must not silently unlock a request/spam DM.
+            is_message_request: channel
+                .is_message_request
+                .or_else(|| existing.and_then(|existing| existing.is_message_request)),
+            is_spam: channel
+                .is_spam
+                .or_else(|| existing.and_then(|existing| existing.is_spam)),
+        };
+        self.navigation_mut()
+            .channels
+            .insert(channel.channel_id, state);
     }
 
     pub(in crate::discord) fn set_thread_notification_flags(
@@ -415,7 +416,7 @@ impl DiscordState {
         channel_id: Id<ChannelMarker>,
         flags: u64,
     ) {
-        if let Some(channel) = self.navigation.channels.get_mut(&channel_id) {
+        if let Some(channel) = self.navigation_mut().channels.get_mut(&channel_id) {
             channel.current_user_thread_notification_flags = Some(flags);
         }
     }
@@ -425,7 +426,7 @@ impl DiscordState {
         channel_id: Id<ChannelMarker>,
         flags: u64,
     ) {
-        if let Some(channel) = self.navigation.channels.get_mut(&channel_id) {
+        if let Some(channel) = self.navigation_mut().channels.get_mut(&channel_id) {
             let current_flags = channel.current_user_thread_notification_flags.unwrap_or(0);
             channel.current_user_thread_notification_flags = Some(
                 (current_flags & !THREAD_NOTIFICATION_FLAGS_MASK)
@@ -440,7 +441,7 @@ impl DiscordState {
         joined: bool,
     ) {
         if let Some(channel) = self
-            .navigation
+            .navigation_mut()
             .channels
             .get_mut(&channel_id)
             .filter(|channel| channel.is_thread())
@@ -456,7 +457,7 @@ impl DiscordState {
         username: Option<&str>,
         avatar_url: Option<&str>,
     ) {
-        for channel in self.navigation.channels.values_mut() {
+        for channel in self.navigation_mut().channels.values_mut() {
             if channel.guild_id.is_some() {
                 continue;
             }
@@ -489,7 +490,7 @@ impl DiscordState {
         user_id: Id<UserMarker>,
         status: PresenceStatus,
     ) {
-        for channel in self.navigation.channels.values_mut() {
+        for channel in self.navigation_mut().channels.values_mut() {
             for recipient in &mut channel.recipients {
                 if recipient.user_id == user_id {
                     recipient.status = status;
@@ -503,7 +504,7 @@ impl DiscordState {
         channel_id: Id<ChannelMarker>,
         message_id: Id<MessageMarker>,
     ) {
-        if let Some(channel) = self.navigation.channels.get_mut(&channel_id) {
+        if let Some(channel) = self.navigation_mut().channels.get_mut(&channel_id) {
             channel.last_message_id = channel.last_message_id.max(Some(message_id));
         }
     }
@@ -513,7 +514,7 @@ impl DiscordState {
         channel_id: Id<ChannelMarker>,
     ) {
         let Some(channel) = self
-            .navigation
+            .navigation_mut()
             .channels
             .get_mut(&channel_id)
             .filter(|channel| channel.is_thread())

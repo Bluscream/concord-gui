@@ -3,6 +3,25 @@
 
 use super::*;
 
+/// Moves `key` to the most-recently-used end of a recency queue.
+///
+/// Several caches keep a `VecDeque` of keys ordered oldest-first and evict from
+/// the front. What they evict differs, but every one of them touches an entry
+/// the same way.
+pub(in crate::discord) fn touch_recent<T: PartialEq>(order: &mut VecDeque<T>, key: T) {
+    order.retain(|existing| *existing != key);
+    order.push_back(key);
+}
+
+/// Removes and returns the oldest entries that push `order` past `limit`.
+///
+/// Returning them lets the caller run its own cascade removal without holding a
+/// borrow on the queue.
+pub(in crate::discord) fn drain_over_limit<T>(order: &mut VecDeque<T>, limit: usize) -> Vec<T> {
+    let excess = order.len().saturating_sub(limit);
+    order.drain(..excess).collect()
+}
+
 #[derive(Clone, Debug, Default)]
 pub(in crate::discord) struct NavigationIndex {
     pub(in crate::discord) guilds: BTreeMap<Id<GuildMarker>, GuildState>,

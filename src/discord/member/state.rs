@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::{DateTime, Utc};
@@ -12,6 +13,7 @@ use crate::discord::{ActivityInfo, MemberInfo, MemberOnboardingStatus, PresenceS
 
 use crate::discord::state::{
     DiscordState, MAX_RECENT_MEMBER_GUILDS, TYPING_INDICATOR_TTL, is_fallback_identity,
+    touch_recent,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -215,9 +217,9 @@ impl DiscordState {
         activities: &[ActivityInfo],
     ) {
         if activities.is_empty() {
-            self.presence.user_activities.remove(&user_id);
+            self.presence_mut().user_activities.remove(&user_id);
         } else {
-            self.presence
+            self.presence_mut()
                 .user_activities
                 .insert(user_id, activities.to_vec());
         }
@@ -231,9 +233,9 @@ impl DiscordState {
     ) {
         let key = (guild_id, user_id);
         if activities.is_empty() {
-            self.presence.guild_user_activities.remove(&key);
+            self.presence_mut().guild_user_activities.remove(&key);
         } else {
-            self.presence
+            self.presence_mut()
                 .guild_user_activities
                 .insert(key, activities.to_vec());
         }
@@ -285,19 +287,25 @@ impl DiscordState {
             })
             .flatten();
 
-        let entry = self.guild_details.members.entry(guild_id).or_default();
+        let Self {
+            guild_details,
+            session,
+            ..
+        } = self;
+        let guild_details = Arc::make_mut(guild_details);
+        let entry = guild_details.members.entry(guild_id).or_default();
         upsert_member(entry, member, previous_status);
 
-        if self.session.current_user_id == Some(member.user_id) {
+        if session.current_user_id == Some(member.user_id) {
             if let Some(cached_role_ids) = protected_role_ids {
                 if let Some(current_member) = entry.get_mut(&member.user_id) {
                     current_member.role_ids = cached_role_ids.clone();
                 }
-                self.guild_details
+                guild_details
                     .current_user_role_ids
                     .insert(guild_id, cached_role_ids);
             } else if let Some(current_member) = entry.get(&member.user_id) {
-                self.guild_details
+                guild_details
                     .current_user_role_ids
                     .insert(guild_id, current_member.role_ids.clone());
             }
@@ -310,9 +318,10 @@ impl DiscordState {
         let Some(current_user_id) = self.session.current_user_id else {
             return;
         };
-        for (guild_id, members) in &self.guild_details.members {
+        let guild_details = self.guild_details_mut();
+        for (guild_id, members) in &guild_details.members {
             if let Some(member) = members.get(&current_user_id) {
-                self.guild_details
+                guild_details
                     .current_user_role_ids
                     .insert(*guild_id, member.role_ids.clone());
             }
@@ -342,12 +351,10 @@ impl DiscordState {
         guild_id: Option<Id<GuildMarker>>,
     ) {
         if let Some(guild_id) = guild_id {
-            self.guild_details
-                .member_cache_guild_order
-                .retain(|existing| *existing != guild_id);
-            self.guild_details
-                .member_cache_guild_order
-                .push_back(guild_id);
+            touch_recent(
+                &mut self.guild_details_mut().member_cache_guild_order,
+                guild_id,
+            );
         }
         self.prune_member_cache(guild_id);
     }
@@ -364,24 +371,26 @@ impl DiscordState {
         if let Some(selected_guild_id) = selected_guild_id {
             keep_guilds.insert(selected_guild_id);
         }
-        self.guild_details
+        self.guild_details_mut()
             .member_cache_guild_order
             .retain(|guild_id| keep_guilds.contains(guild_id));
 
         let current_user_id = self.session.current_user_id;
         let message_authors = self.message_author_ids_by_guild();
-        self.guild_details.members.retain(|guild_id, members| {
-            if keep_guilds.contains(guild_id) {
-                return true;
-            }
-            members.retain(|user_id, _| {
-                current_user_id == Some(*user_id)
-                    || message_authors
-                        .get(guild_id)
-                        .is_some_and(|authors| authors.contains(user_id))
+        self.guild_details_mut()
+            .members
+            .retain(|guild_id, members| {
+                if keep_guilds.contains(guild_id) {
+                    return true;
+                }
+                members.retain(|user_id, _| {
+                    current_user_id == Some(*user_id)
+                        || message_authors
+                            .get(guild_id)
+                            .is_some_and(|authors| authors.contains(user_id))
+                });
+                !members.is_empty()
             });
-            !members.is_empty()
-        });
         self.prune_presence_activity_cache();
     }
 
@@ -412,18 +421,18 @@ impl DiscordState {
 
     fn prune_presence_activity_cache(&mut self) {
         let retained_pairs = self.retained_guild_presence_keys();
-        self.presence
+        self.presence_mut()
             .guild_user_presences
             .retain(|key, _| retained_pairs.contains(key));
-        self.presence
+        self.presence_mut()
             .guild_user_activities
             .retain(|key, _| retained_pairs.contains(key));
 
         let retained_users = self.retained_presence_user_ids();
-        self.presence
+        self.presence_mut()
             .user_presences
             .retain(|user_id, _| retained_users.contains(user_id));
-        self.presence
+        self.presence_mut()
             .user_activities
             .retain(|user_id, _| retained_users.contains(user_id));
     }

@@ -42,14 +42,6 @@ pub struct MfaChallenge {
     pub methods: Vec<MfaMethod>,
 }
 
-pub fn spawn_login(
-    login: String,
-    password: String,
-    events_tx: mpsc::Sender<PasswordAuthEvent>,
-) -> JoinHandle<()> {
-    spawn_login_with_auth_session(login, password, DiscordAuthSession::fallback(), events_tx)
-}
-
 pub(crate) fn spawn_login_with_auth_session(
     login: String,
     password: String,
@@ -84,23 +76,6 @@ pub(crate) fn spawn_login_with_auth_session(
     })
 }
 
-pub fn spawn_mfa_verify(
-    method: MfaMethod,
-    code: String,
-    ticket: String,
-    login_instance_id: String,
-    events_tx: mpsc::Sender<PasswordAuthEvent>,
-) -> JoinHandle<()> {
-    spawn_mfa_verify_with_auth_session(
-        method,
-        code,
-        ticket,
-        login_instance_id,
-        DiscordAuthSession::fallback(),
-        events_tx,
-    )
-}
-
 pub(crate) fn spawn_mfa_verify_with_auth_session(
     method: MfaMethod,
     code: String,
@@ -125,13 +100,6 @@ pub(crate) fn spawn_mfa_verify_with_auth_session(
             }
         }
     })
-}
-
-pub fn spawn_sms_send(
-    ticket: String,
-    events_tx: mpsc::Sender<PasswordAuthEvent>,
-) -> JoinHandle<()> {
-    spawn_sms_send_with_auth_session(ticket, DiscordAuthSession::fallback(), events_tx)
 }
 
 pub(crate) fn spawn_sms_send_with_auth_session(

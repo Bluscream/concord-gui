@@ -152,9 +152,29 @@ fn truncate_notification_text(value: &str, max_chars: usize) -> String {
 }
 
 impl DashboardState {
+    /// Drives `event` the way the running app does: the client applies it to
+    /// its own state and advances the affected revisions, the TUI reattaches
+    /// the moved snapshot areas, and only then does the event reach the UI as
+    /// an effect. Tests call this so they exercise the snapshot path rather
+    /// than a shortcut that writes the TUI's cache directly.
     #[cfg(test)]
     pub fn push_event(&mut self, event: AppEvent) {
-        self.push_event_inner(event, true);
+        if let Some(areas) = event.snapshot_areas() {
+            let previous_revision = self.discord.authoritative_revision;
+            self.discord.authoritative_revision =
+                self.discord
+                    .authoritative
+                    .apply_event_advancing(&event, areas, previous_revision);
+            let snapshot = self
+                .discord
+                .authoritative
+                .snapshot(self.discord.authoritative_revision);
+            self.restore_discord_snapshot_areas(&snapshot, previous_revision);
+        }
+
+        if event.needs_effect_delivery() {
+            self.push_effect(event);
+        }
     }
 
     pub fn push_effect(&mut self, event: AppEvent) {
@@ -162,7 +182,7 @@ impl DashboardState {
             self.record_thread_channel_upserted(channel);
             return;
         }
-        self.push_event_inner(event, false);
+        self.push_event_inner(event);
     }
 }
 

@@ -285,10 +285,7 @@ impl DiscordClient {
         guild_id: Option<Id<GuildMarker>>,
     ) -> Option<(Id<UserMarker>, Option<Id<GuildMarker>>, bool)> {
         let is_self = {
-            let state = self
-                .state
-                .read()
-                .expect("discord state lock is not poisoned");
+            let state = self.read_state();
             if state.user_profile(user_id, guild_id).is_some() {
                 return None;
             }
@@ -303,10 +300,7 @@ impl DiscordClient {
 
     pub(crate) fn next_user_note_request(&self, user_id: Id<UserMarker>) -> Option<Id<UserMarker>> {
         {
-            let state = self
-                .state
-                .read()
-                .expect("discord state lock is not poisoned");
+            let state = self.read_state();
             if state.is_note_fetched(user_id) {
                 return None;
             }
@@ -342,11 +336,7 @@ impl DiscordClient {
         channel_id: Id<ChannelMarker>,
         message_id: Id<MessageMarker>,
     ) {
-        let (flags, last_viewed) = self
-            .state
-            .read()
-            .expect("discord state lock is not poisoned")
-            .channel_ack_metadata(channel_id);
+        let (flags, last_viewed) = self.read_state().channel_ack_metadata(channel_id);
         self.publish_event(AppEvent::MessageAck {
             channel_id,
             message_id,
