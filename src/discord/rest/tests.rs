@@ -34,9 +34,10 @@ use crate::{
 
 use super::{
     DiscordRest, FORBIDDEN_FAILURE_WINDOW, MAX_FORBIDDEN_CIRCUITS, MessageSendCoordinator,
-    REST_MUTATION_MIN_INTERVAL, REST_UNKNOWN_MUTATION_ROUTE_INTERVAL, RequestRoute, RequestSafety,
-    RestMutationPacer, RestRateLimitBody, RestRateLimitDecision, RestRateLimitResponse,
-    RestRateLimitRoute, RestRateLimiter,
+    REST_MESSAGE_SEND_MIN_INTERVAL, REST_MUTATION_MIN_INTERVAL,
+    REST_UNKNOWN_MUTATION_ROUTE_INTERVAL, RequestRoute, RequestSafety, RestRateLimitBody,
+    RestRateLimitDecision, RestRateLimitResponse, RestRateLimitRoute, RestRateLimiter,
+    RestRequestPacer, RestRequestPacingKind,
     application_commands::{
         application_command_autocomplete_body, application_command_interaction_body,
         application_command_option_body, parse_application_command_index,
@@ -100,13 +101,51 @@ fn rest_rate_limit_routes_normalize_ids_but_keep_major_scope() {
 }
 
 #[test]
-fn rest_mutation_pacer_reserves_the_minimum_interval() {
-    let pacer = RestMutationPacer::default();
+fn rest_request_pacing_separates_message_sends_from_other_requests() {
+    let cases = [
+        (
+            reqwest::Method::POST,
+            "https://discord.com/api/v9/channels/123/messages",
+            RestRequestPacingKind::MessageSend,
+        ),
+        (
+            reqwest::Method::POST,
+            "https://discord.com/api/v9/channels/123/typing",
+            RestRequestPacingKind::Mutation,
+        ),
+        (
+            reqwest::Method::PATCH,
+            "https://discord.com/api/v9/channels/123/messages/456",
+            RestRequestPacingKind::Mutation,
+        ),
+        (
+            reqwest::Method::GET,
+            "https://discord.com/api/v9/channels/123/messages",
+            RestRequestPacingKind::None,
+        ),
+    ];
+
+    for (method, url, expected) in cases {
+        let route = RequestRoute::from_request(&test_request_with_method(method, url));
+        assert_eq!(route.pacing_kind(), expected, "{url}");
+    }
+}
+
+#[test]
+fn rest_request_pacers_reserve_configured_intervals_independently() {
+    let message_send_pacer = RestRequestPacer::new(REST_MESSAGE_SEND_MIN_INTERVAL);
+    let mutation_pacer = RestRequestPacer::new(REST_MUTATION_MIN_INTERVAL);
     let started_at = std::time::Instant::now();
-    assert_eq!(pacer.reserve_at(started_at), None);
+
+    assert_eq!(message_send_pacer.reserve_at(started_at), None);
     assert_eq!(
-        pacer.reserve_at(started_at),
-        Some(REST_MUTATION_MIN_INTERVAL)
+        message_send_pacer.reserve_at(started_at),
+        Some(Duration::from_millis(100))
+    );
+    assert_eq!(mutation_pacer.reserve_at(started_at), None);
+    assert_eq!(
+        mutation_pacer.reserve_at(started_at),
+        Some(Duration::from_millis(500))
     );
 }
 

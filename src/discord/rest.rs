@@ -53,7 +53,8 @@ pub struct DiscordRest {
     token: String,
     request_safety: Arc<RequestSafety>,
     rate_limiter: Arc<RestRateLimiter>,
-    mutation_pacer: Arc<RestMutationPacer>,
+    mutation_pacer: Arc<RestRequestPacer>,
+    message_send_pacer: Arc<RestRequestPacer>,
     message_sends: Arc<MessageSendCoordinator>,
     preloaded_settings: Arc<AsyncMutex<Option<Vec<u8>>>>,
 }
@@ -66,7 +67,8 @@ const FORBIDDEN_FAILURE_WINDOW: Duration = Duration::from_secs(5 * 60);
 // Request routes can include message IDs. A fixed cap prevents one-off 403s on
 // many messages from retaining state for the whole application session.
 const MAX_FORBIDDEN_CIRCUITS: usize = 512;
-const REST_MUTATION_MIN_INTERVAL: Duration = Duration::from_millis(200);
+const REST_MUTATION_MIN_INTERVAL: Duration = Duration::from_millis(500);
+const REST_MESSAGE_SEND_MIN_INTERVAL: Duration = Duration::from_millis(100);
 const REST_UNKNOWN_MUTATION_ROUTE_INTERVAL: Duration = Duration::from_millis(500);
 
 impl DiscordRest {
@@ -82,7 +84,8 @@ impl DiscordRest {
             token,
             request_safety: Arc::new(RequestSafety::default()),
             rate_limiter: Arc::new(RestRateLimiter::default()),
-            mutation_pacer: Arc::new(RestMutationPacer::default()),
+            mutation_pacer: Arc::new(RestRequestPacer::new(REST_MUTATION_MIN_INTERVAL)),
+            message_send_pacer: Arc::new(RestRequestPacer::new(REST_MESSAGE_SEND_MIN_INTERVAL)),
             message_sends: Arc::new(MessageSendCoordinator::default()),
             preloaded_settings: Arc::new(AsyncMutex::new(None)),
         }
@@ -145,8 +148,10 @@ impl DiscordRest {
         }
 
         let pacing_started_at = Instant::now();
-        if !matches!(*request.method(), Method::GET | Method::HEAD) {
-            self.mutation_pacer.acquire().await;
+        match route.pacing_kind() {
+            RestRequestPacingKind::None => {}
+            RestRequestPacingKind::Mutation => self.mutation_pacer.acquire().await,
+            RestRequestPacingKind::MessageSend => self.message_send_pacer.acquire().await,
         }
         let pacing_wait = pacing_started_at.elapsed();
         if pacing_wait >= Duration::from_millis(1) {
@@ -402,6 +407,13 @@ struct RequestRoute {
     major_parameter: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RestRequestPacingKind {
+    None,
+    Mutation,
+    MessageSend,
+}
+
 impl RequestRoute {
     fn from_request(request: &reqwest::Request) -> Self {
         let rate_limit_route = RestRateLimitRoute::from_request(request);
@@ -411,10 +423,21 @@ impl RequestRoute {
             major_parameter: rate_limit_route.major_parameter,
         }
     }
+
+    fn pacing_kind(&self) -> RestRequestPacingKind {
+        if self.method == Method::GET.as_str() || self.method == Method::HEAD.as_str() {
+            return RestRequestPacingKind::None;
+        }
+        if self.method == Method::POST.as_str() && self.path == "/api/v9/channels/:major/messages" {
+            return RestRequestPacingKind::MessageSend;
+        }
+        RestRequestPacingKind::Mutation
+    }
 }
 
-#[derive(Debug, Default)]
-struct RestMutationPacer {
+#[derive(Debug)]
+struct RestRequestPacer {
+    min_interval: Duration,
     next_allowed: Mutex<Option<Instant>>,
 }
 
@@ -645,7 +668,14 @@ impl RestRateLimiter {
     }
 }
 
-impl RestMutationPacer {
+impl RestRequestPacer {
+    fn new(min_interval: Duration) -> Self {
+        Self {
+            min_interval,
+            next_allowed: Mutex::new(None),
+        }
+    }
+
     async fn acquire(&self) {
         while let Some(delay) = self.reserve_at(Instant::now()) {
             tokio::time::sleep(delay).await;
@@ -662,7 +692,7 @@ impl RestMutationPacer {
         {
             return Some(deadline.duration_since(now));
         }
-        *next_allowed = Some(now + REST_MUTATION_MIN_INTERVAL);
+        *next_allowed = Some(now + self.min_interval);
         None
     }
 }
