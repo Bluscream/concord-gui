@@ -70,6 +70,7 @@ fn voice_runtime_capture_gate_requires_allowed_active_unmuted_voice() {
 
     let mut requested = requested_voice();
     requested.allow_microphone_transmit = true;
+    requested.noise_suppression = true;
     requested.self_mute = false;
     requested.microphone_volume = VoiceVolumePercent::new(40);
     requested.voice_output_volume = VoiceVolumePercent::new(65);
@@ -85,6 +86,7 @@ fn voice_runtime_capture_gate_requires_allowed_active_unmuted_voice() {
         state.capture_gate(),
         Some(VoiceCaptureGate {
             enabled: true,
+            noise_suppression: true,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::new(40),
         })
@@ -103,6 +105,7 @@ fn voice_runtime_capture_gate_requires_allowed_active_unmuted_voice() {
         state.capture_gate(),
         Some(VoiceCaptureGate {
             enabled: false,
+            noise_suppression: true,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::new(40),
         })
@@ -121,6 +124,7 @@ fn voice_runtime_capture_gate_requires_allowed_active_unmuted_voice() {
         state.capture_gate(),
         Some(VoiceCaptureGate {
             enabled: false,
+            noise_suppression: true,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::new(40),
         })
@@ -141,6 +145,7 @@ fn voice_runtime_capture_gate_requires_allowed_active_unmuted_voice() {
         state.capture_gate(),
         Some(VoiceCaptureGate {
             enabled: false,
+            noise_suppression: true,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::new(40),
         })
@@ -1092,6 +1097,7 @@ fn voice_microphone_conditioning_combines_gain_before_soft_limiting() {
         &mut frame,
         VoiceCaptureGate {
             enabled: true,
+            noise_suppression: false,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::new(200),
         },

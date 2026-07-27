@@ -8,7 +8,7 @@ use crate::{
         GuildOnboardingInfo, GuildParticipationDataGap, GuildParticipationRestriction,
         GuildVerificationLevel, MemberInfo, MentionInfo, MessageAttachmentUpload,
         PermissionDataGap, ReactionEmoji, ReplyReference, RoleInfo, ThreadMetadataInfo,
-        UserProfileInfo, VoiceScope, VoiceSoundKind, VoiceStateInfo,
+        UserProfileInfo, VoiceAudioSettings, VoiceScope, VoiceSoundKind, VoiceStateInfo,
         gateway::GatewayCommand,
         ids::{
             Id,
@@ -1186,10 +1186,10 @@ async fn microphone_transmit_requires_speak_and_voice_activity_permissions() {
             .update_voice_capture_permission(
                 VoiceScope::Guild(Id::new(1)),
                 Id::new(2),
-                true,
-                Default::default(),
-                Default::default(),
-                Default::default(),
+                VoiceAudioSettings {
+                    allow_microphone_transmit: true,
+                    ..VoiceAudioSettings::default()
+                },
             )
             .expect_err("missing voice permission should keep microphone disabled");
 

@@ -8,7 +8,7 @@ use super::{ActiveModalPopupKind, ModalPopup, OptionsCategory, OptionsPopupState
 const DISPLAY_OPTION_COUNT: usize = 8;
 const COMPOSER_OPTION_COUNT: usize = 1;
 const NOTIFICATION_OPTION_COUNT: usize = 1;
-const VOICE_OPTION_COUNT: usize = 6;
+const VOICE_OPTION_COUNT: usize = 7;
 const OPTION_CATEGORY_COUNT: usize = 4;
 
 impl DashboardState {
@@ -165,7 +165,7 @@ impl DashboardState {
                 ),
                 gauge: None,
                 effective: true,
-                description: "Mute, deaf, microphone transmit, sensitivity, and volume settings.",
+                description: "Mute, deaf, microphone transmit, noise suppression, and volume settings.",
             },
         ]
     }
@@ -290,6 +290,14 @@ impl DashboardState {
                 description: "Permit microphone transmit while joined and not muted.",
             },
             DisplayOptionItem {
+                label: "Noise suppression",
+                enabled: self.options.voice_options.noise_suppression,
+                value: None,
+                gauge: None,
+                effective: self.options.voice_options.allow_microphone_transmit,
+                description: "Reduce steady background microphone noise before transmission.",
+            },
+            DisplayOptionItem {
                 label: "Microphone sensitivity",
                 enabled: true,
                 value: Some(self.options.voice_options.microphone_sensitivity.label()),
@@ -396,6 +404,11 @@ impl DashboardState {
                     !self.options.voice_options.allow_microphone_transmit;
                 update_current_voice_capture_permission = true;
             }
+            (OptionsCategory::Voice, 3) => {
+                self.options.voice_options.noise_suppression =
+                    !self.options.voice_options.noise_suppression;
+                update_current_voice_capture_permission = true;
+            }
             _ => return,
         }
         if images_visible_before != self.show_images() {
@@ -417,17 +430,17 @@ impl DashboardState {
             return;
         }
         let changed = match selected {
-            3 => {
+            4 => {
                 let previous = self.options.voice_options.microphone_sensitivity;
                 self.options.voice_options.microphone_sensitivity = previous.adjust(delta);
                 self.options.voice_options.microphone_sensitivity != previous
             }
-            4 => {
+            5 => {
                 let previous = self.options.voice_options.microphone_volume;
                 self.options.voice_options.microphone_volume = previous.adjust(delta);
                 self.options.voice_options.microphone_volume != previous
             }
-            5 => {
+            6 => {
                 let previous = self.options.voice_options.voice_output_volume;
                 self.options.voice_options.voice_output_volume = previous.adjust(delta);
                 self.options.voice_options.voice_output_volume != previous
@@ -491,6 +504,7 @@ impl DashboardState {
             scope: voice.scope,
             channel_id,
             allow_microphone_transmit: self.options.voice_options.allow_microphone_transmit,
+            noise_suppression: self.options.voice_options.noise_suppression,
             microphone_sensitivity: self.options.voice_options.microphone_sensitivity,
             microphone_volume: self.options.voice_options.microphone_volume,
             voice_output_volume: self.options.voice_options.voice_output_volume,

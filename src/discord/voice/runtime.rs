@@ -278,6 +278,7 @@ impl VoiceRuntimeState {
         }
         Some(VoiceCaptureGate {
             enabled: requested.allow_microphone_transmit && !requested.self_mute,
+            noise_suppression: requested.noise_suppression,
             microphone_sensitivity: requested.microphone_sensitivity,
             microphone_volume: requested.microphone_volume,
         })
@@ -348,6 +349,7 @@ pub(crate) async fn run_voice_runtime(
                     participant_playback_tx = Some(next_participant_playback_tx);
                     let initial_capture_gate = state.capture_gate().unwrap_or(VoiceCaptureGate {
                         enabled: false,
+                        noise_suppression: false,
                         microphone_sensitivity: MicrophoneSensitivityDb::default(),
                         microphone_volume: VoiceVolumePercent::default(),
                     });

@@ -546,6 +546,9 @@ self_deaf = false
 # Allow microphone transmit while this session is joined and not self-muted.
 allow_microphone_transmit = false
 
+# Reduce steady background microphone noise.
+noise_suppression = true
+
 # Voice activity threshold in dB. Lower values transmit quieter input.
 microphone_sensitivity = -30
 

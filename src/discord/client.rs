@@ -11,12 +11,10 @@ use std::{
 mod lifecycle;
 mod rest_actions;
 
+use crate::discord::VoiceParticipantPlaybackSettings;
 use crate::discord::ids::{
     Id,
     marker::{ChannelMarker, GuildMarker, UserMarker},
-};
-use crate::discord::{
-    MicrophoneSensitivityDb, VoiceParticipantPlaybackSettings, VoiceVolumePercent,
 };
 use reqwest::header::HeaderValue;
 use tokio::{
@@ -40,7 +38,7 @@ use super::{
     request_lifecycle::RequestLifecycle,
     rest::DiscordRest,
     state::{CurrentVoiceConnectionState, DiscordSnapshot, DiscordState, SnapshotRevision},
-    voice::{self, VoiceRuntimeEvent, VoiceScope},
+    voice::{self, VoiceAudioSettings, VoiceRuntimeEvent, VoiceScope},
 };
 
 const MEMBER_SEARCH_MIN_QUERY_CHARS: usize = 2;
@@ -413,30 +411,20 @@ impl DiscordClient {
         });
         if result.is_ok() {
             if let Some(channel_id) = channel_id {
-                let allow_microphone_transmit = requested
+                let audio_settings = requested
                     .filter(|voice| voice.scope == scope && voice.channel_id == channel_id)
-                    .is_some_and(|voice| voice.allow_microphone_transmit);
-                let microphone_sensitivity = requested
-                    .filter(|voice| voice.scope == scope && voice.channel_id == channel_id)
-                    .map(|voice| voice.microphone_sensitivity)
-                    .unwrap_or_default();
-                let microphone_volume = requested
-                    .filter(|voice| voice.scope == scope && voice.channel_id == channel_id)
-                    .map(|voice| voice.microphone_volume)
-                    .unwrap_or_default();
-                let voice_output_volume = requested
-                    .filter(|voice| voice.scope == scope && voice.channel_id == channel_id)
-                    .map(|voice| voice.voice_output_volume)
+                    .map(CurrentVoiceConnectionState::audio_settings)
                     .unwrap_or_default();
                 let voice = CurrentVoiceConnectionState {
                     scope,
                     channel_id,
                     self_mute,
                     self_deaf,
-                    allow_microphone_transmit,
-                    microphone_sensitivity,
-                    microphone_volume,
-                    voice_output_volume,
+                    allow_microphone_transmit: audio_settings.allow_microphone_transmit,
+                    noise_suppression: audio_settings.noise_suppression,
+                    microphone_sensitivity: audio_settings.microphone_sensitivity,
+                    microphone_volume: audio_settings.microphone_volume,
+                    voice_output_volume: audio_settings.voice_output_volume,
                 };
                 *requested = Some(voice);
                 let event = if manual_retry {
@@ -459,12 +447,9 @@ impl DiscordClient {
         &self,
         scope: VoiceScope,
         channel_id: Id<ChannelMarker>,
-        allow_microphone_transmit: bool,
-        microphone_sensitivity: MicrophoneSensitivityDb,
-        microphone_volume: VoiceVolumePercent,
-        voice_output_volume: VoiceVolumePercent,
+        settings: VoiceAudioSettings,
     ) -> std::result::Result<(), String> {
-        if allow_microphone_transmit && scope.guild_id().is_some() {
+        if settings.allow_microphone_transmit && scope.guild_id().is_some() {
             let state = self.read_state();
             let Some(channel) = state.channel(channel_id) else {
                 return Err("cannot verify voice channel permissions".to_owned());
@@ -500,18 +485,11 @@ impl DiscordClient {
         if voice.scope != scope || voice.channel_id != channel_id {
             return Ok(());
         }
-        if voice.allow_microphone_transmit == allow_microphone_transmit
-            && voice.microphone_sensitivity == microphone_sensitivity
-            && voice.microphone_volume == microphone_volume
-            && voice.voice_output_volume == voice_output_volume
-        {
+        if voice.audio_settings() == settings {
             return Ok(());
         }
 
-        voice.allow_microphone_transmit = allow_microphone_transmit;
-        voice.microphone_sensitivity = microphone_sensitivity;
-        voice.microphone_volume = microphone_volume;
-        voice.voice_output_volume = voice_output_volume;
+        voice.set_audio_settings(settings);
         *requested = Some(voice);
         let _ = self
             .voice_events_tx

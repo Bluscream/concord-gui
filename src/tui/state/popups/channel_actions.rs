@@ -297,6 +297,7 @@ impl DashboardState {
                                             .discord
                                             .cache
                                             .can_transmit_microphone_in_voice_channel(channel)),
+                                noise_suppression: self.options.voice_options.noise_suppression,
                                 microphone_sensitivity: self
                                     .options
                                     .voice_options

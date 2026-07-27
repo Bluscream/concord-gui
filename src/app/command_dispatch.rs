@@ -7,7 +7,10 @@ use std::{
 use tokio::sync::Semaphore;
 use tokio::task::AbortHandle;
 
-use crate::{DiscordClient, discord::AppCommand};
+use crate::{
+    DiscordClient,
+    discord::{AppCommand, VoiceAudioSettings},
+};
 
 use super::{
     gateway_commands, history_commands, inbox_commands, media_commands, message_commands,
@@ -195,6 +198,7 @@ impl CommandDispatcher {
                 self_mute,
                 self_deaf,
                 allow_microphone_transmit,
+                noise_suppression,
                 microphone_sensitivity,
                 microphone_volume,
                 voice_output_volume,
@@ -208,6 +212,7 @@ impl CommandDispatcher {
                         self_mute,
                         self_deaf,
                         allow_microphone_transmit,
+                        noise_suppression,
                         microphone_sensitivity,
                         microphone_volume,
                         voice_output_volume,
@@ -235,6 +240,7 @@ impl CommandDispatcher {
                 scope,
                 channel_id,
                 allow_microphone_transmit,
+                noise_suppression,
                 microphone_sensitivity,
                 microphone_volume,
                 voice_output_volume,
@@ -243,10 +249,13 @@ impl CommandDispatcher {
                     self.client.clone(),
                     scope,
                     channel_id,
-                    allow_microphone_transmit,
-                    microphone_sensitivity,
-                    microphone_volume,
-                    voice_output_volume,
+                    VoiceAudioSettings {
+                        allow_microphone_transmit,
+                        noise_suppression,
+                        microphone_sensitivity,
+                        microphone_volume,
+                        voice_output_volume,
+                    },
                 )
                 .await;
             }
@@ -660,6 +669,7 @@ mod tests {
             scope: VoiceScope::Guild(Id::new(1)),
             channel_id: Id::new(2),
             allow_microphone_transmit: true,
+            noise_suppression: false,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::default(),
             voice_output_volume: VoiceVolumePercent::default(),
@@ -674,6 +684,7 @@ mod tests {
             self_mute: false,
             self_deaf: false,
             allow_microphone_transmit: true,
+            noise_suppression: false,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::default(),
             voice_output_volume: VoiceVolumePercent::default(),

@@ -5,8 +5,8 @@ use crate::discord::ids::{
 use crate::{
     DiscordClient,
     discord::{
-        AppEvent, MicrophoneSensitivityDb, VoiceConnectionStatus, VoiceParticipantPlaybackSettings,
-        VoiceScope, VoiceVolumePercent,
+        AppEvent, MicrophoneSensitivityDb, VoiceAudioSettings, VoiceConnectionStatus,
+        VoiceParticipantPlaybackSettings, VoiceScope, VoiceVolumePercent,
     },
     logging,
 };
@@ -19,6 +19,7 @@ pub(super) struct JoinRequest {
     pub self_mute: bool,
     pub self_deaf: bool,
     pub allow_microphone_transmit: bool,
+    pub noise_suppression: bool,
     pub microphone_sensitivity: MicrophoneSensitivityDb,
     pub microphone_volume: VoiceVolumePercent,
     pub voice_output_volume: VoiceVolumePercent,
@@ -32,11 +33,19 @@ pub(super) async fn join_channel(client: DiscordClient, request: JoinRequest) {
         self_mute,
         self_deaf,
         allow_microphone_transmit,
+        noise_suppression,
         microphone_sensitivity,
         microphone_volume,
         voice_output_volume,
         participant_playback_settings,
     } = request;
+    let audio_settings = VoiceAudioSettings {
+        allow_microphone_transmit,
+        noise_suppression,
+        microphone_sensitivity,
+        microphone_volume,
+        voice_output_volume,
+    };
 
     client.replace_voice_participant_playback_settings(participant_playback_settings);
     if let Err(message) = client.request_voice_join(scope, channel_id, self_mute, self_deaf) {
@@ -52,22 +61,16 @@ pub(super) async fn join_channel(client: DiscordClient, request: JoinRequest) {
         return;
     }
 
-    if let Err(message) = client.update_voice_capture_permission(
-        scope,
-        channel_id,
-        allow_microphone_transmit,
-        microphone_sensitivity,
-        microphone_volume,
-        voice_output_volume,
-    ) {
+    if let Err(message) = client.update_voice_capture_permission(scope, channel_id, audio_settings)
+    {
         logging::error("app", &message);
         let _ = client.update_voice_capture_permission(
             scope,
             channel_id,
-            false,
-            microphone_sensitivity,
-            microphone_volume,
-            voice_output_volume,
+            VoiceAudioSettings {
+                allow_microphone_transmit: false,
+                ..audio_settings
+            },
         );
         client
             .publish_event(AppEvent::GatewayError {
@@ -104,19 +107,9 @@ pub(super) async fn update_capture_permission(
     client: DiscordClient,
     scope: VoiceScope,
     channel_id: Id<ChannelMarker>,
-    allow_microphone_transmit: bool,
-    microphone_sensitivity: MicrophoneSensitivityDb,
-    microphone_volume: VoiceVolumePercent,
-    voice_output_volume: VoiceVolumePercent,
+    settings: VoiceAudioSettings,
 ) {
-    if let Err(message) = client.update_voice_capture_permission(
-        scope,
-        channel_id,
-        allow_microphone_transmit,
-        microphone_sensitivity,
-        microphone_volume,
-        voice_output_volume,
-    ) {
+    if let Err(message) = client.update_voice_capture_permission(scope, channel_id, settings) {
         logging::error("app", &message);
         client
             .publish_event(AppEvent::GatewayError { message })

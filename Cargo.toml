@@ -91,10 +91,11 @@ syntect = { version = "5.3.0", default-features = false, features = [
 interprocess = { version = "2.4.2", features = ["tokio"] }
 sys-locale = "0.3.2"
 iana-time-zone = "0.1.65"
+nnnoiseless = { version = "0.5.2", default-features = false, optional = true }
 
 [features]
 default = ["voice-playback"]
-voice-playback = ["dep:cpal", "dep:alsa"]
+voice-playback = ["dep:cpal", "dep:alsa", "dep:nnnoiseless"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa = { version = "0.11", optional = true }

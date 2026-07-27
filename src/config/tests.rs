@@ -234,6 +234,7 @@ fn app_config_parses_partial_toml_with_defaults() {
             config.voice.allow_microphone_transmit,
             allow_microphone_transmit
         );
+        assert!(config.voice.noise_suppression);
         assert_eq!(config.voice.microphone_sensitivity, microphone_sensitivity);
         assert_eq!(
             config.voice.microphone_volume,
@@ -618,6 +619,16 @@ fn voice_volume_config_values_are_clamped() {
 }
 
 #[test]
+fn noise_suppression_defaults_to_enabled_and_can_be_disabled() {
+    let disabled: AppOptions =
+        toml::from_str("[voice]\nnoise_suppression = false\n").expect("voice config should parse");
+    let missing: AppOptions = toml::from_str("[voice]\n").expect("voice config should parse");
+
+    assert!(!disabled.voice.noise_suppression);
+    assert!(missing.voice.noise_suppression);
+}
+
+#[test]
 fn options_save_and_load_round_trip() {
     let path = test_config_path();
     let options = AppOptions {
@@ -650,6 +661,7 @@ fn options_save_and_load_round_trip() {
             self_mute: true,
             self_deaf: true,
             allow_microphone_transmit: true,
+            noise_suppression: true,
             microphone_sensitivity: MicrophoneSensitivityDb::new(-50),
             microphone_volume: VoiceVolumePercent::new(80),
             voice_output_volume: VoiceVolumePercent::new(60),

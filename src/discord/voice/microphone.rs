@@ -1,3 +1,5 @@
+#[cfg(feature = "voice-playback")]
+use super::noise::VoiceNoiseSuppressor;
 use super::*;
 
 #[cfg(feature = "voice-playback")]
@@ -684,6 +686,8 @@ pub(super) async fn run_voice_udp_transmit(
     let transmit_started_at = Instant::now();
     let mut transmit_stats = VoiceUdpTransmitStats::default();
     let mut microphone_gate = VoiceMicrophoneGateState::default();
+    let mut noise_suppressor = VoiceNoiseSuppressor::new();
+    let mut noise_suppression_enabled = initial_gate.noise_suppression;
     let mut next_stats_log_at = transmit_started_at + VOICE_TRANSMIT_STATS_LOG_INTERVAL;
 
     loop {
@@ -699,6 +703,13 @@ pub(super) async fn run_voice_udp_transmit(
                 if !(gate.enabled && was_enabled) {
                     drain_voice_microphone_pcm_queue(&mut pcm_rx);
                     microphone_gate.reset();
+                    noise_suppressor.reset();
+                }
+                if gate.noise_suppression != noise_suppression_enabled {
+                    if gate.noise_suppression {
+                        noise_suppressor.reset();
+                    }
+                    noise_suppression_enabled = gate.noise_suppression;
                 }
                 if !gate.enabled {
                     stop_voice_transmission(&context, &mut sender, &mut transmit_stats).await;
@@ -734,6 +745,17 @@ pub(super) async fn run_voice_udp_transmit(
                 if !gate.enabled {
                     microphone_gate.reset();
                     continue;
+                }
+                if gate.noise_suppression {
+                    let processing_started_at = Instant::now();
+                    if noise_suppressor.process_20ms_stereo(&mut frame.samples) {
+                        transmit_stats.noise_suppressed_frames = transmit_stats
+                            .noise_suppressed_frames
+                            .saturating_add(1);
+                        transmit_stats.max_noise_suppression_processing_us = transmit_stats
+                            .max_noise_suppression_processing_us
+                            .max(processing_started_at.elapsed().as_micros());
+                    }
                 }
                 if !microphone_gate.allows_frame(&frame.samples, gate.microphone_sensitivity) {
                     stop_voice_transmission(&context, &mut sender, &mut transmit_stats).await;
@@ -948,7 +970,7 @@ pub(super) fn log_voice_transmit_stats(
     logging::debug(
         "voice",
         format!(
-            "{label}: elapsed_ms={} sent_packets={} rtp_timestamp={} rtp_elapsed_ms={} stale_microphone_frames_dropped={} max_microphone_queue_depth={} max_microphone_frame_age_ms={} overload_smoothed_frames={} limited_samples={} max_frame_gap_ms={}",
+            "{label}: elapsed_ms={} sent_packets={} rtp_timestamp={} rtp_elapsed_ms={} stale_microphone_frames_dropped={} max_microphone_queue_depth={} max_microphone_frame_age_ms={} noise_suppressed_frames={} max_noise_suppression_processing_us={} overload_smoothed_frames={} limited_samples={} max_frame_gap_ms={}",
             elapsed_ms,
             stats.sent_packets,
             rtp_timestamp,
@@ -956,6 +978,8 @@ pub(super) fn log_voice_transmit_stats(
             stats.stale_microphone_frames_dropped,
             stats.max_microphone_queue_depth,
             stats.max_microphone_frame_age_ms,
+            stats.noise_suppressed_frames,
+            stats.max_noise_suppression_processing_us,
             stats.overload_smoothed_frames,
             stats.limited_samples,
             stats.max_frame_gap_ms,

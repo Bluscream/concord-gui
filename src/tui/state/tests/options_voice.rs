@@ -74,6 +74,23 @@ fn voice_option_toggles_queue_current_voice_state_update_when_joined() {
             scope: VoiceScope::Guild(Id::new(1)),
             channel_id: Id::new(11),
             allow_microphone_transmit: true,
+            noise_suppression: true,
+            microphone_sensitivity: Default::default(),
+            microphone_volume: Default::default(),
+            voice_output_volume: Default::default(),
+        }]
+    );
+
+    state.move_option_down();
+    state.toggle_selected_display_option();
+    assert!(!state.voice_options().noise_suppression);
+    assert_eq!(
+        state.drain_pending_commands(),
+        vec![AppCommand::UpdateVoiceCapturePermission {
+            scope: VoiceScope::Guild(Id::new(1)),
+            channel_id: Id::new(11),
+            allow_microphone_transmit: true,
+            noise_suppression: false,
             microphone_sensitivity: Default::default(),
             microphone_volume: Default::default(),
             voice_output_volume: Default::default(),
@@ -92,6 +109,7 @@ fn voice_option_toggles_queue_current_voice_state_update_when_joined() {
             scope: VoiceScope::Guild(Id::new(1)),
             channel_id: Id::new(11),
             allow_microphone_transmit: true,
+            noise_suppression: false,
             microphone_sensitivity: state.voice_options().microphone_sensitivity,
             microphone_volume: Default::default(),
             voice_output_volume: Default::default(),
@@ -110,6 +128,7 @@ fn voice_option_toggles_queue_current_voice_state_update_when_joined() {
             scope: VoiceScope::Guild(Id::new(1)),
             channel_id: Id::new(11),
             allow_microphone_transmit: true,
+            noise_suppression: false,
             microphone_sensitivity: state.voice_options().microphone_sensitivity,
             microphone_volume: VoiceVolumePercent::new(200),
             voice_output_volume: Default::default(),
@@ -128,6 +147,7 @@ fn voice_option_toggles_queue_current_voice_state_update_when_joined() {
             scope: VoiceScope::Guild(Id::new(1)),
             channel_id: Id::new(11),
             allow_microphone_transmit: true,
+            noise_suppression: false,
             microphone_sensitivity: state.voice_options().microphone_sensitivity,
             microphone_volume: VoiceVolumePercent::new(200),
             voice_output_volume: VoiceVolumePercent::new(200),
@@ -210,6 +230,7 @@ fn voice_channel_action_emits_join_then_leave_command() {
         self_mute: true,
         self_deaf: true,
         allow_microphone_transmit: false,
+        noise_suppression: true,
         microphone_sensitivity: Default::default(),
         microphone_volume: Default::default(),
         voice_output_volume: Default::default(),
@@ -230,6 +251,7 @@ fn voice_channel_action_emits_join_then_leave_command() {
             self_mute: true,
             self_deaf: true,
             allow_microphone_transmit: false,
+            noise_suppression: true,
             microphone_sensitivity: Default::default(),
             microphone_volume: Default::default(),
             voice_output_volume: Default::default(),
@@ -317,6 +339,7 @@ fn other_client_voice_state_shows_header_only() {
         self_mute: true,
         self_deaf: true,
         allow_microphone_transmit: false,
+        noise_suppression: false,
         microphone_sensitivity: Default::default(),
         microphone_volume: Default::default(),
         voice_output_volume: Default::default(),
@@ -403,6 +426,7 @@ fn voice_join_action_reflects_scope_permissions_and_participation() {
                 self_mute: false,
                 self_deaf: false,
                 allow_microphone_transmit: false,
+                noise_suppression: true,
                 microphone_sensitivity: Default::default(),
                 microphone_volume: Default::default(),
                 voice_output_volume: Default::default(),

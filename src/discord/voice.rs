@@ -16,6 +16,8 @@ mod info;
 mod levels;
 #[cfg(any(test, feature = "voice-playback"))]
 mod microphone;
+#[cfg(feature = "voice-playback")]
+mod noise;
 mod opus;
 mod outbound;
 mod playback;
@@ -42,7 +44,7 @@ use microphone::*;
 use runtime::{VoiceRuntimeAction, VoiceRuntimeState};
 pub(crate) use runtime::{forward_app_event, run_voice_runtime};
 pub(in crate::discord) use state::VoiceState;
-pub use state::{CurrentVoiceConnectionState, VoiceParticipantState};
+pub use state::{CurrentVoiceConnectionState, VoiceAudioSettings, VoiceParticipantState};
 
 use self::opus::VoiceOpusDecode;
 #[cfg(any(test, feature = "voice-playback"))]
@@ -599,6 +601,7 @@ impl Default for VoiceChildTasks {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct VoiceCaptureGate {
     enabled: bool,
+    noise_suppression: bool,
     microphone_sensitivity: MicrophoneSensitivityDb,
     microphone_volume: VoiceVolumePercent,
 }
@@ -662,6 +665,8 @@ struct VoiceMicrophoneCaptureStats {
 struct VoiceUdpTransmitStats {
     sent_packets: u64,
     stale_microphone_frames_dropped: u64,
+    noise_suppressed_frames: u64,
+    max_noise_suppression_processing_us: u128,
     overload_smoothed_frames: u64,
     limited_samples: u64,
     max_microphone_queue_depth: usize,
@@ -750,6 +755,7 @@ impl VoiceChildTasks {
         if let Some(gate) = self.transmit_gate.as_ref() {
             let _ = gate.send(VoiceCaptureGate {
                 enabled: false,
+                noise_suppression: false,
                 microphone_sensitivity: MicrophoneSensitivityDb::default(),
                 microphone_volume: VoiceVolumePercent::default(),
             });

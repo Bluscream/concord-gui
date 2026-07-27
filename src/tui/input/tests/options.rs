@@ -65,7 +65,7 @@ fn options_popup_h_l_adjust_microphone_sensitivity_by_one_or_ten_db() {
     handle_key(&mut state, char_key(' '));
     handle_key(&mut state, char_key('o'));
     handle_key(&mut state, char_key('v'));
-    for _ in 0..3 {
+    for _ in 0..4 {
         handle_key(&mut state, key(KeyCode::Down));
     }
 
