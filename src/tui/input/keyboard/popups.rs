@@ -6,7 +6,7 @@ use crate::tui::keybindings::{
     EmojiReactionPickerAction, KeyChord, NotificationInboxAction, OptionsPopupAction,
     PollVotePickerAction, PopupListAction, ProfilePopupAction, ProfilePopupTabAction,
     ReactionUsersPopupAction, ScrollAction, SearchPopupAction, SelectionAction, SelectionKeySet,
-    VoiceParticipantAudioPopupAction,
+    VoiceParticipantAudioPopupAction, push_to_talk_shortcut_from_key,
 };
 use crate::tui::state::{ActiveModalPopupKind, ConfirmationButton, DashboardState};
 
@@ -1093,6 +1093,18 @@ pub(super) fn handle_options_popup_key(
     state: &mut DashboardState,
     key: KeyEvent,
 ) -> Option<AppCommand> {
+    if state.is_capturing_push_to_talk_shortcut() {
+        if key.code == KeyCode::Esc {
+            state.cancel_push_to_talk_shortcut_capture();
+        } else {
+            match push_to_talk_shortcut_from_key(key) {
+                Ok(shortcut) => state.capture_push_to_talk_shortcut(shortcut),
+                Err(error) => state.show_error_toast(error, std::time::Instant::now()),
+            }
+        }
+        return None;
+    }
+
     match state
         .key_bindings()
         .options_popup_action(key, state.is_options_category_picker_open())

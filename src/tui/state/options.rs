@@ -146,7 +146,12 @@ impl DashboardState {
 
     #[cfg(test)]
     pub fn voice_options(&self) -> VoiceOptions {
-        self.options.voice_options
+        self.options.voice_options.clone()
+    }
+
+    #[cfg(feature = "voice-playback")]
+    pub(in crate::tui) fn voice_options_ref(&self) -> &VoiceOptions {
+        &self.options.voice_options
     }
 
     pub fn key_bindings(&self) -> &crate::tui::keybindings::KeyBindings {
@@ -344,7 +349,7 @@ impl DashboardState {
             composer: self.options.composer_options,
             credentials: self.options.credential_options,
             notifications: self.options.notification_options.clone(),
-            voice: self.options.voice_options,
+            voice: self.options.voice_options.clone(),
             presence: self.options.presence_options,
         })
     }

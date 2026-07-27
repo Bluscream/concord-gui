@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::discord::ids::{
     Id,
     marker::{ChannelMarker, GuildMarker, UserMarker},
@@ -8,6 +10,37 @@ use crate::discord::{MicrophoneSensitivityDb, VoiceVolumePercent};
 use crate::discord::{VoiceScope, VoiceSoundKind, VoiceStateInfo};
 
 use crate::discord::state::DiscordState;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VoiceInputMode {
+    #[default]
+    VoiceActivity,
+    PushToTalk,
+}
+
+impl VoiceInputMode {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::VoiceActivity => "Voice activity",
+            Self::PushToTalk => "Push to talk",
+        }
+    }
+
+    pub(crate) fn next(self) -> Self {
+        match self {
+            Self::VoiceActivity => Self::PushToTalk,
+            Self::PushToTalk => Self::VoiceActivity,
+        }
+    }
+
+    pub(super) fn allows_transmit(self, push_to_talk_pressed: bool) -> bool {
+        match self {
+            Self::VoiceActivity => true,
+            Self::PushToTalk => push_to_talk_pressed,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VoiceParticipantState {

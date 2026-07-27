@@ -23,6 +23,8 @@ pub(super) struct VoiceRuntimeState {
     blocked: Option<VoiceGatewaySession>,
     reconnect_target: Option<VoiceGatewaySession>,
     reconnect_attempts: u8,
+    input_mode: VoiceInputMode,
+    push_to_talk_pressed: bool,
     participant_playback_settings: HashMap<Id<UserMarker>, VoiceParticipantPlaybackSettings>,
     next_connection_id: u64,
 }
@@ -44,6 +46,16 @@ impl VoiceRuntimeState {
         let mut participant_playback_changed = false;
         match event {
             VoiceRuntimeEvent::Requested(requested) => {
+                let target_changed = match (self.requested, requested) {
+                    (Some(current), Some(next)) => {
+                        current.scope != next.scope || current.channel_id != next.channel_id
+                    }
+                    (None, None) => false,
+                    _ => true,
+                };
+                if target_changed {
+                    self.push_to_talk_pressed = false;
+                }
                 if requested.is_none() || self.current_voice.is_none() {
                     self.blocked = None;
                 }
@@ -65,15 +77,28 @@ impl VoiceRuntimeState {
                 }
             }
             VoiceRuntimeEvent::ManualRetry(requested) => {
-                if self.requested.is_some_and(|current| {
+                let target_changed = self.requested.is_none_or(|current| {
                     current.scope != requested.scope || current.channel_id != requested.channel_id
-                }) {
+                });
+                if target_changed {
                     self.server = None;
+                    self.push_to_talk_pressed = false;
                 }
                 self.requested = Some(requested);
                 self.blocked = None;
                 self.reconnect_target = None;
                 self.reconnect_attempts = 0;
+            }
+            #[cfg(feature = "voice-playback")]
+            VoiceRuntimeEvent::InputModeChanged(input_mode) => {
+                if self.input_mode != input_mode {
+                    self.input_mode = input_mode;
+                    self.push_to_talk_pressed = false;
+                }
+            }
+            #[cfg(feature = "voice-playback")]
+            VoiceRuntimeEvent::PushToTalkPressed(pressed) => {
+                self.push_to_talk_pressed = pressed;
             }
             VoiceRuntimeEvent::ReplaceParticipantPlaybackSettings(settings) => {
                 let settings = settings
@@ -187,6 +212,7 @@ impl VoiceRuntimeState {
                 };
             }
             VoiceRuntimeEvent::Shutdown => {
+                self.push_to_talk_pressed = false;
                 return VoiceRuntimeApplyResult {
                     action: self.close_active(),
                     participant_playback_changed,
@@ -210,6 +236,7 @@ impl VoiceRuntimeState {
         let Some(channel_id) = state.channel_id else {
             self.current_voice = None;
             self.server = None;
+            self.push_to_talk_pressed = false;
             return self.close_active();
         };
         if state.scope() != Some(requested.scope) {
@@ -276,8 +303,12 @@ impl VoiceRuntimeState {
         if active.scope != requested.scope || active.channel_id != requested.channel_id {
             return None;
         }
+        let capture_enabled = requested.allow_microphone_transmit && !requested.self_mute;
         Some(VoiceCaptureGate {
-            enabled: requested.allow_microphone_transmit && !requested.self_mute,
+            capture_enabled,
+            transmit_enabled: capture_enabled
+                && self.input_mode.allows_transmit(self.push_to_talk_pressed),
+            use_voice_activity: self.input_mode == VoiceInputMode::VoiceActivity,
             noise_suppression: requested.noise_suppression,
             microphone_sensitivity: requested.microphone_sensitivity,
             microphone_volume: requested.microphone_volume,
@@ -348,7 +379,9 @@ pub(crate) async fn run_voice_runtime(
                     playback_gate_tx = Some(next_playback_gate_tx);
                     participant_playback_tx = Some(next_participant_playback_tx);
                     let initial_capture_gate = state.capture_gate().unwrap_or(VoiceCaptureGate {
-                        enabled: false,
+                        capture_enabled: false,
+                        transmit_enabled: false,
+                        use_voice_activity: true,
                         noise_suppression: false,
                         microphone_sensitivity: MicrophoneSensitivityDb::default(),
                         microphone_volume: VoiceVolumePercent::default(),

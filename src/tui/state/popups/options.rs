@@ -8,7 +8,7 @@ use super::{ActiveModalPopupKind, ModalPopup, OptionsCategory, OptionsPopupState
 const DISPLAY_OPTION_COUNT: usize = 8;
 const COMPOSER_OPTION_COUNT: usize = 1;
 const NOTIFICATION_OPTION_COUNT: usize = 1;
-const VOICE_OPTION_COUNT: usize = 7;
+const VOICE_OPTION_COUNT: usize = 9;
 const OPTION_CATEGORY_COUNT: usize = 4;
 
 impl DashboardState {
@@ -83,6 +83,27 @@ impl DashboardState {
         self.popups
             .options_popup()
             .is_some_and(|popup| popup.category.is_none())
+    }
+
+    pub(in crate::tui) fn is_capturing_push_to_talk_shortcut(&self) -> bool {
+        self.popups
+            .options_popup()
+            .is_some_and(|popup| popup.capturing_push_to_talk_shortcut)
+    }
+
+    pub(in crate::tui) fn cancel_push_to_talk_shortcut_capture(&mut self) {
+        if let Some(popup) = self.popups.options_popup_mut() {
+            popup.capturing_push_to_talk_shortcut = false;
+        }
+    }
+
+    pub(in crate::tui) fn capture_push_to_talk_shortcut(&mut self, shortcut: String) {
+        self.cancel_push_to_talk_shortcut_capture();
+        if self.options.voice_options.push_to_talk_shortcut == shortcut {
+            return;
+        }
+        self.options.voice_options.push_to_talk_shortcut = shortcut;
+        self.after_display_option_changed(false, false);
     }
 
     pub(super) fn options_popup_item_count(&self) -> usize {
@@ -165,7 +186,7 @@ impl DashboardState {
                 ),
                 gauge: None,
                 effective: true,
-                description: "Mute, deaf, microphone transmit, noise suppression, and volume settings.",
+                description: "Mute, deaf, input mode, microphone processing, and volume settings.",
             },
         ]
     }
@@ -290,6 +311,31 @@ impl DashboardState {
                 description: "Permit microphone transmit while joined and not muted.",
             },
             DisplayOptionItem {
+                label: "Input mode",
+                enabled: true,
+                value: Some(self.options.voice_options.input_mode.label().to_owned()),
+                gauge: None,
+                effective: self.options.voice_options.allow_microphone_transmit,
+                description: "Use voice activity or hold a global shortcut to transmit.",
+            },
+            DisplayOptionItem {
+                label: "Push-to-talk shortcut",
+                enabled: true,
+                value: Some(if self.is_capturing_push_to_talk_shortcut() {
+                    "Press shortcut (Esc cancels)".to_owned()
+                } else {
+                    self.options.voice_options.push_to_talk_shortcut.clone()
+                }),
+                gauge: None,
+                effective: self.options.voice_options.input_mode
+                    == crate::discord::VoiceInputMode::PushToTalk,
+                description: if self.is_capturing_push_to_talk_shortcut() {
+                    "Waiting for one portable key chord."
+                } else {
+                    "Press Enter to capture and register a new global shortcut."
+                },
+            },
+            DisplayOptionItem {
                 label: "Noise suppression",
                 enabled: self.options.voice_options.noise_suppression,
                 value: None,
@@ -307,7 +353,9 @@ impl DashboardState {
                     ),
                     100,
                 )),
-                effective: self.options.voice_options.allow_microphone_transmit,
+                effective: self.options.voice_options.allow_microphone_transmit
+                    && self.options.voice_options.input_mode
+                        == crate::discord::VoiceInputMode::VoiceActivity,
                 description: "Lower dB values transmit quieter microphone input.",
             },
             DisplayOptionItem {
@@ -405,6 +453,17 @@ impl DashboardState {
                 update_current_voice_capture_permission = true;
             }
             (OptionsCategory::Voice, 3) => {
+                self.options.voice_options.input_mode =
+                    self.options.voice_options.input_mode.next();
+                update_current_voice_capture_permission = true;
+            }
+            (OptionsCategory::Voice, 4) => {
+                if let Some(popup) = self.popups.options_popup_mut() {
+                    popup.capturing_push_to_talk_shortcut = true;
+                }
+                return;
+            }
+            (OptionsCategory::Voice, 5) => {
                 self.options.voice_options.noise_suppression =
                     !self.options.voice_options.noise_suppression;
                 update_current_voice_capture_permission = true;
@@ -430,17 +489,17 @@ impl DashboardState {
             return;
         }
         let changed = match selected {
-            4 => {
+            6 => {
                 let previous = self.options.voice_options.microphone_sensitivity;
                 self.options.voice_options.microphone_sensitivity = previous.adjust(delta);
                 self.options.voice_options.microphone_sensitivity != previous
             }
-            5 => {
+            7 => {
                 let previous = self.options.voice_options.microphone_volume;
                 self.options.voice_options.microphone_volume = previous.adjust(delta);
                 self.options.voice_options.microphone_volume != previous
             }
-            6 => {
+            8 => {
                 let previous = self.options.voice_options.voice_output_volume;
                 self.options.voice_options.voice_output_volume = previous.adjust(delta);
                 self.options.voice_options.voice_output_volume != previous

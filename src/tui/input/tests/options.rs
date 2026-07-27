@@ -1,4 +1,5 @@
 use super::*;
+use crate::discord::VoiceInputMode;
 
 type DisplayOptionCheck = fn(&DashboardState) -> bool;
 
@@ -65,7 +66,7 @@ fn options_popup_h_l_adjust_microphone_sensitivity_by_one_or_ten_db() {
     handle_key(&mut state, char_key(' '));
     handle_key(&mut state, char_key('o'));
     handle_key(&mut state, char_key('v'));
-    for _ in 0..4 {
+    for _ in 0..6 {
         handle_key(&mut state, key(KeyCode::Down));
     }
 
@@ -221,4 +222,62 @@ fn options_popup_toggles_composer_emoji_links() {
             presence: Default::default(),
         })
     );
+}
+
+#[test]
+fn voice_options_apply_push_to_talk_mode_and_shortcut_without_restart() {
+    let mut state = state_with_messages(1);
+
+    handle_key(&mut state, char_key(' '));
+    handle_key(&mut state, char_key('o'));
+    handle_key(&mut state, char_key('v'));
+    for _ in 0..3 {
+        handle_key(&mut state, key(KeyCode::Down));
+    }
+    handle_key(&mut state, key(KeyCode::Enter));
+
+    assert_eq!(state.voice_options().input_mode, VoiceInputMode::PushToTalk);
+
+    handle_key(&mut state, key(KeyCode::Down));
+    handle_key(&mut state, key(KeyCode::Enter));
+    assert!(state.is_capturing_push_to_talk_shortcut());
+    assert_eq!(
+        state.display_option_items()[4].value.as_deref(),
+        Some("Press shortcut (Esc cancels)")
+    );
+
+    handle_key(
+        &mut state,
+        KeyEvent::new(KeyCode::F(9), KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+    );
+
+    assert!(!state.is_capturing_push_to_talk_shortcut());
+    assert_eq!(
+        state.voice_options().push_to_talk_shortcut,
+        "Control+Shift+F9"
+    );
+    assert!(state.take_options_save_request().is_some());
+}
+
+#[test]
+fn push_to_talk_shortcut_capture_keeps_the_previous_key_on_cancel_or_invalid_input() {
+    let mut state = state_with_messages(1);
+
+    handle_key(&mut state, char_key(' '));
+    handle_key(&mut state, char_key('o'));
+    handle_key(&mut state, char_key('v'));
+    for _ in 0..4 {
+        handle_key(&mut state, key(KeyCode::Down));
+    }
+
+    handle_key(&mut state, key(KeyCode::Enter));
+    handle_key(&mut state, key(KeyCode::Null));
+    assert!(state.is_capturing_push_to_talk_shortcut());
+    assert_eq!(state.voice_options().push_to_talk_shortcut, "F8");
+
+    handle_key(&mut state, key(KeyCode::Esc));
+
+    assert!(!state.is_capturing_push_to_talk_shortcut());
+    assert_eq!(state.voice_options().push_to_talk_shortcut, "F8");
+    assert!(state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::Options));
 }

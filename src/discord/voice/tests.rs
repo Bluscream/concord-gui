@@ -85,7 +85,9 @@ fn voice_runtime_capture_gate_requires_allowed_active_unmuted_voice() {
     assert_eq!(
         state.capture_gate(),
         Some(VoiceCaptureGate {
-            enabled: true,
+            capture_enabled: true,
+            transmit_enabled: true,
+            use_voice_activity: true,
             noise_suppression: true,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::new(40),
@@ -104,7 +106,9 @@ fn voice_runtime_capture_gate_requires_allowed_active_unmuted_voice() {
     assert_eq!(
         state.capture_gate(),
         Some(VoiceCaptureGate {
-            enabled: false,
+            capture_enabled: false,
+            transmit_enabled: false,
+            use_voice_activity: true,
             noise_suppression: true,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::new(40),
@@ -123,7 +127,9 @@ fn voice_runtime_capture_gate_requires_allowed_active_unmuted_voice() {
     assert_eq!(
         state.capture_gate(),
         Some(VoiceCaptureGate {
-            enabled: false,
+            capture_enabled: false,
+            transmit_enabled: false,
+            use_voice_activity: true,
             noise_suppression: true,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::new(40),
@@ -144,7 +150,9 @@ fn voice_runtime_capture_gate_requires_allowed_active_unmuted_voice() {
     assert_eq!(
         state.capture_gate(),
         Some(VoiceCaptureGate {
-            enabled: false,
+            capture_enabled: false,
+            transmit_enabled: false,
+            use_voice_activity: true,
             noise_suppression: true,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::new(40),
@@ -164,6 +172,61 @@ fn voice_runtime_capture_gate_requires_allowed_active_unmuted_voice() {
     state.apply(VoiceRuntimeEvent::Requested(Some(other_channel)));
     assert_eq!(state.capture_gate(), None);
     assert_eq!(state.playback_gate(), None);
+}
+
+#[test]
+#[cfg(feature = "voice-playback")]
+fn voice_runtime_push_to_talk_transmits_only_while_pressed() {
+    let mut state = VoiceRuntimeState::default();
+    state.apply(VoiceRuntimeEvent::CurrentUserReady(Some(Id::new(10))));
+    let mut requested = requested_voice();
+    requested.allow_microphone_transmit = true;
+    requested.self_mute = false;
+    state.apply(VoiceRuntimeEvent::Requested(Some(requested)));
+    state.apply(VoiceRuntimeEvent::VoiceState(voice_state(
+        10,
+        Some(Id::new(10)),
+    )));
+    state.apply(VoiceRuntimeEvent::VoiceServer(voice_server()));
+    state.apply(VoiceRuntimeEvent::InputModeChanged(
+        VoiceInputMode::PushToTalk,
+    ));
+
+    let released_gate = state.capture_gate().expect("capture gate exists");
+    assert!(released_gate.capture_enabled);
+    assert!(!released_gate.transmit_enabled);
+    assert_eq!(
+        state.capture_gate(),
+        Some(VoiceCaptureGate {
+            capture_enabled: true,
+            transmit_enabled: false,
+            use_voice_activity: false,
+            noise_suppression: false,
+            microphone_sensitivity: MicrophoneSensitivityDb::default(),
+            microphone_volume: VoiceVolumePercent::default(),
+        })
+    );
+
+    state.apply(VoiceRuntimeEvent::PushToTalkPressed(true));
+    assert_eq!(
+        state.capture_gate(),
+        Some(VoiceCaptureGate {
+            capture_enabled: true,
+            transmit_enabled: true,
+            use_voice_activity: false,
+            noise_suppression: false,
+            microphone_sensitivity: MicrophoneSensitivityDb::default(),
+            microphone_volume: VoiceVolumePercent::default(),
+        })
+    );
+
+    state.apply(VoiceRuntimeEvent::PushToTalkPressed(false));
+    assert!(
+        !state
+            .capture_gate()
+            .expect("capture gate exists")
+            .transmit_enabled
+    );
 }
 
 #[test]
@@ -471,6 +534,7 @@ fn dave_media_detection_requires_magic_marker() {
 #[test]
 fn voice_playback_frame_uses_only_playable_media_payloads() {
     let header = RtpHeader {
+        marker: false,
         payload_type: DISCORD_VOICE_PAYLOAD_TYPE,
         sequence: 7,
         timestamp: 8,
@@ -1096,7 +1160,9 @@ fn voice_microphone_conditioning_combines_gain_before_soft_limiting() {
     condition_voice_microphone_frame(
         &mut frame,
         VoiceCaptureGate {
-            enabled: true,
+            capture_enabled: true,
+            transmit_enabled: true,
+            use_voice_activity: true,
             noise_suppression: false,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::new(200),
@@ -1612,6 +1678,7 @@ fn rtp_header_parses_minimal_and_extended_packets() {
     assert_eq!(
         header,
         RtpHeader {
+            marker: false,
             payload_type: 0x78,
             sequence: 0x1234,
             timestamp: 0x01020304,
@@ -2073,9 +2140,9 @@ fn fake_outbound_uses_dave_outbound_policy_before_transport_encrypt() {
         &state.events()[1],
         7,
         960,
-        42,
         b"opus-frame",
         30u32.to_be_bytes(),
+        true,
     );
 
     let mut dave = VoiceDaveState::new(&test_voice_gateway_session());
@@ -2120,14 +2187,15 @@ fn fake_outbound_sends_encrypted_packets_without_live_io() {
             &state.events()[1],
             7,
             960,
-            42,
             b"opus-frame",
             [1, 2, 3, 4],
+            true,
         );
         assert_eq!(state.rtp.sequence, 8);
-        assert_eq!(state.rtp.timestamp, 1920);
+        assert_eq!(state.rtp.timestamp, 960);
         assert_eq!(state.nonce_suffix, 0x01020305);
 
+        state.advance_media_clock_frames(1);
         assert_eq!(
             state
                 .send_opus_frame(b"next-frame")
@@ -2140,18 +2208,121 @@ fn fake_outbound_sends_encrypted_packets_without_live_io() {
             &state.events()[2],
             8,
             1920,
-            42,
             b"next-frame",
             [1, 2, 3, 5],
+            false,
         );
         assert_eq!(state.rtp.sequence, 9);
-        assert_eq!(state.rtp.timestamp, 2880);
+        assert_eq!(state.rtp.timestamp, 1920);
         assert_eq!(state.nonce_suffix, 0x01020306);
     }
 }
 
 #[test]
-fn fake_outbound_stop_sends_finite_silence_then_speaking_off() {
+fn fake_outbound_media_clock_and_talkspurt_marker_are_independent() {
+    let mut state = fake_outbound_state(AEAD_AES256_GCM_RTPSIZE, 10);
+    state.set_capture_gate(true, false);
+
+    state.advance_media_clock_frames(10);
+    assert_eq!(state.rtp.sequence, 7);
+    assert_eq!(state.rtp.timestamp, 10_560);
+    assert_eq!(state.nonce_suffix, 10);
+
+    assert_eq!(
+        state
+            .send_opus_frame(b"first-talkspurt")
+            .expect("first talkspurt should send"),
+        VoiceOutboundSendOutcome::Sent
+    );
+    let first_header = fake_packet_header(&state.events()[1]);
+    assert!(first_header.marker);
+    assert_eq!(first_header.timestamp, 10_560);
+    assert_eq!(state.rtp.sequence, 8);
+    assert_eq!(state.rtp.timestamp, 10_560);
+    assert_eq!(state.nonce_suffix, 11);
+
+    state.advance_media_clock_frames(1);
+    assert_eq!(
+        state
+            .send_opus_frame(b"same-talkspurt")
+            .expect("continued talkspurt should send"),
+        VoiceOutboundSendOutcome::Sent
+    );
+    let continued_header = fake_packet_header(&state.events()[2]);
+    assert!(!continued_header.marker);
+    assert_eq!(continued_header.timestamp, 11_520);
+
+    assert_eq!(
+        state.stop_speaking().expect("talkspurt should stop"),
+        VoiceOutboundSendOutcome::Sent
+    );
+    state.advance_media_clock_frames(50);
+    assert_eq!(
+        state
+            .send_opus_frame(b"next-talkspurt")
+            .expect("next talkspurt should send"),
+        VoiceOutboundSendOutcome::Sent
+    );
+    let next_header = fake_packet_header(
+        state
+            .events()
+            .last()
+            .expect("next talkspurt should queue a packet"),
+    );
+    assert!(next_header.marker);
+    assert_eq!(next_header.timestamp, 59_520);
+}
+
+#[test]
+fn trailing_silence_is_paced_and_can_be_cancelled() {
+    let mut tail = VoiceTrailingSilence::default();
+
+    tail.start(true);
+    for index in 0..DISCORD_TRAILING_SILENCE_FRAMES {
+        assert_eq!(
+            tail.take_frame(),
+            Some(index + 1 == DISCORD_TRAILING_SILENCE_FRAMES)
+        );
+    }
+    assert_eq!(tail.take_frame(), None);
+
+    tail.start(true);
+    assert_eq!(tail.take_frame(), Some(false));
+    tail.cancel();
+    assert_eq!(tail.take_frame(), None);
+
+    tail.start(false);
+    assert_eq!(tail.take_frame(), None);
+}
+
+#[test]
+fn microphone_capture_time_advances_rtp_clock_across_missing_frames() {
+    let mut state = fake_outbound_state(AEAD_AES256_GCM_RTPSIZE, 10);
+    let started_at = Instant::now();
+    let mut previous_frame_at = None;
+
+    advance_voice_media_clock(&mut state, &mut previous_frame_at, started_at);
+    assert_eq!(state.rtp.timestamp, 1920);
+
+    advance_voice_media_clock(
+        &mut state,
+        &mut previous_frame_at,
+        started_at + Duration::from_millis(20),
+    );
+    assert_eq!(state.rtp.timestamp, 2880);
+
+    advance_voice_media_clock(
+        &mut state,
+        &mut previous_frame_at,
+        started_at + Duration::from_millis(120),
+    );
+    assert_eq!(state.rtp.timestamp, 7680);
+    assert_eq!(state.rtp.sequence, 7);
+    assert_eq!(state.nonce_suffix, 10);
+}
+
+#[test]
+fn fake_outbound_stop_paces_finite_silence_then_speaking_off() {
     let mut state = fake_outbound_state(AEAD_AES256_GCM_RTPSIZE, 20);
     state.set_capture_gate(true, false);
 
@@ -2161,21 +2332,29 @@ fn fake_outbound_stop_sends_finite_silence_then_speaking_off() {
             .expect("frame should send"),
         VoiceOutboundSendOutcome::Sent
     );
-    assert_eq!(
-        state.stop_speaking().expect("stop should send silence"),
-        VoiceOutboundSendOutcome::Sent
-    );
 
-    assert_eq!(state.events().len(), DISCORD_TRAILING_SILENCE_FRAMES + 3);
     for index in 0..DISCORD_TRAILING_SILENCE_FRAMES {
+        state.advance_media_clock_frames(1);
+        assert_eq!(
+            state
+                .send_trailing_silence_frame_with_dave_payload(
+                    VoiceDaveOutboundPayload::Plain(DISCORD_OPUS_SILENCE_FRAME.to_vec()),
+                    index + 1 == DISCORD_TRAILING_SILENCE_FRAMES,
+                )
+                .expect("one trailing silence frame should send"),
+            VoiceOutboundSendOutcome::Sent
+        );
+        let expected_event_count =
+            index + 3 + usize::from(index + 1 == DISCORD_TRAILING_SILENCE_FRAMES);
+        assert_eq!(state.events().len(), expected_event_count);
         assert_fake_packet(
             AEAD_AES256_GCM_RTPSIZE,
             &state.events()[index + 2],
             8 + index as u16,
             1920 + index as u32 * DISCORD_OPUS_TIMESTAMP_INCREMENT,
-            42,
             &DISCORD_OPUS_SILENCE_FRAME,
             (21 + index as u32).to_be_bytes(),
+            false,
         );
     }
     assert_eq!(
@@ -2186,7 +2365,7 @@ fn fake_outbound_stop_sends_finite_silence_then_speaking_off() {
         }
     );
     assert_eq!(state.rtp.sequence, 13);
-    assert_eq!(state.rtp.timestamp, 6720);
+    assert_eq!(state.rtp.timestamp, 5760);
     assert_eq!(state.nonce_suffix, 26);
 }
 
@@ -2243,7 +2422,7 @@ fn fake_outbound_stop_sends_speaking_off_when_capture_gate_closes() {
 }
 
 #[test]
-fn fake_outbound_stop_uses_dave_policy_for_silence_frames() {
+fn fake_outbound_trailing_silence_uses_dave_policy() {
     let mut dave = VoiceDaveState::new(&test_voice_gateway_session());
     dave.reinit(1).expect("DAVE session should initialize");
     let mut state = fake_outbound_state(AEAD_AES256_GCM_RTPSIZE, 20);
@@ -2253,7 +2432,7 @@ fn fake_outbound_stop_uses_dave_policy_for_silence_frames() {
 
     assert_eq!(
         state
-            .stop_speaking_with_dave(&mut dave)
+            .send_trailing_silence_frame_with_dave(&mut dave, false)
             .expect("DAVE not-ready silence should still send speaking off"),
         VoiceOutboundSendOutcome::Sent
     );
@@ -2375,9 +2554,9 @@ fn assert_fake_packet(
     event: &VoiceOutboundSendEvent,
     sequence: u16,
     timestamp: u32,
-    ssrc: u32,
     expected_payload: &[u8],
     nonce_suffix: [u8; RTP_AEAD_NONCE_SUFFIX_BYTES],
+    marker: bool,
 ) {
     let VoiceOutboundSendEvent::Packet { bytes } = event else {
         panic!("expected fake packet event, got {event:?}");
@@ -2391,10 +2570,18 @@ fn assert_fake_packet(
 
     let actual_nonce_suffix = &packet_bytes[packet_bytes.len() - RTP_AEAD_NONCE_SUFFIX_BYTES..];
     assert_eq!(actual_nonce_suffix, nonce_suffix.as_slice());
+    assert_eq!(header.marker, marker);
     assert_eq!(header.sequence, sequence);
     assert_eq!(header.timestamp, timestamp);
-    assert_eq!(header.ssrc, ssrc);
+    assert_eq!(header.ssrc, 42);
     assert_eq!(decrypted.media_payload, expected_payload);
+}
+
+fn fake_packet_header(event: &VoiceOutboundSendEvent) -> RtpHeader {
+    let VoiceOutboundSendEvent::Packet { bytes } = event else {
+        panic!("expected fake packet event, got {event:?}");
+    };
+    parse_rtp_header(bytes).expect("fake RTP header should parse")
 }
 
 fn encrypt_test_rtp_payload(

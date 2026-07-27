@@ -38,7 +38,7 @@ use super::{
     request_lifecycle::RequestLifecycle,
     rest::DiscordRest,
     state::{CurrentVoiceConnectionState, DiscordSnapshot, DiscordState, SnapshotRevision},
-    voice::{self, VoiceAudioSettings, VoiceRuntimeEvent, VoiceScope},
+    voice::{self, VoiceAudioSettings, VoiceInputMode, VoiceRuntimeEvent, VoiceScope},
 };
 
 const MEMBER_SEARCH_MIN_QUERY_CHARS: usize = 2;
@@ -80,6 +80,7 @@ pub struct DiscordClient {
     snapshots_tx: watch::Sender<SnapshotRevision>,
     state: Arc<RwLock<DiscordState>>,
     requested_voice: Arc<RwLock<Option<CurrentVoiceConnectionState>>>,
+    voice_input_mode: Arc<RwLock<VoiceInputMode>>,
     selected_rich_presence: Arc<RwLock<Option<String>>>,
     /// `application_id -> (external image url -> media-proxy path)`, so a url is
     /// registered with Discord only once.
@@ -159,6 +160,7 @@ impl DiscordClient {
             snapshots_tx,
             state,
             requested_voice: Arc::new(RwLock::new(None)),
+            voice_input_mode: Arc::new(RwLock::new(VoiceInputMode::default())),
             selected_rich_presence: Arc::new(RwLock::new(None)),
             external_assets: Arc::new(Mutex::new(HashMap::new())),
             gateway_session_id: Arc::new(RwLock::new(None)),
@@ -467,13 +469,19 @@ impl DiscordClient {
                 DiscordPermission::Speak,
             )
             .map_err(|error| error.to_string())?;
-            rest_actions::ensure_permission(
-                &state,
-                channel,
-                DiscordAction::TransmitMicrophone,
-                DiscordPermission::UseVoiceActivity,
-            )
-            .map_err(|error| error.to_string())?;
+            let input_mode = *self
+                .voice_input_mode
+                .read()
+                .expect("voice input mode lock is not poisoned");
+            if input_mode == VoiceInputMode::VoiceActivity {
+                rest_actions::ensure_permission(
+                    &state,
+                    channel,
+                    DiscordAction::TransmitMicrophone,
+                    DiscordPermission::UseVoiceActivity,
+                )
+                .map_err(|error| error.to_string())?;
+            }
         }
         let mut requested = self
             .requested_voice
@@ -495,6 +503,28 @@ impl DiscordClient {
             .voice_events_tx
             .send(VoiceRuntimeEvent::Requested(Some(voice)));
         Ok(())
+    }
+
+    #[cfg(feature = "voice-playback")]
+    pub(crate) fn set_voice_input_mode(&self, input_mode: VoiceInputMode) {
+        let mut current = self
+            .voice_input_mode
+            .write()
+            .expect("voice input mode lock is not poisoned");
+        if *current == input_mode {
+            return;
+        }
+        *current = input_mode;
+        let _ = self
+            .voice_events_tx
+            .send(VoiceRuntimeEvent::InputModeChanged(input_mode));
+    }
+
+    #[cfg(feature = "voice-playback")]
+    pub(crate) fn set_push_to_talk_pressed(&self, pressed: bool) {
+        let _ = self
+            .voice_events_tx
+            .send(VoiceRuntimeEvent::PushToTalkPressed(pressed));
     }
 
     pub fn replace_voice_participant_playback_settings(

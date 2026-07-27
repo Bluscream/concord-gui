@@ -223,6 +223,31 @@ fn dispatch_notification_sound(notification_options: NotificationOptions) {
     });
 }
 
+#[cfg(feature = "voice-playback")]
+pub(in crate::tui) fn dispatch_push_to_talk_sound(pressed: bool) {
+    tokio::spawn(async move {
+        let result = tokio::task::spawn_blocking(move || {
+            super::notification_audio::play_push_to_talk_sound(pressed)
+        })
+        .await;
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                log_notification_failure_once(
+                    "voice",
+                    format!("push-to-talk sound failed: {error}"),
+                );
+            }
+            Err(error) => {
+                log_notification_failure_once(
+                    "voice",
+                    format!("push-to-talk sound task failed: {error}"),
+                );
+            }
+        }
+    });
+}
+
 fn spawn_notification_task<F>(target: &'static str, action: &'static str, task: F)
 where
     F: FnOnce() -> std::result::Result<(), String> + Send + 'static,

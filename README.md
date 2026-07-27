@@ -546,6 +546,13 @@ self_deaf = false
 # Allow microphone transmit while this session is joined and not self-muted.
 allow_microphone_transmit = false
 
+# Input mode: "voice-activity" or "push-to-talk".
+input_mode = "voice-activity"
+
+# Global push-to-talk shortcut. The key works even when Concord is not focused.
+# Modifiers can be combined before the key, for example "control+shift+F8".
+push_to_talk_shortcut = "F8"
+
 # Reduce steady background microphone noise.
 noise_suppression = true
 
@@ -558,6 +565,15 @@ microphone_volume = 100
 # Received voice playback volume percentage, from 0 to 200.
 voice_output_volume = 100
 ```
+
+Global push-to-talk uses the native desktop shortcut service on macOS, Windows,
+and X11. On Linux Wayland it uses the XDG Global Shortcuts portal, which may ask
+you to approve or choose the shortcut. If a shortcut is already used by another
+application, Concord keeps microphone transmission closed and reports the
+registration error. Input mode changes apply immediately from Voice Options.
+Select `Push-to-talk shortcut`, press Enter, then press a new key chord to
+re-register it without restarting Concord. Concord plays short local sounds
+when PTT transmission starts and stops.
 
 </details><br>
 

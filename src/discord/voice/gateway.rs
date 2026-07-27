@@ -115,7 +115,9 @@ pub(super) async fn connect_voice_gateway(
                     }
                     None => {
                         child_tasks.set_voice_transmit_gate(VoiceCaptureGate {
-                            enabled: false,
+                            capture_enabled: false,
+                            transmit_enabled: false,
+                            use_voice_activity: true,
                             noise_suppression: false,
                             microphone_sensitivity: MicrophoneSensitivityDb::default(),
                             microphone_volume: VoiceVolumePercent::default(),

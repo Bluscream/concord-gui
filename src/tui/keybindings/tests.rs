@@ -17,6 +17,36 @@ fn key_chord_parses_bare_keys_and_labels() {
 }
 
 #[test]
+fn push_to_talk_shortcut_capture_uses_portable_global_key_names() {
+    let cases = [
+        (
+            KeyEvent::new(KeyCode::F(8), KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            "Control+Shift+F8",
+        ),
+        (
+            KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT),
+            "Shift+/",
+        ),
+        (
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE),
+            "Shift+Tab",
+        ),
+        (
+            KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE),
+            "Shift+A",
+        ),
+    ];
+
+    for (key, expected) in cases {
+        assert_eq!(push_to_talk_shortcut_from_key(key).as_deref(), Ok(expected));
+    }
+
+    assert!(
+        push_to_talk_shortcut_from_key(KeyEvent::new(KeyCode::Null, KeyModifiers::NONE)).is_err()
+    );
+}
+
+#[test]
 fn angle_key_parses_neovim_modifier_aliases() {
     let cases = [
         ("C-f", KeyCode::Char('f'), KeyModifiers::CONTROL, "Ctrl+f"),

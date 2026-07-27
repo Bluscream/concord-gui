@@ -13,6 +13,7 @@ use super::{
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct RtpHeader {
+    pub(super) marker: bool,
     pub(super) payload_type: u8,
     pub(super) sequence: u16,
     pub(super) timestamp: u32,
@@ -221,13 +222,24 @@ pub(super) fn build_voice_rtp_packet(
     ssrc: u32,
     opus_payload: &[u8],
 ) -> Result<Vec<u8>, String> {
+    build_voice_rtp_packet_with_marker(sequence, timestamp, ssrc, false, opus_payload)
+}
+
+#[allow(dead_code)]
+pub(super) fn build_voice_rtp_packet_with_marker(
+    sequence: u16,
+    timestamp: u32,
+    ssrc: u32,
+    marker: bool,
+    opus_payload: &[u8],
+) -> Result<Vec<u8>, String> {
     if opus_payload.is_empty() {
         return Err("voice RTP packet requires a non-empty Opus payload".to_owned());
     }
 
     let mut packet = Vec::with_capacity(RTP_HEADER_MIN_LEN + opus_payload.len());
     packet.push(RTP_VERSION << 6);
-    packet.push(DISCORD_VOICE_PAYLOAD_TYPE);
+    packet.push(u8::from(marker) << 7 | DISCORD_VOICE_PAYLOAD_TYPE);
     packet.extend_from_slice(&sequence.to_be_bytes());
     packet.extend_from_slice(&timestamp.to_be_bytes());
     packet.extend_from_slice(&ssrc.to_be_bytes());
@@ -270,6 +282,7 @@ pub(super) fn parse_rtp_header(packet: &[u8]) -> Result<RtpHeader, String> {
     }
 
     Ok(RtpHeader {
+        marker: packet[1] & 0x80 != 0,
         payload_type: packet[1] & 0x7f,
         sequence: u16::from_be_bytes([packet[2], packet[3]]),
         timestamp: u32::from_be_bytes([packet[4], packet[5], packet[6], packet[7]]),

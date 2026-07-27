@@ -6,7 +6,7 @@ use crate::discord::ids::{
     Id,
     marker::{ChannelMarker, GuildMarker, UserMarker},
 };
-use crate::discord::{MicrophoneSensitivityDb, VoiceVolumePercent};
+use crate::discord::{MicrophoneSensitivityDb, VoiceInputMode, VoiceVolumePercent};
 
 pub const DEFAULT_SERVER_WIDTH: u16 = 20;
 pub const DEFAULT_CHANNEL_LIST_WIDTH: u16 = 24;
@@ -71,12 +71,14 @@ pub struct NotificationOptions {
     pub voice_leave_sound: Option<PathBuf>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct VoiceOptions {
     pub self_mute: bool,
     pub self_deaf: bool,
     pub allow_microphone_transmit: bool,
+    pub input_mode: VoiceInputMode,
+    pub push_to_talk_shortcut: String,
     pub noise_suppression: bool,
     pub microphone_sensitivity: MicrophoneSensitivityDb,
     pub microphone_volume: VoiceVolumePercent,
@@ -89,6 +91,8 @@ impl Default for VoiceOptions {
             self_mute: false,
             self_deaf: false,
             allow_microphone_transmit: false,
+            input_mode: VoiceInputMode::VoiceActivity,
+            push_to_talk_shortcut: "F8".to_owned(),
             noise_suppression: true,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::default(),

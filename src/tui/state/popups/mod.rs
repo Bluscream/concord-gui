@@ -556,6 +556,7 @@ pub enum OptionsCategory {
 pub(super) struct OptionsPopupState {
     pub(super) selection: SelectablePopupState,
     pub(super) category: Option<OptionsCategory>,
+    pub(super) capturing_push_to_talk_shortcut: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -25,6 +25,8 @@ const GENERATED_VOICE_SOUND_CHANNELS: u16 = 2;
 const GENERATED_VOICE_SOUND_DURATION: Duration = Duration::from_millis(180);
 #[cfg(any(test, feature = "voice-playback"))]
 const GENERATED_NOTIFICATION_SOUND_DURATION: Duration = Duration::from_millis(140);
+#[cfg(any(test, feature = "voice-playback"))]
+const GENERATED_PUSH_TO_TALK_SOUND_DURATION: Duration = Duration::from_millis(70);
 #[cfg(feature = "voice-playback")]
 const NOTIFICATION_SOUND_STREAM_PADDING: Duration = Duration::from_millis(40);
 #[cfg(feature = "voice-playback")]
@@ -65,6 +67,11 @@ pub(super) fn play_notification_sound(
         None => generated_notification_sound(),
     };
     play_notification_audio(audio)
+}
+
+#[cfg(feature = "voice-playback")]
+pub(super) fn play_push_to_talk_sound(pressed: bool) -> std::result::Result<(), String> {
+    play_notification_audio(generated_push_to_talk_sound(pressed))
 }
 
 #[cfg(feature = "voice-playback")]
@@ -289,6 +296,28 @@ fn generated_notification_sound() -> NotificationAudio {
 }
 
 #[cfg(any(test, feature = "voice-playback"))]
+fn generated_push_to_talk_sound(pressed: bool) -> NotificationAudio {
+    let frame_count = (GENERATED_VOICE_SOUND_SAMPLE_RATE as f32
+        * GENERATED_PUSH_TO_TALK_SOUND_DURATION.as_secs_f32()) as usize;
+    let frequency = if pressed { 1046.5 } else { 698.5 };
+    let mut samples = Vec::with_capacity(frame_count * usize::from(GENERATED_VOICE_SOUND_CHANNELS));
+    for frame in 0..frame_count {
+        let progress = frame as f32 / frame_count.max(1) as f32;
+        let phase = frame as f32 * frequency * std::f32::consts::TAU
+            / GENERATED_VOICE_SOUND_SAMPLE_RATE as f32;
+        let envelope = generated_voice_sound_envelope(progress);
+        let sample = phase.sin() * 0.13 * envelope;
+        samples.push(sample);
+        samples.push(sample);
+    }
+    NotificationAudio {
+        sample_rate: GENERATED_VOICE_SOUND_SAMPLE_RATE,
+        channels: GENERATED_VOICE_SOUND_CHANNELS,
+        samples,
+    }
+}
+
+#[cfg(any(test, feature = "voice-playback"))]
 fn generated_voice_sound_frequency(kind: VoiceSoundKind, progress: f32) -> f32 {
     match (kind, progress < 0.5) {
         (VoiceSoundKind::Join, true) => 660.0,
@@ -479,6 +508,19 @@ mod tests {
             generated_notification_sound_frequency(0.25),
             generated_voice_sound_frequency(VoiceSoundKind::Join, 0.25)
         );
+    }
+
+    #[test]
+    fn generated_push_to_talk_sounds_are_short_and_distinct() {
+        let pressed = generated_push_to_talk_sound(true);
+        let released = generated_push_to_talk_sound(false);
+
+        assert_eq!(pressed.sample_rate, GENERATED_VOICE_SOUND_SAMPLE_RATE);
+        assert_eq!(pressed.channels, GENERATED_VOICE_SOUND_CHANNELS);
+        assert_eq!(pressed.samples.len(), released.samples.len());
+        assert_eq!(pressed.samples.len() % usize::from(pressed.channels), 0);
+        assert!(pressed.samples.len() < generated_notification_sound().samples.len());
+        assert_ne!(pressed.samples, released.samples);
     }
 
     #[test]

@@ -28,9 +28,9 @@ pub(in crate::tui) use actions::{
     ProfilePopupTabAction, ReactionUsersPopupAction, ScrollAction, SearchPopupAction,
     SelectionAction, SelectionKeySet, UiAction, VoiceParticipantAudioPopupAction,
 };
-pub(in crate::tui) use chord::KeyChord;
 #[cfg(test)]
 use chord::parse_angle_key;
+pub(in crate::tui) use chord::{KeyChord, push_to_talk_shortcut_from_key};
 use chord::{
     KeySequence, char_chord, ctrl_chord, key_chord, key_chords_match_same_event,
     modified_key_chord, parse_sequence_token,

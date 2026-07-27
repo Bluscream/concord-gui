@@ -116,7 +116,7 @@ pub use verification::{
     GuildParticipationBlock, GuildParticipationDataGap, GuildParticipationRestriction,
 };
 pub use voice::{
-    MicrophoneSensitivityDb, VoiceAudioSettings, VoiceParticipantPlaybackSettings,
+    MicrophoneSensitivityDb, VoiceAudioSettings, VoiceInputMode, VoiceParticipantPlaybackSettings,
     VoiceParticipantVolumePercent, VoiceVolumePercent,
 };
 pub use voice::{

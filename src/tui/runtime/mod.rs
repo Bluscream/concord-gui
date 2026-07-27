@@ -15,6 +15,8 @@ use crate::{
     logging,
 };
 
+#[cfg(feature = "voice-playback")]
+use super::global_push_to_talk::GlobalPushToTalkRuntime;
 use super::{
     clipboard::{ClipboardError, ClipboardPasteData, ClipboardService},
     commands as command_helpers, input,
@@ -139,6 +141,19 @@ pub(super) async fn run_dashboard(
     const BACKGROUND_REDRAW_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(80);
     let mut pending_redraw_deadline: Option<tokio::time::Instant> = None;
     let mut animation_frame_deadline: Option<tokio::time::Instant> = None;
+    #[cfg(feature = "voice-playback")]
+    let mut push_to_talk = GlobalPushToTalkRuntime::new(client.clone());
+    #[cfg(feature = "voice-playback")]
+    if let Some(error) = push_to_talk.sync(state.voice_options_ref()).await {
+        logging::error("voice", error.clone());
+        state.show_error_toast(error, std::time::Instant::now());
+    }
+    #[cfg(feature = "voice-playback")]
+    let mut push_to_talk_deadline = push_to_talk
+        .needs_polling()
+        .then(|| tokio::time::Instant::now() + GlobalPushToTalkRuntime::poll_interval());
+    #[cfg(not(feature = "voice-playback"))]
+    let push_to_talk_deadline: Option<tokio::time::Instant> = None;
     let mut clipboard_paste_in_flight = false;
     // Fingerprint of the last drawn frame's background-visible state. Background
     // events only schedule a redraw when this moves (see `redraw_gate`).
@@ -433,6 +448,24 @@ pub(super) async fn run_dashboard(
                 dirty = true;
             }
             _ = async {
+                match push_to_talk_deadline {
+                    Some(deadline) => tokio::time::sleep_until(deadline).await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                #[cfg(feature = "voice-playback")]
+                {
+                    if let Some(error) = push_to_talk.poll() {
+                        logging::error("voice", error.clone());
+                        state.show_error_toast(error, std::time::Instant::now());
+                        dirty = true;
+                    }
+                    push_to_talk_deadline = push_to_talk.needs_polling().then(|| {
+                        tokio::time::Instant::now() + GlobalPushToTalkRuntime::poll_interval()
+                    });
+                }
+            }
+            _ = async {
                 match pending_redraw_deadline {
                     Some(deadline) => tokio::time::sleep_until(deadline).await,
                     None => std::future::pending::<()>().await,
@@ -504,11 +537,29 @@ pub(super) async fn run_dashboard(
             }
         }
 
+        #[cfg(feature = "voice-playback")]
+        {
+            if let Some(error) = push_to_talk.sync(state.voice_options_ref()).await {
+                logging::error("voice", error.clone());
+                state.show_error_toast(error, std::time::Instant::now());
+                dirty = true;
+            }
+            if push_to_talk.needs_polling() {
+                push_to_talk_deadline.get_or_insert_with(|| {
+                    tokio::time::Instant::now() + GlobalPushToTalkRuntime::poll_interval()
+                });
+            } else {
+                push_to_talk_deadline = None;
+            }
+        }
         dirty |= command_scheduler
             .schedule_state_driven_commands(&mut state, &client, &commands)
             .await;
         events::save_options_if_needed(&mut state);
     }
+
+    #[cfg(feature = "voice-playback")]
+    push_to_talk.shutdown().await;
 
     if state.should_sign_out() {
         Ok(DashboardExit::SignOut)

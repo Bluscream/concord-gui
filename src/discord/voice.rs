@@ -44,7 +44,9 @@ use microphone::*;
 use runtime::{VoiceRuntimeAction, VoiceRuntimeState};
 pub(crate) use runtime::{forward_app_event, run_voice_runtime};
 pub(in crate::discord) use state::VoiceState;
-pub use state::{CurrentVoiceConnectionState, VoiceAudioSettings, VoiceParticipantState};
+pub use state::{
+    CurrentVoiceConnectionState, VoiceAudioSettings, VoiceInputMode, VoiceParticipantState,
+};
 
 use self::opus::VoiceOpusDecode;
 #[cfg(any(test, feature = "voice-playback"))]
@@ -145,6 +147,8 @@ const DISCORD_OPUS_FRAME_SAMPLES_PER_CHANNEL: usize = 960;
 #[allow(dead_code)]
 const DISCORD_OPUS_20MS_STEREO_SAMPLES: usize =
     DISCORD_OPUS_FRAME_SAMPLES_PER_CHANNEL * DISCORD_VOICE_CHANNELS as usize;
+#[cfg(any(test, feature = "voice-playback"))]
+const DISCORD_OPUS_FRAME_DURATION: Duration = Duration::from_millis(20);
 #[allow(dead_code)]
 const DISCORD_OPUS_TIMESTAMP_INCREMENT: u32 = DISCORD_OPUS_FRAME_SAMPLES_PER_CHANNEL as u32;
 #[allow(dead_code)]
@@ -273,6 +277,10 @@ type VoiceReader = futures::stream::SplitStream<VoiceGatewayStream>;
 pub(crate) enum VoiceRuntimeEvent {
     Requested(Option<CurrentVoiceConnectionState>),
     ManualRetry(CurrentVoiceConnectionState),
+    #[cfg(feature = "voice-playback")]
+    InputModeChanged(VoiceInputMode),
+    #[cfg(feature = "voice-playback")]
+    PushToTalkPressed(bool),
     ReplaceParticipantPlaybackSettings(Vec<(Id<UserMarker>, VoiceParticipantPlaybackSettings)>),
     UpdateParticipantPlaybackSettings {
         user_id: Id<UserMarker>,
@@ -600,7 +608,9 @@ impl Default for VoiceChildTasks {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct VoiceCaptureGate {
-    enabled: bool,
+    capture_enabled: bool,
+    transmit_enabled: bool,
+    use_voice_activity: bool,
     noise_suppression: bool,
     microphone_sensitivity: MicrophoneSensitivityDb,
     microphone_volume: VoiceVolumePercent,
@@ -673,6 +683,33 @@ struct VoiceUdpTransmitStats {
     max_microphone_frame_age_ms: u128,
     max_frame_gap_ms: u128,
     last_frame_at: Option<Instant>,
+}
+
+#[cfg(any(test, feature = "voice-playback"))]
+#[derive(Default)]
+struct VoiceTrailingSilence {
+    remaining_frames: usize,
+}
+
+#[cfg(any(test, feature = "voice-playback"))]
+impl VoiceTrailingSilence {
+    fn start(&mut self, speaking: bool) {
+        if speaking && self.remaining_frames == 0 {
+            self.remaining_frames = DISCORD_TRAILING_SILENCE_FRAMES;
+        }
+    }
+
+    fn cancel(&mut self) {
+        self.remaining_frames = 0;
+    }
+
+    fn take_frame(&mut self) -> Option<bool> {
+        if self.remaining_frames == 0 {
+            return None;
+        }
+        self.remaining_frames -= 1;
+        Some(self.remaining_frames == 0)
+    }
 }
 
 #[cfg(any(test, feature = "voice-playback"))]
@@ -754,7 +791,9 @@ impl VoiceChildTasks {
     fn signal_udp_transmit_stop(&mut self) {
         if let Some(gate) = self.transmit_gate.as_ref() {
             let _ = gate.send(VoiceCaptureGate {
-                enabled: false,
+                capture_enabled: false,
+                transmit_enabled: false,
+                use_voice_activity: true,
                 noise_suppression: false,
                 microphone_sensitivity: MicrophoneSensitivityDb::default(),
                 microphone_volume: VoiceVolumePercent::default(),
@@ -855,7 +894,7 @@ impl VoiceChildTasks {
                 let _ = gate.send(capture_gate);
             }
             self.set_microphone_capture_enabled(
-                capture_gate.enabled && self.microphone_pcm_tx.is_some(),
+                capture_gate.capture_enabled && self.microphone_pcm_tx.is_some(),
             );
         }
         #[cfg(not(feature = "voice-playback"))]

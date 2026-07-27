@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+#[cfg(feature = "voice-playback")]
+use crate::discord::VoiceInputMode;
 use crate::{
     AppError,
     discord::{
@@ -1201,6 +1203,41 @@ async fn microphone_transmit_requires_speak_and_voice_activity_permissions() {
                 .allow_microphone_transmit
         );
     }
+}
+
+#[tokio::test]
+#[cfg(feature = "voice-playback")]
+async fn push_to_talk_transmit_does_not_require_voice_activity_permission() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
+    publish_permission_fixture(&client, "GuildVoice", VIEW_CHANNEL | CONNECT | SPEAK).await;
+    client
+        .update_voice_state(
+            VoiceScope::Guild(Id::new(1)),
+            Some(Id::new(2)),
+            false,
+            false,
+        )
+        .expect("CONNECT should allow voice join");
+    client.set_voice_input_mode(VoiceInputMode::PushToTalk);
+
+    client
+        .update_voice_capture_permission(
+            VoiceScope::Guild(Id::new(1)),
+            Id::new(2),
+            VoiceAudioSettings {
+                allow_microphone_transmit: true,
+                ..VoiceAudioSettings::default()
+            },
+        )
+        .expect("push to talk requires SPEAK but not USE_VOICE_ACTIVITY");
+
+    assert!(
+        client
+            .requested_voice_connection()
+            .expect("voice request")
+            .allow_microphone_transmit
+    );
 }
 
 #[tokio::test]
