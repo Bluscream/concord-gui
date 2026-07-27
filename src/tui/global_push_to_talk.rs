@@ -1,8 +1,10 @@
 use std::time::Duration;
 
+use global_hotkey::hotkey::HotKey;
 #[cfg(any(test, target_os = "linux"))]
 use global_hotkey::hotkey::{Code, Modifiers};
-use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 #[cfg(target_os = "linux")]
 use tokio::task::JoinHandle;
 
@@ -13,6 +15,19 @@ use crate::{
 };
 
 const PUSH_TO_TALK_POLL_INTERVAL: Duration = Duration::from_millis(5);
+
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos as platform;
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+use windows as platform;
+#[cfg(target_os = "linux")]
+mod x11;
+#[cfg(target_os = "linux")]
+use x11 as platform;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PushToTalkConfiguration {
@@ -28,10 +43,13 @@ pub(super) struct GlobalPushToTalkRuntime {
 }
 
 enum PushToTalkBackend {
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     Native {
         manager: GlobalHotKeyManager,
         hotkey: HotKey,
     },
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    Passive(platform::PushToTalkListener),
     #[cfg(target_os = "linux")]
     Portal {
         messages: tokio::sync::mpsc::UnboundedReceiver<PortalMessage>,
@@ -102,7 +120,7 @@ impl GlobalPushToTalkRuntime {
                 logging::debug(
                     "voice",
                     format!(
-                        "registered global push-to-talk shortcut: {}",
+                        "started global push-to-talk listener: {}",
                         configuration.shortcut
                     ),
                 );
@@ -114,18 +132,21 @@ impl GlobalPushToTalkRuntime {
     }
 
     pub(super) fn poll(&mut self) -> Option<String> {
-        pump_platform_events();
-
         let mut pressed = None;
         #[cfg(target_os = "linux")]
         let mut backend_failed = None;
         match self.backend.as_mut() {
+            #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
             Some(PushToTalkBackend::Native { hotkey, .. }) => {
                 while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
                     if event.id() == hotkey.id() {
                         pressed = Some(event.state() == HotKeyState::Pressed);
                     }
                 }
+            }
+            #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+            Some(PushToTalkBackend::Passive(listener)) => {
+                pressed = listener.latest_state();
             }
             #[cfg(target_os = "linux")]
             Some(PushToTalkBackend::Portal {
@@ -236,12 +257,19 @@ impl GlobalPushToTalkRuntime {
             return;
         };
         match backend {
+            #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
             PushToTalkBackend::Native { manager, hotkey } => {
                 if let Err(error) = manager.unregister(hotkey) {
                     logging::debug(
                         "voice",
                         format!("failed to unregister push-to-talk shortcut: {error}"),
                     );
+                }
+            }
+            #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+            PushToTalkBackend::Passive(listener) => {
+                if let Err(error) = listener.stop() {
+                    logging::debug("voice", error);
                 }
             }
             #[cfg(target_os = "linux")]
@@ -264,6 +292,7 @@ impl GlobalPushToTalkRuntime {
     }
 }
 
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn register_native_hotkey(hotkey: HotKey) -> std::result::Result<PushToTalkBackend, String> {
     let manager = GlobalHotKeyManager::new()
         .map_err(|error| format!("Could not initialize global push-to-talk: {error}"))?;
@@ -273,73 +302,9 @@ fn register_native_hotkey(hotkey: HotKey) -> std::result::Result<PushToTalkBacke
     Ok(PushToTalkBackend::Native { manager, hotkey })
 }
 
-#[cfg(target_os = "macos")]
-fn pump_platform_events() {
-    macos_event_loop::dispatch_pending_events();
-}
-
-#[cfg(target_os = "windows")]
-fn pump_platform_events() {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
-    };
-
-    // `RegisterHotKey` delivers `WM_HOTKEY` to a hidden window created by
-    // `global-hotkey`. The TUI has no native Windows event loop, so drain that
-    // thread's queue on each low-latency PTT tick.
-    unsafe {
-        let mut message: MSG = std::mem::zeroed();
-        while PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
-            let _ = TranslateMessage(&message);
-            DispatchMessageW(&message);
-        }
-    }
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn pump_platform_events() {}
-
-#[cfg(target_os = "macos")]
-mod macos_event_loop {
-    use std::ffi::c_void;
-
-    const NO_ERR: i32 = 0;
-    const MAX_EVENTS_PER_POLL: usize = 64;
-
-    type EventRef = *mut c_void;
-    type EventTargetRef = *mut c_void;
-
-    #[link(name = "Carbon", kind = "framework")]
-    unsafe extern "C" {
-        fn GetEventDispatcherTarget() -> EventTargetRef;
-        fn ReceiveNextEvent(
-            in_num_types: usize,
-            in_list: *const c_void,
-            in_timeout: f64,
-            in_pull_event: u8,
-            out_event: *mut EventRef,
-        ) -> i32;
-        fn ReleaseEvent(in_event: EventRef);
-        fn SendEventToEventTarget(in_event: EventRef, in_target: EventTargetRef) -> i32;
-    }
-
-    pub(super) fn dispatch_pending_events() {
-        // A terminal process has no Cocoa application loop. Carbon still queues
-        // registered hotkey events, so forward them through the dispatcher that
-        // invokes the handler installed by `global-hotkey`.
-        unsafe {
-            let target = GetEventDispatcherTarget();
-            for _ in 0..MAX_EVENTS_PER_POLL {
-                let mut event = std::ptr::null_mut();
-                let status = ReceiveNextEvent(0, std::ptr::null(), 0.0, 1, &mut event);
-                if status != NO_ERR || event.is_null() {
-                    break;
-                }
-                let _ = SendEventToEventTarget(event, target);
-                ReleaseEvent(event);
-            }
-        }
-    }
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+fn register_native_hotkey(hotkey: HotKey) -> std::result::Result<PushToTalkBackend, String> {
+    platform::PushToTalkListener::start(hotkey).map(PushToTalkBackend::Passive)
 }
 
 #[cfg(target_os = "linux")]

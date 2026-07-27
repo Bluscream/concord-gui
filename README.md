@@ -184,35 +184,28 @@ storage is unavailable. See the Security section below for details.
 To sign out with the default keys, open your profile with `Space`, `p`, then
 choose `[o] sign out`.
 
+### Voice calls
+
+- Full voice support with push-to-talk
+- Supports noise suppression
+
 ### Guilds & Channels
 
-- Browse servers with guild folder grouping
 - Navigate text channels, threads, and forum channels
 - View, filter, and create forum/media posts (active / archived)
-- Create, edit, follow, close, lock, pin, and delete threads and forum posts
 - Switch channels, threads, and posts with the fuzzy channel switcher (`Space`, `Space`)
-- Load pinned messages per channel
-- Open channel actions for pinned messages, thread lists, and mark-as-read
-- Join and leave voice channels/DM calls
-- Highlight active voice speakers in voice channel/DM calls
-- Adjust local volume and mute for voice participants
 - Track unread messages and mention counts per channel
 - Mute and unmute channels and servers
-- Leave the selected server after confirmation
 
 ### Messaging
 
 - Send, edit, and delete messages
 - Upload / Download attachments
 - Search messages with filters with `/`
-- Use @mention autocomplete
-- Use custom emoji from other servers when your account supports it
+- @mention autocomplete
 - Send custom emoji your account cannot use directly as image links when enabled
-- View full message history
 - Rich content display (embeds, attachments, stickers, and mentions)
 - Detect URLs in message bodies and markdown links, then open them in your default browser
-- Direct message shortcuts for copy, reply, edit, delete, reactions, URL opening,
-  and image viewing. More message actions are available from the action menu.
 
 #### Markdown Rendering & Code syntax highlighting
 
@@ -231,7 +224,6 @@ Concord renders a practical subset of Discord-style Markdown in message bodies:
 
 - View, add, and remove emoji reactions (Unicode and custom server emoji)
 - Use custom emoji from other servers as reactions when your account supports it
-- Browse who reacted with a specific emoji
 - View and vote on polls
 
 ### Media & Images
@@ -243,7 +235,7 @@ Image rendering is powered by [ratatui-image](https://github.com/benjajaja/ratat
 - **Sixel** - foot, mlterm, xterm (if compiled with Sixel support), etc.
 - **Halfblocks** (fallback) - works on any terminal, but uses block characters instead of true pixels.
 
-If your terminal does not support any graphics protocol, images will be rendered as halfblock approximations. For the best experience, use a terminal that supports the Kitty or iTerm2 protocol.
+Checkout [compatibility-matrix](https://github.com/ratatui/ratatui-image#compatibility-matrix) for a list of terminals that support each protocol.
 
 You can toggle image viewing on or off in the configuration file. When image viewing is off, attachments and emojis will be shown as text placeholders.
 
@@ -255,12 +247,11 @@ options menu.
 
 ### Members & Profiles
 
-- Member list with grouping
-- Search members in server
+- View Member list and search members
 - Presence indicators (Online, Idle, DND, Offline)
-- Configure user profile and custom activity status
+- Configure user profile and rich presence activity
 
-### Rich Presence
+#### Rich Presence
 
 - Concord serves the local `discord-ipc` socket, detects connected apps, and
   lets you pick which one to share from your profile's activity picker
@@ -268,12 +259,6 @@ options menu.
 - Detection needs the official Discord client closed, since only one program can
   own the socket and the official client claims it first
 - Toggle with `share_rich_presence` under `[presence]` in `config.toml`
-
-### Typing Indicators & Read State
-
-- Live "user is typing..." indicators
-- Unread message tracking with mention counts
-- Mark server, channel as read
 
 ### Notifications
 
@@ -566,14 +551,10 @@ microphone_volume = 100
 voice_output_volume = 100
 ```
 
-Global push-to-talk uses the native desktop shortcut service on macOS, Windows,
-and X11. On Linux Wayland it uses the XDG Global Shortcuts portal, which may ask
-you to approve or choose the shortcut. If a shortcut is already used by another
-application, Concord keeps microphone transmission closed and reports the
-registration error. Input mode changes apply immediately from Voice Options.
-Select `Push-to-talk shortcut`, press Enter, then press a new key chord to
-re-register it without restarting Concord. Concord plays short local sounds
-when PTT transmission starts and stops.
+macOS may require Input Monitoring permission for Concord or the terminal that
+started it. On Linux Wayland, the compositor manages global shortcuts, so
+Concord cannot guarantee that the shortcut input also reaches the focused
+application.
 
 </details><br>
 
