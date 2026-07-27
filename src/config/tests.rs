@@ -10,9 +10,7 @@ use super::{
     PresenceOptions, ThemeOptions, VoiceOptions, load_keymap_options_from_path,
     load_options_from_path, parse_app_options, parse_theme_options, save_options_to_path,
 };
-use crate::discord::{
-    MicrophoneSensitivityDb, VoiceInputMode, VoiceParticipantVolumePercent, VoiceVolumePercent,
-};
+use crate::discord::{MicrophoneSensitivityDb, VoiceParticipantVolumePercent, VoiceVolumePercent};
 
 #[test]
 fn display_options_default_to_all_media_enabled() {
@@ -631,16 +629,15 @@ fn noise_suppression_defaults_to_enabled_and_can_be_disabled() {
 }
 
 #[test]
-fn voice_input_mode_defaults_and_parses_push_to_talk() {
+fn push_to_talk_defaults_to_disabled_and_can_be_enabled() {
     let defaults: AppOptions = toml::from_str("[voice]\n").expect("voice config should parse");
-    let push_to_talk: AppOptions = toml::from_str(
-        "[voice]\ninput_mode = \"push-to-talk\"\npush_to_talk_shortcut = \"control+F8\"\n",
-    )
-    .expect("push-to-talk config should parse");
+    let push_to_talk: AppOptions =
+        toml::from_str("[voice]\npush_to_talk = true\npush_to_talk_shortcut = \"control+F8\"\n")
+            .expect("push-to-talk config should parse");
 
-    assert_eq!(defaults.voice.input_mode, VoiceInputMode::VoiceActivity);
+    assert!(!defaults.voice.push_to_talk);
     assert_eq!(defaults.voice.push_to_talk_shortcut, "F8");
-    assert_eq!(push_to_talk.voice.input_mode, VoiceInputMode::PushToTalk);
+    assert!(push_to_talk.voice.push_to_talk);
     assert_eq!(push_to_talk.voice.push_to_talk_shortcut, "control+F8");
 }
 
@@ -677,7 +674,7 @@ fn options_save_and_load_round_trip() {
             self_mute: true,
             self_deaf: true,
             allow_microphone_transmit: true,
-            input_mode: VoiceInputMode::PushToTalk,
+            push_to_talk: true,
             push_to_talk_shortcut: "control+F8".to_owned(),
             noise_suppression: true,
             microphone_sensitivity: MicrophoneSensitivityDb::new(-50),

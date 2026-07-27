@@ -8,11 +8,7 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 #[cfg(target_os = "linux")]
 use tokio::task::JoinHandle;
 
-use crate::{
-    config::VoiceOptions,
-    discord::{DiscordClient, VoiceInputMode},
-    logging,
-};
+use crate::{config::VoiceOptions, discord::DiscordClient, logging};
 
 const PUSH_TO_TALK_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
@@ -31,7 +27,7 @@ use x11 as platform;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PushToTalkConfiguration {
-    input_mode: VoiceInputMode,
+    enabled: bool,
     shortcut: String,
 }
 
@@ -79,7 +75,7 @@ impl GlobalPushToTalkRuntime {
 
     pub(super) async fn sync(&mut self, options: &VoiceOptions) -> Option<String> {
         let configuration = PushToTalkConfiguration {
-            input_mode: options.input_mode,
+            enabled: options.push_to_talk,
             shortcut: options.push_to_talk_shortcut.trim().to_owned(),
         };
         if self.configuration.as_ref() == Some(&configuration) {
@@ -88,10 +84,10 @@ impl GlobalPushToTalkRuntime {
 
         self.release();
         self.stop_backend().await;
-        self.client.set_voice_input_mode(configuration.input_mode);
+        self.client.set_push_to_talk_enabled(configuration.enabled);
         self.configuration = Some(configuration.clone());
 
-        if configuration.input_mode == VoiceInputMode::VoiceActivity {
+        if !configuration.enabled {
             return None;
         }
 

@@ -44,9 +44,7 @@ use microphone::*;
 use runtime::{VoiceRuntimeAction, VoiceRuntimeState};
 pub(crate) use runtime::{forward_app_event, run_voice_runtime};
 pub(in crate::discord) use state::VoiceState;
-pub use state::{
-    CurrentVoiceConnectionState, VoiceAudioSettings, VoiceInputMode, VoiceParticipantState,
-};
+pub use state::{CurrentVoiceConnectionState, VoiceAudioSettings, VoiceParticipantState};
 
 use self::opus::VoiceOpusDecode;
 #[cfg(any(test, feature = "voice-playback"))]
@@ -278,7 +276,7 @@ pub(crate) enum VoiceRuntimeEvent {
     Requested(Option<CurrentVoiceConnectionState>),
     ManualRetry(CurrentVoiceConnectionState),
     #[cfg(feature = "voice-playback")]
-    InputModeChanged(VoiceInputMode),
+    PushToTalkEnabledChanged(bool),
     #[cfg(feature = "voice-playback")]
     PushToTalkPressed(bool),
     ReplaceParticipantPlaybackSettings(Vec<(Id<UserMarker>, VoiceParticipantPlaybackSettings)>),

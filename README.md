@@ -531,8 +531,8 @@ self_deaf = false
 # Allow microphone transmit while this session is joined and not self-muted.
 allow_microphone_transmit = false
 
-# Input mode: "voice-activity" or "push-to-talk".
-input_mode = "voice-activity"
+# Require holding the configured shortcut to transmit.
+push_to_talk = false
 
 # Global push-to-talk shortcut. The key works even when Concord is not focused.
 # Modifiers can be combined before the key, for example "control+shift+F8".

@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 #[cfg(feature = "voice-playback")]
-use crate::discord::VoiceInputMode;
 use crate::{
     AppError,
     discord::{
@@ -1219,7 +1218,7 @@ async fn push_to_talk_transmit_does_not_require_voice_activity_permission() {
             false,
         )
         .expect("CONNECT should allow voice join");
-    client.set_voice_input_mode(VoiceInputMode::PushToTalk);
+    client.set_push_to_talk_enabled(true);
 
     client
         .update_voice_capture_permission(

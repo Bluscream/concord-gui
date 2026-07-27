@@ -186,7 +186,7 @@ impl DashboardState {
                 ),
                 gauge: None,
                 effective: true,
-                description: "Mute, deaf, input mode, microphone processing, and volume settings.",
+                description: "Mute, deaf, push-to-talk, microphone processing, and volume settings.",
             },
         ]
     }
@@ -311,12 +311,12 @@ impl DashboardState {
                 description: "Permit microphone transmit while joined and not muted.",
             },
             DisplayOptionItem {
-                label: "Input mode",
-                enabled: true,
-                value: Some(self.options.voice_options.input_mode.label().to_owned()),
+                label: "Push to talk",
+                enabled: self.options.voice_options.push_to_talk,
+                value: None,
                 gauge: None,
                 effective: self.options.voice_options.allow_microphone_transmit,
-                description: "Use voice activity or hold a global shortcut to transmit.",
+                description: "Require holding the global shortcut to transmit.",
             },
             DisplayOptionItem {
                 label: "Push-to-talk shortcut",
@@ -327,8 +327,7 @@ impl DashboardState {
                     self.options.voice_options.push_to_talk_shortcut.clone()
                 }),
                 gauge: None,
-                effective: self.options.voice_options.input_mode
-                    == crate::discord::VoiceInputMode::PushToTalk,
+                effective: self.options.voice_options.push_to_talk,
                 description: if self.is_capturing_push_to_talk_shortcut() {
                     "Waiting for one portable key chord."
                 } else {
@@ -354,8 +353,7 @@ impl DashboardState {
                     100,
                 )),
                 effective: self.options.voice_options.allow_microphone_transmit
-                    && self.options.voice_options.input_mode
-                        == crate::discord::VoiceInputMode::VoiceActivity,
+                    && !self.options.voice_options.push_to_talk,
                 description: "Lower dB values transmit quieter microphone input.",
             },
             DisplayOptionItem {
@@ -453,8 +451,7 @@ impl DashboardState {
                 update_current_voice_capture_permission = true;
             }
             (OptionsCategory::Voice, 3) => {
-                self.options.voice_options.input_mode =
-                    self.options.voice_options.input_mode.next();
+                self.options.voice_options.push_to_talk = !self.options.voice_options.push_to_talk;
                 update_current_voice_capture_permission = true;
             }
             (OptionsCategory::Voice, 4) => {

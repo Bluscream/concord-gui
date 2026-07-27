@@ -38,7 +38,7 @@ use super::{
     request_lifecycle::RequestLifecycle,
     rest::DiscordRest,
     state::{CurrentVoiceConnectionState, DiscordSnapshot, DiscordState, SnapshotRevision},
-    voice::{self, VoiceAudioSettings, VoiceInputMode, VoiceRuntimeEvent, VoiceScope},
+    voice::{self, VoiceAudioSettings, VoiceRuntimeEvent, VoiceScope},
 };
 
 const MEMBER_SEARCH_MIN_QUERY_CHARS: usize = 2;
@@ -80,7 +80,7 @@ pub struct DiscordClient {
     snapshots_tx: watch::Sender<SnapshotRevision>,
     state: Arc<RwLock<DiscordState>>,
     requested_voice: Arc<RwLock<Option<CurrentVoiceConnectionState>>>,
-    voice_input_mode: Arc<RwLock<VoiceInputMode>>,
+    push_to_talk: Arc<RwLock<bool>>,
     selected_rich_presence: Arc<RwLock<Option<String>>>,
     /// `application_id -> (external image url -> media-proxy path)`, so a url is
     /// registered with Discord only once.
@@ -160,7 +160,7 @@ impl DiscordClient {
             snapshots_tx,
             state,
             requested_voice: Arc::new(RwLock::new(None)),
-            voice_input_mode: Arc::new(RwLock::new(VoiceInputMode::default())),
+            push_to_talk: Arc::new(RwLock::new(false)),
             selected_rich_presence: Arc::new(RwLock::new(None)),
             external_assets: Arc::new(Mutex::new(HashMap::new())),
             gateway_session_id: Arc::new(RwLock::new(None)),
@@ -469,11 +469,11 @@ impl DiscordClient {
                 DiscordPermission::Speak,
             )
             .map_err(|error| error.to_string())?;
-            let input_mode = *self
-                .voice_input_mode
+            let push_to_talk = *self
+                .push_to_talk
                 .read()
-                .expect("voice input mode lock is not poisoned");
-            if input_mode == VoiceInputMode::VoiceActivity {
+                .expect("push-to-talk lock is not poisoned");
+            if !push_to_talk {
                 rest_actions::ensure_permission(
                     &state,
                     channel,
@@ -506,18 +506,18 @@ impl DiscordClient {
     }
 
     #[cfg(feature = "voice-playback")]
-    pub(crate) fn set_voice_input_mode(&self, input_mode: VoiceInputMode) {
+    pub(crate) fn set_push_to_talk_enabled(&self, enabled: bool) {
         let mut current = self
-            .voice_input_mode
+            .push_to_talk
             .write()
-            .expect("voice input mode lock is not poisoned");
-        if *current == input_mode {
+            .expect("push-to-talk lock is not poisoned");
+        if *current == enabled {
             return;
         }
-        *current = input_mode;
+        *current = enabled;
         let _ = self
             .voice_events_tx
-            .send(VoiceRuntimeEvent::InputModeChanged(input_mode));
+            .send(VoiceRuntimeEvent::PushToTalkEnabledChanged(enabled));
     }
 
     #[cfg(feature = "voice-playback")]

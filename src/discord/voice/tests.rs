@@ -188,9 +188,7 @@ fn voice_runtime_push_to_talk_transmits_only_while_pressed() {
         Some(Id::new(10)),
     )));
     state.apply(VoiceRuntimeEvent::VoiceServer(voice_server()));
-    state.apply(VoiceRuntimeEvent::InputModeChanged(
-        VoiceInputMode::PushToTalk,
-    ));
+    state.apply(VoiceRuntimeEvent::PushToTalkEnabledChanged(true));
 
     let released_gate = state.capture_gate().expect("capture gate exists");
     assert!(released_gate.capture_enabled);

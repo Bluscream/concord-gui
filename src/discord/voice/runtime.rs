@@ -23,7 +23,7 @@ pub(super) struct VoiceRuntimeState {
     blocked: Option<VoiceGatewaySession>,
     reconnect_target: Option<VoiceGatewaySession>,
     reconnect_attempts: u8,
-    input_mode: VoiceInputMode,
+    push_to_talk: bool,
     push_to_talk_pressed: bool,
     participant_playback_settings: HashMap<Id<UserMarker>, VoiceParticipantPlaybackSettings>,
     next_connection_id: u64,
@@ -90,9 +90,9 @@ impl VoiceRuntimeState {
                 self.reconnect_attempts = 0;
             }
             #[cfg(feature = "voice-playback")]
-            VoiceRuntimeEvent::InputModeChanged(input_mode) => {
-                if self.input_mode != input_mode {
-                    self.input_mode = input_mode;
+            VoiceRuntimeEvent::PushToTalkEnabledChanged(enabled) => {
+                if self.push_to_talk != enabled {
+                    self.push_to_talk = enabled;
                     self.push_to_talk_pressed = false;
                 }
             }
@@ -306,9 +306,8 @@ impl VoiceRuntimeState {
         let capture_enabled = requested.allow_microphone_transmit && !requested.self_mute;
         Some(VoiceCaptureGate {
             capture_enabled,
-            transmit_enabled: capture_enabled
-                && self.input_mode.allows_transmit(self.push_to_talk_pressed),
-            use_voice_activity: self.input_mode == VoiceInputMode::VoiceActivity,
+            transmit_enabled: capture_enabled && (!self.push_to_talk || self.push_to_talk_pressed),
+            use_voice_activity: !self.push_to_talk,
             noise_suppression: requested.noise_suppression,
             microphone_sensitivity: requested.microphone_sensitivity,
             microphone_volume: requested.microphone_volume,

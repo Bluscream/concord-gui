@@ -6,7 +6,7 @@ use crate::discord::ids::{
     Id,
     marker::{ChannelMarker, GuildMarker, UserMarker},
 };
-use crate::discord::{MicrophoneSensitivityDb, VoiceInputMode, VoiceVolumePercent};
+use crate::discord::{MicrophoneSensitivityDb, VoiceVolumePercent};
 
 pub const DEFAULT_SERVER_WIDTH: u16 = 20;
 pub const DEFAULT_CHANNEL_LIST_WIDTH: u16 = 24;
@@ -77,7 +77,7 @@ pub struct VoiceOptions {
     pub self_mute: bool,
     pub self_deaf: bool,
     pub allow_microphone_transmit: bool,
-    pub input_mode: VoiceInputMode,
+    pub push_to_talk: bool,
     pub push_to_talk_shortcut: String,
     pub noise_suppression: bool,
     pub microphone_sensitivity: MicrophoneSensitivityDb,
@@ -91,7 +91,7 @@ impl Default for VoiceOptions {
             self_mute: false,
             self_deaf: false,
             allow_microphone_transmit: false,
-            input_mode: VoiceInputMode::VoiceActivity,
+            push_to_talk: false,
             push_to_talk_shortcut: "F8".to_owned(),
             noise_suppression: true,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),

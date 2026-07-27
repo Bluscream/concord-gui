@@ -1,5 +1,4 @@
 use super::*;
-use crate::discord::VoiceInputMode;
 
 type DisplayOptionCheck = fn(&DashboardState) -> bool;
 
@@ -225,7 +224,7 @@ fn options_popup_toggles_composer_emoji_links() {
 }
 
 #[test]
-fn voice_options_apply_push_to_talk_mode_and_shortcut_without_restart() {
+fn voice_options_enable_push_to_talk_and_apply_shortcut_without_restart() {
     let mut state = state_with_messages(1);
 
     handle_key(&mut state, char_key(' '));
@@ -236,7 +235,7 @@ fn voice_options_apply_push_to_talk_mode_and_shortcut_without_restart() {
     }
     handle_key(&mut state, key(KeyCode::Enter));
 
-    assert_eq!(state.voice_options().input_mode, VoiceInputMode::PushToTalk);
+    assert!(state.voice_options().push_to_talk);
 
     handle_key(&mut state, key(KeyCode::Down));
     handle_key(&mut state, key(KeyCode::Enter));
