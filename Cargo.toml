@@ -1,6 +1,6 @@
 [package]
 name = "concord"
-version = "2.4.6"
+version = "2.4.7"
 edition = "2024"
 rust-version = "1.88"
 description = "A terminal user interface client for Discord"
@@ -109,7 +109,10 @@ voice-playback = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa = { version = "0.11", optional = true }
-ashpd = { version = "0.13.13", default-features = false, features = ["tokio", "global_shortcuts"], optional = true }
+ashpd = { version = "0.13.13", default-features = false, features = [
+  "tokio",
+  "global_shortcuts",
+], optional = true }
 x11rb = { version = "0.13.2", features = ["xinput"], optional = true }
 xkeysym = { version = "0.2.1", optional = true }
 

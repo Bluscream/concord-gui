@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.7] - 2026-07-27
+
+### Bug Fixes
+
+- _(voice)_ Fix voice input delay (#278) in [#278](https://github.com/chojs23/concord/pull/278) by @chojs23
+- _(voice)_ Preserve normal key input while using bare keys for push-to-talk by @chojs23
+
+### Documentation
+
+- Update LICESE by @chojs23
+
+### Features
+
+- Add independent 100ms pacing for message sends by @chojs23
+- _(voice)_ Add optional RNNoise microphone noise suppression by @chojs23
+- _(voice)_ Add push-to-talk option by @chojs23
+- _(voice)_ Replace voice input mode with a push-to-talk boolean by @chojs23
+
+### Miscellaneous Tasks
+
+- Use Arc instead of deep clone for client by @chojs23
+- _(test)_ Remove redundant tests and consolidate same-policy cases by @chojs23
+
 ## [2.4.6] - 2026-07-25
 
 ### Bug Fixes
