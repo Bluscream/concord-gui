@@ -416,6 +416,41 @@ fn voice_state_debug_redacts_session_id() {
 }
 
 #[test]
+fn voice_session_description_reuses_only_the_same_transport_key_and_mode() {
+    let current = VoiceSessionDescription {
+        mode: "aead_xchacha20_poly1305_rtpsize".to_owned(),
+        secret_key: vec![1, 2, 3],
+        dave_protocol_version: Some(1),
+    };
+
+    for (next, expected) in [
+        (
+            VoiceSessionDescription {
+                dave_protocol_version: Some(2),
+                ..current.clone()
+            },
+            true,
+        ),
+        (
+            VoiceSessionDescription {
+                secret_key: vec![4, 5, 6],
+                ..current.clone()
+            },
+            false,
+        ),
+        (
+            VoiceSessionDescription {
+                mode: "aead_aes256_gcm_rtpsize".to_owned(),
+                ..current.clone()
+            },
+            false,
+        ),
+    ] {
+        assert_eq!(current.uses_same_transport(&next), expected, "{next:?}");
+    }
+}
+
+#[test]
 fn voice_dave_state_tracks_speaking_ssrc_mapping() {
     let session = VoiceGatewaySession {
         connection_id: 0,
@@ -461,12 +496,14 @@ fn voice_speaking_uses_microphone_bit_only() {
 }
 
 #[test]
-fn voice_speaking_tracker_expires_remote_speakers_and_tracks_local_edges() {
-    let mut tracker = VoiceSpeakingTracker::default();
+fn voice_speaking_tracker_keeps_local_and_remote_activity_separate() {
     let remote_user = Id::new(30);
     let local_user = Id::new(20);
+    let mut tracker = VoiceSpeakingTracker::new(local_user);
     let now = Instant::now();
 
+    assert_eq!(tracker.record_remote(local_user, true, now), None);
+    assert!(tracker.remote_deadlines.is_empty());
     assert_eq!(tracker.record_remote(remote_user, true, now), Some(true));
     assert_eq!(
         tracker.record_remote(remote_user, true, now + VOICE_REMOTE_SPEAKING_TTL / 2),
@@ -487,7 +524,64 @@ fn voice_speaking_tracker_expires_remote_speakers_and_tracks_local_edges() {
 
     assert_eq!(tracker.record_local(true), Some(true));
     assert_eq!(tracker.record_local(true), None);
-    assert_eq!(tracker.clear_all(local_user), vec![local_user]);
+    assert_eq!(tracker.clear_all(), vec![local_user]);
+}
+
+#[cfg(feature = "voice-playback")]
+#[test]
+fn local_speaking_follows_microphone_activity_and_emits_only_edges() {
+    let quiet = vec![100i16; DISCORD_OPUS_20MS_STEREO_SAMPLES];
+    let normal = vec![1500i16; DISCORD_OPUS_20MS_STEREO_SAMPLES];
+    let voice_activity_gate = VoiceCaptureGate {
+        capture_enabled: true,
+        transmit_enabled: true,
+        use_voice_activity: true,
+        noise_suppression: false,
+        microphone_sensitivity: MicrophoneSensitivityDb::default(),
+        microphone_volume: VoiceVolumePercent::default(),
+    };
+    assert!(voice_microphone_frame_is_active(
+        voice_activity_gate,
+        &mut VoiceMicrophoneGateState::default(),
+        &normal,
+    ));
+    assert!(!voice_microphone_frame_is_active(
+        voice_activity_gate,
+        &mut VoiceMicrophoneGateState::default(),
+        &quiet,
+    ));
+    assert!(voice_microphone_frame_is_active(
+        VoiceCaptureGate {
+            use_voice_activity: false,
+            ..voice_activity_gate
+        },
+        &mut VoiceMicrophoneGateState::default(),
+        &quiet,
+    ));
+    assert!(!voice_microphone_frame_is_active(
+        VoiceCaptureGate {
+            transmit_enabled: false,
+            ..voice_activity_gate
+        },
+        &mut VoiceMicrophoneGateState::default(),
+        &normal,
+    ));
+
+    let (speaking_tx, mut speaking_rx) = mpsc::unbounded_channel();
+    let mut local_speaking = false;
+
+    publish_local_speaking_edge(&speaking_tx, &mut local_speaking, false);
+    publish_local_speaking_edge(&speaking_tx, &mut local_speaking, true);
+    publish_local_speaking_edge(&speaking_tx, &mut local_speaking, true);
+    publish_local_speaking_edge(&speaking_tx, &mut local_speaking, false);
+    publish_local_speaking_edge(&speaking_tx, &mut local_speaking, false);
+
+    assert_eq!(speaking_rx.try_recv(), Ok(true));
+    assert_eq!(speaking_rx.try_recv(), Ok(false));
+    assert_eq!(
+        speaking_rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    );
 }
 
 #[test]
@@ -1962,6 +2056,23 @@ async fn voice_child_tasks_waits_for_udp_transmit_shutdown() {
         .expect("shutdown should await UDP transmit completion");
 }
 
+#[cfg(feature = "voice-playback")]
+#[test]
+fn voice_udp_transmit_reports_only_failures_to_the_gateway() {
+    let (failure_tx, mut failure_rx) = mpsc::unbounded_channel();
+
+    publish_voice_udp_transmit_failure(Ok(()), &failure_tx);
+    assert_eq!(failure_rx.try_recv(), Err(mpsc::error::TryRecvError::Empty));
+
+    publish_voice_udp_transmit_failure(Err("closed voice websocket".to_owned()), &failure_tx);
+    assert_eq!(
+        failure_rx
+            .try_recv()
+            .expect("fatal transmit errors should reach the gateway"),
+        "closed voice websocket"
+    );
+}
+
 #[tokio::test]
 async fn voice_runtime_stops_connection_task_by_closing_gate_channels() {
     let (capture_gate_tx, mut capture_gate_rx) = mpsc::unbounded_channel();
@@ -1972,23 +2083,50 @@ async fn voice_runtime_stops_connection_task_by_closing_gate_channels() {
         assert!(playback_gate_rx.recv().await.is_none());
         let _ = done_tx.send(());
     }));
+    let mut connection_session = None;
     let mut capture_gate_tx = Some(capture_gate_tx);
     let mut playback_gate_tx = Some(playback_gate_tx);
 
-    stop_voice_connection_task(
+    let stopped_session = stop_voice_connection_task(
         &mut connection_task,
+        &mut connection_session,
         &mut capture_gate_tx,
         &mut playback_gate_tx,
         "test voice connection stop",
     )
     .await;
 
+    assert!(stopped_session.is_none());
     done_rx
         .await
         .expect("connection task should finish after gate channels close");
     assert!(connection_task.is_none());
     assert!(capture_gate_tx.is_none());
     assert!(playback_gate_tx.is_none());
+}
+
+#[tokio::test]
+async fn voice_runtime_requests_speaking_cleanup_after_connection_task_failure() {
+    let mut connection_task = Some(tokio::spawn(async {
+        panic!("simulated voice connection task failure");
+    }));
+    let expected_session = test_voice_gateway_session();
+    let mut connection_session = Some(expected_session.clone());
+    let mut capture_gate_tx = None;
+    let mut playback_gate_tx = None;
+
+    let stopped_session = stop_voice_connection_task(
+        &mut connection_task,
+        &mut connection_session,
+        &mut capture_gate_tx,
+        &mut playback_gate_tx,
+        "test failed voice connection stop",
+    )
+    .await;
+
+    assert_eq!(stopped_session, Some(expected_session));
+    assert!(connection_task.is_none());
+    assert!(connection_session.is_none());
 }
 
 #[cfg(feature = "voice-playback")]

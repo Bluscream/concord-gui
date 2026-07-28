@@ -118,6 +118,7 @@ const VOICE_GATEWAY_VERSION: u8 = 9;
 const VOICE_WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const VOICE_RESUME_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 const VOICE_CONNECTION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
+const VOICE_CONNECTION_STABLE_INTERVAL: Duration = Duration::from_secs(10);
 const UDP_DISCOVERY_PACKET_LEN: usize = 74;
 const UDP_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const UDP_KEEPALIVE_PACKET_LEN: usize = 8;
@@ -409,12 +410,23 @@ impl PartialEq for VoiceGatewaySession {
 impl Eq for VoiceGatewaySession {}
 
 impl VoiceSpeakingTracker {
+    fn new(local_user_id: Id<UserMarker>) -> Self {
+        Self {
+            local_user_id,
+            remote_deadlines: HashMap::new(),
+            local_speaking: false,
+        }
+    }
+
     fn record_remote(
         &mut self,
         user_id: Id<UserMarker>,
         speaking: bool,
         now: Instant,
     ) -> Option<bool> {
+        if user_id == self.local_user_id {
+            return None;
+        }
         if speaking {
             let was_active = self.remote_deadlines.contains_key(&user_id);
             self.remote_deadlines
@@ -448,13 +460,13 @@ impl VoiceSpeakingTracker {
         expired
     }
 
-    fn clear_all(&mut self, local_user_id: Id<UserMarker>) -> Vec<Id<UserMarker>> {
+    fn clear_all(&mut self) -> Vec<Id<UserMarker>> {
         let mut cleared = self.remote_deadlines.keys().copied().collect::<Vec<_>>();
         self.remote_deadlines.clear();
         if self.local_speaking {
             self.local_speaking = false;
-            if !cleared.contains(&local_user_id) {
-                cleared.push(local_user_id);
+            if !cleared.contains(&self.local_user_id) {
+                cleared.push(self.local_user_id);
             }
         }
         cleared
@@ -493,8 +505,14 @@ impl fmt::Debug for VoiceSessionDescription {
     }
 }
 
-#[derive(Default)]
+impl VoiceSessionDescription {
+    fn uses_same_transport(&self, other: &Self) -> bool {
+        self.mode == other.mode && self.secret_key == other.secret_key
+    }
+}
+
 struct VoiceSpeakingTracker {
+    local_user_id: Id<UserMarker>,
     remote_deadlines: HashMap<Id<UserMarker>, Instant>,
     local_speaking: bool,
 }
@@ -770,16 +788,13 @@ impl VoiceChildTasks {
     }
 
     #[cfg(feature = "voice-playback")]
-    async fn replace_udp_transmit(
+    fn install_udp_transmit(
         &mut self,
         task: JoinHandle<()>,
         gate: watch::Sender<VoiceCaptureGate>,
         microphone_pcm_tx: mpsc::Sender<VoiceMicrophoneFrame>,
     ) {
-        if self.udp_transmit.is_some() {
-            self.stop_udp_transmit_gracefully("stopping previous voice UDP transmit task")
-                .await;
-        }
+        debug_assert!(self.udp_transmit.is_none());
         self.udp_transmit = Some(task);
         self.transmit_gate = Some(gate);
         self.microphone_pcm_tx = Some(microphone_pcm_tx);
@@ -803,10 +818,10 @@ impl VoiceChildTasks {
     }
 
     #[cfg(feature = "voice-playback")]
-    async fn stop_udp_transmit_gracefully(&mut self, label: &str) {
+    async fn stop_udp_transmit_gracefully(&mut self, label: &str) -> bool {
         let Some(mut task) = self.udp_transmit.take() else {
             self.signal_udp_transmit_stop();
-            return;
+            return false;
         };
         logging::debug("voice", label);
         self.signal_udp_transmit_stop();
@@ -818,8 +833,10 @@ impl VoiceChildTasks {
             Err(_) => {
                 logging::debug("voice", "voice UDP transmit graceful stop timed out");
                 task.abort();
+                let _ = task.await;
             }
         }
+        true
     }
 
     fn replace_opus_decode(&mut self, opus_decode: VoiceOpusDecode) {
@@ -840,7 +857,7 @@ impl VoiceChildTasks {
         if let Some(task) = self.udp_transmit.take() {
             logging::debug("voice", "stopping voice UDP transmit task");
             self.signal_udp_transmit_stop();
-            drop(task);
+            task.abort();
         }
         self.opus_decode.abort();
         #[cfg(feature = "voice-playback")]
@@ -853,7 +870,8 @@ impl VoiceChildTasks {
 
     async fn shutdown_all(&mut self) {
         #[cfg(feature = "voice-playback")]
-        self.stop_udp_transmit_gracefully("stopping voice UDP transmit task")
+        let _ = self
+            .stop_udp_transmit_gracefully("stopping voice UDP transmit task")
             .await;
         self.abort_all();
     }

@@ -23,9 +23,7 @@ use crate::{
 };
 
 use self::{
-    command_loop::start_command_loop,
-    credentials::resolve_token,
-    shutdown::{leave_current_voice_channel_on_shutdown, shutdown_gateway},
+    command_loop::start_command_loop, credentials::resolve_token, shutdown::shutdown_gateway,
 };
 
 #[derive(Default)]
@@ -102,7 +100,6 @@ impl App {
             .await;
 
             command_task.abort();
-            leave_current_voice_channel_on_shutdown(&client);
             shutdown_gateway(&client, gateway_task).await;
             match result? {
                 tui::DashboardExit::Quit => return Ok(()),

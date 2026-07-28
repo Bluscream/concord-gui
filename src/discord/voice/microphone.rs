@@ -578,7 +578,6 @@ async fn stop_voice_transmission(
         &context.writer,
         outcome,
         sender,
-        &context.local_speaking_tx,
         transmit_stats,
     )
     .await
@@ -587,8 +586,8 @@ async fn stop_voice_transmission(
     }
 }
 
-/// [`stop_voice_transmission`] plus marking the local user silent and
-/// forcing the capture gate shut. Used on every teardown path.
+/// [`stop_voice_transmission`] plus forcing the capture gate shut. The
+/// transmit loop publishes the local silent edge on every teardown path.
 #[cfg(feature = "voice-playback")]
 async fn silence_voice_transmission(
     context: &VoiceUdpTransmitContext,
@@ -596,8 +595,31 @@ async fn silence_voice_transmission(
     transmit_stats: &mut VoiceUdpTransmitStats,
 ) {
     stop_voice_transmission(context, sender, transmit_stats).await;
-    let _ = context.local_speaking_tx.send(false);
     sender.set_capture_gate(false, false);
+}
+
+#[cfg(feature = "voice-playback")]
+pub(super) fn publish_local_speaking_edge(
+    local_speaking_tx: &mpsc::UnboundedSender<bool>,
+    local_speaking: &mut bool,
+    speaking: bool,
+) {
+    if *local_speaking == speaking {
+        return;
+    }
+    *local_speaking = speaking;
+    let _ = local_speaking_tx.send(speaking);
+}
+
+#[cfg(feature = "voice-playback")]
+pub(super) fn voice_microphone_frame_is_active(
+    gate: VoiceCaptureGate,
+    microphone_gate: &mut VoiceMicrophoneGateState,
+    frame: &[i16],
+) -> bool {
+    gate.transmit_enabled
+        && (!gate.use_voice_activity
+            || microphone_gate.allows_frame(frame, gate.microphone_sensitivity))
 }
 
 /// Applies overload smoothing, user volume, transmit boost, and the limiter
@@ -688,7 +710,6 @@ async fn send_voice_trailing_silence_frame(
         &context.writer,
         outcome,
         sender,
-        &context.local_speaking_tx,
         transmit_stats,
     )
     .await?;
@@ -704,7 +725,7 @@ pub(super) async fn run_voice_udp_transmit(
     mut pcm_rx: mpsc::Receiver<VoiceMicrophoneFrame>,
     mut gate_rx: watch::Receiver<VoiceCaptureGate>,
     context: VoiceUdpTransmitContext,
-) {
+) -> Result<(), String> {
     let rtp = VoiceOutboundRtpState {
         sequence: 0,
         timestamp: 0,
@@ -718,8 +739,8 @@ pub(super) async fn run_voice_udp_transmit(
     ) {
         Ok(sender) => sender,
         Err(error) => {
-            logging::error("voice", format!("voice UDP transmit init failed: {error}"));
-            return;
+            let _ = context.local_speaking_tx.send(false);
+            return Err(format!("voice UDP transmit init failed: {error}"));
         }
     };
     let initial_gate = *gate_rx.borrow();
@@ -727,8 +748,8 @@ pub(super) async fn run_voice_udp_transmit(
     let mut encoder = match VoiceOpusEncode::new() {
         Ok(encoder) => encoder,
         Err(error) => {
-            logging::error("voice", error);
-            return;
+            let _ = context.local_speaking_tx.send(false);
+            return Err(error);
         }
     };
     let transmit_started_at = Instant::now();
@@ -739,14 +760,15 @@ pub(super) async fn run_voice_udp_transmit(
     let mut noise_suppression_enabled = initial_gate.noise_suppression;
     let mut previous_microphone_frame_at = None;
     let mut next_stats_log_at = transmit_started_at + VOICE_TRANSMIT_STATS_LOG_INTERVAL;
+    let mut local_speaking = false;
 
-    loop {
+    let result = loop {
         tokio::select! {
             changed = gate_rx.changed() => {
                 if changed.is_err() {
                     drain_voice_microphone_pcm_queue(&mut pcm_rx);
                     silence_voice_transmission(&context, &mut sender, &mut transmit_stats).await;
-                    break;
+                    break Ok(());
                 }
                 let gate = *gate_rx.borrow();
                 let was_enabled = sender.capture_gate_enabled();
@@ -762,12 +784,16 @@ pub(super) async fn run_voice_udp_transmit(
                     noise_suppression_enabled = gate.noise_suppression;
                 }
                 if !gate.transmit_enabled {
+                    publish_local_speaking_edge(
+                        &context.local_speaking_tx,
+                        &mut local_speaking,
+                        false,
+                    );
                     if gate.capture_enabled {
                         trailing_silence.start(sender.speaking);
                     } else {
                         trailing_silence.cancel();
                         stop_voice_transmission(&context, &mut sender, &mut transmit_stats).await;
-                        let _ = context.local_speaking_tx.send(false);
                     }
                     microphone_gate.reset();
                 } else {
@@ -779,7 +805,7 @@ pub(super) async fn run_voice_udp_transmit(
                 let Some(frame) = received else {
                     silence_voice_transmission(&context, &mut sender, &mut transmit_stats).await;
                     microphone_gate.reset();
-                    break;
+                    break Ok(());
                 };
                 transmit_stats.max_microphone_queue_depth = transmit_stats
                     .max_microphone_queue_depth
@@ -805,6 +831,11 @@ pub(super) async fn run_voice_udp_transmit(
                 );
                 let gate = *gate_rx.borrow();
                 if !gate.transmit_enabled {
+                    publish_local_speaking_edge(
+                        &context.local_speaking_tx,
+                        &mut local_speaking,
+                        false,
+                    );
                     microphone_gate.reset();
                     if let Err(error) = send_voice_trailing_silence_frame(
                         &context,
@@ -814,8 +845,7 @@ pub(super) async fn run_voice_udp_transmit(
                     )
                     .await
                     {
-                        logging::error("voice", error);
-                        break;
+                        break Err(error);
                     }
                 } else {
                     if gate.noise_suppression {
@@ -829,10 +859,14 @@ pub(super) async fn run_voice_udp_transmit(
                                 .max(processing_started_at.elapsed().as_micros());
                         }
                     }
-                    if gate.use_voice_activity
-                        && !microphone_gate
-                            .allows_frame(&frame.samples, gate.microphone_sensitivity)
-                    {
+                    let microphone_active =
+                        voice_microphone_frame_is_active(gate, &mut microphone_gate, &frame.samples);
+                    publish_local_speaking_edge(
+                        &context.local_speaking_tx,
+                        &mut local_speaking,
+                        microphone_active,
+                    );
+                    if !microphone_active {
                         trailing_silence.start(sender.speaking);
                         if let Err(error) = send_voice_trailing_silence_frame(
                             &context,
@@ -842,8 +876,7 @@ pub(super) async fn run_voice_udp_transmit(
                         )
                         .await
                         {
-                            logging::error("voice", error);
-                            break;
+                            break Err(error);
                         }
                     } else {
                         trailing_silence.cancel();
@@ -877,7 +910,6 @@ pub(super) async fn run_voice_udp_transmit(
                                 transmit_stats.max_microphone_frame_age_ms = transmit_stats
                                     .max_microphone_frame_age_ms
                                     .max(frame_age.as_millis());
-                                let _ = context.local_speaking_tx.send(true);
                                 record_voice_transmit_frame(&mut transmit_stats, now);
                                 let mut dave_state = context.dave_state.lock().await;
                                 let outcome =
@@ -888,13 +920,11 @@ pub(super) async fn run_voice_udp_transmit(
                                     &context.writer,
                                     outcome,
                                     &mut sender,
-                                    &context.local_speaking_tx,
                                     &mut transmit_stats,
                                 )
                                 .await
                                 {
-                                    logging::error("voice", error);
-                                    break;
+                                    break Err(error);
                                 }
                             }
                         }
@@ -912,13 +942,16 @@ pub(super) async fn run_voice_udp_transmit(
                 }
             }
         }
-    }
+    };
+    publish_local_speaking_edge(&context.local_speaking_tx, &mut local_speaking, false);
+    sender.set_capture_gate(false, false);
     log_voice_transmit_stats(
         "voice UDP transmit stopped",
         &transmit_stats,
         transmit_started_at,
         sender.rtp.timestamp,
     );
+    result
 }
 
 #[cfg(feature = "voice-playback")]
@@ -1001,7 +1034,6 @@ pub(super) async fn flush_voice_outbound_events(
     writer: &VoiceWriter,
     outcome: Result<VoiceOutboundSendOutcome, String>,
     sender: &mut VoiceOutboundSendState,
-    local_speaking_tx: &mpsc::UnboundedSender<bool>,
     transmit_stats: &mut VoiceUdpTransmitStats,
 ) -> Result<(), String> {
     match outcome? {
@@ -1010,7 +1042,6 @@ pub(super) async fn flush_voice_outbound_events(
                 match event {
                     VoiceOutboundSendEvent::Speaking { speaking, ssrc } => {
                         send_voice_text(writer, voice_speaking_payload(ssrc, speaking)).await?;
-                        let _ = local_speaking_tx.send(speaking);
                     }
                     VoiceOutboundSendEvent::Packet { bytes } => {
                         udp_socket

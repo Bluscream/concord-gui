@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-#[cfg(feature = "voice-playback")]
 use crate::{
     AppError,
     discord::{

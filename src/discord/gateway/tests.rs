@@ -106,6 +106,74 @@ fn gateway_rate_limit_covers_connection_window_and_parses_member_retry() {
 }
 
 #[test]
+fn voice_state_dispatch_uses_the_urgent_queue_without_blocking() {
+    let (urgent_tx, mut urgent_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (normal_tx, _normal_rx) = tokio::sync::mpsc::unbounded_channel();
+    let sender = GatewaySender {
+        urgent_tx,
+        normal_tx,
+    };
+
+    dispatch_command(
+        &sender,
+        GatewayCommand::UpdateVoiceState {
+            guild_id: Some(Id::new(10)),
+            channel_id: None,
+            self_mute: false,
+            self_deaf: false,
+        },
+        &mut SubscriptionDeduper::default(),
+        &mut GatewaySessionResources::default(),
+    )
+    .expect("voice state update should enter the urgent queue");
+
+    let request = urgent_rx
+        .try_recv()
+        .expect("voice state update should reach the time-sensitive gateway writer queue");
+
+    let payload: serde_json::Value =
+        serde_json::from_str(&request.payload).expect("gateway payload should be valid json");
+    assert_eq!(payload["op"].as_u64(), Some(4));
+    assert!(payload["d"]["channel_id"].is_null());
+    assert!(
+        request.completion.is_none(),
+        "ordinary voice state updates must not block the gateway read loop"
+    );
+}
+
+#[tokio::test]
+async fn urgent_gateway_send_waits_for_writer_completion() {
+    let (urgent_tx, mut urgent_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (normal_tx, _normal_rx) = tokio::sync::mpsc::unbounded_channel();
+    let sender = GatewaySender {
+        urgent_tx,
+        normal_tx,
+    };
+
+    let send_task = tokio::spawn(async move {
+        sender
+            .send_urgent("voice leave".to_owned())
+            .await
+            .expect("urgent send should complete");
+    });
+    let request = urgent_rx
+        .recv()
+        .await
+        .expect("urgent send should reach the gateway writer queue");
+
+    assert!(
+        !send_task.is_finished(),
+        "shutdown must not close the websocket before voice leave is sent"
+    );
+    request
+        .completion
+        .expect("urgent send should request writer completion")
+        .send(Ok(()))
+        .expect("urgent sender should still await completion");
+    send_task.await.expect("urgent send task should finish");
+}
+
+#[test]
 fn guild_member_rate_limit_requeues_the_correlated_request() {
     let now = Instant::now();
     let guild_id = Id::new(99);

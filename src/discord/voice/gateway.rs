@@ -70,10 +70,12 @@ pub(super) async fn connect_voice_gateway(
     let audio_runtime = VoiceAudioRuntime::start()?;
     let audio_handle = audio_runtime.handle().clone();
     child_tasks.audio_runtime = Some(audio_runtime);
-    let mut speaking_tracker = VoiceSpeakingTracker::default();
+    let mut speaking_tracker = VoiceSpeakingTracker::new(session.user_id);
     let mut speaking_sweep = tokio::time::interval(VOICE_REMOTE_SPEAKING_SWEEP_INTERVAL);
     #[cfg_attr(not(feature = "voice-playback"), allow(unused_variables))]
     let (local_speaking_tx, mut local_speaking_rx) = mpsc::unbounded_channel();
+    #[cfg_attr(not(feature = "voice-playback"), allow(unused_variables))]
+    let (transmit_failure_tx, mut transmit_failure_rx) = mpsc::unbounded_channel::<String>();
     let (remote_speaking_tx, mut remote_speaking_rx) = mpsc::unbounded_channel();
     #[cfg_attr(
         not(feature = "voice-playback"),
@@ -82,6 +84,7 @@ pub(super) async fn connect_voice_gateway(
     let mut current_capture_gate = initial_capture_gate;
     let mut current_playback_gate = initial_playback_gate;
     let mut udp_socket: Option<Arc<UdpSocket>> = None;
+    let mut current_session_description: Option<VoiceSessionDescription> = None;
     #[cfg_attr(
         not(feature = "voice-playback"),
         allow(unused_mut, unused_variables, unused_assignments)
@@ -100,6 +103,7 @@ pub(super) async fn connect_voice_gateway(
     let mut resume_pending = false;
     let mut resume_deadline: Option<Instant> = None;
     let mut connection_generation = 0u64;
+    let mut connection_stable_deadline: Option<Instant> = None;
 
     loop {
         let frame = tokio::select! {
@@ -160,6 +164,23 @@ pub(super) async fn connect_voice_gateway(
                 if let Some(speaking) = speaking_tracker.record_remote(user_id, true, Instant::now()) {
                     status_publisher.publish_speaking(session, user_id, speaking).await;
                 }
+                continue;
+            }
+            transmit_failure = transmit_failure_rx.recv() => {
+                let Some(error) = transmit_failure else {
+                    break;
+                };
+                logging::error(
+                    "voice",
+                    format!("voice UDP transmit failed, reconnecting: {error}"),
+                );
+                return Ok(VoiceConnectionEnd::Reconnect);
+            }
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
+                connection_stable_deadline.unwrap_or_else(Instant::now)
+            )), if connection_stable_deadline.is_some() => {
+                connection_stable_deadline = None;
+                let _ = events_tx.send(session.connection_established_event());
                 continue;
             }
             _ = speaking_sweep.tick() => {
@@ -260,7 +281,6 @@ pub(super) async fn connect_voice_gateway(
                         let (socket, ready) =
                             establish_voice_transport(&value, &writer, &audio_handle).await?;
                         udp_socket = Some(socket);
-                        let _ = events_tx.send(session.connection_established_event());
                         #[cfg(feature = "voice-playback")]
                         {
                             voice_ready = Some(ready);
@@ -274,33 +294,87 @@ pub(super) async fn connect_voice_gateway(
                             "voice",
                             format!("voice session description received: {description:?}"),
                         );
+                        if let Some(current) = current_session_description.as_ref() {
+                            if current.secret_key == description.secret_key
+                                && current.mode != description.mode
+                            {
+                                return Err(
+                                    "voice transport mode changed without a new secret key"
+                                        .to_owned(),
+                                );
+                            }
+                            if current.uses_same_transport(&description) {
+                                if current.dave_protocol_version
+                                    != description.dave_protocol_version
+                                    && let Some(dave_protocol_version) =
+                                        description.dave_protocol_version
+                                {
+                                    let dave_protocol_version =
+                                        u16::try_from(dave_protocol_version).map_err(|_| {
+                                            "DAVE protocol version does not fit u16".to_owned()
+                                        })?;
+                                    dave_state.lock().await.reinit(dave_protocol_version)?;
+                                }
+                                current_session_description = Some(description);
+                                logging::debug(
+                                    "voice",
+                                    "keeping current voice transport for duplicate session description",
+                                );
+                                continue;
+                            }
+                        }
                         if let Some(dave_protocol_version) = description.dave_protocol_version {
                             let dave_protocol_version = u16::try_from(dave_protocol_version)
                                 .map_err(|_| "DAVE protocol version does not fit u16".to_owned())?;
                             dave_state.lock().await.reinit(dave_protocol_version)?;
                         }
-                        if let Some(socket) = udp_socket.as_ref() {
-                            start_voice_session_audio(
-                                description,
-                                &mut child_tasks,
-                                VoiceSessionAudio {
-                                    socket,
-                                    #[cfg(feature = "voice-playback")]
-                                    writer: &writer,
-                                    audio_handle: &audio_handle,
-                                    dave_state: &dave_state,
-                                    remote_speaking_tx: &remote_speaking_tx,
-                                    current_playback_gate,
-                                    participant_playback_rx: participant_playback_rx.clone(),
-                                    #[cfg(feature = "voice-playback")]
-                                    voice_ready: voice_ready.as_ref(),
-                                    #[cfg(feature = "voice-playback")]
-                                    current_capture_gate,
-                                    #[cfg(feature = "voice-playback")]
-                                    local_speaking_tx: &local_speaking_tx,
-                                },
+                        let Some(socket) = udp_socket.as_ref() else {
+                            return Err(
+                                "voice session description received before transport ready"
+                                    .to_owned(),
+                            );
+                        };
+                        #[cfg(feature = "voice-playback")]
+                        if child_tasks
+                            .stop_udp_transmit_gracefully(
+                                "stopping previous voice UDP transmit task",
                             )
-                            .await;
+                            .await
+                        {
+                            while local_speaking_rx.try_recv().is_ok() {}
+                            while transmit_failure_rx.try_recv().is_ok() {}
+                            if let Some(speaking) = speaking_tracker.record_local(false) {
+                                status_publisher
+                                    .publish_speaking(session, session.user_id, speaking)
+                                    .await;
+                            }
+                        }
+                        start_voice_session_audio(
+                            description.clone(),
+                            &mut child_tasks,
+                            VoiceSessionAudio {
+                                socket,
+                                #[cfg(feature = "voice-playback")]
+                                writer: &writer,
+                                audio_handle: &audio_handle,
+                                dave_state: &dave_state,
+                                remote_speaking_tx: &remote_speaking_tx,
+                                current_playback_gate,
+                                participant_playback_rx: participant_playback_rx.clone(),
+                                #[cfg(feature = "voice-playback")]
+                                voice_ready: voice_ready.as_ref(),
+                                #[cfg(feature = "voice-playback")]
+                                current_capture_gate,
+                                #[cfg(feature = "voice-playback")]
+                                local_speaking_tx: &local_speaking_tx,
+                                #[cfg(feature = "voice-playback")]
+                                transmit_failure_tx: &transmit_failure_tx,
+                            },
+                        );
+                        current_session_description = Some(description);
+                        if connection_stable_deadline.is_none() {
+                            connection_stable_deadline =
+                                Some(Instant::now() + VOICE_CONNECTION_STABLE_INTERVAL);
                         }
                     }
                     VOICE_OP_HEARTBEAT_ACK => {
@@ -309,7 +383,6 @@ pub(super) async fn connect_voice_gateway(
                     VOICE_OP_RESUMED => {
                         resume_pending = false;
                         resume_deadline = None;
-                        let _ = events_tx.send(session.connection_established_event());
                         logging::debug("voice", "voice gateway session resumed");
                     }
                     VOICE_OP_HELLO => {
@@ -414,7 +487,7 @@ pub(super) async fn connect_voice_gateway(
     .await;
 
     child_tasks.shutdown_all().await;
-    for user_id in speaking_tracker.clear_all(session.user_id) {
+    for user_id in speaking_tracker.clear_all() {
         status_publisher
             .publish_speaking(session, user_id, false)
             .await;
@@ -527,9 +600,11 @@ struct VoiceSessionAudio<'a> {
     current_capture_gate: VoiceCaptureGate,
     #[cfg(feature = "voice-playback")]
     local_speaking_tx: &'a mpsc::UnboundedSender<bool>,
+    #[cfg(feature = "voice-playback")]
+    transmit_failure_tx: &'a mpsc::UnboundedSender<String>,
 }
 
-async fn start_voice_session_audio(
+fn start_voice_session_audio(
     description: VoiceSessionDescription,
     child_tasks: &mut VoiceChildTasks,
     audio: VoiceSessionAudio<'_>,
@@ -561,25 +636,34 @@ async fn start_voice_session_audio(
     if let Some(ready) = audio.voice_ready {
         let (pcm_tx, pcm_rx) = mpsc::channel(VOICE_MIC_PCM_FRAME_QUEUE);
         let (gate_tx, gate_rx) = watch::channel(audio.current_capture_gate);
-        child_tasks
-            .replace_udp_transmit(
-                audio.audio_handle.spawn(run_voice_udp_transmit(
-                    pcm_rx,
-                    gate_rx,
-                    VoiceUdpTransmitContext {
-                        udp_socket: Arc::clone(audio.socket),
-                        writer: Arc::clone(audio.writer),
-                        description: transmit_description,
-                        ssrc: ready.ssrc,
-                        dave_state: Arc::clone(audio.dave_state),
-                        local_speaking_tx: audio.local_speaking_tx.clone(),
-                    },
-                )),
-                gate_tx,
-                pcm_tx,
-            )
-            .await;
+        let transmit_failure_tx = audio.transmit_failure_tx.clone();
+        let transmit_context = VoiceUdpTransmitContext {
+            udp_socket: Arc::clone(audio.socket),
+            writer: Arc::clone(audio.writer),
+            description: transmit_description,
+            ssrc: ready.ssrc,
+            dave_state: Arc::clone(audio.dave_state),
+            local_speaking_tx: audio.local_speaking_tx.clone(),
+        };
+        child_tasks.install_udp_transmit(
+            audio.audio_handle.spawn(async move {
+                let result = run_voice_udp_transmit(pcm_rx, gate_rx, transmit_context).await;
+                publish_voice_udp_transmit_failure(result, &transmit_failure_tx);
+            }),
+            gate_tx,
+            pcm_tx,
+        );
         child_tasks.set_voice_transmit_gate(audio.current_capture_gate);
+    }
+}
+
+#[cfg(feature = "voice-playback")]
+pub(super) fn publish_voice_udp_transmit_failure(
+    result: Result<(), String>,
+    transmit_failure_tx: &mpsc::UnboundedSender<String>,
+) {
+    if let Err(error) = result {
+        let _ = transmit_failure_tx.send(error);
     }
 }
 

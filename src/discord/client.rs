@@ -34,7 +34,7 @@ use super::{
     },
     events::{AppEvent, SequencedAppEvent},
     fingerprint::{CLIENT_BUILD_NUMBER, ClientFingerprint, discord_http_client},
-    gateway::{GatewayCommand, GatewayRuntime, run_gateway},
+    gateway::{GatewayCommand, GatewayRuntime, GatewayVoiceStateUpdate, run_gateway},
     request_lifecycle::RequestLifecycle,
     rest::DiscordRest,
     state::{CurrentVoiceConnectionState, DiscordSnapshot, DiscordState, SnapshotRevision},
@@ -736,7 +736,15 @@ impl DiscordClient {
 
     pub fn shutdown_gateway(&self) -> std::result::Result<(), String> {
         let _ = self.voice_events_tx.send(VoiceRuntimeEvent::Shutdown);
-        self.send_gateway_command(GatewayCommand::Shutdown)
+        let voice_leave = self
+            .requested_voice_connection()
+            .map(|voice| GatewayVoiceStateUpdate {
+                guild_id: voice.scope.guild_id(),
+                channel_id: None,
+                self_mute: voice.self_mute,
+                self_deaf: voice.self_deaf,
+            });
+        self.send_gateway_command(GatewayCommand::Shutdown { voice_leave })
     }
 
     pub async fn load_application_commands(

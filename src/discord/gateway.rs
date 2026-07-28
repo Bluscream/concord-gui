@@ -12,7 +12,7 @@ use futures::{SinkExt, StreamExt};
 use rand::Rng;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, mpsc, oneshot};
-use tokio::time::{Instant, sleep};
+use tokio::time::{Instant, sleep, timeout};
 use tokio_tungstenite::{
     connect_async_with_config,
     tungstenite::{
@@ -79,7 +79,17 @@ pub enum GatewayCommand {
         status: PresenceStatus,
         activities: Vec<ActivityInfo>,
     },
-    Shutdown,
+    Shutdown {
+        voice_leave: Option<GatewayVoiceStateUpdate>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GatewayVoiceStateUpdate {
+    pub guild_id: Option<Id<GuildMarker>>,
+    pub channel_id: Option<Id<ChannelMarker>>,
+    pub self_mute: bool,
+    pub self_deaf: bool,
 }
 
 #[derive(Clone)]
@@ -123,6 +133,7 @@ const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(30);
 // WebSocket control frames such as Pong and Close are not Gateway events.
 const GATEWAY_SEND_LIMIT: usize = 120;
 const GATEWAY_SEND_WINDOW: Duration = Duration::from_secs(60);
+const GATEWAY_SHUTDOWN_LEAVE_TIMEOUT: Duration = Duration::from_millis(1_500);
 const GUILD_MEMBER_REQUEST_INTERVAL: Duration = Duration::from_secs(30);
 const GUILD_MEMBER_REQUEST_RESPONSE_TTL: Duration = Duration::from_secs(2 * 60);
 const MAX_PENDING_GUILD_MEMBER_REQUESTS: usize = 512;
@@ -139,8 +150,8 @@ type WriterHandle = Arc<Mutex<futures::stream::SplitSink<GatewayStream, WsMessag
 
 #[derive(Clone)]
 struct GatewaySender {
-    // Heartbeats and session setup use the urgent queue so a backlog of UI
-    // commands cannot delay connection health traffic once a slot is free.
+    // Heartbeats, session setup, and voice state use the urgent queue so a
+    // backlog of UI commands cannot delay time-sensitive traffic.
     urgent_tx: mpsc::UnboundedSender<GatewaySendRequest>,
     normal_tx: mpsc::UnboundedSender<GatewaySendRequest>,
 }
@@ -1028,10 +1039,38 @@ async fn connect_and_run(
             maybe_command = commands.recv() => {
                 match maybe_command {
                     Some(command) => {
-                        if let GatewayCommand::Shutdown = command {
+                        if let GatewayCommand::Shutdown { voice_leave } = command {
+                            if let Some(voice_leave) = voice_leave {
+                                let leave_result = timeout(
+                                    GATEWAY_SHUTDOWN_LEAVE_TIMEOUT,
+                                    sender.send_urgent(voice_state_update_payload(
+                                        voice_leave.guild_id,
+                                        voice_leave.channel_id,
+                                        voice_leave.self_mute,
+                                        voice_leave.self_deaf,
+                                    )),
+                                )
+                                .await
+                                .map_err(|_| {
+                                    "voice leave timed out before gateway shutdown".to_owned()
+                                })
+                                .and_then(|result| result);
+                                if let Err(error) = leave_result {
+                                    log_and_publish_gateway_error(
+                                        publish,
+                                        format!(
+                                            "voice leave before gateway shutdown failed: {error}"
+                                        ),
+                                    )
+                                    .await;
+                                }
+                            }
                             if let Err(error) = close_websocket(&writer).await {
-                                let message = format!("gateway shutdown failed: {error}");
-                                log_and_publish_gateway_error(publish, message).await;
+                                log_and_publish_gateway_error(
+                                    publish,
+                                    format!("gateway shutdown failed: {error}"),
+                                )
+                                .await;
                             }
                             break ConnectionOutcome::Stop;
                         } else if let Err(error) =
@@ -1398,6 +1437,7 @@ fn dispatch_command(
             activities: activities.clone(),
         });
     }
+    let urgent = matches!(command, GatewayCommand::UpdateVoiceState { .. });
     let payload = match command {
         GatewayCommand::RequestGuildMembers {
             guild_id,
@@ -1519,9 +1559,13 @@ fn dispatch_command(
             );
             presence_update_payload(status, &activities)
         }
-        GatewayCommand::Shutdown => return Ok(()),
+        GatewayCommand::Shutdown { .. } => return Ok(()),
     };
-    sender.enqueue_text(payload)
+    if urgent {
+        sender.enqueue_urgent_text(payload)
+    } else {
+        sender.enqueue_text(payload)
+    }
 }
 
 async fn close_websocket(writer: &WriterHandle) -> Result<(), String> {
@@ -1548,6 +1592,15 @@ impl GatewaySender {
         completion_rx
             .await
             .map_err(|_| "gateway writer task stopped before send completed".to_owned())?
+    }
+
+    fn enqueue_urgent_text(&self, payload: String) -> Result<(), String> {
+        self.urgent_tx
+            .send(GatewaySendRequest {
+                payload,
+                completion: None,
+            })
+            .map_err(|_| "gateway writer task stopped".to_owned())
     }
 
     fn enqueue_text(&self, payload: String) -> Result<(), String> {
