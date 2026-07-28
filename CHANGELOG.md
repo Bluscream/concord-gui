@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.8] - 2026-07-27
+
+### Bug Fixes
+
+- _(voice)_ Stabilize speaking state and connection lifecycle by @chojs23
+
 ## [2.4.7] - 2026-07-27
 
 ### Bug Fixes
