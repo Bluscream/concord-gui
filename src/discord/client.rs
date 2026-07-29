@@ -20,6 +20,7 @@ use reqwest::header::HeaderValue;
 use tokio::{
     sync::{Mutex as AsyncMutex, mpsc, watch},
     task::JoinHandle,
+    time::{Duration, timeout},
 };
 
 use crate::{AppError, Result};
@@ -50,6 +51,7 @@ const MEMBER_SEARCH_MAX_LIMIT: u16 = 10;
 const OFFICIAL_WORDLE_APPLICATION_ID: u64 = 1_211_781_489_931_452_447;
 const DISCORD_LOCAL_APPLICATION_ID: &str = "-1";
 const GATEWAY_COMMAND_CHANNEL_CLOSED: &str = "gateway command channel closed";
+const VOICE_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(8);
 
 type ApplicationCommandCache = HashMap<Option<Id<GuildMarker>>, Vec<ApplicationCommandInfo>>;
 type MemberListRange = (u32, u32);
@@ -98,6 +100,7 @@ pub struct DiscordClient {
     gateway_commands_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<GatewayCommand>>>>,
     voice_events_tx: mpsc::UnboundedSender<VoiceRuntimeEvent>,
     voice_events_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<VoiceRuntimeEvent>>>>,
+    voice_runtime_task: Arc<Mutex<Option<JoinHandle<()>>>>,
     event_publisher: AppEventPublisher,
 }
 
@@ -176,6 +179,7 @@ impl DiscordClient {
             gateway_commands_rx: Arc::new(Mutex::new(Some(gateway_commands_rx))),
             voice_events_tx,
             voice_events_rx: Arc::new(Mutex::new(Some(voice_events_rx))),
+            voice_runtime_task: Arc::new(Mutex::new(None)),
             event_publisher,
         })
     }
@@ -256,12 +260,16 @@ impl DiscordClient {
             .expect("voice event receiver mutex is not poisoned")
             .take()
         {
-            tokio::spawn(voice::run_voice_runtime(
+            let task = tokio::spawn(voice::run_voice_runtime(
                 voice_events,
                 voice_events_tx.clone(),
                 self.gateway_commands_tx.clone(),
                 voice_status_publisher,
             ));
+            *self
+                .voice_runtime_task
+                .lock()
+                .expect("voice runtime task mutex is not poisoned") = Some(task);
         }
 
         // Best-effort, so it never blocks the gateway from starting.
@@ -864,8 +872,29 @@ impl DiscordClient {
             .expect("requested voice lock is not poisoned")
     }
 
-    pub fn shutdown_gateway(&self) -> std::result::Result<(), String> {
+    pub async fn shutdown_voice_runtime(&self) -> std::result::Result<(), String> {
         let _ = self.voice_events_tx.send(VoiceRuntimeEvent::Shutdown);
+        let task = self
+            .voice_runtime_task
+            .lock()
+            .expect("voice runtime task mutex is not poisoned")
+            .take();
+        let Some(mut task) = task else {
+            return Ok(());
+        };
+
+        match timeout(VOICE_RUNTIME_SHUTDOWN_TIMEOUT, &mut task).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => Err(format!("voice runtime task ended unexpectedly: {error}")),
+            Err(_) => {
+                task.abort();
+                let _ = task.await;
+                Err("voice runtime shutdown timed out after 8s".to_owned())
+            }
+        }
+    }
+
+    pub fn shutdown_gateway(&self) -> std::result::Result<(), String> {
         let voice_leave = self
             .requested_voice_connection()
             .map(|voice| GatewayVoiceStateUpdate {

@@ -6,6 +6,9 @@ pub(super) async fn shutdown_gateway(
     client: &DiscordClient,
     mut gateway_task: tokio::task::JoinHandle<()>,
 ) {
+    if let Err(message) = client.shutdown_voice_runtime().await {
+        logging::error("app", format!("voice runtime shutdown failed: {message}"));
+    }
     if let Err(message) = client.shutdown_gateway() {
         logging::error("app", format!("gateway shutdown request failed: {message}"));
         gateway_task.abort();

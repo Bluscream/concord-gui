@@ -32,6 +32,56 @@ use super::{
 };
 
 #[tokio::test]
+async fn voice_cleanup_is_queued_before_gateway_shutdown() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
+    let mut voice_events = client
+        .voice_events_rx
+        .lock()
+        .expect("voice event receiver mutex is not poisoned")
+        .take()
+        .expect("voice event receiver exists");
+    let mut gateway_commands = client
+        .gateway_commands_rx
+        .lock()
+        .expect("gateway command receiver mutex is not poisoned")
+        .take()
+        .expect("gateway command receiver exists");
+    let gateway_commands_tx = client.gateway_commands_tx.clone();
+    let task = tokio::spawn(async move {
+        while let Some(event) = voice_events.recv().await {
+            if matches!(event, VoiceRuntimeEvent::Shutdown) {
+                let _ = gateway_commands_tx.send(GatewayCommand::DeleteStream {
+                    stream_key: "guild:1:2:3".to_owned(),
+                });
+                break;
+            }
+        }
+    });
+    *client
+        .voice_runtime_task
+        .lock()
+        .expect("voice runtime task mutex is not poisoned") = Some(task);
+
+    client
+        .shutdown_voice_runtime()
+        .await
+        .expect("voice runtime shuts down");
+    client
+        .shutdown_gateway()
+        .expect("gateway shutdown is queued");
+
+    assert!(matches!(
+        gateway_commands.recv().await,
+        Some(GatewayCommand::DeleteStream { .. })
+    ));
+    assert!(matches!(
+        gateway_commands.recv().await,
+        Some(GatewayCommand::Shutdown { .. })
+    ));
+}
+
+#[tokio::test]
 async fn publish_event_sends_matching_snapshot_and_effect_revisions() {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
