@@ -46,6 +46,70 @@ pub(super) struct StreamGatewaySession {
     pub(super) token: String,
 }
 
+#[derive(Default)]
+struct StreamChildTasks {
+    heartbeat: Option<JoinHandle<()>>,
+    keepalive: Option<JoinHandle<()>>,
+    media: Option<JoinHandle<()>>,
+}
+
+impl StreamChildTasks {
+    async fn replace_heartbeat(&mut self, task: JoinHandle<()>) {
+        Self::replace(&mut self.heartbeat, task).await;
+    }
+
+    async fn replace_keepalive(&mut self, task: JoinHandle<()>) {
+        Self::replace(&mut self.keepalive, task).await;
+    }
+
+    async fn replace_media(&mut self, task: JoinHandle<()>) {
+        Self::replace(&mut self.media, task).await;
+    }
+
+    async fn replace(slot: &mut Option<JoinHandle<()>>, task: JoinHandle<()>) {
+        if let Some(previous) = slot.take() {
+            previous.abort();
+            let _ = previous.await;
+        }
+        *slot = Some(task);
+    }
+
+    async fn shutdown(&mut self) {
+        let tasks = [
+            self.heartbeat.take(),
+            self.keepalive.take(),
+            self.media.take(),
+        ];
+        for task in tasks.iter().flatten() {
+            task.abort();
+        }
+        for task in tasks.into_iter().flatten() {
+            let _ = task.await;
+        }
+    }
+
+    fn abort_all(&mut self) {
+        for task in [
+            self.heartbeat.take(),
+            self.keepalive.take(),
+            self.media.take(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            task.abort();
+        }
+    }
+}
+
+impl Drop for StreamChildTasks {
+    fn drop(&mut self) {
+        // The runtime normally force-cancels watch sessions. Abort every child
+        // here so dropping the parent cannot detach media or keepalive work.
+        self.abort_all();
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ObservedStreamVoiceState {
     scope: VoiceScope,
@@ -380,9 +444,7 @@ async fn connect_stream_gateway(
     let heartbeat_ack = Arc::new(Mutex::new(VoiceHeartbeatAckState::default()));
     let (heartbeat_timeout_tx, mut heartbeat_timeout_rx) =
         mpsc::unbounded_channel::<VoiceHeartbeatTimeout>();
-    let mut heartbeat_task: Option<JoinHandle<()>> = None;
-    let mut keepalive_task: Option<JoinHandle<()>> = None;
-    let mut media_task: Option<JoinHandle<()>> = None;
+    let mut child_tasks = StreamChildTasks::default();
     let (media_finished_tx, mut media_finished_rx) =
         mpsc::unbounded_channel::<Result<(), StreamConnectionFailure>>();
     let (player_ready_tx, mut player_ready_rx) = mpsc::unbounded_channel::<u64>();
@@ -411,14 +473,14 @@ async fn connect_stream_gateway(
             _ = heartbeat_timeout_rx.recv() => {
                 break Ok(VoiceConnectionEnd::Reconnect);
             }
-            media_result = media_finished_rx.recv(), if media_task.is_some() => {
+            media_result = media_finished_rx.recv(), if child_tasks.media.is_some() => {
                 match media_result {
                     Some(Ok(())) => break Ok(VoiceConnectionEnd::Stop),
                     Some(Err(error)) => break Err(error),
                     None => break Ok(VoiceConnectionEnd::Reconnect),
                 }
             }
-            ready_generation = player_ready_rx.recv(), if media_task.is_some() => {
+            ready_generation = player_ready_rx.recv(), if child_tasks.media.is_some() => {
                 if ready_generation == Some(media_generation) {
                     connection_stable_deadline =
                         Some(Instant::now() + STREAM_CONNECTION_STABLE_INTERVAL);
@@ -505,12 +567,6 @@ async fn connect_stream_gateway(
                         if current_description.as_ref() == Some(&description) {
                             continue;
                         }
-                        if let Some(task) = media_task.take() {
-                            task.abort();
-                        }
-                        if let Some(task) = keepalive_task.take() {
-                            task.abort();
-                        }
                         let socket_for_media = Arc::clone(socket);
                         let description_for_media = description.clone();
                         let dave_for_media = Arc::clone(&dave_state);
@@ -529,22 +585,26 @@ async fn connect_stream_gateway(
                             user_id: session.request.owner_id,
                             display_name: session.request.display_name.clone(),
                         };
-                        media_task = Some(tokio::spawn(async move {
-                            let result = run_stream_media(
-                                socket_for_media,
-                                description_for_media,
-                                dave_for_media,
-                                source_for_media,
-                                owner_id,
-                                local_ssrc,
-                                stream_player_ready,
-                            )
+                        child_tasks
+                            .replace_media(tokio::spawn(async move {
+                                let result = run_stream_media(
+                                    socket_for_media,
+                                    description_for_media,
+                                    dave_for_media,
+                                    source_for_media,
+                                    owner_id,
+                                    local_ssrc,
+                                    stream_player_ready,
+                                )
+                                .await;
+                                let _ = finished.send(result);
+                            }))
                             .await;
-                            let _ = finished.send(result);
-                        }));
-                        keepalive_task = Some(tokio::spawn(gateway::run_voice_udp_keepalive(
-                            Arc::clone(socket),
-                        )));
+                        child_tasks
+                            .replace_keepalive(tokio::spawn(gateway::run_voice_udp_keepalive(
+                                Arc::clone(socket),
+                            )))
+                            .await;
                         current_description = Some(description);
                     }
                     VOICE_OP_HEARTBEAT_ACK => {
@@ -557,18 +617,17 @@ async fn connect_stream_gateway(
                             .and_then(Value::as_u64)
                             .map(Duration::from_millis)
                             .ok_or_else(|| "stream hello missing heartbeat interval".to_owned())?;
-                        if let Some(task) = heartbeat_task.take() {
-                            task.abort();
-                        }
                         heartbeat_ack.lock().await.reset();
-                        heartbeat_task = Some(tokio::spawn(gateway::run_voice_heartbeat(
-                            Arc::clone(&writer),
-                            interval,
-                            Arc::clone(&last_sequence),
-                            Arc::clone(&heartbeat_ack),
-                            heartbeat_timeout_tx.clone(),
-                            0,
-                        )));
+                        child_tasks
+                            .replace_heartbeat(tokio::spawn(gateway::run_voice_heartbeat(
+                                Arc::clone(&writer),
+                                interval,
+                                Arc::clone(&last_sequence),
+                                Arc::clone(&heartbeat_ack),
+                                heartbeat_timeout_tx.clone(),
+                                0,
+                            )))
+                            .await;
                     }
                     VOICE_OP_VIDEO => {
                         if let Some(source) =
@@ -652,15 +711,7 @@ async fn connect_stream_gateway(
         }
     };
 
-    if let Some(task) = heartbeat_task {
-        task.abort();
-    }
-    if let Some(task) = keepalive_task {
-        task.abort();
-    }
-    if let Some(task) = media_task {
-        task.abort();
-    }
+    child_tasks.shutdown().await;
     result
 }
 
@@ -1762,6 +1813,52 @@ fn annex_b_nals(frame: &[u8]) -> Vec<&[u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::oneshot;
+
+    struct TaskDropSignal(Option<oneshot::Sender<()>>);
+
+    impl Drop for TaskDropSignal {
+        fn drop(&mut self) {
+            if let Some(dropped) = self.0.take() {
+                let _ = dropped.send(());
+            }
+        }
+    }
+
+    fn cancellable_test_task() -> (JoinHandle<()>, oneshot::Receiver<()>, oneshot::Receiver<()>) {
+        let (started_tx, started_rx) = oneshot::channel();
+        let (dropped_tx, dropped_rx) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _drop_signal = TaskDropSignal(Some(dropped_tx));
+            let _ = started_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        (task, started_rx, dropped_rx)
+    }
+
+    #[tokio::test]
+    async fn dropping_stream_child_tasks_aborts_every_child() {
+        let (heartbeat, heartbeat_started, heartbeat_dropped) = cancellable_test_task();
+        let (keepalive, keepalive_started, keepalive_dropped) = cancellable_test_task();
+        let (media, media_started, media_dropped) = cancellable_test_task();
+        let child_tasks = StreamChildTasks {
+            heartbeat: Some(heartbeat),
+            keepalive: Some(keepalive),
+            media: Some(media),
+        };
+
+        heartbeat_started.await.expect("heartbeat test task starts");
+        keepalive_started.await.expect("keepalive test task starts");
+        media_started.await.expect("media test task starts");
+        drop(child_tasks);
+
+        for dropped in [heartbeat_dropped, keepalive_dropped, media_dropped] {
+            timeout(Duration::from_secs(1), dropped)
+                .await
+                .expect("stream child task is aborted promptly")
+                .expect("stream child task drop signal is sent");
+        }
+    }
 
     fn stream_request() -> StreamWatchRequest {
         StreamWatchRequest {
