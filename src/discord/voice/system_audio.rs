@@ -220,30 +220,28 @@ fn system_audio_device() -> Result<(cpal::Host, cpal::Device, bool), String> {
     let sink_id = default_output
         .id()
         .map_err(|error| format!("default system audio output id failed: {error}"))?;
-    let expected_monitor_id = format!("{}.monitor", sink_id.id());
     let inputs = host
         .input_devices()
         .map_err(|error| format!("system audio monitor enumeration failed: {error}"))?;
-    let mut fallback_monitor = None;
     for device in inputs {
         let Ok(id) = device.id() else {
             continue;
         };
-        if id.id() == expected_monitor_id {
+        if is_pulse_monitor_for_sink(sink_id.id(), id.id()) {
             return Ok((host, device, false));
         }
-        if fallback_monitor.is_none() && id.id().ends_with(".monitor") {
-            fallback_monitor = Some(device);
-        }
     }
-    fallback_monitor
-        .map(|device| (host, device, false))
-        .ok_or_else(|| {
-            format!(
-                "no PulseAudio monitor source is available for output {}",
-                sink_id.id()
-            )
-        })
+    Err(format!(
+        "no PulseAudio monitor source is available for output {}",
+        sink_id.id()
+    ))
+}
+
+#[cfg(any(test, all(feature = "voice-playback", target_os = "linux")))]
+fn is_pulse_monitor_for_sink(sink_id: &str, input_id: &str) -> bool {
+    input_id
+        .strip_suffix(".monitor")
+        .is_some_and(|source_id| source_id == sink_id)
 }
 
 #[cfg(all(feature = "voice-playback", not(target_os = "linux")))]
@@ -370,6 +368,22 @@ impl Drop for SystemAudioCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pulse_monitor_selection_accepts_only_the_default_output() {
+        assert!(is_pulse_monitor_for_sink(
+            "alsa_output.default",
+            "alsa_output.default.monitor"
+        ));
+        assert!(!is_pulse_monitor_for_sink(
+            "alsa_output.default",
+            "alsa_output.unrelated.monitor"
+        ));
+        assert!(!is_pulse_monitor_for_sink(
+            "alsa_output.default",
+            "alsa_output.default"
+        ));
+    }
 
     #[test]
     fn pcm_capture_emits_normalized_20ms_stereo_frames() {
