@@ -174,7 +174,13 @@ pub(super) struct StreamRuntimeUpdate {
     pub(super) close_stream_key: Option<String>,
     pub(super) send_delete: bool,
     pub(super) connect: Option<StreamGatewaySession>,
+    pub(super) playback_ended: Option<StreamPlaybackEnded>,
     pub(super) error: Option<String>,
+}
+
+pub(super) struct StreamPlaybackEnded {
+    pub(super) request: StreamWatchRequest,
+    pub(super) reconnecting: bool,
 }
 
 impl StreamRuntimeState {
@@ -189,6 +195,11 @@ impl StreamRuntimeState {
                     .as_ref()
                     .is_none_or(|current| current.stream_key != request.stream_key)
                 {
+                    update.playback_ended =
+                        self.requested.take().map(|request| StreamPlaybackEnded {
+                            request,
+                            reconnecting: false,
+                        });
                     update.close_stream_key =
                         self.active.take().map(|active| active.request.stream_key);
                     update.send_delete = update.close_stream_key.is_some();
@@ -219,6 +230,14 @@ impl StreamRuntimeState {
                     if self.active.as_ref().is_some_and(|active| {
                         !server.matches_connection(&active.endpoint, &active.token)
                     }) {
+                        update.playback_ended =
+                            self.requested
+                                .as_ref()
+                                .cloned()
+                                .map(|request| StreamPlaybackEnded {
+                                    request,
+                                    reconnecting: true,
+                                });
                         update.close_stream_key =
                             self.active.take().map(|active| active.request.stream_key);
                     }
@@ -268,7 +287,11 @@ impl StreamRuntimeState {
                     if *outcome == VoiceConnectionEnd::Stop
                         || self.reconnect_attempts >= MAX_VOICE_RECONNECT_ATTEMPTS
                     {
-                        self.requested = None;
+                        update.playback_ended =
+                            self.requested.take().map(|request| StreamPlaybackEnded {
+                                request,
+                                reconnecting: false,
+                            });
                         self.create = None;
                         self.server = None;
                         self.reconnect_attempts = 0;
@@ -276,14 +299,25 @@ impl StreamRuntimeState {
                         update.send_delete = true;
                     } else {
                         self.reconnect_attempts = self.reconnect_attempts.saturating_add(1);
+                        update.playback_ended =
+                            self.requested
+                                .as_ref()
+                                .cloned()
+                                .map(|request| StreamPlaybackEnded {
+                                    request,
+                                    reconnecting: true,
+                                });
                     }
                 }
             }
             VoiceRuntimeEvent::Shutdown => {
+                update.playback_ended = self.requested.take().map(|request| StreamPlaybackEnded {
+                    request,
+                    reconnecting: false,
+                });
                 update.close_stream_key =
                     self.active.take().map(|active| active.request.stream_key);
                 update.send_delete = update.close_stream_key.is_some();
-                self.requested = None;
                 self.create = None;
                 self.server = None;
             }
@@ -302,9 +336,12 @@ impl StreamRuntimeState {
         }
         let Some(channel_id) = state.channel_id else {
             self.current_voice = None;
+            update.playback_ended = self.requested.take().map(|request| StreamPlaybackEnded {
+                request,
+                reconnecting: false,
+            });
             update.close_stream_key = self.active.take().map(|active| active.request.stream_key);
             update.send_delete = update.close_stream_key.is_some();
-            self.requested = None;
             self.create = None;
             self.server = None;
             return;
@@ -329,9 +366,12 @@ impl StreamRuntimeState {
             .as_ref()
             .is_some_and(|request| request.scope != scope || request.channel_id != channel_id)
         {
+            update.playback_ended = self.requested.take().map(|request| StreamPlaybackEnded {
+                request,
+                reconnecting: false,
+            });
             update.close_stream_key = self.active.take().map(|active| active.request.stream_key);
             update.send_delete = update.close_stream_key.is_some();
-            self.requested = None;
             self.create = None;
             self.server = None;
         }
@@ -348,7 +388,10 @@ impl StreamRuntimeState {
             .as_ref()
             .is_some_and(|request| request.stream_key == stream_key)
         {
-            self.requested = None;
+            update.playback_ended = self.requested.take().map(|request| StreamPlaybackEnded {
+                request,
+                reconnecting: false,
+            });
             self.create = None;
             self.server = None;
             self.reconnect_attempts = 0;
@@ -414,14 +457,6 @@ pub(super) async fn run_stream_gateway_session(
             error.outcome
         }
     };
-    status_publisher
-        .publish_stream_playback_ended(
-            session.request.scope,
-            session.request.channel_id,
-            session.request.owner_id,
-            outcome == VoiceConnectionEnd::Reconnect,
-        )
-        .await;
     let _ = events_tx.send(VoiceRuntimeEvent::StreamConnectionEnded {
         connection_id: session.connection_id,
         stream_key: session.request.stream_key.clone(),
@@ -2155,6 +2190,27 @@ mod tests {
     }
 
     #[test]
+    fn stream_runtime_pending_cancel_ends_playback_once() {
+        let request = stream_request();
+        let mut state = StreamRuntimeState::default();
+        state.apply(&VoiceRuntimeEvent::WatchStreamRequested(request.clone()));
+
+        let cancelled = state.apply(&VoiceRuntimeEvent::WatchStreamCancelled {
+            stream_key: request.stream_key.clone(),
+        });
+        let ended = cancelled
+            .playback_ended
+            .expect("pending stream cancellation ends preparing playback");
+        assert_eq!(ended.request, request);
+        assert!(!ended.reconnecting);
+
+        let repeated = state.apply(&VoiceRuntimeEvent::WatchStreamCancelled {
+            stream_key: ended.request.stream_key,
+        });
+        assert!(repeated.playback_ended.is_none());
+    }
+
+    #[test]
     fn stream_runtime_rotates_active_stream_servers() {
         let (mut state, initial) = connected_stream_runtime();
 
@@ -2168,6 +2224,12 @@ mod tests {
             Some(initial.request.stream_key.as_str())
         );
         assert!(!rotated.send_delete);
+        assert!(
+            rotated
+                .playback_ended
+                .as_ref()
+                .is_some_and(|ended| ended.reconnecting)
+        );
         let replacement = rotated
             .connect
             .expect("new stream server starts a replacement connection");

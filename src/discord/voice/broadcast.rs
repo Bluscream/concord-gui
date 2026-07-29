@@ -169,6 +169,7 @@ pub(super) struct StreamBroadcastRuntimeUpdate {
     pub(super) close_stream_key: Option<String>,
     pub(super) send_delete: bool,
     pub(super) connect: Option<StreamBroadcastGatewaySession>,
+    pub(super) broadcast_ended: Option<StreamBroadcastRequest>,
     pub(super) error: Option<String>,
 }
 
@@ -184,6 +185,7 @@ impl StreamBroadcastRuntimeState {
                     .as_ref()
                     .is_some_and(|current| current.stream_key != request.stream_key)
                 {
+                    update.broadcast_ended = self.requested.take();
                     update.close_stream_key =
                         self.active.take().map(|active| active.request.stream_key);
                     update.send_delete = update.close_stream_key.is_some();
@@ -267,7 +269,7 @@ impl StreamBroadcastRuntimeState {
                     if *outcome == VoiceConnectionEnd::Stop
                         || self.reconnect_attempts >= MAX_VOICE_RECONNECT_ATTEMPTS
                     {
-                        self.requested = None;
+                        update.broadcast_ended = self.requested.take();
                         self.create = None;
                         self.server = None;
                         self.reconnect_attempts = 0;
@@ -289,7 +291,7 @@ impl StreamBroadcastRuntimeState {
                             .map(|request| request.stream_key.clone())
                     });
                 update.send_delete = update.close_stream_key.is_some();
-                self.requested = None;
+                update.broadcast_ended = self.requested.take();
                 self.create = None;
                 self.server = None;
                 self.reconnect_attempts = 0;
@@ -323,7 +325,7 @@ impl StreamBroadcastRuntimeState {
                         .map(|request| request.stream_key.clone())
                 });
             update.send_delete = update.close_stream_key.is_some();
-            self.requested = None;
+            update.broadcast_ended = self.requested.take();
             self.create = None;
             self.server = None;
             self.reconnect_attempts = 0;
@@ -359,7 +361,7 @@ impl StreamBroadcastRuntimeState {
                         .map(|request| request.stream_key.clone())
                 });
             update.send_delete = update.close_stream_key.is_some();
-            self.requested = None;
+            update.broadcast_ended = self.requested.take();
             self.create = None;
             self.server = None;
             self.reconnect_attempts = 0;
@@ -377,7 +379,7 @@ impl StreamBroadcastRuntimeState {
             .as_ref()
             .is_some_and(|request| request.stream_key == stream_key);
         if matches_requested {
-            self.requested = None;
+            update.broadcast_ended = self.requested.take();
             self.create = None;
             self.server = None;
             self.reconnect_attempts = 0;
@@ -2171,6 +2173,25 @@ mod tests {
     }
 
     #[test]
+    fn broadcast_runtime_pending_cancel_ends_preparing_once() {
+        let request = request();
+        let mut state = StreamBroadcastRuntimeState::default();
+        state.apply(&VoiceRuntimeEvent::BroadcastStreamRequested(
+            request.clone(),
+        ));
+
+        let cancelled = state.apply(&VoiceRuntimeEvent::BroadcastStreamCancelled {
+            stream_key: request.stream_key.clone(),
+        });
+        assert_eq!(cancelled.broadcast_ended, Some(request.clone()));
+
+        let repeated = state.apply(&VoiceRuntimeEvent::BroadcastStreamCancelled {
+            stream_key: request.stream_key,
+        });
+        assert!(repeated.broadcast_ended.is_none());
+    }
+
+    #[test]
     fn broadcast_runtime_rotates_active_stream_servers() {
         let (mut state, initial) = connected_broadcast_runtime();
 
@@ -2184,6 +2205,7 @@ mod tests {
             Some(initial.request.stream_key.as_str())
         );
         assert!(!rotated.send_delete);
+        assert!(rotated.broadcast_ended.is_none());
         let replacement = rotated
             .connect
             .expect("new stream server starts a replacement broadcast");

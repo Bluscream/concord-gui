@@ -405,44 +405,34 @@ pub(crate) async fn run_voice_runtime(
         if let Some(error) = stream_update.error {
             status_publisher.publish_error(error).await;
         }
+        if let Some(ended) = stream_update.playback_ended {
+            status_publisher
+                .publish_stream_playback_ended(
+                    ended.request.scope,
+                    ended.request.channel_id,
+                    ended.request.owner_id,
+                    ended.reconnecting,
+                )
+                .await;
+        }
         if let Some(stream_key) = stream_update.close_stream_key {
-            if let Some(stopped_session) = stop_stream_connection_task(
+            let _ = stop_stream_connection_task(
                 &mut stream_task,
                 &mut stream_session,
                 "stopping active stream connection task",
             )
-            .await
-            {
-                status_publisher
-                    .publish_stream_playback_ended(
-                        stopped_session.request.scope,
-                        stopped_session.request.channel_id,
-                        stopped_session.request.owner_id,
-                        false,
-                    )
-                    .await;
-            }
+            .await;
             if stream_update.send_delete {
                 let _ = gateway_commands_tx.send(GatewayCommand::DeleteStream { stream_key });
             }
         }
         if let Some(session) = stream_update.connect {
-            if let Some(stopped_session) = stop_stream_connection_task(
+            let _ = stop_stream_connection_task(
                 &mut stream_task,
                 &mut stream_session,
                 "stopping previous stream connection task before reconnect",
             )
-            .await
-            {
-                status_publisher
-                    .publish_stream_playback_ended(
-                        stopped_session.request.scope,
-                        stopped_session.request.channel_id,
-                        stopped_session.request.owner_id,
-                        true,
-                    )
-                    .await;
-            }
+            .await;
             stream_session = Some(session.clone());
             stream_task = Some(tokio::spawn(run_stream_gateway_session(
                 session,
@@ -453,42 +443,31 @@ pub(crate) async fn run_voice_runtime(
         if let Some(error) = broadcast_update.error {
             status_publisher.publish_error(error).await;
         }
+        if let Some(ended) = broadcast_update.broadcast_ended {
+            status_publisher
+                .publish_stream_broadcast_ended(ended.scope, ended.channel_id)
+                .await;
+        }
         if let Some(stream_key) = broadcast_update.close_stream_key {
-            if let Some(stopped_session) = stop_stream_broadcast_task(
+            let _ = stop_stream_broadcast_task(
                 &mut broadcast_task,
                 &mut broadcast_session,
                 &mut broadcast_stop_tx,
                 "stopping active stream broadcast task",
             )
-            .await
-            {
-                status_publisher
-                    .publish_stream_broadcast_ended(
-                        stopped_session.request.scope,
-                        stopped_session.request.channel_id,
-                    )
-                    .await;
-            }
+            .await;
             if broadcast_update.send_delete {
                 let _ = gateway_commands_tx.send(GatewayCommand::DeleteStream { stream_key });
             }
         }
         if let Some(session) = broadcast_update.connect {
-            if let Some(stopped_session) = stop_stream_broadcast_task(
+            let _ = stop_stream_broadcast_task(
                 &mut broadcast_task,
                 &mut broadcast_session,
                 &mut broadcast_stop_tx,
                 "stopping previous stream broadcast task before reconnect",
             )
-            .await
-            {
-                status_publisher
-                    .publish_stream_broadcast_ended(
-                        stopped_session.request.scope,
-                        stopped_session.request.channel_id,
-                    )
-                    .await;
-            }
+            .await;
             let (stop_tx, stop_rx) = oneshot::channel();
             broadcast_stop_tx = Some(stop_tx);
             broadcast_session = Some(session.clone());
@@ -612,37 +591,19 @@ pub(crate) async fn run_voice_runtime(
             .publish_speaking(&stopped_session, stopped_session.user_id, false)
             .await;
     }
-    if let Some(stopped_session) = stop_stream_connection_task(
+    let _ = stop_stream_connection_task(
         &mut stream_task,
         &mut stream_session,
         "stopping stream connection task during voice runtime shutdown",
     )
-    .await
-    {
-        status_publisher
-            .publish_stream_playback_ended(
-                stopped_session.request.scope,
-                stopped_session.request.channel_id,
-                stopped_session.request.owner_id,
-                false,
-            )
-            .await;
-    }
-    if let Some(stopped_session) = stop_stream_broadcast_task(
+    .await;
+    let _ = stop_stream_broadcast_task(
         &mut broadcast_task,
         &mut broadcast_session,
         &mut broadcast_stop_tx,
         "stopping stream broadcast task during voice runtime shutdown",
     )
-    .await
-    {
-        status_publisher
-            .publish_stream_broadcast_ended(
-                stopped_session.request.scope,
-                stopped_session.request.channel_id,
-            )
-            .await;
-    }
+    .await;
 }
 
 async fn stop_stream_connection_task(
