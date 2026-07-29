@@ -57,30 +57,17 @@ pub(in crate::tui::ui) fn stream_info_lines(state: &DashboardState) -> Vec<Line<
             theme::current().style(theme::HighlightGroup::Info),
         ));
 
-        let visible_participants = section
-            .participants
-            .iter()
-            .filter(|participant| participant.broadcaster)
-            .chain(
-                section
-                    .participants
-                    .iter()
-                    .filter(|participant| !participant.broadcaster),
-            );
-        for participant in visible_participants {
-            if participant.broadcaster {
-                let status = if section.paused { "PAUSED" } else { "LIVE" };
-                lines.push(Line::from(vec![
-                    Span::styled("● ", theme::current().style(theme::HighlightGroup::Success)),
-                    Span::raw(participant.display_name.clone()),
-                    Span::styled(
-                        format!("  {status}"),
-                        theme::current().style(theme::HighlightGroup::Success),
-                    ),
-                ]));
-            } else {
-                lines.push(Line::from(format!("  {}", participant.display_name)));
-            }
+        let status = if section.paused { "PAUSED" } else { "LIVE" };
+        lines.push(Line::from(vec![
+            Span::styled("● ", theme::current().style(theme::HighlightGroup::Success)),
+            Span::raw(section.broadcaster.clone()),
+            Span::styled(
+                format!("  {status}"),
+                theme::current().style(theme::HighlightGroup::Success),
+            ),
+        ]));
+        for viewer in &section.viewers {
+            lines.push(Line::from(format!("  {viewer}")));
         }
     }
 

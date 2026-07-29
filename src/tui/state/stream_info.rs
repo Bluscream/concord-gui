@@ -1,12 +1,11 @@
-use crate::discord::StreamParticipantState;
-
 use super::DashboardState;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::tui) struct StreamInfoSection {
     pub(in crate::tui) label: &'static str,
     pub(in crate::tui) paused: bool,
-    pub(in crate::tui) participants: Vec<StreamParticipantState>,
+    pub(in crate::tui) broadcaster: String,
+    pub(in crate::tui) viewers: Vec<String>,
 }
 
 impl DashboardState {
@@ -22,7 +21,8 @@ impl DashboardState {
             sections.push(StreamInfoSection {
                 label: "My stream",
                 paused: stream.paused,
-                participants: stream.participants,
+                broadcaster: stream.broadcaster,
+                viewers: stream.viewers,
             });
         }
 
@@ -33,7 +33,8 @@ impl DashboardState {
             sections.push(StreamInfoSection {
                 label: "Watching",
                 paused: stream.paused,
-                participants: stream.participants,
+                broadcaster: stream.broadcaster,
+                viewers: stream.viewers,
             });
         }
 

@@ -581,6 +581,22 @@ fn raw_stream_events_supply_the_separate_rtc_connection() {
 }
 
 #[test]
+fn stream_update_without_viewer_ids_is_ignored() {
+    let events = parse_user_account_event(
+        &json!({
+            "t": "STREAM_UPDATE",
+            "d": {
+                "stream_key": "guild:10:20:30",
+                "paused": false
+            }
+        })
+        .to_string(),
+    );
+
+    assert!(events.is_empty());
+}
+
+#[test]
 fn raw_voice_state_update_extracts_leave_payload() {
     let events = parse_user_account_event(
         &json!({

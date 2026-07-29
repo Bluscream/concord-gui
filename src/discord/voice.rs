@@ -50,7 +50,6 @@ use microphone::*;
 #[cfg(test)]
 use runtime::{VoiceRuntimeAction, VoiceRuntimeState};
 pub(crate) use runtime::{forward_app_event, run_voice_runtime};
-pub(crate) use state::StreamParticipantState;
 pub(in crate::discord) use state::StreamState;
 pub(in crate::discord) use state::VoiceState;
 pub use state::{CurrentVoiceConnectionState, VoiceAudioSettings, VoiceParticipantState};

@@ -46,17 +46,10 @@ fn stream_presence_lists_broadcaster_first_and_tracks_viewers() {
 
     let stream = state.stream_participants(VoiceScope::Guild(guild_id), channel_id, owner_id);
     assert!(stream.paused);
+    assert_eq!(stream.broadcaster, "Broadcaster");
     assert_eq!(
-        stream
-            .participants
-            .iter()
-            .map(|participant| (participant.display_name.as_str(), participant.broadcaster))
-            .collect::<Vec<_>>(),
-        vec![
-            ("Broadcaster", true),
-            ("Viewer one", false),
-            ("Viewer two", false),
-        ]
+        stream.viewers,
+        vec!["Viewer one".to_owned(), "Viewer two".to_owned()]
     );
 
     state.apply_event(&AppEvent::StreamDelete {
@@ -69,10 +62,39 @@ fn stream_presence_lists_broadcaster_first_and_tracks_viewers() {
     assert_eq!(
         state
             .stream_participants(VoiceScope::Guild(guild_id), channel_id, owner_id)
-            .participants
-            .len(),
-        1
+            .viewers,
+        Vec::<String>::new()
     );
+}
+
+#[test]
+fn stream_update_recovers_presence_when_create_was_missed() {
+    let guild_id = Id::new(1);
+    let channel_id = Id::new(10);
+    let owner_id = Id::new(20);
+    let viewer_id = Id::new(30);
+    let mut state = DiscordState::default();
+    state.apply_event(&guild_create_event(GuildCreateFixture {
+        channels: vec![guild_voice_channel(guild_id, channel_id)],
+        members: vec![
+            member_info(owner_id, "Broadcaster"),
+            member_info(viewer_id, "Viewer"),
+        ],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+
+    state.apply_event(&AppEvent::StreamUpdate {
+        stream: StreamUpdateInfo {
+            stream_key: "guild:1:10:20".to_owned(),
+            viewer_ids: vec![viewer_id],
+            paused: true,
+        },
+    });
+
+    let stream = state.stream_participants(VoiceScope::Guild(guild_id), channel_id, owner_id);
+    assert!(stream.paused);
+    assert_eq!(stream.broadcaster, "Broadcaster");
+    assert_eq!(stream.viewers, vec!["Viewer".to_owned()]);
 }
 
 #[test]

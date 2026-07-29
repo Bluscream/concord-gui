@@ -24,15 +24,10 @@ pub struct VoiceParticipantState {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct StreamParticipantState {
-    pub(crate) display_name: String,
-    pub(crate) broadcaster: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StreamParticipantList {
     pub(crate) paused: bool,
-    pub(crate) participants: Vec<StreamParticipantState>,
+    pub(crate) broadcaster: String,
+    pub(crate) viewers: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -287,21 +282,16 @@ impl DiscordState {
             stream.scope == scope && stream.channel_id == channel_id && stream.owner_id == owner_id
         });
         let paused = stream.is_some_and(|stream| stream.paused);
-        let viewer_ids = stream
-            .map(|stream| stream.viewer_ids.iter().copied().collect::<Vec<_>>())
-            .unwrap_or_default();
-
-        let mut participants = Vec::with_capacity(viewer_ids.len().saturating_add(1));
-        participants.push(self.stream_participant_state(scope, owner_id, true));
-        participants.extend(
-            viewer_ids
-                .into_iter()
-                .filter(|user_id| *user_id != owner_id)
-                .map(|user_id| self.stream_participant_state(scope, user_id, false)),
-        );
+        let viewers = stream
+            .into_iter()
+            .flat_map(|stream| stream.viewer_ids.iter().copied())
+            .filter(|user_id| *user_id != owner_id)
+            .map(|user_id| self.stream_participant_display_name(scope, user_id))
+            .collect();
         StreamParticipantList {
             paused,
-            participants,
+            broadcaster: self.stream_participant_display_name(scope, owner_id),
+            viewers,
         }
     }
 
@@ -383,61 +373,46 @@ impl DiscordState {
         }
     }
 
-    fn stream_participant_state(
+    fn stream_participant_display_name(
         &self,
         scope: VoiceScope,
         user_id: Id<UserMarker>,
-        broadcaster: bool,
-    ) -> StreamParticipantState {
-        let display_name = self
-            .voice_participant_display_name(scope, user_id)
+    ) -> String {
+        self.voice_participant_display_name(scope, user_id)
             .or_else(|| {
                 self.session
                     .ready_users
                     .get(&user_id)
                     .map(|user| user.display_name.clone())
             })
-            .unwrap_or_else(|| format!("user-{}", user_id.get()));
-        StreamParticipantState {
-            display_name,
-            broadcaster,
-        }
+            .unwrap_or_else(|| format!("user-{}", user_id.get()))
     }
 
     pub(in crate::discord) fn record_stream_create(&mut self, stream: &StreamCreateInfo) {
-        let Some((scope, channel_id, owner_id)) = parse_stream_location(&stream.stream_key) else {
-            return;
-        };
-        self.voice_mut().streams.insert(
-            stream.stream_key.clone(),
-            StreamState {
-                scope,
-                channel_id,
-                owner_id,
-                viewer_ids: stream.viewer_ids.iter().copied().collect(),
-                paused: stream.paused,
-            },
-        );
+        self.record_stream_presence(&stream.stream_key, &stream.viewer_ids, stream.paused);
     }
 
     pub(in crate::discord) fn record_stream_update(&mut self, stream: &StreamUpdateInfo) {
-        if let Some(current) = self.voice_mut().streams.get_mut(&stream.stream_key) {
-            current.viewer_ids = stream.viewer_ids.iter().copied().collect();
-            current.paused = stream.paused;
-            return;
-        }
+        self.record_stream_presence(&stream.stream_key, &stream.viewer_ids, stream.paused);
+    }
 
-        let Some((scope, channel_id, owner_id)) = parse_stream_location(&stream.stream_key) else {
+    fn record_stream_presence(
+        &mut self,
+        stream_key: &str,
+        viewer_ids: &[Id<UserMarker>],
+        paused: bool,
+    ) {
+        let Some((scope, channel_id, owner_id)) = parse_stream_location(stream_key) else {
             return;
         };
         self.voice_mut().streams.insert(
-            stream.stream_key.clone(),
+            stream_key.to_owned(),
             StreamState {
                 scope,
                 channel_id,
                 owner_id,
-                viewer_ids: stream.viewer_ids.iter().copied().collect(),
-                paused: stream.paused,
+                viewer_ids: viewer_ids.iter().copied().collect(),
+                paused,
             },
         );
     }

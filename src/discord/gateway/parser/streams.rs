@@ -17,7 +17,7 @@ pub(super) fn parse_stream_create(data: &Value) -> Option<AppEvent> {
     let rtc_channel_id = data
         .get("rtc_channel_id")
         .and_then(parse_id::<ChannelMarker>)?;
-    let viewer_ids = parse_viewer_ids(data);
+    let viewer_ids = parse_viewer_ids(data).unwrap_or_default();
     let paused = data.get("paused").and_then(Value::as_bool).unwrap_or(false);
 
     Some(AppEvent::StreamCreate {
@@ -35,7 +35,7 @@ pub(super) fn parse_stream_update(data: &Value) -> Option<AppEvent> {
     Some(AppEvent::StreamUpdate {
         stream: StreamUpdateInfo {
             stream_key: required_string(data, "stream_key")?,
-            viewer_ids: parse_viewer_ids(data),
+            viewer_ids: parse_viewer_ids(data)?,
             paused: data.get("paused").and_then(Value::as_bool).unwrap_or(false),
         },
     })
@@ -84,11 +84,13 @@ fn required_string(data: &Value, field: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn parse_viewer_ids(data: &Value) -> Vec<Id<UserMarker>> {
+fn parse_viewer_ids(data: &Value) -> Option<Vec<Id<UserMarker>>> {
     data.get("viewer_ids")
         .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(parse_id::<UserMarker>)
-        .collect()
+        .map(|viewer_ids| {
+            viewer_ids
+                .iter()
+                .filter_map(parse_id::<UserMarker>)
+                .collect()
+        })
 }

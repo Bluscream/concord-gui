@@ -257,9 +257,11 @@ To broadcast, join a voice channel, open its channel actions, choose
 `Share screen`, then select a whole display or one window. While sharing, the
 same `s` action changes to `Stop sharing`. The default `<leader>vs` voice
 shortcut performs the same toggle. The first version sends 1280x720 H264 video
-at up to 30 FPS and does not capture system audio. macOS may ask for Screen
-Recording permission. Linux availability depends on the active X11 or Wayland
-capture support.
+at up to 30 FPS and includes system audio when an output loopback source is
+available. If audio capture is unavailable, the broadcast continues with video
+only. macOS may ask for Screen Recording permission. Linux screen capture
+depends on the active X11 or Wayland support, and system audio uses a PulseAudio
+monitor source.
 
 ### Members & Profiles
 
