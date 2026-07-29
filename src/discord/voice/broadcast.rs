@@ -19,6 +19,7 @@ use tokio::{
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 use uuid::Uuid;
 
+use super::runtime::MAX_VOICE_RECONNECT_ATTEMPTS;
 use super::{
     DISCORD_OPUS_FRAME_DURATION, DISCORD_OPUS_TIMESTAMP_INCREMENT,
     DISCORD_STREAM_VIDEO_PAYLOAD_TYPE, DISCORD_STREAM_VIDEO_RTX_PAYLOAD_TYPE,
@@ -159,6 +160,7 @@ pub(super) struct StreamBroadcastRuntimeState {
     create: Option<StreamCreateInfo>,
     server: Option<StreamServerInfo>,
     active: Option<StreamBroadcastGatewaySession>,
+    reconnect_attempts: u8,
     next_connection_id: u64,
 }
 
@@ -186,6 +188,7 @@ impl StreamBroadcastRuntimeState {
                         self.active.take().map(|active| active.request.stream_key);
                     update.send_delete = update.close_stream_key.is_some();
                 }
+                self.reconnect_attempts = 0;
                 self.requested = Some(request.clone());
                 self.create = None;
                 self.server = None;
@@ -240,21 +243,39 @@ impl StreamBroadcastRuntimeState {
                 }
                 self.clear_matching(&stream.stream_key, &mut update, false);
             }
+            VoiceRuntimeEvent::BroadcastStreamConnectionEstablished {
+                connection_id,
+                stream_key,
+            } => {
+                if self.active.as_ref().is_some_and(|active| {
+                    active.connection_id == *connection_id
+                        && active.request.stream_key == *stream_key
+                }) {
+                    self.reconnect_attempts = 0;
+                }
+            }
             VoiceRuntimeEvent::BroadcastStreamConnectionEnded {
                 connection_id,
                 stream_key,
-                outcome: _,
+                outcome,
             } => {
                 if self.active.as_ref().is_some_and(|active| {
                     active.connection_id == *connection_id
                         && active.request.stream_key == *stream_key
                 }) {
                     self.active = None;
-                    self.requested = None;
-                    self.create = None;
-                    self.server = None;
-                    update.close_stream_key = Some(stream_key.clone());
-                    update.send_delete = true;
+                    if *outcome == VoiceConnectionEnd::Stop
+                        || self.reconnect_attempts >= MAX_VOICE_RECONNECT_ATTEMPTS
+                    {
+                        self.requested = None;
+                        self.create = None;
+                        self.server = None;
+                        self.reconnect_attempts = 0;
+                        update.close_stream_key = Some(stream_key.clone());
+                        update.send_delete = true;
+                    } else {
+                        self.reconnect_attempts = self.reconnect_attempts.saturating_add(1);
+                    }
                 }
             }
             VoiceRuntimeEvent::Shutdown => {
@@ -271,6 +292,7 @@ impl StreamBroadcastRuntimeState {
                 self.requested = None;
                 self.create = None;
                 self.server = None;
+                self.reconnect_attempts = 0;
             }
             _ => {}
         }
@@ -304,6 +326,7 @@ impl StreamBroadcastRuntimeState {
             self.requested = None;
             self.create = None;
             self.server = None;
+            self.reconnect_attempts = 0;
             return;
         };
         let Some(scope) = state.scope() else {
@@ -339,6 +362,7 @@ impl StreamBroadcastRuntimeState {
             self.requested = None;
             self.create = None;
             self.server = None;
+            self.reconnect_attempts = 0;
         }
     }
 
@@ -356,6 +380,7 @@ impl StreamBroadcastRuntimeState {
             self.requested = None;
             self.create = None;
             self.server = None;
+            self.reconnect_attempts = 0;
         }
         if self
             .active
@@ -2019,6 +2044,17 @@ mod tests {
         (state, session)
     }
 
+    fn broadcast_connection_ended(
+        session: &StreamBroadcastGatewaySession,
+        outcome: VoiceConnectionEnd,
+    ) -> VoiceRuntimeEvent {
+        VoiceRuntimeEvent::BroadcastStreamConnectionEnded {
+            connection_id: session.connection_id,
+            stream_key: session.request.stream_key.clone(),
+            outcome,
+        }
+    }
+
     fn voice_description() -> VoiceSessionDescription {
         VoiceSessionDescription {
             mode: AEAD_XCHACHA20_POLY1305_RTPSIZE.to_owned(),
@@ -2191,6 +2227,36 @@ mod tests {
                 .connection_id,
             active.connection_id
         );
+    }
+
+    #[test]
+    fn broadcast_runtime_stops_after_bounded_reconnect_attempts() {
+        let (mut state, mut active) = connected_broadcast_runtime();
+
+        for attempt in 1..=MAX_VOICE_RECONNECT_ATTEMPTS {
+            let update = state.apply(&broadcast_connection_ended(
+                &active,
+                VoiceConnectionEnd::Reconnect,
+            ));
+            assert!(
+                update.close_stream_key.is_none(),
+                "retry {attempt} should keep the broadcast request active"
+            );
+            active = update
+                .connect
+                .expect("retry within the limit should reconnect broadcast");
+        }
+
+        let stopped = state.apply(&broadcast_connection_ended(
+            &active,
+            VoiceConnectionEnd::Reconnect,
+        ));
+        assert!(stopped.connect.is_none());
+        assert_eq!(
+            stopped.close_stream_key.as_deref(),
+            Some(active.request.stream_key.as_str())
+        );
+        assert!(stopped.send_delete);
     }
 
     #[test]
