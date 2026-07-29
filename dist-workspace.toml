@@ -41,4 +41,11 @@ pkg-config = { stage = ["build"] }
 [dist.dependencies.apt]
 libopus-dev = { stage = ["build"] }
 libasound2-dev = { stage = ["build"] }
+libclang-dev = { stage = ["build"] }
+libdbus-1-dev = { stage = ["build"] }
+libegl-dev = { stage = ["build"] }
+libpipewire-0.3-dev = { stage = ["build"] }
+libwayland-dev = { stage = ["build"] }
+libxcb1-dev = { stage = ["build"] }
+libxrandr-dev = { stage = ["build"] }
 pkg-config = { stage = ["build"] }
