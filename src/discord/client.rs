@@ -38,7 +38,10 @@ use super::{
     request_lifecycle::RequestLifecycle,
     rest::DiscordRest,
     state::{CurrentVoiceConnectionState, DiscordSnapshot, DiscordState, SnapshotRevision},
-    voice::{self, VoiceAudioSettings, VoiceRuntimeEvent, VoiceScope},
+    voice::{
+        self, StreamBroadcastRequest, StreamCaptureTarget, VoiceAudioSettings, VoiceRuntimeEvent,
+        VoiceScope,
+    },
 };
 
 const MEMBER_SEARCH_MIN_QUERY_CHARS: usize = 2;
@@ -256,6 +259,7 @@ impl DiscordClient {
             tokio::spawn(voice::run_voice_runtime(
                 voice_events,
                 voice_events_tx.clone(),
+                self.gateway_commands_tx.clone(),
                 voice_status_publisher,
             ));
         }
@@ -360,6 +364,132 @@ impl DiscordClient {
         self_deaf: bool,
     ) -> std::result::Result<(), String> {
         self.update_voice_state_inner(scope, Some(channel_id), self_mute, self_deaf, true)
+    }
+
+    pub fn request_stream_watch(
+        &self,
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+        owner_id: Id<UserMarker>,
+        display_name: String,
+    ) -> std::result::Result<(), String> {
+        let state = self.read_state();
+        let current_voice = state
+            .current_user_voice_connection()
+            .filter(|voice| voice.scope == scope && voice.channel_id == channel_id)
+            .ok_or_else(|| "join the streamer's voice channel first".to_owned())?;
+        let participants = match scope {
+            VoiceScope::Guild(guild_id) => {
+                state.voice_participants_for_channel(guild_id, channel_id)
+            }
+            VoiceScope::Private(_) => state.voice_participants_for_private_channel(channel_id),
+        };
+        let participant = participants
+            .iter()
+            .find(|participant| participant.user_id == owner_id)
+            .ok_or_else(|| "streamer is no longer in this voice channel".to_owned())?;
+        if !participant.self_stream {
+            return Err("selected participant is not streaming".to_owned());
+        }
+        if state.current_user_id() == Some(owner_id) {
+            return Err("cannot watch your own stream".to_owned());
+        }
+        let stream_key = match scope {
+            VoiceScope::Guild(guild_id) => format!(
+                "guild:{}:{}:{}",
+                guild_id.get(),
+                current_voice.channel_id.get(),
+                owner_id.get()
+            ),
+            VoiceScope::Private(_) => {
+                format!("call:{}:{}", current_voice.channel_id.get(), owner_id.get())
+            }
+        };
+        drop(state);
+
+        let request = voice::StreamWatchRequest {
+            stream_key: stream_key.clone(),
+            scope,
+            channel_id,
+            owner_id,
+            display_name,
+        };
+        self.voice_events_tx
+            .send(VoiceRuntimeEvent::WatchStreamRequested(request))
+            .map_err(|_| "voice runtime stopped".to_owned())?;
+        if let Err(error) = self.send_gateway_command(GatewayCommand::WatchStream {
+            stream_key: stream_key.clone(),
+        }) {
+            let _ = self
+                .voice_events_tx
+                .send(VoiceRuntimeEvent::WatchStreamCancelled { stream_key });
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub fn request_stream_start(
+        &self,
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+        target: StreamCaptureTarget,
+    ) -> std::result::Result<(), String> {
+        let state = self.read_state();
+        let current_voice = state
+            .current_user_voice_connection()
+            .filter(|voice| voice.scope == scope && voice.channel_id == channel_id)
+            .ok_or_else(|| "join this voice channel before starting a stream".to_owned())?;
+        if scope.guild_id().is_some() {
+            let channel = state
+                .channel(channel_id)
+                .ok_or_else(|| "cannot verify stream permissions".to_owned())?;
+            rest_actions::ensure_channel_action_policy(&state, channel, DiscordAction::StreamVoice)
+                .map_err(|error| error.to_string())?;
+        }
+        let current_user_id = state
+            .current_user_id()
+            .ok_or_else(|| "current user is not ready".to_owned())?;
+        let stream_key = stream_key(scope, current_voice.channel_id, current_user_id);
+        drop(state);
+
+        let request = StreamBroadcastRequest {
+            stream_key: stream_key.clone(),
+            scope,
+            channel_id,
+            target,
+        };
+        self.voice_events_tx
+            .send(VoiceRuntimeEvent::BroadcastStreamRequested(request))
+            .map_err(|_| "voice runtime stopped".to_owned())?;
+        if let Err(error) =
+            self.send_gateway_command(GatewayCommand::CreateStream { scope, channel_id })
+        {
+            let _ = self
+                .voice_events_tx
+                .send(VoiceRuntimeEvent::BroadcastStreamCancelled { stream_key });
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub fn request_stream_stop(
+        &self,
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+    ) -> std::result::Result<(), String> {
+        let state = self.read_state();
+        let current_voice = state
+            .current_user_voice_connection()
+            .filter(|voice| voice.scope == scope && voice.channel_id == channel_id)
+            .ok_or_else(|| "not connected to this voice channel".to_owned())?;
+        let current_user_id = state
+            .current_user_id()
+            .ok_or_else(|| "current user is not ready".to_owned())?;
+        let stream_key = stream_key(scope, current_voice.channel_id, current_user_id);
+        drop(state);
+        self.voice_events_tx
+            .send(VoiceRuntimeEvent::BroadcastStreamStopRequested { stream_key })
+            .map_err(|_| "voice runtime stopped".to_owned())
     }
 
     fn update_voice_state_inner(
@@ -945,6 +1075,15 @@ pub(crate) fn validate_token_header(token: &str) -> Result<()> {
     HeaderValue::from_str(token)
         .map_err(|source| AppError::InvalidDiscordTokenHeader { source })?;
     Ok(())
+}
+
+fn stream_key(scope: VoiceScope, channel_id: Id<ChannelMarker>, user_id: Id<UserMarker>) -> String {
+    match scope {
+        VoiceScope::Guild(guild_id) => {
+            format!("guild:{guild_id}:{channel_id}:{user_id}")
+        }
+        VoiceScope::Private(_) => format!("call:{channel_id}:{user_id}"),
+    }
 }
 
 fn voice_state_request_is_duplicate(

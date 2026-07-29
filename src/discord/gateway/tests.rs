@@ -4,10 +4,11 @@ use super::{
     GuildMemberRequestKind, GuildMemberRequestLimiter, GuildMemberRequestScheduler,
     HeartbeatAckState, MAX_PENDING_GUILD_MEMBER_REQUESTS, SessionState, SubscriptionDeduper,
     USER_ACCOUNT_CAPABILITIES, build_identify_payload, build_resume_payload, close_code_outcome,
-    direct_message_subscribe_payload, dispatch_command, gateway_guild_member_rate_limit,
-    gateway_request, guild_channel_subscribe_payload, presence_update_payload,
-    ready_installation_id, request_guild_members_by_ids_payload, request_guild_members_payload,
-    voice_state_update_payload,
+    create_stream_payload, delete_stream_payload, direct_message_subscribe_payload,
+    dispatch_command, gateway_guild_member_rate_limit, gateway_request,
+    guild_channel_subscribe_payload, presence_update_payload, ready_installation_id,
+    request_guild_members_by_ids_payload, request_guild_members_payload,
+    voice_state_update_payload, watch_stream_payload,
 };
 use crate::discord::fingerprint::{
     CLIENT_BROWSER, CLIENT_BROWSER_VERSION, CLIENT_BUILD_NUMBER, ClientFingerprint,
@@ -17,7 +18,7 @@ use crate::discord::ids::{
     Id,
     marker::{ChannelMarker, EmojiMarker, GuildMarker, UserMarker},
 };
-use crate::discord::{ActivityEmoji, ActivityInfo, ActivityKind, PresenceStatus};
+use crate::discord::{ActivityEmoji, ActivityInfo, ActivityKind, PresenceStatus, VoiceScope};
 use serde_json::json;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -863,4 +864,55 @@ fn voice_state_update_payload_joins_and_leaves_voice_channel() {
     .expect("dm call payload should be valid json");
     assert!(dm_call_payload["d"]["guild_id"].is_null());
     assert_eq!(dm_call_payload["d"]["channel_id"].as_str(), Some("30"));
+}
+
+#[test]
+fn stream_watch_payloads_use_the_documented_gateway_opcodes() {
+    let stream_key = "guild:10:20:30";
+    let watch: serde_json::Value = serde_json::from_str(&watch_stream_payload(stream_key))
+        .expect("watch stream payload should be valid json");
+    assert_eq!(watch, json!({"op": 20, "d": {"stream_key": stream_key}}));
+
+    let delete: serde_json::Value = serde_json::from_str(&delete_stream_payload(stream_key))
+        .expect("delete stream payload should be valid json");
+    assert_eq!(delete, json!({"op": 19, "d": {"stream_key": stream_key}}));
+}
+
+#[test]
+fn stream_create_payload_uses_guild_and_private_call_shapes() {
+    let guild: serde_json::Value = serde_json::from_str(&create_stream_payload(
+        VoiceScope::Guild(Id::new(10)),
+        Id::new(20),
+    ))
+    .expect("guild stream payload should be valid json");
+    assert_eq!(
+        guild,
+        json!({
+            "op": 18,
+            "d": {
+                "type": "guild",
+                "guild_id": "10",
+                "channel_id": "20",
+                "preferred_region": null,
+            }
+        })
+    );
+
+    let call: serde_json::Value = serde_json::from_str(&create_stream_payload(
+        VoiceScope::Private(Id::new(20)),
+        Id::new(20),
+    ))
+    .expect("call stream payload should be valid json");
+    assert_eq!(
+        call,
+        json!({
+            "op": 18,
+            "d": {
+                "type": "call",
+                "guild_id": null,
+                "channel_id": "20",
+                "preferred_region": null,
+            }
+        })
+    );
 }

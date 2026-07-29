@@ -108,6 +108,7 @@ pub(in crate::tui) struct LeaderShortcutItem {
     pub key: String,
     pub label: String,
     pub has_children: bool,
+    pub action: Option<UiAction>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -411,6 +412,7 @@ impl KeyMap {
                                 .or_else(|| self.group_title(&child_sequence))
                                 .unwrap_or_else(|| "prefix".to_owned()),
                             has_children: !child.node.children.is_empty(),
+                            action: child.node.action.as_ref().map(|action| action.action),
                         }
                     })
                     .collect()
@@ -755,10 +757,12 @@ impl ChannelActionKind {
         match name {
             "JoinVoice" => Some(Self::JoinVoice),
             "LeaveVoice" => Some(Self::LeaveVoice),
+            "ToggleStream" | "StartStream" => Some(Self::ToggleStream),
             "ShowPinnedMessages" => Some(Self::ShowPinnedMessages),
             "ShowThreads" => Some(Self::ShowThreads),
             "MarkAsRead" => Some(Self::MarkAsRead),
             "ToggleMute" => Some(Self::ToggleMute),
+            "WatchStream" => Some(Self::WatchStream),
             "VoiceParticipantAudio" => Some(Self::ParticipantAudioSettings),
             _ => None,
         }
@@ -768,10 +772,12 @@ impl ChannelActionKind {
         match self {
             Self::JoinVoice => "JoinVoice",
             Self::LeaveVoice => "LeaveVoice",
+            Self::ToggleStream => "ToggleStream",
             Self::ShowPinnedMessages => "ShowPinnedMessages",
             Self::ShowThreads => "ShowThreads",
             Self::MarkAsRead => "MarkAsRead",
             Self::ToggleMute => "ToggleMute",
+            Self::WatchStream => "WatchStream",
             Self::ParticipantAudioSettings => "VoiceParticipantAudio",
         }
     }

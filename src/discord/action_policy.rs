@@ -30,6 +30,7 @@ pub enum DiscordAction {
     DeleteMessage,
     AddReaction,
     JoinVoiceChannel,
+    StreamVoice,
     TransmitMicrophone,
 }
 
@@ -57,6 +58,7 @@ impl DiscordAction {
             }
             Self::ReopenThread => Some(DiscordPermission::ReopenThread),
             Self::JoinVoiceChannel => Some(DiscordPermission::Connect),
+            Self::StreamVoice => Some(DiscordPermission::Stream),
             Self::RemoveMessageEmbeds
             | Self::ChangeThreadMembership
             | Self::EditMessage
@@ -92,6 +94,7 @@ impl fmt::Display for DiscordAction {
             Self::DeleteMessage => "delete this message",
             Self::AddReaction => "add a reaction",
             Self::JoinVoiceChannel => "join this voice channel",
+            Self::StreamVoice => "stream video",
             Self::TransmitMicrophone => "transmit microphone audio",
         })
     }

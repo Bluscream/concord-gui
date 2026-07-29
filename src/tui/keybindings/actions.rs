@@ -117,6 +117,7 @@ define_ui_actions! {
     OpenVoiceOptions => ("Voice options", &[], None),
     VoiceDeafen => ("deafen voice", &[&[Leader, Char('v'), Char('d')]], None),
     VoiceMute => ("mute voice", &[&[Leader, Char('v'), Char('m')]], None),
+    VoiceStream => ("Share screen", &[&[Leader, Char('v'), Char('s')]], None),
     VoiceLeave => ("leave voice", &[&[Leader, Char('v'), Char('l')]], None),
 }
 

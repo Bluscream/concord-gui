@@ -32,7 +32,7 @@ fn channel_action_menu_show_threads_opens_thread_list_view() {
 
     assert!(state.is_channel_action_menu_active());
     let actions = state.selected_channel_action_items();
-    assert_eq!(actions.len(), 6);
+    assert_eq!(actions.len(), 7);
     assert_eq!(actions[0].kind, ChannelActionKind::JoinVoice);
     assert_eq!(actions[0].label, "Join voice");
     assert!(!actions[0].is_enabled());
@@ -41,15 +41,17 @@ fn channel_action_menu_show_threads_opens_thread_list_view() {
     assert_eq!(actions[1].label, "Leave voice");
     assert!(!actions[1].is_enabled());
     assert_eq!(actions[1].disabled_reason(), Some("not connected here"));
-    assert_eq!(actions[2].kind, ChannelActionKind::ShowPinnedMessages);
-    assert_eq!(actions[2].label, "Show pinned messages");
-    assert!(actions[2].is_enabled());
-    assert_eq!(actions[3].kind, ChannelActionKind::ShowThreads);
+    assert_eq!(actions[2].kind, ChannelActionKind::ToggleStream);
+    assert!(!actions[2].is_enabled());
+    assert_eq!(actions[3].kind, ChannelActionKind::ShowPinnedMessages);
+    assert_eq!(actions[3].label, "Show pinned messages");
     assert!(actions[3].is_enabled());
-    assert_eq!(actions[4].kind, ChannelActionKind::MarkAsRead);
-    assert_eq!(actions[4].label, "Mark as read");
-    assert_eq!(actions[5].kind, ChannelActionKind::ToggleMute);
-    assert_eq!(actions[5].label, "Mute channel");
+    assert_eq!(actions[4].kind, ChannelActionKind::ShowThreads);
+    assert!(actions[4].is_enabled());
+    assert_eq!(actions[5].kind, ChannelActionKind::MarkAsRead);
+    assert_eq!(actions[5].label, "Mark as read");
+    assert_eq!(actions[6].kind, ChannelActionKind::ToggleMute);
+    assert_eq!(actions[6].label, "Mute channel");
 
     // "Show threads" opens the thread-list view in the message pane, not a submenu.
     let command = state.activate_channel_action_shortcut("t".parse().expect("t should parse"));
@@ -313,7 +315,7 @@ fn channel_action_menu_toggle_mute_opens_duration_then_dispatches_command() {
     state.focus_pane(FocusPane::Channels);
     state.move_down();
     state.open_selected_channel_actions();
-    state.select_channel_action_row(5);
+    state.select_channel_action_row(6);
 
     assert_eq!(state.activate_selected_channel_action(), None);
     assert!(state.is_channel_action_mute_duration_phase());
@@ -342,24 +344,26 @@ fn category_leader_action_lists_disabled_rows_and_dispatches_mute_command() {
 
     assert!(state.is_channel_action_menu_active());
     let actions = state.selected_channel_action_items();
-    assert_eq!(actions.len(), 6);
+    assert_eq!(actions.len(), 7);
     assert_eq!(actions[0].kind, ChannelActionKind::JoinVoice);
     assert!(!actions[0].is_enabled());
     assert_eq!(actions[1].kind, ChannelActionKind::LeaveVoice);
     assert!(!actions[1].is_enabled());
-    assert_eq!(actions[2].kind, ChannelActionKind::ShowPinnedMessages);
+    assert_eq!(actions[2].kind, ChannelActionKind::ToggleStream);
     assert!(!actions[2].is_enabled());
-    assert_eq!(actions[3].kind, ChannelActionKind::ShowThreads);
+    assert_eq!(actions[3].kind, ChannelActionKind::ShowPinnedMessages);
     assert!(!actions[3].is_enabled());
-    assert_eq!(actions[4].kind, ChannelActionKind::MarkAsRead);
+    assert_eq!(actions[4].kind, ChannelActionKind::ShowThreads);
     assert!(!actions[4].is_enabled());
-    assert_eq!(actions[5].kind, ChannelActionKind::ToggleMute);
-    assert_eq!(actions[5].label, "Mute category");
-    assert!(actions[5].is_enabled());
+    assert_eq!(actions[5].kind, ChannelActionKind::MarkAsRead);
+    assert!(!actions[5].is_enabled());
+    assert_eq!(actions[6].kind, ChannelActionKind::ToggleMute);
+    assert_eq!(actions[6].label, "Mute category");
+    assert!(actions[6].is_enabled());
 
     assert_eq!(state.activate_selected_channel_action(), None);
     assert!(state.is_channel_action_menu_active());
-    state.select_channel_action_row(5);
+    state.select_channel_action_row(6);
     assert_eq!(state.activate_selected_channel_action(), None);
     assert!(state.is_channel_action_mute_duration_phase());
 

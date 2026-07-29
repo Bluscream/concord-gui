@@ -15,7 +15,8 @@ use super::{
     ActivityInfo, AttachmentUpdate, ChannelInfo, ChannelRecipientInfo, CustomEmojiInfo, EmbedInfo,
     GuildBoostTier, GuildNotificationSettingsInfo, GuildOnboardingInfo, GuildVerificationLevel,
     MemberInfo, MentionInfo, MessageInfo, PollInfo, PremiumTier, PresenceStatus, ReactionUserInfo,
-    ReadStateInfo, RelationshipInfo, RoleInfo, SnapshotAreas, UserProfileInfo, UserSettingsInfo,
+    ReadStateInfo, RelationshipInfo, RoleInfo, SnapshotAreas, StreamCaptureTarget,
+    StreamCreateInfo, StreamDeleteInfo, StreamServerInfo, UserProfileInfo, UserSettingsInfo,
     VoiceConnectionStatus, VoiceScope, VoiceServerInfo, VoiceSoundKind, VoiceStateInfo,
     is_thread_kind,
 };
@@ -427,6 +428,15 @@ pub enum AppEvent {
     VoiceServerUpdate {
         server: VoiceServerInfo,
     },
+    StreamCreate {
+        stream: StreamCreateInfo,
+    },
+    StreamServerUpdate {
+        server: StreamServerInfo,
+    },
+    StreamDelete {
+        stream: StreamDeleteInfo,
+    },
     VoiceConnectionStatusChanged {
         scope: VoiceScope,
         channel_id: Option<Id<ChannelMarker>>,
@@ -545,6 +555,31 @@ pub enum AppEvent {
     MediaPlaybackWindowReady {
         request_id: MediaPlaybackRequestId,
         url: String,
+    },
+    StreamPlaybackWindowReady {
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+        user_id: Id<UserMarker>,
+    },
+    StreamPlaybackEnded {
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+        user_id: Id<UserMarker>,
+        reconnecting: bool,
+    },
+    StreamCaptureTargetsLoaded {
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+        targets: Vec<StreamCaptureTarget>,
+        error: Option<String>,
+    },
+    StreamBroadcastStarted {
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+    },
+    StreamBroadcastEnded {
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
     },
     AttachmentDownloadStarted {
         id: AttachmentDownloadId,
@@ -729,6 +764,9 @@ define_app_event_kinds! {
     VoiceStateUpdate: AppEvent::VoiceStateUpdate { .. },
     VoiceSpeakingUpdate: AppEvent::VoiceSpeakingUpdate { .. },
     VoiceServerUpdate: AppEvent::VoiceServerUpdate { .. },
+    StreamCreate: AppEvent::StreamCreate { .. },
+    StreamServerUpdate: AppEvent::StreamServerUpdate { .. },
+    StreamDelete: AppEvent::StreamDelete { .. },
     VoiceConnectionStatusChanged: AppEvent::VoiceConnectionStatusChanged { .. },
     VoiceSound: AppEvent::VoiceSound { .. },
     CallDelete: AppEvent::CallDelete { .. },
@@ -754,6 +792,11 @@ define_app_event_kinds! {
     CaptchaRequired: AppEvent::CaptchaRequired { .. },
     ThreadNotificationLevelUpdate: AppEvent::ThreadNotificationLevelUpdate { .. },
     MediaPlaybackWindowReady: AppEvent::MediaPlaybackWindowReady { .. },
+    StreamPlaybackWindowReady: AppEvent::StreamPlaybackWindowReady { .. },
+    StreamPlaybackEnded: AppEvent::StreamPlaybackEnded { .. },
+    StreamCaptureTargetsLoaded: AppEvent::StreamCaptureTargetsLoaded { .. },
+    StreamBroadcastStarted: AppEvent::StreamBroadcastStarted { .. },
+    StreamBroadcastEnded: AppEvent::StreamBroadcastEnded { .. },
     AttachmentDownloadStarted: AppEvent::AttachmentDownloadStarted { .. },
     AttachmentDownloadProgress: AppEvent::AttachmentDownloadProgress { .. },
     AttachmentDownloadCompleted: AppEvent::AttachmentDownloadCompleted { .. },
@@ -1773,6 +1816,11 @@ impl AppEventKind {
             | AppEventKind::GatewayDispatchReceived
             | AppEventKind::SignedOut
             | AppEventKind::MediaPlaybackWindowReady
+            | AppEventKind::StreamPlaybackWindowReady
+            | AppEventKind::StreamPlaybackEnded
+            | AppEventKind::StreamCaptureTargetsLoaded
+            | AppEventKind::StreamBroadcastStarted
+            | AppEventKind::StreamBroadcastEnded
             | AppEventKind::ApplicationCommandsLoaded
             | AppEventKind::ApplicationCommandIndexUpdated
             | AppEventKind::InteractionSucceeded
@@ -1807,7 +1855,10 @@ impl AppEventKind {
             | AppEventKind::GatewayReidentified
             | AppEventKind::GatewayClosed => AppEventMetadata::effect_only(),
 
-            AppEventKind::VoiceServerUpdate => AppEventMetadata::inert(),
+            AppEventKind::VoiceServerUpdate
+            | AppEventKind::StreamCreate
+            | AppEventKind::StreamServerUpdate
+            | AppEventKind::StreamDelete => AppEventMetadata::inert(),
 
             // The current user's Nitro tier is stored in the session (part of
             // the navigation snapshot area) so the upload-limit check can read

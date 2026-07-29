@@ -9,6 +9,7 @@ use crate::discord::{
 };
 use crate::logging;
 
+use super::popups::{ChannelActionMenuState, ModalPopup};
 use super::{
     ChannelPaneCursor, DashboardState, MINIMUM_ESTABLISHED_DM_MESSAGES, VoiceConnectionUiState,
 };
@@ -200,6 +201,53 @@ impl DashboardState {
             }
             AppEvent::MediaPlaybackWindowReady { request_id, .. } => {
                 self.clear_media_playback_preparing(*request_id);
+            }
+            AppEvent::StreamPlaybackWindowReady {
+                scope,
+                channel_id,
+                user_id,
+            } => {
+                self.clear_stream_playback_preparing(*scope, *channel_id, *user_id);
+            }
+            AppEvent::StreamPlaybackEnded {
+                scope,
+                channel_id,
+                user_id,
+                reconnecting,
+            } => {
+                self.record_stream_playback_ended(*scope, *channel_id, *user_id, *reconnecting);
+            }
+            AppEvent::StreamCaptureTargetsLoaded {
+                scope,
+                channel_id,
+                targets,
+                error,
+            } => {
+                if let Some(error) = error {
+                    self.show_error_toast(error, Instant::now());
+                } else if targets.is_empty() {
+                    self.show_error_toast(
+                        "No displays or shareable windows were found.",
+                        Instant::now(),
+                    );
+                } else if self.runtime.voice_connection.is_some_and(|voice| {
+                    voice.scope == *scope && voice.channel_id == Some(*channel_id)
+                }) {
+                    self.popups.modal = Some(ModalPopup::ChannelActionMenu(
+                        ChannelActionMenuState::StreamTargets {
+                            scope: *scope,
+                            channel_id: *channel_id,
+                            targets: targets.clone(),
+                            selection: Default::default(),
+                        },
+                    ));
+                }
+            }
+            AppEvent::StreamBroadcastStarted { scope, channel_id } => {
+                self.clear_stream_broadcast_preparing(*scope, *channel_id);
+            }
+            AppEvent::StreamBroadcastEnded { scope, channel_id } => {
+                self.record_stream_broadcast_ended(*scope, *channel_id);
             }
             AppEvent::CurrentUserCapabilities { premium_tier } => {
                 self.discord.current_user_premium_tier = Some(*premium_tier);
@@ -511,6 +559,10 @@ impl DashboardState {
                 );
             }
             VoiceConnectionStatus::Disconnected => {
+                self.runtime.stream_playback_preparing = None;
+                self.runtime.active_stream_playback = None;
+                self.runtime.stream_broadcast_preparing = None;
+                self.runtime.active_stream_broadcast = None;
                 if self
                     .runtime
                     .voice_connection
@@ -524,6 +576,10 @@ impl DashboardState {
                 );
             }
             VoiceConnectionStatus::Failed => {
+                self.runtime.stream_playback_preparing = None;
+                self.runtime.active_stream_playback = None;
+                self.runtime.stream_broadcast_preparing = None;
+                self.runtime.active_stream_broadcast = None;
                 if self
                     .runtime
                     .voice_connection

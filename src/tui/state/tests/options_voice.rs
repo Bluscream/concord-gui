@@ -1,12 +1,14 @@
+use std::str::FromStr;
+
 use super::*;
 use crate::discord::test_builders::{
     VoiceConnectionStatusChangedFixture, guild_create_event, voice_connection_status_changed_event,
 };
 use crate::discord::{
-    AppCommand, VoiceParticipantPlaybackSettings, VoiceParticipantVolumePercent, VoiceScope,
-    VoiceVolumePercent,
+    AppCommand, StreamCaptureTarget, StreamCaptureTargetKind, VoiceParticipantPlaybackSettings,
+    VoiceParticipantVolumePercent, VoiceScope, VoiceVolumePercent,
 };
-use crate::tui::keybindings::OptionsCategoryShortcut;
+use crate::tui::keybindings::{KeyChord, OptionsCategoryShortcut, UiAction};
 use crate::tui::state::{ChannelActionKind, popups::OptionsCategory};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -26,6 +28,17 @@ fn private_voice_state(kind: &str) -> DashboardState {
     state.focus_pane(FocusPane::Channels);
     state.open_selected_channel_actions();
     state
+}
+
+fn current_voice_stream_leader_label(state: &mut DashboardState) -> String {
+    state.open_leader();
+    state.push_leader_keymap_key(KeyChord::from_str("v").expect("voice prefix should parse"));
+    state
+        .leader_keymap_shortcuts()
+        .into_iter()
+        .find(|item| item.action == Some(UiAction::VoiceStream))
+        .expect("voice stream shortcut is present")
+        .label
 }
 
 #[test]
@@ -262,6 +275,56 @@ fn voice_channel_participant_audio_controls_persist() {
 }
 
 #[test]
+fn streaming_voice_participant_action_emits_watch_command_when_joined() {
+    let mut state = state_with_voice_channel_participant();
+    state.push_event(AppEvent::Ready {
+        user: "me".to_owned(),
+        user_id: Some(Id::new(1)),
+    });
+    state.push_event(AppEvent::VoiceStateUpdate {
+        state: VoiceStateInfo {
+            session_id: Some("my-voice-session".to_owned()),
+            ..voice_state(Id::new(1), Some(Id::new(11)), Id::new(1))
+        },
+    });
+    state.push_event(AppEvent::VoiceStateUpdate {
+        state: VoiceStateInfo {
+            self_stream: true,
+            ..voice_state(Id::new(1), Some(Id::new(11)), Id::new(20))
+        },
+    });
+    state.push_effect(voice_connection_status_changed_event(
+        VoiceConnectionStatusChangedFixture {
+            scope: VoiceScope::Guild(Id::new(1)),
+            channel_id: Some(Id::new(11)),
+            status: VoiceConnectionStatus::Connected,
+            ..VoiceConnectionStatusChangedFixture::new()
+        },
+    ));
+    state.focus_pane(FocusPane::Channels);
+    state.set_channel_view_height(10);
+
+    assert!(state.select_visible_pane_row(FocusPane::Channels, 2));
+    assert_eq!(state.confirm_selected_channel_command(), None);
+    let actions = state.selected_channel_action_items();
+    assert_eq!(actions[0].kind, ChannelActionKind::WatchStream);
+    assert!(actions[0].is_enabled());
+
+    assert_eq!(
+        crate::tui::input::handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE),
+        ),
+        Some(AppCommand::WatchVoiceStream {
+            scope: VoiceScope::Guild(Id::new(1)),
+            channel_id: Id::new(11),
+            user_id: Id::new(20),
+            display_name: "Alice".to_owned(),
+        })
+    );
+}
+
+#[test]
 fn voice_channel_action_emits_join_then_leave_command() {
     let mut state = DashboardState::new_with_voice_options(VoiceOptions {
         self_mute: true,
@@ -321,6 +384,128 @@ fn voice_channel_action_emits_join_then_leave_command() {
             scope: VoiceScope::Guild(Id::new(1)),
             self_mute: true,
             self_deaf: true,
+        })
+    );
+}
+
+#[test]
+fn joined_voice_channel_can_select_a_stream_target_and_stop_sharing() {
+    let me = Id::new(10);
+    let guild_id = Id::new(1);
+    let channel_id = Id::new(11);
+    let target = StreamCaptureTarget {
+        kind: StreamCaptureTargetKind::Window,
+        id: 7,
+        title: "Window: Terminal".to_owned(),
+    };
+    let mut state = DashboardState::new();
+    state.push_event(AppEvent::Ready {
+        user: "me".to_owned(),
+        user_id: Some(me),
+    });
+    state.push_event(guild_create_event(GuildCreateFixture {
+        member_count: Some(1),
+        owner_id: Some(Id::new(99)),
+        channels: vec![voice_channel_info(guild_id, channel_id, "Lobby")],
+        members: vec![member_with_username(me, "me", "me")],
+        roles: vec![role_info(
+            Id::new(guild_id.get()),
+            "@everyone",
+            PERM_VIEW_CHANNEL | PERM_CONNECT | PERM_STREAM,
+        )],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+    state.push_event(AppEvent::VoiceStateUpdate {
+        state: VoiceStateInfo {
+            session_id: Some("voice-session".to_owned()),
+            ..voice_state(guild_id, Some(channel_id), me)
+        },
+    });
+    state.push_effect(voice_connection_status_changed_event(
+        VoiceConnectionStatusChangedFixture {
+            scope: VoiceScope::Guild(guild_id),
+            channel_id: Some(channel_id),
+            status: VoiceConnectionStatus::Connected,
+            ..VoiceConnectionStatusChangedFixture::new()
+        },
+    ));
+    state.activate_guild(super::ActiveGuildScope::Guild(guild_id));
+    state.focus_pane(FocusPane::Channels);
+    assert_eq!(
+        current_voice_stream_leader_label(&mut state),
+        "Share screen"
+    );
+    assert_eq!(
+        state.toggle_current_voice_stream_command(),
+        Some(AppCommand::LoadStreamCaptureTargets {
+            scope: VoiceScope::Guild(guild_id),
+            channel_id,
+        })
+    );
+    state.open_selected_channel_actions();
+
+    let actions = state.selected_channel_action_items();
+    assert!(actions[2].is_enabled());
+    assert_eq!(actions[2].kind, ChannelActionKind::ToggleStream);
+    assert_eq!(actions[2].label, "Share screen");
+    state.select_channel_action_row(2);
+    assert_eq!(
+        state.activate_selected_channel_action(),
+        Some(AppCommand::LoadStreamCaptureTargets {
+            scope: VoiceScope::Guild(guild_id),
+            channel_id,
+        })
+    );
+
+    state.push_effect(AppEvent::StreamCaptureTargetsLoaded {
+        scope: VoiceScope::Guild(guild_id),
+        channel_id,
+        targets: vec![target.clone()],
+        error: None,
+    });
+    assert!(state.is_channel_action_stream_target_phase());
+    assert_eq!(
+        state.selected_stream_capture_targets(),
+        std::slice::from_ref(&target)
+    );
+    assert_eq!(
+        state.activate_selected_channel_action(),
+        Some(AppCommand::StartVoiceStream {
+            scope: VoiceScope::Guild(guild_id),
+            channel_id,
+            target,
+        })
+    );
+    assert_eq!(
+        state
+            .toast_message()
+            .expect("screen share preparing toast is visible")
+            .text,
+        "Preparing screen share..."
+    );
+
+    state.push_event(AppEvent::VoiceStateUpdate {
+        state: VoiceStateInfo {
+            session_id: Some("voice-session".to_owned()),
+            self_stream: true,
+            ..voice_state(guild_id, Some(channel_id), me)
+        },
+    });
+    assert_eq!(
+        current_voice_stream_leader_label(&mut state),
+        "Stop sharing"
+    );
+    state.open_selected_channel_actions();
+    let actions = state.selected_channel_action_items();
+    assert!(actions[2].is_enabled());
+    assert_eq!(actions[2].kind, ChannelActionKind::ToggleStream);
+    assert_eq!(actions[2].label, "Stop sharing");
+    state.select_channel_action_row(2);
+    assert_eq!(
+        state.activate_selected_channel_action(),
+        Some(AppCommand::StopVoiceStream {
+            scope: VoiceScope::Guild(guild_id),
+            channel_id,
         })
     );
 }

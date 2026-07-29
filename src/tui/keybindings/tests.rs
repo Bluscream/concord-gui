@@ -143,6 +143,18 @@ fn default_keymap_uses_leader_v_voice_group() {
         Some(KeyMapLookup::Action(UiAction::VoiceMute))
     );
     assert!(
+        children
+            .iter()
+            .any(|item| item.key == "s" && item.label == "Share screen")
+    );
+    assert_eq!(
+        key_bindings.keymap_lookup_with_key(
+            &prefix,
+            KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE)
+        ),
+        Some(KeyMapLookup::Action(UiAction::VoiceStream))
+    );
+    assert!(
         key_bindings
             .leader_keymap_children(&key_bindings.leader_keymap_prefix())
             .iter()

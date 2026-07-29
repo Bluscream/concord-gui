@@ -830,6 +830,11 @@ impl DiscordState {
             | AppEvent::MessageSendCooldownStarted { .. }
             | AppEvent::SignedOut
             | AppEvent::MediaPlaybackWindowReady { .. }
+            | AppEvent::StreamPlaybackWindowReady { .. }
+            | AppEvent::StreamPlaybackEnded { .. }
+            | AppEvent::StreamCaptureTargetsLoaded { .. }
+            | AppEvent::StreamBroadcastStarted { .. }
+            | AppEvent::StreamBroadcastEnded { .. }
             | AppEvent::ApplicationCommandsLoaded { .. }
             | AppEvent::ApplicationCommandIndexUpdated { .. }
             | AppEvent::InteractionSucceeded { .. }
@@ -849,6 +854,9 @@ impl DiscordState {
             | AppEvent::UserProfileLoadFailed { .. }
             | AppEvent::UserProfileUpdateFailed { .. }
             | AppEvent::VoiceServerUpdate { .. }
+            | AppEvent::StreamCreate { .. }
+            | AppEvent::StreamServerUpdate { .. }
+            | AppEvent::StreamDelete { .. }
             | AppEvent::VoiceConnectionStatusChanged { .. }
             | AppEvent::VoiceSound { .. }
             | AppEvent::GatewayResumed

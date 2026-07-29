@@ -1280,10 +1280,16 @@ pub(super) fn parse_voice_session_description(
         return Err("voice session description secret key is not 32 bytes".to_owned());
     }
     let dave_protocol_version = data.get("dave_protocol_version").and_then(Value::as_u64);
+    let video_codec = data
+        .get("video_codec")
+        .and_then(Value::as_str)
+        .filter(|codec| !codec.is_empty())
+        .map(str::to_owned);
     Ok(VoiceSessionDescription {
         mode,
         secret_key,
         dave_protocol_version,
+        video_codec,
     })
 }
 

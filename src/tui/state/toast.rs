@@ -1,8 +1,15 @@
 use std::time::{Duration, Instant};
 
-use crate::discord::MediaPlaybackRequestId;
+use crate::discord::ids::{
+    Id,
+    marker::{ChannelMarker, UserMarker},
+};
+use crate::discord::{MediaPlaybackRequestId, VoiceScope};
 
-use super::{DashboardState, MediaPlaybackPreparingUiState, ToastKind, ToastMessage, ToastView};
+use super::{
+    DashboardState, MediaPlaybackPreparingUiState, StreamBroadcastUiTarget, StreamPlaybackUiTarget,
+    ToastKind, ToastMessage, ToastView,
+};
 
 const TOAST_DURATION: Duration = Duration::from_secs(2);
 /// Captcha guidance points the user to another client, so it lingers longer
@@ -10,6 +17,8 @@ const TOAST_DURATION: Duration = Duration::from_secs(2);
 const CAPTCHA_TOAST_DURATION: Duration = Duration::from_secs(8);
 const MEDIA_PLAYBACK_DISABLED_TEXT: &str = "Media playback is disabled in Display options.";
 const MEDIA_PLAYBACK_PREPARING_TEXT: &str = "Preparing media playback...";
+const STREAM_PLAYBACK_PREPARING_TEXT: &str = "Preparing stream playback...";
+const STREAM_BROADCAST_PREPARING_TEXT: &str = "Preparing screen share...";
 
 impl DashboardState {
     pub(in crate::tui) fn show_success_toast(&mut self, text: impl Into<String>, now: Instant) {
@@ -40,6 +49,12 @@ impl DashboardState {
         now: Instant,
     ) {
         self.runtime.media_playback_preparing = None;
+        // Short status updates may cover a slow stream startup. Keep tracking
+        // it so the preparing toast returns when that update expires.
+        if kind == ToastKind::Error {
+            self.runtime.stream_playback_preparing = None;
+            self.runtime.stream_broadcast_preparing = None;
+        }
         self.runtime.toast_message = Some(ToastMessage {
             text: text.into(),
             kind,
@@ -47,11 +62,107 @@ impl DashboardState {
         });
     }
 
+    pub(in crate::tui) fn show_stream_playback_preparing_toast(
+        &mut self,
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+        user_id: Id<UserMarker>,
+    ) -> bool {
+        let target = StreamPlaybackUiTarget {
+            scope,
+            channel_id,
+            user_id,
+        };
+        if self.runtime.active_stream_playback == Some(target) {
+            return false;
+        }
+
+        self.runtime.media_playback_preparing = None;
+        self.runtime.active_stream_playback = None;
+        self.runtime.stream_playback_preparing = Some(target);
+        self.runtime.toast_message = Some(ToastMessage {
+            text: STREAM_PLAYBACK_PREPARING_TEXT.to_owned(),
+            kind: ToastKind::Info,
+            expires_at: None,
+        });
+        true
+    }
+
+    pub(in crate::tui) fn clear_stream_playback_preparing(
+        &mut self,
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+        user_id: Id<UserMarker>,
+    ) -> bool {
+        let target = StreamPlaybackUiTarget {
+            scope,
+            channel_id,
+            user_id,
+        };
+        if self.runtime.stream_playback_preparing.as_ref() != Some(&target) {
+            return false;
+        }
+
+        self.runtime.stream_playback_preparing = None;
+        self.runtime.active_stream_playback = Some(target);
+        if self
+            .runtime
+            .toast_message
+            .as_ref()
+            .is_some_and(|message| message.expires_at.is_none())
+        {
+            self.runtime.toast_message = None;
+            return true;
+        }
+        false
+    }
+
+    pub(in crate::tui) fn record_stream_playback_ended(
+        &mut self,
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+        user_id: Id<UserMarker>,
+        reconnecting: bool,
+    ) -> bool {
+        let target = StreamPlaybackUiTarget {
+            scope,
+            channel_id,
+            user_id,
+        };
+        let tracked = self.runtime.active_stream_playback == Some(target)
+            || self.runtime.stream_playback_preparing == Some(target);
+        if !tracked {
+            return false;
+        }
+
+        self.runtime.active_stream_playback = None;
+        if reconnecting {
+            return self.show_stream_playback_preparing_toast(scope, channel_id, user_id);
+        }
+
+        let was_preparing = self.runtime.stream_playback_preparing == Some(target);
+        if was_preparing {
+            self.runtime.stream_playback_preparing = None;
+        }
+        if was_preparing
+            && self
+                .runtime
+                .toast_message
+                .as_ref()
+                .is_some_and(|message| message.expires_at.is_none())
+        {
+            self.runtime.toast_message = None;
+            return true;
+        }
+        false
+    }
+
     pub(in crate::tui) fn show_media_playback_preparing_toast(
         &mut self,
         request_id: MediaPlaybackRequestId,
         url: String,
     ) {
+        self.runtime.stream_playback_preparing = None;
         self.runtime.media_playback_preparing =
             Some(MediaPlaybackPreparingUiState { request_id, url });
         self.runtime.toast_message = Some(ToastMessage {
@@ -59,6 +170,81 @@ impl DashboardState {
             kind: ToastKind::Info,
             expires_at: None,
         });
+    }
+
+    pub(in crate::tui) fn show_stream_broadcast_preparing_toast(
+        &mut self,
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+    ) -> bool {
+        let target = StreamBroadcastUiTarget { scope, channel_id };
+        if self.runtime.active_stream_broadcast == Some(target) {
+            return false;
+        }
+
+        self.runtime.media_playback_preparing = None;
+        self.runtime.active_stream_broadcast = None;
+        self.runtime.stream_broadcast_preparing = Some(target);
+        self.runtime.toast_message = Some(ToastMessage {
+            text: STREAM_BROADCAST_PREPARING_TEXT.to_owned(),
+            kind: ToastKind::Info,
+            expires_at: None,
+        });
+        true
+    }
+
+    pub(in crate::tui) fn clear_stream_broadcast_preparing(
+        &mut self,
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+    ) -> bool {
+        let target = StreamBroadcastUiTarget { scope, channel_id };
+        if self.runtime.stream_broadcast_preparing != Some(target) {
+            return false;
+        }
+
+        self.runtime.stream_broadcast_preparing = None;
+        self.runtime.active_stream_broadcast = Some(target);
+        if self
+            .runtime
+            .toast_message
+            .as_ref()
+            .is_some_and(|message| message.expires_at.is_none())
+        {
+            self.runtime.toast_message = None;
+            return true;
+        }
+        false
+    }
+
+    pub(in crate::tui) fn record_stream_broadcast_ended(
+        &mut self,
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+    ) -> bool {
+        let target = StreamBroadcastUiTarget { scope, channel_id };
+        let tracked = self.runtime.active_stream_broadcast == Some(target)
+            || self.runtime.stream_broadcast_preparing == Some(target);
+        if !tracked {
+            return false;
+        }
+
+        self.runtime.active_stream_broadcast = None;
+        let was_preparing = self.runtime.stream_broadcast_preparing == Some(target);
+        if was_preparing {
+            self.runtime.stream_broadcast_preparing = None;
+        }
+        if was_preparing
+            && self
+                .runtime
+                .toast_message
+                .as_ref()
+                .is_some_and(|message| message.expires_at.is_none())
+        {
+            self.runtime.toast_message = None;
+            return true;
+        }
+        false
     }
 
     pub(in crate::tui) fn clear_media_playback_preparing(
@@ -96,7 +282,21 @@ impl DashboardState {
             .and_then(|message| message.expires_at)
             .is_some_and(|expires_at| expires_at <= now)
         {
-            self.runtime.toast_message = None;
+            self.runtime.toast_message = if self.runtime.stream_broadcast_preparing.is_some() {
+                Some(ToastMessage {
+                    text: STREAM_BROADCAST_PREPARING_TEXT.to_owned(),
+                    kind: ToastKind::Info,
+                    expires_at: None,
+                })
+            } else if self.runtime.stream_playback_preparing.is_some() {
+                Some(ToastMessage {
+                    text: STREAM_PLAYBACK_PREPARING_TEXT.to_owned(),
+                    kind: ToastKind::Info,
+                    expires_at: None,
+                })
+            } else {
+                None
+            };
             return true;
         }
         false
@@ -206,5 +406,106 @@ mod tests {
             url: "https://example.com/video.mp4".to_owned(),
         });
         assert!(state.toast_message().is_none());
+    }
+
+    #[test]
+    fn stream_playback_preparing_toast_waits_for_matching_ready_event() {
+        let mut state = DashboardState::new();
+        let now = Instant::now();
+        let scope = VoiceScope::Guild(Id::new(1));
+        let channel_id = Id::new(2);
+        let user_id = Id::new(3);
+        let media_request_id = MediaPlaybackRequestId::new(1);
+
+        state.show_media_playback_preparing_toast(
+            media_request_id,
+            "https://example.com/video.mp4".to_owned(),
+        );
+        assert!(state.show_stream_playback_preparing_toast(scope, channel_id, user_id));
+
+        let toast = state.toast_message().expect("preparing toast is visible");
+        assert_eq!(toast.text, STREAM_PLAYBACK_PREPARING_TEXT);
+        assert_eq!(toast.kind, ToastKind::Info);
+        assert_eq!(state.next_toast_deadline(), None);
+        state.show_success_toast("Voice connected", now);
+        assert!(state.clear_expired_toast(now + TOAST_DURATION));
+        assert_eq!(
+            state
+                .toast_message()
+                .expect("preparing toast is restored")
+                .text,
+            STREAM_PLAYBACK_PREPARING_TEXT
+        );
+        state.push_event(AppEvent::MediaPlaybackWindowReady {
+            request_id: media_request_id,
+            url: "https://example.com/video.mp4".to_owned(),
+        });
+        assert!(state.toast_message().is_some());
+        state.push_event(AppEvent::StreamPlaybackWindowReady {
+            scope,
+            channel_id,
+            user_id: Id::new(4),
+        });
+        assert!(state.toast_message().is_some());
+        state.push_event(AppEvent::StreamPlaybackWindowReady {
+            scope,
+            channel_id,
+            user_id,
+        });
+        assert!(state.toast_message().is_none());
+        assert!(!state.show_stream_playback_preparing_toast(scope, channel_id, user_id));
+        assert!(state.toast_message().is_none());
+        state.push_event(AppEvent::StreamPlaybackEnded {
+            scope,
+            channel_id,
+            user_id,
+            reconnecting: false,
+        });
+        assert!(state.show_stream_playback_preparing_toast(scope, channel_id, user_id));
+        state.push_event(AppEvent::StreamPlaybackWindowReady {
+            scope,
+            channel_id,
+            user_id,
+        });
+        state.push_event(AppEvent::StreamPlaybackEnded {
+            scope,
+            channel_id,
+            user_id,
+            reconnecting: true,
+        });
+        assert_eq!(
+            state
+                .toast_message()
+                .expect("reconnect preparing toast is visible")
+                .text,
+            STREAM_PLAYBACK_PREPARING_TEXT
+        );
+    }
+
+    #[test]
+    fn stream_broadcast_preparing_toast_waits_for_matching_started_event() {
+        let mut state = DashboardState::new();
+        let scope = VoiceScope::Guild(Id::new(1));
+        let channel_id = Id::new(2);
+
+        assert!(state.show_stream_broadcast_preparing_toast(scope, channel_id));
+        assert_eq!(
+            state
+                .toast_message()
+                .expect("broadcast preparing toast is visible")
+                .text,
+            STREAM_BROADCAST_PREPARING_TEXT
+        );
+        state.push_event(AppEvent::StreamBroadcastStarted {
+            scope,
+            channel_id: Id::new(3),
+        });
+        assert!(state.toast_message().is_some());
+        state.push_event(AppEvent::StreamBroadcastStarted { scope, channel_id });
+        assert!(state.toast_message().is_none());
+        assert!(!state.show_stream_broadcast_preparing_toast(scope, channel_id));
+
+        state.push_event(AppEvent::StreamBroadcastEnded { scope, channel_id });
+        assert!(state.show_stream_broadcast_preparing_toast(scope, channel_id));
     }
 }

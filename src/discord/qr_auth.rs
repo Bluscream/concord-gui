@@ -25,6 +25,7 @@ use super::{
 const REMOTE_AUTH_URL: &str = "wss://remote-auth-gateway.discord.gg/?v=2";
 const TICKET_EXCHANGE_URL: &str = "https://discord.com/api/v10/users/@me/remote-auth/login";
 const QR_QUIET_ZONE_MODULES: usize = 4;
+const MAX_REMOTE_AUTH_RECONNECT_ATTEMPTS: u8 = 3;
 
 #[derive(Clone, Debug)]
 pub enum QrEvent {
@@ -75,17 +76,31 @@ async fn run(
     tx: &mpsc::Sender<QrEvent>,
     auth_session: &DiscordAuthSession,
 ) -> Result<Option<String>, String> {
+    let mut reconnect_attempts = 0;
     loop {
         match run_connection(tx, auth_session).await? {
             RemoteAuthConnectionOutcome::Finished(token) => return Ok(token),
             RemoteAuthConnectionOutcome::Reconnect(reason) => {
+                record_remote_auth_reconnect(&mut reconnect_attempts, reason)?;
                 let _ = tx
-                    .send(QrEvent::Status(format!("{reason}. Reconnecting...")))
+                    .send(QrEvent::Status(format!(
+                        "{reason}. Reconnecting ({reconnect_attempts}/{MAX_REMOTE_AUTH_RECONNECT_ATTEMPTS})..."
+                    )))
                     .await;
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
     }
+}
+
+fn record_remote_auth_reconnect(attempts: &mut u8, reason: &str) -> Result<(), String> {
+    if *attempts >= MAX_REMOTE_AUTH_RECONNECT_ATTEMPTS {
+        return Err(format!(
+            "{reason}; remote auth reconnect limit reached after {MAX_REMOTE_AUTH_RECONNECT_ATTEMPTS} attempts"
+        ));
+    }
+    *attempts += 1;
+    Ok(())
 }
 
 async fn run_connection(
@@ -198,9 +213,7 @@ async fn run_connection(
                             .ok_or("missing fingerprint")?;
                         if verify_remote_fingerprint(fp, &expected_fingerprint).is_err() {
                             let _ = writer.close().await;
-                            return Ok(RemoteAuthConnectionOutcome::Reconnect(
-                                "Remote auth fingerprint validation failed",
-                            ));
+                            return Err("Remote auth fingerprint validation failed".to_owned());
                         }
                         let bitmap = build_qr_bitmap(&format!("https://discord.com/ra/{fp}"))?;
                         let _ = tx.send(QrEvent::QrBitmap(bitmap)).await;
@@ -471,9 +484,9 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        QR_QUIET_ZONE_MODULES, build_qr_bitmap, format_ticket_exchange_error,
-        remote_auth_close_outcome, remote_auth_request, sanitize_response_body,
-        verify_remote_fingerprint,
+        MAX_REMOTE_AUTH_RECONNECT_ATTEMPTS, QR_QUIET_ZONE_MODULES, build_qr_bitmap,
+        format_ticket_exchange_error, record_remote_auth_reconnect, remote_auth_close_outcome,
+        remote_auth_request, sanitize_response_body, verify_remote_fingerprint,
     };
     use crate::discord::fingerprint::{CLIENT_BUILD_NUMBER, ClientFingerprint, accept_language};
     use tokio_tungstenite::tungstenite::http::header::{ACCEPT_LANGUAGE, ORIGIN, USER_AGENT};
@@ -511,6 +524,20 @@ mod tests {
             Ok(super::RemoteAuthConnectionOutcome::Reconnect(_))
         ));
         assert!(remote_auth_close_outcome(4001, "invalid command").is_err());
+    }
+
+    #[test]
+    fn remote_auth_stops_after_the_reconnect_limit() {
+        let mut attempts = 0;
+        for _ in 0..MAX_REMOTE_AUTH_RECONNECT_ATTEMPTS {
+            record_remote_auth_reconnect(&mut attempts, "session expired")
+                .expect("retry within the limit should continue");
+        }
+
+        let error = record_remote_auth_reconnect(&mut attempts, "session expired")
+            .expect_err("retry after the limit should stop");
+        assert!(error.contains("session expired"));
+        assert!(error.contains("reconnect limit reached"));
     }
 
     #[test]

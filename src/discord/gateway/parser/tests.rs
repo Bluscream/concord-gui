@@ -498,6 +498,66 @@ fn raw_voice_server_update_extracts_endpoint_without_exposing_token_in_debug() {
 }
 
 #[test]
+fn raw_stream_events_supply_the_separate_rtc_connection() {
+    let created = parse_user_account_event(
+        &json!({
+            "t": "STREAM_CREATE",
+            "d": {
+                "stream_key": "guild:10:20:30",
+                "rtc_server_id": "400",
+                "rtc_channel_id": "401"
+            }
+        })
+        .to_string(),
+    );
+    assert!(created.iter().any(|event| matches!(
+        event,
+        AppEvent::StreamCreate { stream }
+            if stream.stream_key == "guild:10:20:30"
+                && stream.rtc_server_id == "400"
+                && stream.rtc_channel_id == Id::new(401)
+    )));
+
+    let server = parse_user_account_event(
+        &json!({
+            "t": "STREAM_SERVER_UPDATE",
+            "d": {
+                "stream_key": "guild:10:20:30",
+                "endpoint": "stream.example.com",
+                "token": "secret-stream-token"
+            }
+        })
+        .to_string(),
+    );
+    let server = server
+        .iter()
+        .find_map(|event| match event {
+            AppEvent::StreamServerUpdate { server } => Some(server),
+            _ => None,
+        })
+        .expect("stream server update should parse");
+    assert_eq!(server.endpoint.as_deref(), Some("stream.example.com"));
+    assert!(!format!("{server:?}").contains("secret-stream-token"));
+
+    let deleted = parse_user_account_event(
+        &json!({
+            "t": "STREAM_DELETE",
+            "d": {
+                "stream_key": "guild:10:20:30",
+                "reason": "stream_ended",
+                "unavailable": true
+            }
+        })
+        .to_string(),
+    );
+    assert!(deleted.iter().any(|event| matches!(
+        event,
+        AppEvent::StreamDelete { stream }
+            if stream.reason == "stream_ended" && stream.unavailable
+    )));
+}
+
+#[test]
 fn raw_voice_state_update_extracts_leave_payload() {
     let events = parse_user_account_event(
         &json!({

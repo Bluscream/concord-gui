@@ -421,6 +421,7 @@ fn voice_session_description_reuses_only_the_same_transport_key_and_mode() {
         mode: "aead_xchacha20_poly1305_rtpsize".to_owned(),
         secret_key: vec![1, 2, 3],
         dave_protocol_version: Some(1),
+        video_codec: None,
     };
 
     for (next, expected) in [
@@ -626,6 +627,7 @@ fn dave_media_detection_requires_magic_marker() {
 #[test]
 fn voice_playback_frame_uses_only_playable_media_payloads() {
     let header = RtpHeader {
+        has_padding: false,
         marker: false,
         payload_type: DISCORD_VOICE_PAYLOAD_TYPE,
         sequence: 7,
@@ -1770,6 +1772,7 @@ fn rtp_header_parses_minimal_and_extended_packets() {
     assert_eq!(
         header,
         RtpHeader {
+            has_padding: false,
             marker: false,
             payload_type: 0x78,
             sequence: 0x1234,
@@ -1795,13 +1798,18 @@ fn rtp_header_parses_minimal_and_extended_packets() {
 }
 
 #[test]
-fn rtp_decrypts_aead_rtpsize_modes_and_strips_extension_body() {
+fn rtp_decrypts_aead_rtpsize_modes_and_strips_extension_body_and_padding() {
     let key = [7u8; 32];
     let nonce_suffix = [1, 2, 3, 4];
-    let mut header = vec![0x90, 0x78, 0, 7, 0, 0, 0, 8, 0, 0, 0, 9];
+    let mut header = vec![0xb0, 0x78, 0, 7, 0, 0, 0, 8, 0, 0, 0, 9];
     header.extend_from_slice(&0x1000u16.to_be_bytes());
     header.extend_from_slice(&1u16.to_be_bytes());
-    let plaintext = [b"ext!".as_slice(), b"opus-frame".as_slice()].concat();
+    let plaintext = [
+        b"ext!".as_slice(),
+        b"opus-frame".as_slice(),
+        [0, 0, 3].as_slice(),
+    ]
+    .concat();
 
     for mode in [AEAD_AES256_GCM_RTPSIZE, AEAD_XCHACHA20_POLY1305_RTPSIZE] {
         let mut packet = header.clone();
@@ -1816,6 +1824,7 @@ fn rtp_decrypts_aead_rtpsize_modes_and_strips_extension_body() {
         let rtp_header = parse_rtp_header(&packet).expect("RTP header should parse");
         let decryptor = VoiceRtpDecryptor::new(mode, &key).expect("decryptor should build");
 
+        assert!(rtp_header.has_padding);
         let decrypted = decryptor
             .decrypt_packet(&packet, &rtp_header)
             .expect("RTP payload should decrypt");
@@ -1915,6 +1924,26 @@ fn opus_encoder_encodes_decodable_20ms_stereo_frame() {
             DISCORD_OPUS_20MS_STEREO_SAMPLES - 1
         )
     );
+}
+
+#[test]
+fn system_audio_opus_encoder_encodes_decodable_20ms_stereo_frame() {
+    let mut encoder =
+        VoiceOpusEncode::new_system_audio().expect("system audio Opus encoder should build");
+    let pcm = vec![0i16; DISCORD_OPUS_20MS_STEREO_SAMPLES];
+
+    let opus = encoder
+        .encode_20ms_i16(&pcm)
+        .expect("system audio frame should encode");
+
+    let mut decoder = OpusDecoder::new(DISCORD_VOICE_SAMPLE_RATE, Channels::Stereo)
+        .expect("Opus decoder should build");
+    let mut decoded = vec![0.0f32; DISCORD_OPUS_20MS_STEREO_SAMPLES];
+    let samples_per_channel = decoder
+        .decode_float(&opus, &mut decoded, false)
+        .expect("system audio Opus should decode");
+
+    assert_eq!(samples_per_channel, DISCORD_OPUS_FRAME_SAMPLES_PER_CHANNEL);
 }
 
 #[cfg(feature = "voice-playback")]

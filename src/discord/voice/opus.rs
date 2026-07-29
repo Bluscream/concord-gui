@@ -11,7 +11,8 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError};
 
 use ::opus::{
-    Application as OpusApplication, Channels, Decoder as OpusDecoder, Encoder as OpusEncoder,
+    Application as OpusApplication, Bitrate as OpusBitrate, Channels, Decoder as OpusDecoder,
+    Encoder as OpusEncoder, Signal as OpusSignal,
 };
 use tokio::{
     sync::mpsc,
@@ -233,13 +234,34 @@ impl VoiceDecodedAudio {
 #[allow(dead_code)]
 impl VoiceOpusEncode {
     pub(super) fn new() -> Result<Self, String> {
-        OpusEncoder::new(
-            DISCORD_VOICE_SAMPLE_RATE,
-            Channels::Stereo,
-            OpusApplication::Voip,
-        )
-        .map(|encoder| Self { encoder })
-        .map_err(|error| format!("voice Opus encoder init failed: {error}"))
+        Self::new_with_application(OpusApplication::Voip)
+    }
+
+    pub(super) fn new_system_audio() -> Result<Self, String> {
+        let mut encoder = Self::new_with_application(OpusApplication::Audio)?;
+        encoder
+            .encoder
+            .set_bitrate(OpusBitrate::Bits(128_000))
+            .map_err(|error| format!("system audio Opus bitrate setup failed: {error}"))?;
+        encoder
+            .encoder
+            .set_signal(OpusSignal::Music)
+            .map_err(|error| format!("system audio Opus signal setup failed: {error}"))?;
+        encoder
+            .encoder
+            .set_inband_fec(true)
+            .map_err(|error| format!("system audio Opus FEC setup failed: {error}"))?;
+        encoder
+            .encoder
+            .set_packet_loss_perc(10)
+            .map_err(|error| format!("system audio Opus packet loss setup failed: {error}"))?;
+        Ok(encoder)
+    }
+
+    fn new_with_application(application: OpusApplication) -> Result<Self, String> {
+        OpusEncoder::new(DISCORD_VOICE_SAMPLE_RATE, Channels::Stereo, application)
+            .map(|encoder| Self { encoder })
+            .map_err(|error| format!("voice Opus encoder init failed: {error}"))
     }
 
     pub(super) fn encode_20ms_i16(&mut self, pcm: &[i16]) -> Result<Vec<u8>, String> {

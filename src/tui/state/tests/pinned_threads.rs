@@ -7,7 +7,7 @@ fn channel_show_pinned_messages_action_enters_pinned_message_view() {
     let mut state = state_with_messages(1);
     state.focus_pane(FocusPane::Channels);
     state.open_selected_channel_actions();
-    state.select_channel_action_row(2);
+    state.select_channel_action_row(3);
 
     let command = state.activate_selected_channel_action();
 

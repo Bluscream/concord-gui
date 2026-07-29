@@ -13,6 +13,7 @@ use crate::discord::state::{ChannelState, DiscordState};
 const PERMISSION_VIEW_CHANNEL: u64 = 0x0000_0000_0000_0400;
 const PERMISSION_MANAGE_CHANNELS: u64 = 0x0000_0000_0000_0010;
 const PERMISSION_MANAGE_GUILD: u64 = 0x0000_0000_0000_0020;
+const PERMISSION_STREAM: u64 = 0x0000_0000_0000_0200;
 const PERMISSION_SEND_MESSAGES: u64 = 0x0000_0000_0000_0800;
 const PERMISSION_SEND_TTS_MESSAGES: u64 = 0x0000_0000_0000_1000;
 const PERMISSION_MANAGE_MESSAGES: u64 = 0x0000_0000_0000_2000;
@@ -45,6 +46,7 @@ pub enum DiscordPermission {
     UseExternalEmojis,
     UseApplicationCommands,
     Connect,
+    Stream,
     Speak,
     UseVoiceActivity,
     ManageThreads,
@@ -67,6 +69,7 @@ impl fmt::Display for DiscordPermission {
             Self::UseExternalEmojis => "Use External Emojis",
             Self::UseApplicationCommands => "Use Application Commands",
             Self::Connect => "Connect",
+            Self::Stream => "Video",
             Self::Speak => "Speak",
             Self::UseVoiceActivity => "Use Voice Activity",
             Self::ManageThreads => "Manage Threads",
@@ -381,6 +384,12 @@ impl DiscordState {
                 channel.is_voice()
                     && permissions.contains(PERMISSION_VIEW_CHANNEL)
                     && permissions.contains(PERMISSION_CONNECT)
+            }
+            DiscordPermission::Stream => {
+                channel.is_voice()
+                    && permissions.contains(PERMISSION_VIEW_CHANNEL)
+                    && permissions.contains(PERMISSION_CONNECT)
+                    && permissions.contains(PERMISSION_STREAM)
             }
             DiscordPermission::Speak => {
                 channel.is_voice()

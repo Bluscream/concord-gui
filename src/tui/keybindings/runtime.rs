@@ -979,10 +979,12 @@ impl KeyBindings {
         match kind {
             ChannelActionKind::JoinVoice => vec![char_chord('e')],
             ChannelActionKind::LeaveVoice => vec![char_chord('l')],
+            ChannelActionKind::ToggleStream => vec![char_chord('s')],
             ChannelActionKind::ShowPinnedMessages => vec![char_chord('p')],
             ChannelActionKind::ShowThreads => vec![char_chord('t')],
             ChannelActionKind::MarkAsRead => vec![char_chord('m')],
             ChannelActionKind::ToggleMute => vec![char_chord('u')],
+            ChannelActionKind::WatchStream => vec![char_chord('w')],
             ChannelActionKind::ParticipantAudioSettings => vec![char_chord('a')],
         }
     }

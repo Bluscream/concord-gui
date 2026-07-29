@@ -16,6 +16,19 @@ pub enum VoiceScope {
     Private(Id<ChannelMarker>),
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum StreamCaptureTargetKind {
+    Display,
+    Window,
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct StreamCaptureTarget {
+    pub kind: StreamCaptureTargetKind,
+    pub id: u32,
+    pub title: String,
+}
+
 impl VoiceScope {
     pub fn guild_id(self) -> Option<Id<GuildMarker>> {
         match self {
@@ -155,6 +168,37 @@ impl fmt::Debug for VoiceServerInfo {
             .field("token", &"<redacted>")
             .finish()
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StreamCreateInfo {
+    pub stream_key: String,
+    pub rtc_server_id: String,
+    pub rtc_channel_id: Id<ChannelMarker>,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct StreamServerInfo {
+    pub stream_key: String,
+    pub endpoint: Option<String>,
+    pub token: String,
+}
+
+impl fmt::Debug for StreamServerInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StreamServerInfo")
+            .field("stream_key", &self.stream_key)
+            .field("endpoint", &self.endpoint)
+            .field("token", &"<redacted>")
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StreamDeleteInfo {
+    pub stream_key: String,
+    pub reason: String,
+    pub unavailable: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

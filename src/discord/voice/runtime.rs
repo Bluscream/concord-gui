@@ -1,4 +1,9 @@
+use super::broadcast::{
+    StreamBroadcastGatewaySession, StreamBroadcastRuntimeState, run_stream_broadcast_session,
+};
+use super::stream::{StreamGatewaySession, StreamRuntimeState, run_stream_gateway_session};
 use super::*;
+use tokio::sync::oneshot;
 
 pub(super) const MAX_VOICE_RECONNECT_ATTEMPTS: u8 = 3;
 
@@ -143,6 +148,18 @@ impl VoiceRuntimeState {
                 }
                 self.server = Some(server);
             }
+            VoiceRuntimeEvent::WatchStreamRequested(_)
+            | VoiceRuntimeEvent::WatchStreamCancelled { .. }
+            | VoiceRuntimeEvent::StreamCreate(_)
+            | VoiceRuntimeEvent::StreamServer(_)
+            | VoiceRuntimeEvent::StreamDelete(_)
+            | VoiceRuntimeEvent::StreamConnectionEstablished { .. }
+            | VoiceRuntimeEvent::StreamConnectionEnded { .. }
+            | VoiceRuntimeEvent::BroadcastStreamRequested(_)
+            | VoiceRuntimeEvent::BroadcastStreamCancelled { .. }
+            | VoiceRuntimeEvent::BroadcastStreamStopRequested { .. }
+            | VoiceRuntimeEvent::BroadcastStreamConnectionEstablished { .. }
+            | VoiceRuntimeEvent::BroadcastStreamConnectionEnded { .. } => {}
             VoiceRuntimeEvent::ConnectionEstablished { connection_id } => {
                 if self
                     .active
@@ -335,6 +352,9 @@ pub(crate) fn forward_app_event(
         AppEvent::Ready { user_id, .. } => VoiceRuntimeEvent::CurrentUserReady(*user_id),
         AppEvent::VoiceStateUpdate { state } => VoiceRuntimeEvent::VoiceState(state.clone()),
         AppEvent::VoiceServerUpdate { server } => VoiceRuntimeEvent::VoiceServer(server.clone()),
+        AppEvent::StreamCreate { stream } => VoiceRuntimeEvent::StreamCreate(stream.clone()),
+        AppEvent::StreamServerUpdate { server } => VoiceRuntimeEvent::StreamServer(server.clone()),
+        AppEvent::StreamDelete { stream } => VoiceRuntimeEvent::StreamDelete(stream.clone()),
         _ => return,
     };
     let _ = sender.send(runtime_event);
@@ -343,9 +363,12 @@ pub(crate) fn forward_app_event(
 pub(crate) async fn run_voice_runtime(
     mut events: mpsc::UnboundedReceiver<VoiceRuntimeEvent>,
     events_tx: mpsc::UnboundedSender<VoiceRuntimeEvent>,
+    gateway_commands_tx: mpsc::UnboundedSender<GatewayCommand>,
     status_publisher: VoiceStatusPublisher,
 ) {
     let mut state = VoiceRuntimeState::default();
+    let mut stream_state = StreamRuntimeState::default();
+    let mut broadcast_state = StreamBroadcastRuntimeState::default();
     let mut connection_task: Option<JoinHandle<()>> = None;
     let mut connection_session: Option<VoiceGatewaySession> = None;
     let mut capture_gate_tx: Option<mpsc::UnboundedSender<VoiceCaptureGate>> = None;
@@ -353,13 +376,134 @@ pub(crate) async fn run_voice_runtime(
     let mut participant_playback_tx: Option<
         watch::Sender<HashMap<Id<UserMarker>, VoiceParticipantPlaybackSettings>>,
     > = None;
+    let mut stream_task: Option<JoinHandle<()>> = None;
+    let mut stream_session: Option<StreamGatewaySession> = None;
+    let mut broadcast_task: Option<JoinHandle<()>> = None;
+    let mut broadcast_session: Option<StreamBroadcastGatewaySession> = None;
+    let mut broadcast_stop_tx: Option<oneshot::Sender<()>> = None;
 
     while let Some(event) = events.recv().await {
         let shutdown = matches!(event, VoiceRuntimeEvent::Shutdown);
+        let broadcast_started = match (&event, broadcast_session.as_ref()) {
+            (
+                VoiceRuntimeEvent::BroadcastStreamConnectionEstablished {
+                    connection_id,
+                    stream_key,
+                },
+                Some(session),
+            ) => {
+                session.connection_id == *connection_id && session.request.stream_key == *stream_key
+            }
+            _ => false,
+        };
+        let stream_update = stream_state.apply(&event);
+        let broadcast_update = broadcast_state.apply(&event);
         let VoiceRuntimeApplyResult {
             action,
             participant_playback_changed,
         } = state.apply_with_changes(event);
+        if let Some(error) = stream_update.error {
+            status_publisher.publish_error(error).await;
+        }
+        if let Some(stream_key) = stream_update.close_stream_key {
+            if let Some(stopped_session) = stop_stream_connection_task(
+                &mut stream_task,
+                &mut stream_session,
+                "stopping active stream connection task",
+            )
+            .await
+            {
+                status_publisher
+                    .publish_stream_playback_ended(
+                        stopped_session.request.scope,
+                        stopped_session.request.channel_id,
+                        stopped_session.request.owner_id,
+                        false,
+                    )
+                    .await;
+            }
+            if stream_update.send_delete {
+                let _ = gateway_commands_tx.send(GatewayCommand::DeleteStream { stream_key });
+            }
+        }
+        if let Some(session) = stream_update.connect {
+            if let Some(stopped_session) = stop_stream_connection_task(
+                &mut stream_task,
+                &mut stream_session,
+                "stopping previous stream connection task before reconnect",
+            )
+            .await
+            {
+                status_publisher
+                    .publish_stream_playback_ended(
+                        stopped_session.request.scope,
+                        stopped_session.request.channel_id,
+                        stopped_session.request.owner_id,
+                        true,
+                    )
+                    .await;
+            }
+            stream_session = Some(session.clone());
+            stream_task = Some(tokio::spawn(run_stream_gateway_session(
+                session,
+                events_tx.clone(),
+                status_publisher.clone(),
+            )));
+        }
+        if let Some(error) = broadcast_update.error {
+            status_publisher.publish_error(error).await;
+        }
+        if let Some(stream_key) = broadcast_update.close_stream_key {
+            if let Some(stopped_session) = stop_stream_broadcast_task(
+                &mut broadcast_task,
+                &mut broadcast_session,
+                &mut broadcast_stop_tx,
+                "stopping active stream broadcast task",
+            )
+            .await
+            {
+                status_publisher
+                    .publish_stream_broadcast_ended(
+                        stopped_session.request.scope,
+                        stopped_session.request.channel_id,
+                    )
+                    .await;
+            }
+            if broadcast_update.send_delete {
+                let _ = gateway_commands_tx.send(GatewayCommand::DeleteStream { stream_key });
+            }
+        }
+        if let Some(session) = broadcast_update.connect {
+            if let Some(stopped_session) = stop_stream_broadcast_task(
+                &mut broadcast_task,
+                &mut broadcast_session,
+                &mut broadcast_stop_tx,
+                "stopping previous stream broadcast task before reconnect",
+            )
+            .await
+            {
+                status_publisher
+                    .publish_stream_broadcast_ended(
+                        stopped_session.request.scope,
+                        stopped_session.request.channel_id,
+                    )
+                    .await;
+            }
+            let (stop_tx, stop_rx) = oneshot::channel();
+            broadcast_stop_tx = Some(stop_tx);
+            broadcast_session = Some(session.clone());
+            broadcast_task = Some(tokio::spawn(run_stream_broadcast_session(
+                session,
+                events_tx.clone(),
+                status_publisher.clone(),
+                stop_rx,
+            )));
+        }
+        if broadcast_started && let Some(session) = broadcast_session.as_ref() {
+            status_publisher
+                .publish_stream_broadcast_started(session.request.scope, session.request.channel_id)
+                .await;
+        }
         let connected_this_event = matches!(&action, Some(VoiceRuntimeAction::Connect(_)));
         if let Some(action) = action {
             match action {
@@ -468,6 +612,82 @@ pub(crate) async fn run_voice_runtime(
             .publish_speaking(&stopped_session, stopped_session.user_id, false)
             .await;
     }
+    if let Some(stopped_session) = stop_stream_connection_task(
+        &mut stream_task,
+        &mut stream_session,
+        "stopping stream connection task during voice runtime shutdown",
+    )
+    .await
+    {
+        status_publisher
+            .publish_stream_playback_ended(
+                stopped_session.request.scope,
+                stopped_session.request.channel_id,
+                stopped_session.request.owner_id,
+                false,
+            )
+            .await;
+    }
+    if let Some(stopped_session) = stop_stream_broadcast_task(
+        &mut broadcast_task,
+        &mut broadcast_session,
+        &mut broadcast_stop_tx,
+        "stopping stream broadcast task during voice runtime shutdown",
+    )
+    .await
+    {
+        status_publisher
+            .publish_stream_broadcast_ended(
+                stopped_session.request.scope,
+                stopped_session.request.channel_id,
+            )
+            .await;
+    }
+}
+
+async fn stop_stream_connection_task(
+    stream_task: &mut Option<JoinHandle<()>>,
+    stream_session: &mut Option<StreamGatewaySession>,
+    label: &str,
+) -> Option<StreamGatewaySession> {
+    let stopped_session = stream_session.take();
+    let Some(mut task) = stream_task.take() else {
+        return stopped_session;
+    };
+    logging::debug("stream", label);
+    task.abort();
+    let _ = timeout(Duration::from_millis(100), &mut task).await;
+    stopped_session
+}
+
+async fn stop_stream_broadcast_task(
+    stream_task: &mut Option<JoinHandle<()>>,
+    stream_session: &mut Option<StreamBroadcastGatewaySession>,
+    stop_tx: &mut Option<oneshot::Sender<()>>,
+    label: &str,
+) -> Option<StreamBroadcastGatewaySession> {
+    let stopped_session = stream_session.take();
+    if let Some(stop_tx) = stop_tx.take() {
+        let _ = stop_tx.send(());
+    }
+    let Some(mut task) = stream_task.take() else {
+        return stopped_session;
+    };
+    logging::debug("stream", label);
+    match timeout(VOICE_CONNECTION_SHUTDOWN_TIMEOUT, &mut task).await {
+        Ok(Ok(())) => {
+            logging::debug("stream", "stream broadcast task stopped cleanly");
+        }
+        Ok(Err(error)) => {
+            logging::debug("stream", format!("stream broadcast task ended: {error}"));
+        }
+        Err(_) => {
+            logging::debug("stream", "stream broadcast graceful stop timed out");
+            task.abort();
+            let _ = timeout(Duration::from_millis(100), &mut task).await;
+        }
+    }
+    stopped_session
 }
 
 pub(super) async fn stop_voice_connection_task(
@@ -496,5 +716,39 @@ pub(super) async fn stop_voice_connection_task(
             let _ = timeout(Duration::from_millis(100), &mut task).await;
             stopped_session
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn broadcast_stop_waits_for_graceful_cleanup() {
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (cleaned_tx, cleaned_rx) = tokio::sync::oneshot::channel();
+        let mut task = Some(tokio::spawn(async move {
+            let _ = started_tx.send(());
+            let _ = stop_rx.await;
+            let _ = cleaned_tx.send(());
+        }));
+        let mut stop_tx = Some(stop_tx);
+        let mut session = None;
+        started_rx.await.expect("test broadcast task should start");
+
+        stop_stream_broadcast_task(
+            &mut task,
+            &mut session,
+            &mut stop_tx,
+            "stopping test broadcast task",
+        )
+        .await;
+
+        cleaned_rx
+            .await
+            .expect("broadcast task should clean up before stop returns");
+        assert!(task.is_none());
+        assert!(stop_tx.is_none());
     }
 }

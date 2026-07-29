@@ -3,7 +3,7 @@ use std::{
     num::NonZeroU16,
 };
 
-use davey::{DaveSession, MediaType, ProposalsOperationType};
+use davey::{Codec, DaveSession, MediaType, ProposalsOperationType};
 use serde_json::{Value, json};
 
 use crate::discord::ids::{Id, marker::UserMarker};
@@ -69,12 +69,16 @@ pub(super) struct VoiceDaveState {
 
 impl VoiceDaveState {
     pub(super) fn new(session: &VoiceGatewaySession) -> Self {
-        let user_id = session.user_id.get();
+        Self::new_for_identity(session.user_id, session.channel_id.get())
+    }
+
+    pub(super) fn new_for_identity(user_id: Id<UserMarker>, channel_id: u64) -> Self {
+        let user_id = user_id.get();
         let mut known_user_ids = BTreeSet::new();
         known_user_ids.insert(user_id);
         Self {
             user_id,
-            channel_id: session.channel_id.get(),
+            channel_id,
             protocol_version: None,
             session: None,
             pending_transitions: HashMap::new(),
@@ -446,6 +450,34 @@ impl VoiceDaveState {
             .and_then(Id::<UserMarker>::new_checked)
     }
 
+    pub(super) fn record_ssrc_user(&mut self, ssrc: u32, user_id: Id<UserMarker>) {
+        self.known_user_ids.insert(user_id.get());
+        self.ssrc_user_ids.insert(ssrc, user_id.get());
+    }
+
+    pub(super) fn decrypt_video_frame(
+        &mut self,
+        user_id: Id<UserMarker>,
+        payload: &[u8],
+    ) -> Result<Option<Vec<u8>>, String> {
+        if !self.dave_media_active() {
+            return Ok(Some(payload.to_vec()));
+        }
+        if !looks_like_dave_media_frame(payload) {
+            return Ok(None);
+        }
+        let Some(session) = self.session.as_mut() else {
+            return Ok(None);
+        };
+        if !session.is_ready() {
+            return Ok(None);
+        }
+        session
+            .decrypt(user_id.get(), MediaType::VIDEO, payload)
+            .map(Some)
+            .map_err(|error| format!("DAVE video decrypt failed: {error:?}"))
+    }
+
     #[allow(dead_code)]
     pub(super) fn prepare_outbound_opus(&mut self, opus: &[u8]) -> VoiceDaveOutboundPayload {
         if self.protocol_version.is_none() {
@@ -462,6 +494,28 @@ impl VoiceDaveState {
             );
         }
         match session.encrypt_opus(opus) {
+            Ok(encrypted) => VoiceDaveOutboundPayload::Encrypted(encrypted.into_owned()),
+            Err(_) => VoiceDaveOutboundPayload::Blocked(
+                VoiceOutboundSendBlockReason::DaveOutboundEncryptFailed,
+            ),
+        }
+    }
+
+    pub(super) fn prepare_outbound_h264(&mut self, frame: &[u8]) -> VoiceDaveOutboundPayload {
+        if self.protocol_version.is_none() {
+            return VoiceDaveOutboundPayload::Plain(frame.to_vec());
+        }
+        let Some(session) = self.session.as_mut() else {
+            return VoiceDaveOutboundPayload::Blocked(
+                VoiceOutboundSendBlockReason::DaveOutboundMissingSession,
+            );
+        };
+        if !session.is_ready() {
+            return VoiceDaveOutboundPayload::Blocked(
+                VoiceOutboundSendBlockReason::DaveOutboundNotReady,
+            );
+        }
+        match session.encrypt(MediaType::VIDEO, Codec::H264, frame) {
             Ok(encrypted) => VoiceDaveOutboundPayload::Encrypted(encrypted.into_owned()),
             Err(_) => VoiceDaveOutboundPayload::Blocked(
                 VoiceOutboundSendBlockReason::DaveOutboundEncryptFailed,

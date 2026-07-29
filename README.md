@@ -188,6 +188,10 @@ choose `[o] sign out`.
 
 - Full voice support with push-to-talk
 - Supports noise suppression
+- Watch another participant's H264 Go Live stream in mpv while staying in the
+  parent voice channel
+- Share a whole display or one window as a low-latency H264 Go Live stream on
+  macOS, Windows, and Linux
 
 ### Guilds & Channels
 
@@ -244,6 +248,18 @@ YouTube playback depends on your local `mpv` setup, such as `yt-dlp` support.
 External media playback is off by default. You can enable it with
 `media_playback = true` under `[display]`, or toggle it from the in-app Display
 options menu.
+
+Go Live viewing also uses mpv. Join the streamer's voice channel, focus the
+streaming participant, and choose `Watch stream`. Closing the mpv window stops
+the stream connection without leaving voice.
+
+To broadcast, join a voice channel, open its channel actions, choose
+`Share screen`, then select a whole display or one window. While sharing, the
+same `s` action changes to `Stop sharing`. The default `<leader>vs` voice
+shortcut performs the same toggle. The first version sends 1280x720 H264 video
+at up to 30 FPS and does not capture system audio. macOS may ask for Screen
+Recording permission. Linux availability depends on the active X11 or Wayland
+capture support.
 
 ### Members & Profiles
 
@@ -375,6 +391,8 @@ Channel actions:
 | -------- | -------------------- | -------------------------------------------- |
 | `e`      | Join voice           | Join the selected voice channel or DM call   |
 | `l`      | Leave voice          | Leave the current voice channel or DM call   |
+| `s`      | Toggle screen share  | Start from a display or window, or stop it   |
+| `w`      | Watch stream         | Watch the selected participant's Go Live     |
 | `a`      | Audio settings       | Set participant volume or mute               |
 | `p`      | Show pinned messages | Open the selected channel's pinned messages  |
 | `t`      | Show threads         | List threads for the selected channel        |
@@ -629,6 +647,7 @@ OpenNotificationInbox = "<leader>n"
 ChannelSwitcher = "<leader><leader>"
 VoiceDeafen = "<leader>vd"
 VoiceMute = "<leader>vm"
+VoiceStream = "<leader>vs"
 VoiceLeave = "<leader>vl"
 
 [keymap.groups]
@@ -647,6 +666,7 @@ FolderSettings = "r"
 [keymap.channel_actions]
 JoinVoice = "e"
 LeaveVoice = "l"
+ToggleStream = "s"
 VoiceParticipantAudio = "a"
 ShowPinnedMessages = "p"
 ShowThreads = "t"

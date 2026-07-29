@@ -9,12 +9,15 @@ use crate::discord::ids::{
     marker::{ChannelMarker, ForumTagMarker, GuildMarker, MessageMarker, UserMarker},
 };
 use crate::discord::{
-    AppCommand, MessageAttachmentUpload, ReactionEmoji, VoiceParticipantPlaybackSettings,
+    AppCommand, MessageAttachmentUpload, ReactionEmoji, StreamCaptureTarget,
+    VoiceParticipantPlaybackSettings, VoiceScope,
 };
 use crate::discord::{PresenceStatus, ProfileAvatarUpload};
 
 use crate::discord::ReactionUserInfo;
-use crate::tui::keybindings::{KeyBindings, KeyChord, LeaderShortcutItem, SelectionAction};
+use crate::tui::keybindings::{
+    KeyBindings, KeyChord, LeaderShortcutItem, SelectionAction, UiAction,
+};
 use crate::tui::text_input::TextInputState;
 
 mod attachment_viewer;
@@ -838,6 +841,12 @@ pub(super) enum ChannelActionMenuState {
         channel_id: Id<ChannelMarker>,
         selection: SelectablePopupState,
     },
+    StreamTargets {
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+        targets: Vec<StreamCaptureTarget>,
+        selection: SelectablePopupState,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1404,9 +1413,18 @@ impl DashboardState {
     }
 
     pub fn leader_keymap_shortcuts(&self) -> Vec<LeaderShortcutItem> {
-        self.options
+        let mut shortcuts = self
+            .options
             .key_bindings
-            .leader_keymap_children(self.leader_keymap_prefix())
+            .leader_keymap_children(self.leader_keymap_prefix());
+        for shortcut in &mut shortcuts {
+            if shortcut.action == Some(UiAction::VoiceStream)
+                && shortcut.label == UiAction::VoiceStream.label()
+            {
+                shortcut.label = self.current_voice_stream_action_label().to_owned();
+            }
+        }
+        shortcuts
     }
 
     pub(in crate::tui) fn leader_keymap_title(&self) -> String {

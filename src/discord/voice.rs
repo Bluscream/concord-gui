@@ -10,6 +10,8 @@ use std::{
 #[cfg(feature = "voice-playback")]
 mod audio_buffer;
 mod audio_runtime;
+mod broadcast;
+mod capture;
 mod dave;
 mod gateway;
 mod info;
@@ -24,7 +26,10 @@ mod playback;
 mod rtp;
 mod runtime;
 mod state;
+mod stream;
+mod system_audio;
 
+pub(crate) use capture::list_stream_capture_targets;
 #[cfg(all(feature = "voice-playback", not(test)))]
 use gateway::voice_speaking_payload;
 #[cfg(test)]
@@ -32,7 +37,9 @@ use gateway::*;
 #[cfg(not(test))]
 use gateway::{run_voice_gateway_session, send_voice_binary, send_voice_text};
 pub use info::{
-    VoiceConnectionStatus, VoiceScope, VoiceServerInfo, VoiceSoundKind, VoiceStateInfo,
+    StreamCaptureTarget, StreamCaptureTargetKind, StreamCreateInfo, StreamDeleteInfo,
+    StreamServerInfo, VoiceConnectionStatus, VoiceScope, VoiceServerInfo, VoiceSoundKind,
+    VoiceStateInfo,
 };
 #[cfg(all(feature = "voice-playback", target_os = "linux", not(test)))]
 use microphone::log_captured_alsa_errors;
@@ -73,10 +80,9 @@ use playback::{VoicePlaybackPostProcess, VoicePlayoutFrame};
 use playback::{apply_voice_playback_gain_and_limit, write_voice_output_frame};
 #[cfg(any(test, feature = "voice-playback"))]
 use rtp::VoiceOutboundRtpState;
-#[cfg(test)]
-use rtp::VoiceRtpEncryptor;
 use rtp::{
-    RtpHeader, VoiceRtpDecryptor, looks_like_rtcp_packet, parse_rtp_header, rtcp_sender_ssrc,
+    RtpHeader, VoiceRtpDecryptor, VoiceRtpEncryptor, looks_like_rtcp_packet, parse_rtp_header,
+    rtcp_sender_ssrc,
 };
 
 #[cfg(test)]
@@ -112,7 +118,7 @@ pub use levels::{
     VoiceVolumePercent,
 };
 
-use super::{client::AppEventPublisher, events::AppEvent};
+use super::{client::AppEventPublisher, events::AppEvent, gateway::GatewayCommand};
 
 const VOICE_GATEWAY_VERSION: u8 = 9;
 const VOICE_WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -126,6 +132,10 @@ const UDP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
 const RTP_HEADER_MIN_LEN: usize = 12;
 const RTP_VERSION: u8 = 2;
 const DISCORD_VOICE_PAYLOAD_TYPE: u8 = 0x78;
+const DISCORD_STREAM_VIDEO_PAYLOAD_TYPE: u8 = 103;
+const DISCORD_STREAM_VIDEO_RTX_PAYLOAD_TYPE: u8 = 104;
+const LOCAL_STREAM_AUDIO_PAYLOAD_TYPE: u8 = 111;
+const LOCAL_STREAM_VIDEO_PAYLOAD_TYPE: u8 = 96;
 const RTP_HEADER_EXTENSION_BYTES: usize = 4;
 const RTP_EXTENSION_WORD_BYTES: usize = 4;
 const RTP_AEAD_TAG_BYTES: usize = 16;
@@ -146,7 +156,6 @@ const DISCORD_OPUS_FRAME_SAMPLES_PER_CHANNEL: usize = 960;
 #[allow(dead_code)]
 const DISCORD_OPUS_20MS_STEREO_SAMPLES: usize =
     DISCORD_OPUS_FRAME_SAMPLES_PER_CHANNEL * DISCORD_VOICE_CHANNELS as usize;
-#[cfg(any(test, feature = "voice-playback"))]
 const DISCORD_OPUS_FRAME_DURATION: Duration = Duration::from_millis(20);
 #[allow(dead_code)]
 const DISCORD_OPUS_TIMESTAMP_INCREMENT: u32 = DISCORD_OPUS_FRAME_SAMPLES_PER_CHANNEL as u32;
@@ -251,6 +260,7 @@ const VOICE_OP_RESUME: u8 = 7;
 const VOICE_OP_HELLO: u8 = 8;
 const VOICE_OP_RESUMED: u8 = 9;
 const VOICE_OP_CLIENTS_CONNECT: u8 = 11;
+const VOICE_OP_VIDEO: u8 = 12;
 const VOICE_OP_CLIENT_DISCONNECT: u8 = 13;
 const VOICE_OP_MEDIA_SINK_WANTS: u8 = 15;
 const VOICE_OP_CLIENT_FLAGS: u8 = 18;
@@ -288,6 +298,38 @@ pub(crate) enum VoiceRuntimeEvent {
     CurrentUserReady(Option<Id<UserMarker>>),
     VoiceState(VoiceStateInfo),
     VoiceServer(VoiceServerInfo),
+    WatchStreamRequested(StreamWatchRequest),
+    WatchStreamCancelled {
+        stream_key: String,
+    },
+    StreamCreate(StreamCreateInfo),
+    StreamServer(StreamServerInfo),
+    StreamDelete(StreamDeleteInfo),
+    StreamConnectionEstablished {
+        connection_id: u64,
+        stream_key: String,
+    },
+    StreamConnectionEnded {
+        connection_id: u64,
+        stream_key: String,
+        outcome: VoiceConnectionEnd,
+    },
+    BroadcastStreamRequested(StreamBroadcastRequest),
+    BroadcastStreamCancelled {
+        stream_key: String,
+    },
+    BroadcastStreamStopRequested {
+        stream_key: String,
+    },
+    BroadcastStreamConnectionEstablished {
+        connection_id: u64,
+        stream_key: String,
+    },
+    BroadcastStreamConnectionEnded {
+        connection_id: u64,
+        stream_key: String,
+        outcome: VoiceConnectionEnd,
+    },
     ConnectionEstablished {
         connection_id: u64,
     },
@@ -300,6 +342,23 @@ pub(crate) enum VoiceRuntimeEvent {
         outcome: VoiceConnectionEnd,
     },
     Shutdown,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct StreamWatchRequest {
+    pub(crate) stream_key: String,
+    pub(crate) scope: VoiceScope,
+    pub(crate) channel_id: Id<ChannelMarker>,
+    pub(crate) owner_id: Id<UserMarker>,
+    pub(crate) display_name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct StreamBroadcastRequest {
+    pub(crate) stream_key: String,
+    pub(crate) scope: VoiceScope,
+    pub(crate) channel_id: Id<ChannelMarker>,
+    pub(crate) target: StreamCaptureTarget,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -358,6 +417,64 @@ impl VoiceStatusPublisher {
                 user_id,
                 speaking,
             })
+            .await;
+    }
+
+    async fn publish_error(&self, message: String) {
+        self.events
+            .publish(AppEvent::GatewayError { message })
+            .await;
+    }
+
+    async fn publish_stream_playback_ready(
+        &self,
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+        user_id: Id<UserMarker>,
+    ) {
+        self.events
+            .publish(AppEvent::StreamPlaybackWindowReady {
+                scope,
+                channel_id,
+                user_id,
+            })
+            .await;
+    }
+
+    async fn publish_stream_playback_ended(
+        &self,
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+        user_id: Id<UserMarker>,
+        reconnecting: bool,
+    ) {
+        self.events
+            .publish(AppEvent::StreamPlaybackEnded {
+                scope,
+                channel_id,
+                user_id,
+                reconnecting,
+            })
+            .await;
+    }
+
+    async fn publish_stream_broadcast_started(
+        &self,
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+    ) {
+        self.events
+            .publish(AppEvent::StreamBroadcastStarted { scope, channel_id })
+            .await;
+    }
+
+    async fn publish_stream_broadcast_ended(
+        &self,
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+    ) {
+        self.events
+            .publish(AppEvent::StreamBroadcastEnded { scope, channel_id })
             .await;
     }
 }
@@ -492,6 +609,7 @@ struct VoiceSessionDescription {
     mode: String,
     secret_key: Vec<u8>,
     dave_protocol_version: Option<u64>,
+    video_codec: Option<String>,
 }
 
 impl fmt::Debug for VoiceSessionDescription {
@@ -501,6 +619,7 @@ impl fmt::Debug for VoiceSessionDescription {
             .field("secret_key", &"<redacted>")
             .field("secret_key_len", &self.secret_key.len())
             .field("dave_protocol_version", &self.dave_protocol_version)
+            .field("video_codec", &self.video_codec)
             .finish()
     }
 }

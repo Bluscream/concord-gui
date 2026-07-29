@@ -24,7 +24,7 @@ use tokio_tungstenite::{
 };
 
 use super::{
-    ActivityInfo, PresenceStatus,
+    ActivityInfo, PresenceStatus, VoiceScope,
     client::AppEventPublisher,
     events::AppEvent,
     fingerprint::{
@@ -74,6 +74,16 @@ pub enum GatewayCommand {
         channel_id: Option<Id<ChannelMarker>>,
         self_mute: bool,
         self_deaf: bool,
+    },
+    WatchStream {
+        stream_key: String,
+    },
+    CreateStream {
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+    },
+    DeleteStream {
+        stream_key: String,
     },
     UpdatePresence {
         status: PresenceStatus,
@@ -1437,7 +1447,13 @@ fn dispatch_command(
             activities: activities.clone(),
         });
     }
-    let urgent = matches!(command, GatewayCommand::UpdateVoiceState { .. });
+    let urgent = matches!(
+        command,
+        GatewayCommand::UpdateVoiceState { .. }
+            | GatewayCommand::WatchStream { .. }
+            | GatewayCommand::CreateStream { .. }
+            | GatewayCommand::DeleteStream { .. }
+    );
     let payload = match command {
         GatewayCommand::RequestGuildMembers {
             guild_id,
@@ -1547,6 +1563,21 @@ fn dispatch_command(
                 ),
             );
             voice_state_update_payload(guild_id, channel_id, self_mute, self_deaf)
+        }
+        GatewayCommand::WatchStream { stream_key } => {
+            logging::debug("gateway", format!("watching stream: {stream_key}"));
+            watch_stream_payload(&stream_key)
+        }
+        GatewayCommand::CreateStream { scope, channel_id } => {
+            logging::debug(
+                "gateway",
+                format!("creating stream: scope={scope:?} channel={channel_id}"),
+            );
+            create_stream_payload(scope, channel_id)
+        }
+        GatewayCommand::DeleteStream { stream_key } => {
+            logging::debug("gateway", format!("deleting stream: {stream_key}"));
+            delete_stream_payload(&stream_key)
         }
         GatewayCommand::UpdatePresence { status, activities } => {
             logging::debug(
@@ -1962,6 +1993,43 @@ fn voice_state_update_payload(
             "channel_id": channel_id.map(|channel_id| channel_id.to_string()),
             "self_mute": self_mute,
             "self_deaf": self_deaf,
+        },
+    })
+    .to_string()
+}
+
+fn watch_stream_payload(stream_key: &str) -> String {
+    json!({
+        "op": 20,
+        "d": {
+            "stream_key": stream_key,
+        },
+    })
+    .to_string()
+}
+
+fn create_stream_payload(scope: VoiceScope, channel_id: Id<ChannelMarker>) -> String {
+    let (stream_type, guild_id) = match scope {
+        VoiceScope::Guild(guild_id) => ("guild", Some(guild_id.to_string())),
+        VoiceScope::Private(_) => ("call", None),
+    };
+    json!({
+        "op": 18,
+        "d": {
+            "type": stream_type,
+            "guild_id": guild_id,
+            "channel_id": channel_id.to_string(),
+            "preferred_region": Value::Null,
+        },
+    })
+    .to_string()
+}
+
+fn delete_stream_payload(stream_key: &str) -> String {
+    json!({
+        "op": 19,
+        "d": {
+            "stream_key": stream_key,
         },
     })
     .to_string()

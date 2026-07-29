@@ -13,6 +13,7 @@ ClosePopup = "q"
 ReplyMessage = "<leader>mr"
 VoiceDeafen = "<leader>vd"
 VoiceMute = "<leader>vm"
+VoiceStream = "<leader>vs"
 VoiceLeave = "<leader>vl"
 
 [keymap.groups]
@@ -23,6 +24,8 @@ LeaveServer = { keys = ["l"], description = "leave server" }
 
 [keymap.channel_actions]
 ToggleMute = { keys = ["x"], description = "mute channel" }
+ToggleStream = { keys = ["s"], description = "toggle screen share" }
+WatchStream = { keys = ["w"], description = "watch stream" }
 VoiceParticipantAudio = { keys = ["v"], description = "participant audio" }
 
 [keymap.message_actions]
@@ -179,6 +182,7 @@ Pane, options, and voice actions:
 | `OpenVoiceOptions`        | Contextual `v` after `OpenOptions` | Open Voice options.                          |
 | `VoiceDeafen`             | `"<leader>vd"`                     | Toggle voice deafen.                         |
 | `VoiceMute`               | `"<leader>vm"`                     | Toggle voice mute.                           |
+| `VoiceStream`             | `"<leader>vs"`                     | Start or stop screen sharing.                |
 | `VoiceLeave`              | `"<leader>vl"`                     | Leave the current Concord voice channel.     |
 
 Profile popup shortcuts are fixed once `OpenCurrentUserProfile` opens your
@@ -271,6 +275,8 @@ Channel pane actions:
 [keymap.channel_actions]
 JoinVoice = { keys = ["e"], description = "join voice" }
 LeaveVoice = { keys = ["l"], description = "leave voice" }
+ToggleStream = { keys = ["s"], description = "toggle screen share" }
+WatchStream = { keys = ["w"], description = "watch stream" }
 VoiceParticipantAudio = { keys = ["a"], description = "participant audio" }
 ShowPinnedMessages = { keys = ["p"], description = "show pinned messages" }
 ShowThreads = { keys = ["t"], description = "show threads" }
@@ -282,6 +288,8 @@ ToggleMute = { keys = ["u"], description = "mute channel" }
 | ----------------------- | ------- | ----------------------------------------------------------------------- |
 | `JoinVoice`             | `e`     | Join the selected voice channel.                                        |
 | `LeaveVoice`            | `l`     | Leave the current Concord voice channel.                                |
+| `ToggleStream`          | `s`     | Choose a source to start sharing, or stop the current broadcast.        |
+| `WatchStream`           | `w`     | Watch the selected participant's Go Live stream in mpv.                 |
 | `VoiceParticipantAudio` | `a`     | Open local volume and mute controls for the selected voice participant. |
 | `ShowPinnedMessages`    | `p`     | Open the selected channel's pinned messages.                            |
 | `ShowThreads`           | `t`     | List threads for the selected channel.                                  |

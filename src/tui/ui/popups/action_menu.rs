@@ -234,6 +234,15 @@ fn channel_action_menu_content(
         );
         return Some(("Mute channel", action_menu_lines(&rows, selected)));
     }
+    if state.is_channel_action_stream_target_phase() {
+        let rows = indexed_action_menu_rows(
+            state
+                .selected_stream_capture_targets()
+                .iter()
+                .map(|target| target.title.clone()),
+        );
+        return Some(("Share screen", action_menu_lines(&rows, selected)));
+    }
     let actions = state.selected_channel_action_items();
     if actions.is_empty() {
         return None;

@@ -550,6 +550,25 @@ pub enum AppCommand {
         user_id: Id<UserMarker>,
         settings: crate::discord::VoiceParticipantPlaybackSettings,
     },
+    WatchVoiceStream {
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+        user_id: Id<UserMarker>,
+        display_name: String,
+    },
+    LoadStreamCaptureTargets {
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+    },
+    StartVoiceStream {
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+        target: crate::discord::StreamCaptureTarget,
+    },
+    StopVoiceStream {
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+    },
     LeaveVoiceChannel {
         scope: VoiceScope,
         self_mute: bool,

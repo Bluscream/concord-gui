@@ -11,8 +11,11 @@ use super::{
     RTP_EXTENSION_WORD_BYTES, RTP_HEADER_EXTENSION_BYTES, RTP_HEADER_MIN_LEN, RTP_VERSION,
 };
 
+const RTCP_FEEDBACK_AUTHENTICATED_HEADER_BYTES: usize = 8;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct RtpHeader {
+    pub(super) has_padding: bool,
     pub(super) marker: bool,
     pub(super) payload_type: u8,
     pub(super) sequence: u16,
@@ -83,6 +86,14 @@ impl VoiceRtpDecryptor {
                 header.payload_type
             ));
         }
+        self.decrypt_packet_any(packet, header)
+    }
+
+    pub(super) fn decrypt_packet_any(
+        &self,
+        packet: &[u8],
+        header: &RtpHeader,
+    ) -> Result<DecryptedRtpPayload, String> {
         let sealed_end = packet
             .len()
             .checked_sub(RTP_AEAD_NONCE_SUFFIX_BYTES)
@@ -93,7 +104,49 @@ impl VoiceRtpDecryptor {
         let nonce_suffix = &packet[sealed_end..];
         let sealed_payload = &packet[header.authenticated_header_len..sealed_end];
         let aad = &packet[..header.authenticated_header_len];
-        let decrypted = match self {
+        let decrypted = self.decrypt_authenticated_payload(aad, sealed_payload, nonce_suffix)?;
+        if decrypted.len() < header.encrypted_extension_body_len {
+            return Err("decrypted RTP payload is shorter than extension body".to_owned());
+        }
+        let media_payload = &decrypted[header.encrypted_extension_body_len..];
+        let media_payload = strip_rtp_padding(media_payload, header.has_padding)?;
+        Ok(DecryptedRtpPayload {
+            media_payload: media_payload.to_vec(),
+            encrypted_extension_body_len: header.encrypted_extension_body_len,
+        })
+    }
+
+    pub(super) fn decrypt_rtcp_feedback(&self, packet: &[u8]) -> Result<Vec<u8>, String> {
+        if !looks_like_rtcp_packet(packet) {
+            return Err("RTCP feedback packet has an invalid header".to_owned());
+        }
+        let sealed_end = packet
+            .len()
+            .checked_sub(RTP_AEAD_NONCE_SUFFIX_BYTES)
+            .ok_or_else(|| "RTCP feedback packet is missing nonce suffix".to_owned())?;
+        if sealed_end < RTCP_FEEDBACK_AUTHENTICATED_HEADER_BYTES + RTP_AEAD_TAG_BYTES {
+            return Err("RTCP feedback packet is too short for encrypted body".to_owned());
+        }
+
+        let aad = &packet[..RTCP_FEEDBACK_AUTHENTICATED_HEADER_BYTES];
+        let sealed_payload = &packet[RTCP_FEEDBACK_AUTHENTICATED_HEADER_BYTES..sealed_end];
+        let nonce_suffix = &packet[sealed_end..];
+        let plaintext = self.decrypt_authenticated_payload(aad, sealed_payload, nonce_suffix)?;
+
+        let mut decrypted = Vec::with_capacity(aad.len() + plaintext.len());
+        decrypted.extend_from_slice(aad);
+        decrypted.extend_from_slice(&plaintext);
+        validate_rtcp_compound_packet(&decrypted)?;
+        Ok(decrypted)
+    }
+
+    fn decrypt_authenticated_payload(
+        &self,
+        aad: &[u8],
+        sealed_payload: &[u8],
+        nonce_suffix: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        Ok(match self {
             Self::Aes256Gcm(cipher) => {
                 let mut nonce = [0u8; 12];
                 nonce[..RTP_AEAD_NONCE_SUFFIX_BYTES].copy_from_slice(nonce_suffix);
@@ -120,15 +173,23 @@ impl VoiceRtpDecryptor {
                     )
                     .map_err(|_| "RTP XChaCha20-Poly1305 decrypt failed".to_owned())?
             }
-        };
-        if decrypted.len() < header.encrypted_extension_body_len {
-            return Err("decrypted RTP payload is shorter than extension body".to_owned());
-        }
-        Ok(DecryptedRtpPayload {
-            media_payload: decrypted[header.encrypted_extension_body_len..].to_vec(),
-            encrypted_extension_body_len: header.encrypted_extension_body_len,
         })
     }
+}
+
+fn strip_rtp_padding(payload: &[u8], has_padding: bool) -> Result<&[u8], String> {
+    if !has_padding {
+        return Ok(payload);
+    }
+    let padding_len = payload
+        .last()
+        .copied()
+        .map(usize::from)
+        .ok_or_else(|| "RTP padding flag is set on an empty payload".to_owned())?;
+    if padding_len == 0 || padding_len > payload.len() {
+        return Err("RTP packet has invalid padding length".to_owned());
+    }
+    Ok(&payload[..payload.len() - padding_len])
 }
 
 #[allow(dead_code)]
@@ -157,12 +218,57 @@ impl VoiceRtpEncryptor {
                 header.payload_type
             ));
         }
+        self.encrypt_media_packet_with_header(packet, header, nonce_suffix)
+    }
+
+    pub(super) fn encrypt_media_packet(
+        &self,
+        packet: &[u8],
+        nonce_suffix: [u8; RTP_AEAD_NONCE_SUFFIX_BYTES],
+    ) -> Result<Vec<u8>, String> {
+        let header = parse_rtp_header(packet)?;
+        self.encrypt_media_packet_with_header(packet, header, nonce_suffix)
+    }
+
+    fn encrypt_media_packet_with_header(
+        &self,
+        packet: &[u8],
+        header: RtpHeader,
+        nonce_suffix: [u8; RTP_AEAD_NONCE_SUFFIX_BYTES],
+    ) -> Result<Vec<u8>, String> {
         if packet.len() <= header.authenticated_header_len {
             return Err("RTP packet is missing media payload".to_owned());
         }
 
         let aad = &packet[..header.authenticated_header_len];
         let plaintext = &packet[header.authenticated_header_len..];
+        self.encrypt_authenticated_payload(aad, plaintext, nonce_suffix)
+    }
+
+    pub(super) fn encrypt_rtcp_feedback(
+        &self,
+        packet: &[u8],
+        nonce_suffix: [u8; RTP_AEAD_NONCE_SUFFIX_BYTES],
+    ) -> Result<Vec<u8>, String> {
+        if !looks_like_rtcp_packet(packet) {
+            return Err("RTCP feedback packet has an invalid header".to_owned());
+        }
+        if packet.len() <= RTCP_FEEDBACK_AUTHENTICATED_HEADER_BYTES {
+            return Err("RTCP feedback packet is missing feedback body".to_owned());
+        }
+        validate_rtcp_compound_packet(packet)?;
+
+        let aad = &packet[..RTCP_FEEDBACK_AUTHENTICATED_HEADER_BYTES];
+        let plaintext = &packet[RTCP_FEEDBACK_AUTHENTICATED_HEADER_BYTES..];
+        self.encrypt_authenticated_payload(aad, plaintext, nonce_suffix)
+    }
+
+    fn encrypt_authenticated_payload(
+        &self,
+        aad: &[u8],
+        plaintext: &[u8],
+        nonce_suffix: [u8; RTP_AEAD_NONCE_SUFFIX_BYTES],
+    ) -> Result<Vec<u8>, String> {
         let sealed_payload = match self {
             Self::Aes256Gcm(cipher) => {
                 let mut nonce = [0u8; 12];
@@ -192,9 +298,8 @@ impl VoiceRtpEncryptor {
             }
         };
 
-        let mut encrypted = Vec::with_capacity(
-            header.authenticated_header_len + sealed_payload.len() + RTP_AEAD_NONCE_SUFFIX_BYTES,
-        );
+        let mut encrypted =
+            Vec::with_capacity(aad.len() + sealed_payload.len() + RTP_AEAD_NONCE_SUFFIX_BYTES);
         encrypted.extend_from_slice(aad);
         encrypted.extend_from_slice(&sealed_payload);
         encrypted.extend_from_slice(&nonce_suffix);
@@ -282,6 +387,7 @@ pub(super) fn parse_rtp_header(packet: &[u8]) -> Result<RtpHeader, String> {
     }
 
     Ok(RtpHeader {
+        has_padding: packet[0] & 0x20 != 0,
         marker: packet[1] & 0x80 != 0,
         payload_type: packet[1] & 0x7f,
         sequence: u16::from_be_bytes([packet[2], packet[3]]),
@@ -299,6 +405,36 @@ pub(super) fn looks_like_rtcp_packet(packet: &[u8]) -> bool {
         && (192..=223).contains(&packet[1])
 }
 
+fn validate_rtcp_compound_packet(packet: &[u8]) -> Result<(), String> {
+    if packet.is_empty() {
+        return Err("RTCP packet is empty".to_owned());
+    }
+
+    // Each packet in a compound RTCP datagram declares only its own length.
+    // The datagram is valid when every subpacket ends at the next boundary.
+    let mut offset = 0usize;
+    while offset < packet.len() {
+        let remaining = &packet[offset..];
+        if remaining.len() < RTCP_MIN_PACKET_BYTES {
+            return Err("RTCP packet is shorter than its header".to_owned());
+        }
+        if remaining[0] >> 6 != RTP_VERSION {
+            return Err("RTCP packet has unsupported version".to_owned());
+        }
+        if !(192..=223).contains(&remaining[1]) {
+            return Err("RTCP packet has invalid packet type".to_owned());
+        }
+
+        let packet_len = (usize::from(u16::from_be_bytes([remaining[2], remaining[3]])) + 1) * 4;
+        if packet_len > remaining.len() {
+            return Err("RTCP packet length exceeds received data".to_owned());
+        }
+        offset += packet_len;
+    }
+
+    Ok(())
+}
+
 pub(super) fn rtcp_sender_ssrc(packet: &[u8]) -> Option<u32> {
     let end = RTCP_SENDER_SSRC_OFFSET + RTCP_SENDER_SSRC_BYTES;
     (packet.len() >= end).then(|| {
@@ -309,4 +445,30 @@ pub(super) fn rtcp_sender_ssrc(packet: &[u8]) -> Option<u32> {
             packet[RTCP_SENDER_SSRC_OFFSET + 3],
         ])
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compound_rtcp_validation_rejects_malformed_subpackets() {
+        let valid_pli = [0x81, 206, 0, 2, 0, 0, 0, 1, 0, 0, 0, 2];
+        let cases = [
+            ("truncated header", vec![0x80, 206, 0]),
+            ("unsupported version", vec![0x40, 206, 0, 0]),
+            ("invalid packet type", vec![0x80, 100, 0, 0]),
+            ("truncated body", vec![0x80, 206, 0, 2]),
+        ];
+
+        for (case, suffix) in cases {
+            let mut packet = valid_pli.to_vec();
+            packet.extend_from_slice(&suffix);
+
+            assert!(
+                validate_rtcp_compound_packet(&packet).is_err(),
+                "{case} should be rejected"
+            );
+        }
+    }
 }

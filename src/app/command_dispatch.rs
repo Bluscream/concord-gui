@@ -262,6 +262,35 @@ impl CommandDispatcher {
             AppCommand::UpdateVoiceParticipantPlayback { user_id, settings } => {
                 voice_commands::update_participant_playback(&self.client, user_id, settings);
             }
+            AppCommand::WatchVoiceStream {
+                scope,
+                channel_id,
+                user_id,
+                display_name,
+            } => {
+                voice_commands::watch_stream(
+                    self.client.clone(),
+                    scope,
+                    channel_id,
+                    user_id,
+                    display_name,
+                )
+                .await;
+            }
+            AppCommand::LoadStreamCaptureTargets { scope, channel_id } => {
+                voice_commands::load_stream_capture_targets(self.client.clone(), scope, channel_id)
+                    .await;
+            }
+            AppCommand::StartVoiceStream {
+                scope,
+                channel_id,
+                target,
+            } => {
+                voice_commands::start_stream(self.client.clone(), scope, channel_id, target).await;
+            }
+            AppCommand::StopVoiceStream { scope, channel_id } => {
+                voice_commands::stop_stream(self.client.clone(), scope, channel_id).await;
+            }
             AppCommand::LeaveVoiceChannel {
                 scope,
                 self_mute,
@@ -642,6 +671,9 @@ fn runs_inline(command: &AppCommand) -> bool {
             | AppCommand::UpdateVoiceState { .. }
             | AppCommand::UpdateVoiceCapturePermission { .. }
             | AppCommand::UpdateVoiceParticipantPlayback { .. }
+            | AppCommand::WatchVoiceStream { .. }
+            | AppCommand::StartVoiceStream { .. }
+            | AppCommand::StopVoiceStream { .. }
             | AppCommand::LeaveVoiceChannel { .. }
     )
 }

@@ -1,5 +1,5 @@
 use crate::discord::ids::{Id, marker::ChannelMarker};
-use crate::discord::{AppCommand, DiscordAction};
+use crate::discord::{AppCommand, DiscordAction, StreamCaptureTarget, VoiceScope};
 use crate::tui::keybindings::KeyChord;
 
 use super::super::model::{
@@ -49,7 +49,10 @@ impl DashboardState {
 
     pub fn back_channel_action_menu(&mut self) -> bool {
         match self.popups.channel_action_menu() {
-            Some(ChannelActionMenuState::MuteDuration { channel_id, .. }) => {
+            Some(
+                ChannelActionMenuState::MuteDuration { channel_id, .. }
+                | ChannelActionMenuState::StreamTargets { channel_id, .. },
+            ) => {
                 let channel_id = *channel_id;
                 if let Some(action) = self.popups.channel_action_menu_mut() {
                     *action = ChannelActionMenuState::Actions {
@@ -66,13 +69,62 @@ impl DashboardState {
     pub fn selected_channel_action_items(&self) -> Vec<ChannelActionItem> {
         let channel_id = match self.popups.channel_action_menu() {
             Some(ChannelActionMenuState::Actions { channel_id, .. }) => *channel_id,
-            Some(ChannelActionMenuState::ParticipantActions { .. }) => {
-                return vec![ChannelActionItem::new(
-                    ChannelActionKind::ParticipantAudioSettings,
-                    "Audio settings",
-                    ActionAvailability::Enabled,
-                )];
+            Some(ChannelActionMenuState::ParticipantActions {
+                channel_id,
+                user_id,
+                ..
+            }) => {
+                let watch_disabled_reason =
+                    if let Some(channel) = self.discord.cache.channel(*channel_id) {
+                        let scope = channel.voice_scope();
+                        let joined_here = self
+                            .discord
+                            .cache
+                            .current_user_voice_connection()
+                            .is_some_and(|voice| {
+                                voice.scope == scope && voice.channel_id == *channel_id
+                            });
+                        if !joined_here {
+                            Some("join this voice channel first".to_owned())
+                        } else if self.discord.cache.current_user_id() == Some(*user_id) {
+                            Some("cannot watch your own stream".to_owned())
+                        } else {
+                            let participants = match scope {
+                                VoiceScope::Guild(guild_id) => self
+                                    .discord
+                                    .cache
+                                    .voice_participants_for_channel(guild_id, *channel_id),
+                                VoiceScope::Private(_) => self
+                                    .discord
+                                    .cache
+                                    .voice_participants_for_private_channel(*channel_id),
+                            };
+                            participants
+                                .iter()
+                                .find(|participant| participant.user_id == *user_id)
+                                .map(|participant| {
+                                    (!participant.self_stream)
+                                        .then(|| "participant is not streaming".to_owned())
+                                })
+                                .unwrap_or_else(|| Some("participant left the channel".to_owned()))
+                        }
+                    } else {
+                        Some("voice channel unavailable".to_owned())
+                    };
+                return vec![
+                    ChannelActionItem::new(
+                        ChannelActionKind::WatchStream,
+                        "Watch stream",
+                        watch_disabled_reason,
+                    ),
+                    ChannelActionItem::new(
+                        ChannelActionKind::ParticipantAudioSettings,
+                        "Audio settings",
+                        ActionAvailability::Enabled,
+                    ),
+                ];
             }
+            Some(ChannelActionMenuState::StreamTargets { .. }) => return Vec::new(),
             _ => return Vec::new(),
         };
         let Some(channel) = self.discord.cache.channel(channel_id) else {
@@ -105,6 +157,15 @@ impl DashboardState {
             && self.runtime.voice_connection.is_some_and(|voice| {
                 voice.scope == channel.voice_scope() && voice.channel_id == Some(channel_id)
             });
+        let stream_disabled_reason = if !joined_here {
+            Some("join this voice channel first".to_owned())
+        } else if channel.guild_id.is_none() {
+            None
+        } else {
+            self.discord_action_block_reason_in_channel(channel_id, DiscordAction::StreamVoice)
+        };
+        let stream_label =
+            self.stream_broadcast_action_label_for(channel.voice_scope(), channel_id);
         // Guild voice needs the connect permission. DM and group-DM calls have
         // no guild permission model, so they bypass this policy.
         let join_voice_disabled_reason = if !channel.supports_voice_call() {
@@ -146,6 +207,11 @@ impl DashboardState {
                 ChannelActionKind::LeaveVoice,
                 "Leave voice",
                 (!joined_here).then(|| "not connected here".to_owned()),
+            ),
+            ChannelActionItem::new(
+                ChannelActionKind::ToggleStream,
+                stream_label,
+                stream_disabled_reason,
             ),
             ChannelActionItem::new(
                 ChannelActionKind::ShowPinnedMessages,
@@ -197,6 +263,9 @@ impl DashboardState {
             ChannelActionMenuState::MuteDuration { selection, .. } => {
                 Some(selection.selected_for_len(self.selected_channel_mute_duration_items().len()))
             }
+            ChannelActionMenuState::StreamTargets {
+                targets, selection, ..
+            } => Some(selection.selected_for_len(targets.len())),
         }
     }
 
@@ -209,6 +278,7 @@ impl DashboardState {
             Some(ChannelActionMenuState::MuteDuration { .. }) => {
                 self.selected_channel_mute_duration_items().len()
             }
+            Some(ChannelActionMenuState::StreamTargets { targets, .. }) => targets.len(),
             None => 0,
         }
     }
@@ -217,13 +287,15 @@ impl DashboardState {
         match self.popups.channel_action_menu_mut()? {
             ChannelActionMenuState::Actions { selection, .. }
             | ChannelActionMenuState::ParticipantActions { selection, .. }
-            | ChannelActionMenuState::MuteDuration { selection, .. } => Some(selection),
+            | ChannelActionMenuState::MuteDuration { selection, .. }
+            | ChannelActionMenuState::StreamTargets { selection, .. } => Some(selection),
         }
     }
 
     pub(in crate::tui) fn channel_action_menu_title(&self) -> &'static str {
         match self.popups.channel_action_menu() {
             Some(ChannelActionMenuState::ParticipantActions { .. }) => "Participant actions",
+            Some(ChannelActionMenuState::StreamTargets { .. }) => "Share screen",
             Some(
                 ChannelActionMenuState::Actions { .. }
                 | ChannelActionMenuState::MuteDuration { .. },
@@ -319,6 +391,10 @@ impl DashboardState {
                             }
                         })
                     }
+                    ChannelActionKind::ToggleStream => {
+                        self.close_channel_action_menu();
+                        self.toggle_current_voice_stream_command()
+                    }
                     ChannelActionKind::ShowPinnedMessages => {
                         self.close_channel_action_menu();
                         self.open_channel_for_pane_view(channel_id);
@@ -355,24 +431,39 @@ impl DashboardState {
                             None
                         }
                     }
+                    ChannelActionKind::WatchStream => None,
                     ChannelActionKind::ParticipantAudioSettings => None,
                 }
             }
             ChannelActionMenuState::ParticipantActions {
+                channel_id,
                 user_id,
                 display_name,
                 selection,
-                ..
             } => {
                 let items = self.selected_channel_action_items();
                 let item = items.get(selection.selected_for_len(items.len()))?;
                 if !item.is_enabled() {
                     return None;
                 }
-                if item.kind == ChannelActionKind::ParticipantAudioSettings {
-                    self.open_voice_participant_audio_popup(user_id, display_name);
+                match item.kind {
+                    ChannelActionKind::WatchStream => {
+                        self.close_channel_action_menu();
+                        self.discord.cache.channel(channel_id).map(|channel| {
+                            AppCommand::WatchVoiceStream {
+                                scope: channel.voice_scope(),
+                                channel_id,
+                                user_id,
+                                display_name,
+                            }
+                        })
+                    }
+                    ChannelActionKind::ParticipantAudioSettings => {
+                        self.open_voice_participant_audio_popup(user_id, display_name);
+                        None
+                    }
+                    _ => None,
                 }
-                None
             }
             ChannelActionMenuState::MuteDuration {
                 channel_id,
@@ -383,6 +474,23 @@ impl DashboardState {
                 )?;
                 self.close_channel_action_menu();
                 self.toggle_channel_mute(channel_id, Some(item.duration))
+            }
+            ChannelActionMenuState::StreamTargets {
+                scope,
+                channel_id,
+                targets,
+                selection,
+            } => {
+                let target = targets
+                    .get(selection.selected_for_len(targets.len()))?
+                    .clone();
+                self.close_channel_action_menu();
+                self.show_stream_broadcast_preparing_toast(scope, channel_id);
+                Some(AppCommand::StartVoiceStream {
+                    scope,
+                    channel_id,
+                    target,
+                })
             }
         }
     }
@@ -414,6 +522,28 @@ impl DashboardState {
                 self.select_channel_action_row(index);
                 self.activate_selected_channel_action()
             }
+            ChannelActionMenuState::StreamTargets { targets, .. } => {
+                let index = self
+                    .options
+                    .key_bindings()
+                    .matching_indexed_shortcut_index(shortcut, targets.len())?;
+                self.select_channel_action_row(index);
+                self.activate_selected_channel_action()
+            }
         }
+    }
+
+    pub(in crate::tui) fn selected_stream_capture_targets(&self) -> &[StreamCaptureTarget] {
+        match self.popups.channel_action_menu() {
+            Some(ChannelActionMenuState::StreamTargets { targets, .. }) => targets,
+            _ => &[],
+        }
+    }
+
+    pub(in crate::tui) fn is_channel_action_stream_target_phase(&self) -> bool {
+        matches!(
+            self.popups.channel_action_menu(),
+            Some(ChannelActionMenuState::StreamTargets { .. })
+        )
     }
 }

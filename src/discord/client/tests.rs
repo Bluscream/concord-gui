@@ -20,6 +20,7 @@ use crate::{
             guild_message_create_fixture, message_create_event as build_message_create_event,
             message_history_loaded_event, user_profile_load_failed_event,
         },
+        voice::VoiceRuntimeEvent,
     },
 };
 use serde_json::{Value, json};
@@ -440,6 +441,65 @@ async fn requested_voice_state_tracks_changes_and_skips_duplicate_gateway_update
     assert!(matches!(
         gateway_commands.try_recv(),
         Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+}
+
+#[tokio::test]
+async fn stream_watch_requires_a_live_participant_in_the_current_voice_channel() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
+    publish_permission_fixture(&client, "GuildVoice", VIEW_CHANNEL | CONNECT).await;
+    client
+        .publish_event(AppEvent::VoiceStateUpdate {
+            state: VoiceStateInfo {
+                session_id: Some("parent-session".to_owned()),
+                ..VoiceStateInfo::test(Id::new(1), Some(Id::new(2)), Id::new(10))
+            },
+        })
+        .await;
+    client
+        .publish_event(AppEvent::VoiceStateUpdate {
+            state: VoiceStateInfo {
+                self_stream: true,
+                ..VoiceStateInfo::test(Id::new(1), Some(Id::new(2)), Id::new(99))
+            },
+        })
+        .await;
+    let mut gateway_commands = client
+        .gateway_commands_rx
+        .lock()
+        .expect("gateway command receiver mutex is not poisoned")
+        .take()
+        .expect("gateway commands can be taken once");
+    let mut voice_events = client
+        .voice_events_rx
+        .lock()
+        .expect("voice event receiver mutex is not poisoned")
+        .take()
+        .expect("voice events can be taken once");
+    while voice_events.try_recv().is_ok() {}
+
+    client
+        .request_stream_watch(
+            VoiceScope::Guild(Id::new(1)),
+            Id::new(2),
+            Id::new(99),
+            "Streamer".to_owned(),
+        )
+        .expect("active stream should be watchable");
+
+    assert_eq!(
+        gateway_commands.try_recv(),
+        Ok(GatewayCommand::WatchStream {
+            stream_key: "guild:1:2:99".to_owned(),
+        })
+    );
+    assert!(matches!(
+        voice_events.try_recv(),
+        Ok(VoiceRuntimeEvent::WatchStreamRequested(request))
+            if request.stream_key == "guild:1:2:99"
+                && request.owner_id == Id::new(99)
+                && request.channel_id == Id::new(2)
     ));
 }
 

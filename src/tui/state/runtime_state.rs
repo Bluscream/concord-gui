@@ -1,6 +1,9 @@
 use std::time::Instant;
 
-use crate::discord::ids::{Id, marker::ChannelMarker};
+use crate::discord::ids::{
+    Id,
+    marker::{ChannelMarker, UserMarker},
+};
 use crate::discord::{
     ActivityInfo, AttachmentDownloadId, DownloadAttachmentSource, MediaPlaybackRequestId,
     VoiceScope,
@@ -36,10 +39,27 @@ pub(super) struct MediaPlaybackPreparingUiState {
     pub(super) url: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct StreamPlaybackUiTarget {
+    pub(super) scope: VoiceScope,
+    pub(super) channel_id: Id<ChannelMarker>,
+    pub(super) user_id: Id<UserMarker>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct StreamBroadcastUiTarget {
+    pub(super) scope: VoiceScope,
+    pub(super) channel_id: Id<ChannelMarker>,
+}
+
 #[derive(Debug, Default)]
 pub(super) struct RuntimeUiState {
     pub(super) toast_message: Option<ToastMessage>,
     pub(super) media_playback_preparing: Option<MediaPlaybackPreparingUiState>,
+    pub(super) stream_playback_preparing: Option<StreamPlaybackUiTarget>,
+    pub(super) active_stream_playback: Option<StreamPlaybackUiTarget>,
+    pub(super) stream_broadcast_preparing: Option<StreamBroadcastUiTarget>,
+    pub(super) active_stream_broadcast: Option<StreamBroadcastUiTarget>,
     pub(super) gateway_error: Option<String>,
     pub(super) voice_connection: Option<VoiceConnectionUiState>,
     pub(super) open_composer_in_editor_requested: bool,

@@ -291,6 +291,27 @@ pub(super) async fn run_dashboard(
                                         dirty = true;
                                     }
                                 }
+                                AppCommand::WatchVoiceStream {
+                                    scope,
+                                    channel_id,
+                                    user_id,
+                                    display_name,
+                                } => {
+                                    dirty |= state.show_stream_playback_preparing_toast(
+                                        scope, channel_id, user_id,
+                                    );
+                                    let _ = command_helpers::send_or_record_closed(
+                                        &mut state,
+                                        &commands,
+                                        AppCommand::WatchVoiceStream {
+                                            scope,
+                                            channel_id,
+                                            user_id,
+                                            display_name,
+                                        },
+                                    )
+                                    .await;
+                                }
                                 command => {
                                     let _ = command_helpers::send_or_record_closed(
                                         &mut state, &commands, command,
