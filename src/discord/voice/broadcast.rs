@@ -215,6 +215,12 @@ impl StreamBroadcastRuntimeState {
                     .as_ref()
                     .is_some_and(|request| request.stream_key == server.stream_key)
                 {
+                    if self.active.as_ref().is_some_and(|active| {
+                        !server.matches_connection(&active.endpoint, &active.token)
+                    }) {
+                        update.close_stream_key =
+                            self.active.take().map(|active| active.request.stream_key);
+                    }
                     self.server = Some(server.clone());
                 }
             }
@@ -1980,6 +1986,39 @@ mod tests {
         }
     }
 
+    fn connected_broadcast_runtime() -> (StreamBroadcastRuntimeState, StreamBroadcastGatewaySession)
+    {
+        let mut state = StreamBroadcastRuntimeState::default();
+        state.apply(&VoiceRuntimeEvent::CurrentUserReady(Some(Id::new(30))));
+        state.apply(&VoiceRuntimeEvent::VoiceState(VoiceStateInfo {
+            guild_id: Some(Id::new(10)),
+            channel_id: Some(Id::new(20)),
+            user_id: Id::new(30),
+            session_id: Some("session".to_owned()),
+            member: None,
+            deaf: false,
+            mute: false,
+            self_deaf: false,
+            self_mute: false,
+            self_stream: false,
+        }));
+        state.apply(&VoiceRuntimeEvent::BroadcastStreamRequested(request()));
+        state.apply(&VoiceRuntimeEvent::StreamCreate(StreamCreateInfo {
+            stream_key: request().stream_key,
+            rtc_server_id: "11".to_owned(),
+            rtc_channel_id: Id::new(20),
+            viewer_ids: Vec::new(),
+            paused: false,
+        }));
+        let update = state.apply(&VoiceRuntimeEvent::StreamServer(StreamServerInfo {
+            stream_key: request().stream_key,
+            endpoint: Some("streams.example".to_owned()),
+            token: "token".to_owned(),
+        }));
+        let session = update.connect.expect("broadcast session should be ready");
+        (state, session)
+    }
+
     fn voice_description() -> VoiceSessionDescription {
         VoiceSessionDescription {
             mode: AEAD_XCHACHA20_POLY1305_RTPSIZE.to_owned(),
@@ -2093,6 +2132,65 @@ mod tests {
         assert_eq!(session.current_user_id, user_id);
         assert_eq!(session.request.channel_id, channel_id);
         assert_eq!(session.endpoint, "streams.example");
+    }
+
+    #[test]
+    fn broadcast_runtime_rotates_active_stream_servers() {
+        let (mut state, initial) = connected_broadcast_runtime();
+
+        let rotated = state.apply(&VoiceRuntimeEvent::StreamServer(StreamServerInfo {
+            stream_key: initial.request.stream_key.clone(),
+            endpoint: Some("replacement.example.com".to_owned()),
+            token: "replacement-token".to_owned(),
+        }));
+        assert_eq!(
+            rotated.close_stream_key.as_deref(),
+            Some(initial.request.stream_key.as_str())
+        );
+        assert!(!rotated.send_delete);
+        let replacement = rotated
+            .connect
+            .expect("new stream server starts a replacement broadcast");
+        assert_eq!(replacement.endpoint, "replacement.example.com");
+        assert_eq!(replacement.token, "replacement-token");
+
+        let unavailable = state.apply(&VoiceRuntimeEvent::StreamServer(StreamServerInfo {
+            stream_key: initial.request.stream_key.clone(),
+            endpoint: None,
+            token: "pending-token".to_owned(),
+        }));
+        assert_eq!(
+            unavailable.close_stream_key.as_deref(),
+            Some(initial.request.stream_key.as_str())
+        );
+        assert!(!unavailable.send_delete);
+        assert!(unavailable.connect.is_none());
+
+        let reallocated = state.apply(&VoiceRuntimeEvent::StreamServer(StreamServerInfo {
+            stream_key: initial.request.stream_key.clone(),
+            endpoint: Some("reallocated.example.com".to_owned()),
+            token: "reallocated-token".to_owned(),
+        }));
+        let active = reallocated
+            .connect
+            .expect("reallocated stream server reconnects broadcast");
+        assert_ne!(active.connection_id, replacement.connection_id);
+
+        let stale_end = state.apply(&VoiceRuntimeEvent::BroadcastStreamConnectionEnded {
+            connection_id: replacement.connection_id,
+            stream_key: replacement.request.stream_key,
+            outcome: VoiceConnectionEnd::Stop,
+        });
+        assert!(stale_end.close_stream_key.is_none());
+        assert!(stale_end.connect.is_none());
+        assert_eq!(
+            state
+                .active
+                .as_ref()
+                .expect("reallocated broadcast remains active")
+                .connection_id,
+            active.connection_id
+        );
     }
 
     #[test]

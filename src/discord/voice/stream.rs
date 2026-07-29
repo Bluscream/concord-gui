@@ -216,6 +216,12 @@ impl StreamRuntimeState {
                     .as_ref()
                     .is_some_and(|request| request.stream_key == server.stream_key)
                 {
+                    if self.active.as_ref().is_some_and(|active| {
+                        !server.matches_connection(&active.endpoint, &active.token)
+                    }) {
+                        update.close_stream_key =
+                            self.active.take().map(|active| active.request.stream_key);
+                    }
                     self.server = Some(server.clone());
                 }
             }
@@ -2146,6 +2152,64 @@ mod tests {
         assert_eq!(session.rtc_server_id, "400");
         assert_eq!(session.rtc_channel_id, Id::new(401));
         assert_eq!(session.request.owner_id, Id::new(99));
+    }
+
+    #[test]
+    fn stream_runtime_rotates_active_stream_servers() {
+        let (mut state, initial) = connected_stream_runtime();
+
+        let rotated = state.apply(&VoiceRuntimeEvent::StreamServer(StreamServerInfo {
+            stream_key: initial.request.stream_key.clone(),
+            endpoint: Some("replacement.example.com".to_owned()),
+            token: "replacement-token".to_owned(),
+        }));
+        assert_eq!(
+            rotated.close_stream_key.as_deref(),
+            Some(initial.request.stream_key.as_str())
+        );
+        assert!(!rotated.send_delete);
+        let replacement = rotated
+            .connect
+            .expect("new stream server starts a replacement connection");
+        assert_eq!(replacement.endpoint, "replacement.example.com");
+        assert_eq!(replacement.token, "replacement-token");
+
+        let unavailable = state.apply(&VoiceRuntimeEvent::StreamServer(StreamServerInfo {
+            stream_key: initial.request.stream_key.clone(),
+            endpoint: None,
+            token: "pending-token".to_owned(),
+        }));
+        assert_eq!(
+            unavailable.close_stream_key.as_deref(),
+            Some(initial.request.stream_key.as_str())
+        );
+        assert!(!unavailable.send_delete);
+        assert!(unavailable.connect.is_none());
+
+        let reallocated = state.apply(&VoiceRuntimeEvent::StreamServer(StreamServerInfo {
+            stream_key: initial.request.stream_key.clone(),
+            endpoint: Some("reallocated.example.com".to_owned()),
+            token: "reallocated-token".to_owned(),
+        }));
+        let active = reallocated
+            .connect
+            .expect("reallocated stream server reconnects");
+        assert_ne!(active.connection_id, replacement.connection_id);
+
+        let stale_end = state.apply(&stream_connection_ended(
+            &replacement,
+            VoiceConnectionEnd::Stop,
+        ));
+        assert!(stale_end.close_stream_key.is_none());
+        assert!(stale_end.connect.is_none());
+        assert_eq!(
+            state
+                .active
+                .as_ref()
+                .expect("reallocated connection remains active")
+                .connection_id,
+            active.connection_id
+        );
     }
 
     #[test]

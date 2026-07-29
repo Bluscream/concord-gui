@@ -193,6 +193,17 @@ pub struct StreamServerInfo {
     pub token: String,
 }
 
+impl StreamServerInfo {
+    pub(super) fn matches_connection(&self, endpoint: &str, token: &str) -> bool {
+        self.endpoint
+            .as_deref()
+            .map(|endpoint| endpoint.trim_end_matches('/'))
+            .is_some_and(|candidate| !candidate.is_empty() && candidate == endpoint)
+            && !self.token.is_empty()
+            && self.token == token
+    }
+}
+
 impl fmt::Debug for StreamServerInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StreamServerInfo")
