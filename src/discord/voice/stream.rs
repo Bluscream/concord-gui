@@ -34,7 +34,7 @@ const RTCP_PAYLOAD_SPECIFIC_FEEDBACK: u8 = 206;
 const RTCP_PLI_FORMAT: u8 = 1;
 const RTCP_PLI_LENGTH_WORDS_MINUS_ONE: u16 = 2;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub(super) struct StreamGatewaySession {
     pub(super) connection_id: u64,
     pub(super) request: StreamWatchRequest,
@@ -44,6 +44,21 @@ pub(super) struct StreamGatewaySession {
     pub(super) rtc_channel_id: Id<ChannelMarker>,
     pub(super) endpoint: String,
     pub(super) token: String,
+}
+
+impl std::fmt::Debug for StreamGatewaySession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamGatewaySession")
+            .field("connection_id", &self.connection_id)
+            .field("request", &self.request)
+            .field("current_user_id", &self.current_user_id)
+            .field("session_id", &self.session_id)
+            .field("rtc_server_id", &self.rtc_server_id)
+            .field("rtc_channel_id", &self.rtc_channel_id)
+            .field("endpoint", &self.endpoint)
+            .field("token", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Default)]
@@ -1945,6 +1960,15 @@ mod tests {
         }));
         let session = update.connect.expect("stream session should be ready");
         (state, session)
+    }
+
+    #[test]
+    fn stream_gateway_session_debug_redacts_token() {
+        let (_, session) = connected_stream_runtime();
+        let debug = format!("{session:?}");
+
+        assert!(!debug.contains("stream-token"));
+        assert!(debug.contains("<redacted>"));
     }
 
     fn stream_connection_ended(

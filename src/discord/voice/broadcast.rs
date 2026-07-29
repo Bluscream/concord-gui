@@ -69,7 +69,7 @@ const STREAM_RTX_MAX_RETRANSMISSIONS_PER_FEEDBACK: usize = 128;
 const STREAM_UDP_RECEIVE_PACKET_BYTES: usize = 2_048;
 const SOUNDSHARE_SPEAKING_FLAG: u8 = 2;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub(super) struct StreamBroadcastGatewaySession {
     pub(super) connection_id: u64,
     pub(super) request: StreamBroadcastRequest,
@@ -79,6 +79,21 @@ pub(super) struct StreamBroadcastGatewaySession {
     pub(super) rtc_channel_id: Id<ChannelMarker>,
     pub(super) endpoint: String,
     pub(super) token: String,
+}
+
+impl std::fmt::Debug for StreamBroadcastGatewaySession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamBroadcastGatewaySession")
+            .field("connection_id", &self.connection_id)
+            .field("request", &self.request)
+            .field("current_user_id", &self.current_user_id)
+            .field("session_id", &self.session_id)
+            .field("rtc_server_id", &self.rtc_server_id)
+            .field("rtc_channel_id", &self.rtc_channel_id)
+            .field("endpoint", &self.endpoint)
+            .field("token", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Default)]
@@ -2011,6 +2026,16 @@ mod tests {
             endpoint: "streams.example".to_owned(),
             token: "token".to_owned(),
         }
+    }
+
+    #[test]
+    fn stream_broadcast_gateway_session_debug_redacts_token() {
+        let mut session = session();
+        session.token = "broadcast-secret-token".to_owned();
+        let debug = format!("{session:?}");
+
+        assert!(!debug.contains("broadcast-secret-token"));
+        assert!(debug.contains("<redacted>"));
     }
 
     fn connected_broadcast_runtime() -> (StreamBroadcastRuntimeState, StreamBroadcastGatewaySession)
