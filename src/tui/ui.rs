@@ -82,11 +82,11 @@ use self::popups::{
     render_message_action_menu, render_message_confirmation, render_message_url_picker,
     render_notification_inbox_mark_all_confirmation, render_notification_inbox_popup,
     render_options_popup, render_poll_vote_picker, render_quit_confirmation,
-    render_reaction_users_popup, render_search_popup, render_thread_action_menu,
-    render_thread_delete_confirmation, render_thread_edit, render_thread_edit_tag_picker,
-    render_toast, render_user_profile_popup, render_voice_participant_audio_popup,
-    search_popup_visible_items, thread_edit_metrics, thread_edit_popup_area,
-    thread_edit_tag_picker_visible_items, user_profile_popup_has_avatar,
+    render_reaction_users_popup, render_search_popup, render_stream_info,
+    render_thread_action_menu, render_thread_delete_confirmation, render_thread_edit,
+    render_thread_edit_tag_picker, render_toast, render_user_profile_popup,
+    render_voice_participant_audio_popup, search_popup_visible_items, thread_edit_metrics,
+    thread_edit_popup_area, thread_edit_tag_picker_visible_items, user_profile_popup_has_avatar,
     user_profile_popup_text_geometry, user_profile_popup_total_lines,
 };
 pub use self::types::{
@@ -116,7 +116,8 @@ use self::{
         message_pin_confirmation_lines, message_remove_embeds_confirmation_lines,
         message_url_picker_lines_for_width, options_popup_lines, poll_vote_picker_lines,
         quit_confirmation_lines, reaction_list_lines_with_ready_urls, reaction_users_popup_lines,
-        toast_line, user_profile_popup_lines, user_profile_popup_lines_with_activities,
+        stream_info_area, stream_info_lines, toast_line, user_profile_popup_lines,
+        user_profile_popup_lines_with_activities,
     },
 };
 use super::theme;
@@ -319,6 +320,7 @@ pub(in crate::tui) fn render_with_message_viewport_plan(
     if state.is_pane_visible(FocusPane::Members) {
         render_members(frame, areas.members, state, &emoji_images);
     }
+    render_stream_info(frame, frame.area(), state);
     render_leader_popup(frame, popup_area, state);
     render_guild_action_menu(frame, popup_area, state);
     render_channel_action_menu(frame, popup_area, state);

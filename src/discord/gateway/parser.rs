@@ -49,7 +49,9 @@ use read_state::{
 };
 use ready::{parse_ready, parse_ready_supplemental};
 use relationships::{parse_relationship_add, parse_relationship_remove, parse_relationship_update};
-use streams::{parse_stream_create, parse_stream_delete, parse_stream_server_update};
+use streams::{
+    parse_stream_create, parse_stream_delete, parse_stream_server_update, parse_stream_update,
+};
 use user_settings::{parse_user_notification_settings_update, parse_user_settings_update};
 use voice::{
     parse_call, parse_call_delete, parse_guild_voice_states, parse_voice_server_update,
@@ -163,6 +165,7 @@ fn parse_user_account_event_data(event_type: &str, data: &Value) -> Vec<AppEvent
         "VOICE_STATE_UPDATE" => parse_voice_state_update(data).into_iter().collect(),
         "VOICE_SERVER_UPDATE" => parse_voice_server_update(data).into_iter().collect(),
         "STREAM_CREATE" => parse_stream_create(data).into_iter().collect(),
+        "STREAM_UPDATE" => parse_stream_update(data).into_iter().collect(),
         "STREAM_SERVER_UPDATE" => parse_stream_server_update(data).into_iter().collect(),
         "STREAM_DELETE" => parse_stream_delete(data).into_iter().collect(),
         "CALL_CREATE" | "CALL_UPDATE" => parse_call(data),

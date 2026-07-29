@@ -1021,19 +1021,21 @@ async fn publish_app_event(
 ) {
     let snapshot_areas = event.snapshot_areas();
     let needs_effect_delivery = event.needs_effect_delivery();
-    let voice_sound = {
-        let state = state.read().expect("discord state lock is not poisoned");
-        match event {
-            AppEvent::VoiceStateUpdate { state: voice_state } => {
-                state.voice_sound_for_state_update(voice_state)
-            }
-            _ => None,
-        }
-    };
 
     let event_revision: SnapshotRevision;
     {
         let _publish_guard = publish_lock.lock().await;
+        let voice_sounds = {
+            let state = state.read().expect("discord state lock is not poisoned");
+            match event {
+                AppEvent::VoiceStateUpdate { state: voice_state } => state
+                    .voice_sound_for_state_update(voice_state)
+                    .into_iter()
+                    .collect(),
+                AppEvent::StreamUpdate { stream } => state.stream_viewer_sounds_for_update(stream),
+                _ => Vec::new(),
+            }
+        };
 
         event_revision = if let Some(areas) = snapshot_areas {
             let next_revision = {
@@ -1060,7 +1062,7 @@ async fn publish_app_event(
                 })
                 .await;
         }
-        if let Some(kind) = voice_sound {
+        for kind in voice_sounds {
             let _ = effects_tx
                 .send(SequencedAppEvent {
                     revision: event_revision.global,

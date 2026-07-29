@@ -1,0 +1,42 @@
+use crate::discord::StreamParticipantState;
+
+use super::DashboardState;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::tui) struct StreamInfoSection {
+    pub(in crate::tui) label: &'static str,
+    pub(in crate::tui) paused: bool,
+    pub(in crate::tui) participants: Vec<StreamParticipantState>,
+}
+
+impl DashboardState {
+    pub(in crate::tui) fn stream_info_sections(&self) -> Vec<StreamInfoSection> {
+        let mut sections = Vec::with_capacity(2);
+
+        if let (Some(target), Some(current_user_id)) =
+            (self.runtime.active_stream_broadcast, self.current_user_id())
+        {
+            let stream =
+                self.discord
+                    .stream_participants(target.scope, target.channel_id, current_user_id);
+            sections.push(StreamInfoSection {
+                label: "My stream",
+                paused: stream.paused,
+                participants: stream.participants,
+            });
+        }
+
+        if let Some(target) = self.runtime.active_stream_playback {
+            let stream =
+                self.discord
+                    .stream_participants(target.scope, target.channel_id, target.user_id);
+            sections.push(StreamInfoSection {
+                label: "Watching",
+                paused: stream.paused,
+                participants: stream.participants,
+            });
+        }
+
+        sections
+    }
+}

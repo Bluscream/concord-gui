@@ -141,6 +141,7 @@ pub(in crate::discord) struct TypingIndicator {
 pub(in crate::discord) struct VoiceStateCache {
     pub(in crate::discord) states:
         BTreeMap<(VoiceScope, Id<UserMarker>), crate::discord::voice::VoiceState>,
+    pub(in crate::discord) streams: BTreeMap<String, crate::discord::voice::StreamState>,
 }
 
 #[derive(Clone, Debug, Default)]

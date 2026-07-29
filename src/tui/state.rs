@@ -32,6 +32,7 @@ mod presentation;
 mod request_tracking;
 mod runtime_state;
 mod scroll;
+mod stream_info;
 mod subscriptions;
 mod text_completion;
 mod toast;

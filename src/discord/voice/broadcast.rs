@@ -2076,6 +2076,8 @@ mod tests {
                     stream_key: request().stream_key,
                     rtc_server_id: "11".to_owned(),
                     rtc_channel_id: channel_id,
+                    viewer_ids: Vec::new(),
+                    paused: false,
                 }))
                 .connect
                 .is_none()

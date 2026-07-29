@@ -115,6 +115,7 @@ pub(crate) use verification::GuildParticipationDecision;
 pub use verification::{
     GuildParticipationBlock, GuildParticipationDataGap, GuildParticipationRestriction,
 };
+pub(crate) use voice::StreamParticipantState;
 pub(crate) use voice::list_stream_capture_targets;
 pub use voice::{
     MicrophoneSensitivityDb, VoiceAudioSettings, VoiceParticipantPlaybackSettings,
@@ -122,6 +123,6 @@ pub use voice::{
 };
 pub use voice::{
     StreamCaptureTarget, StreamCaptureTargetKind, StreamCreateInfo, StreamDeleteInfo,
-    StreamServerInfo, VoiceConnectionStatus, VoiceScope, VoiceServerInfo, VoiceSoundKind,
-    VoiceStateInfo,
+    StreamServerInfo, StreamUpdateInfo, VoiceConnectionStatus, VoiceScope, VoiceServerInfo,
+    VoiceSoundKind, VoiceStateInfo,
 };

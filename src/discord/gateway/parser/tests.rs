@@ -505,7 +505,9 @@ fn raw_stream_events_supply_the_separate_rtc_connection() {
             "d": {
                 "stream_key": "guild:10:20:30",
                 "rtc_server_id": "400",
-                "rtc_channel_id": "401"
+                "rtc_channel_id": "401",
+                "viewer_ids": ["50", "60"],
+                "paused": true
             }
         })
         .to_string(),
@@ -516,6 +518,27 @@ fn raw_stream_events_supply_the_separate_rtc_connection() {
             if stream.stream_key == "guild:10:20:30"
                 && stream.rtc_server_id == "400"
                 && stream.rtc_channel_id == Id::new(401)
+                && stream.viewer_ids == vec![Id::new(50), Id::new(60)]
+                && stream.paused
+    )));
+
+    let updated = parse_user_account_event(
+        &json!({
+            "t": "STREAM_UPDATE",
+            "d": {
+                "stream_key": "guild:10:20:30",
+                "viewer_ids": ["50", "70"],
+                "paused": false
+            }
+        })
+        .to_string(),
+    );
+    assert!(updated.iter().any(|event| matches!(
+        event,
+        AppEvent::StreamUpdate { stream }
+            if stream.stream_key == "guild:10:20:30"
+                && stream.viewer_ids == vec![Id::new(50), Id::new(70)]
+                && !stream.paused
     )));
 
     let server = parse_user_account_event(

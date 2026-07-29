@@ -7,8 +7,9 @@ use crate::{
         DiscordAction, DiscordPermission, ForumPostCreate, ForumTagInfo, GuildBoostTier,
         GuildOnboardingInfo, GuildParticipationDataGap, GuildParticipationRestriction,
         GuildVerificationLevel, MemberInfo, MentionInfo, MessageAttachmentUpload,
-        PermissionDataGap, ReactionEmoji, ReplyReference, RoleInfo, ThreadMetadataInfo,
-        UserProfileInfo, VoiceAudioSettings, VoiceScope, VoiceSoundKind, VoiceStateInfo,
+        PermissionDataGap, ReactionEmoji, ReplyReference, RoleInfo, StreamCreateInfo,
+        StreamUpdateInfo, ThreadMetadataInfo, UserProfileInfo, VoiceAudioSettings, VoiceScope,
+        VoiceSoundKind, VoiceStateInfo,
         gateway::GatewayCommand,
         ids::{
             Id,
@@ -1697,6 +1698,42 @@ async fn voice_state_transitions_publish_join_and_leave_sound_effects() {
         })
         .await;
     assert_voice_sound(&mut effects, VoiceSoundKind::Leave).await;
+}
+
+#[tokio::test]
+async fn stream_viewer_updates_publish_stream_sound_effects() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
+    let mut effects = client.take_effects();
+
+    client
+        .publish_event(AppEvent::Ready {
+            user: "me".to_owned(),
+            user_id: Some(Id::new(20)),
+        })
+        .await;
+    client
+        .publish_event(AppEvent::StreamCreate {
+            stream: StreamCreateInfo {
+                stream_key: "guild:1:10:20".to_owned(),
+                rtc_server_id: "100".to_owned(),
+                rtc_channel_id: Id::new(101),
+                viewer_ids: vec![Id::new(30)],
+                paused: false,
+            },
+        })
+        .await;
+    client
+        .publish_event(AppEvent::StreamUpdate {
+            stream: StreamUpdateInfo {
+                stream_key: "guild:1:10:20".to_owned(),
+                viewer_ids: vec![Id::new(30), Id::new(40)],
+                paused: false,
+            },
+        })
+        .await;
+
+    assert_voice_sound(&mut effects, VoiceSoundKind::StreamViewerJoin).await;
 }
 
 #[test]

@@ -38,8 +38,8 @@ use gateway::*;
 use gateway::{run_voice_gateway_session, send_voice_binary, send_voice_text};
 pub use info::{
     StreamCaptureTarget, StreamCaptureTargetKind, StreamCreateInfo, StreamDeleteInfo,
-    StreamServerInfo, VoiceConnectionStatus, VoiceScope, VoiceServerInfo, VoiceSoundKind,
-    VoiceStateInfo,
+    StreamServerInfo, StreamUpdateInfo, VoiceConnectionStatus, VoiceScope, VoiceServerInfo,
+    VoiceSoundKind, VoiceStateInfo,
 };
 #[cfg(all(feature = "voice-playback", target_os = "linux", not(test)))]
 use microphone::log_captured_alsa_errors;
@@ -50,6 +50,8 @@ use microphone::*;
 #[cfg(test)]
 use runtime::{VoiceRuntimeAction, VoiceRuntimeState};
 pub(crate) use runtime::{forward_app_event, run_voice_runtime};
+pub(crate) use state::StreamParticipantState;
+pub(in crate::discord) use state::StreamState;
 pub(in crate::discord) use state::VoiceState;
 pub use state::{CurrentVoiceConnectionState, VoiceAudioSettings, VoiceParticipantState};
 

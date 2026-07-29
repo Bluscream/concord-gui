@@ -10,6 +10,72 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::BTreeMap;
 
 #[test]
+fn stream_info_panel_separates_owned_and_watched_streams() {
+    let guild_id = Id::new(1);
+    let channel_id = Id::new(10);
+    let current_user_id = Id::new(20);
+    let watched_owner_id = Id::new(30);
+    let viewer_id = Id::new(40);
+    let scope = crate::discord::VoiceScope::Guild(guild_id);
+    let mut state = DashboardState::new();
+    state.push_event(AppEvent::Ready {
+        user: "Me".to_owned(),
+        user_id: Some(current_user_id),
+    });
+    state.push_event(AppEvent::ReadyUserDirectory {
+        users: vec![
+            ChannelRecipientInfo::test(current_user_id, "Me"),
+            ChannelRecipientInfo::test(watched_owner_id, "Broadcaster"),
+            ChannelRecipientInfo::test(viewer_id, "Viewer"),
+        ],
+    });
+    state.push_event(AppEvent::StreamCreate {
+        stream: crate::discord::StreamCreateInfo {
+            stream_key: "guild:1:10:20".to_owned(),
+            rtc_server_id: "100".to_owned(),
+            rtc_channel_id: Id::new(101),
+            viewer_ids: vec![viewer_id],
+            paused: false,
+        },
+    });
+    state.push_event(AppEvent::StreamCreate {
+        stream: crate::discord::StreamCreateInfo {
+            stream_key: "guild:1:10:30".to_owned(),
+            rtc_server_id: "200".to_owned(),
+            rtc_channel_id: Id::new(201),
+            viewer_ids: vec![current_user_id],
+            paused: false,
+        },
+    });
+    state.show_stream_broadcast_preparing_toast(scope, channel_id);
+    state.push_effect(AppEvent::StreamBroadcastStarted { scope, channel_id });
+    state.show_stream_playback_preparing_toast(scope, channel_id, watched_owner_id);
+    state.push_effect(AppEvent::StreamPlaybackWindowReady {
+        scope,
+        channel_id,
+        user_id: watched_owner_id,
+    });
+
+    let lines = stream_info_lines(&state);
+    assert_eq!(
+        line_texts_from_ratatui(&lines),
+        vec![
+            "My stream",
+            "● Me  LIVE",
+            "  Viewer",
+            "---",
+            "Watching",
+            "● Broadcaster  LIVE",
+            "  Me",
+        ]
+    );
+    let frame = Rect::new(0, 0, 80, 24);
+    let popup = stream_info_area(frame, &lines);
+    assert_eq!(popup.right(), frame.right());
+    assert_eq!(popup.bottom(), frame.bottom());
+}
+
+#[test]
 fn options_popup_lines_show_selected_toggle_state() {
     let items = vec![
         DisplayOptionItem {

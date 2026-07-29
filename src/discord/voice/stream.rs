@@ -62,6 +62,7 @@ struct StreamPlayerReadySignal {
     scope: VoiceScope,
     channel_id: Id<ChannelMarker>,
     user_id: Id<UserMarker>,
+    display_name: String,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -526,6 +527,7 @@ async fn connect_stream_gateway(
                             scope: session.request.scope,
                             channel_id: session.request.channel_id,
                             user_id: session.request.owner_id,
+                            display_name: session.request.display_name.clone(),
                         };
                         media_task = Some(tokio::spawn(async move {
                             let result = run_stream_media(
@@ -826,7 +828,7 @@ async fn run_stream_media(
     // release them immediately before mpv binds its receive sockets.
     drop(audio_ports);
     drop(video_ports);
-    let mut player = stream_player_command(sdp.path());
+    let mut player = stream_player_command(sdp.path(), &stream_player_ready.display_name);
     let mut player = player.spawn().map_err(stream_player_spawn_failure)?;
     let player_id = player.id();
     let player_stdout = player
@@ -1226,7 +1228,7 @@ fn stream_player_spawn_failure(error: std::io::Error) -> StreamConnectionFailure
     StreamConnectionFailure::stop(message)
 }
 
-fn stream_player_command(sdp_path: &Path) -> Command {
+fn stream_player_command(sdp_path: &Path, display_name: &str) -> Command {
     let mut player = Command::new("mpv");
     player
         // Keep playback deterministic and prevent user cache settings from
@@ -1253,6 +1255,7 @@ fn stream_player_command(sdp_path: &Path) -> Command {
         // the protocol list together as one value.
         .arg("--demuxer-lavf-o=protocol_whitelist=[file,udp,rtp],max_delay=0,reorder_queue_size=0")
         .arg("--force-window=immediate")
+        .arg(format!("--title={display_name}'s stream"))
         // Audio and video share one player so its volume and mute controls
         // apply to the complete broadcast.
         .arg("--video-sync=desync")
@@ -1794,6 +1797,8 @@ mod tests {
             stream_key: "guild:10:20:99".to_owned(),
             rtc_server_id: "400".to_owned(),
             rtc_channel_id: Id::new(401),
+            viewer_ids: Vec::new(),
+            paused: false,
         }));
         let update = state.apply(&VoiceRuntimeEvent::StreamServer(StreamServerInfo {
             stream_key: "guild:10:20:99".to_owned(),
@@ -2030,6 +2035,8 @@ mod tests {
             stream_key: "guild:10:20:99".to_owned(),
             rtc_server_id: "400".to_owned(),
             rtc_channel_id: Id::new(401),
+            viewer_ids: Vec::new(),
+            paused: false,
         }));
 
         let update = state.apply(&VoiceRuntimeEvent::StreamServer(StreamServerInfo {
@@ -2175,7 +2182,7 @@ mod tests {
 
     #[test]
     fn stream_player_controls_the_complete_broadcast() {
-        let player = stream_player_command(Path::new("/tmp/concord-stream.sdp"))
+        let player = stream_player_command(Path::new("/tmp/concord-stream.sdp"), "neo")
             .as_std()
             .get_args()
             .map(|argument| argument.to_string_lossy().into_owned())
@@ -2197,6 +2204,7 @@ mod tests {
                 "--demuxer-lavf-buffersize=4096",
                 "--demuxer-lavf-o=protocol_whitelist=[file,udp,rtp],max_delay=0,reorder_queue_size=0",
                 "--force-window=immediate",
+                "--title=neo's stream",
                 "--video-sync=desync",
                 "--framedrop=vo",
                 "--video-timing-offset=0",

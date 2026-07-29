@@ -16,9 +16,9 @@ use super::{
     GuildBoostTier, GuildNotificationSettingsInfo, GuildOnboardingInfo, GuildVerificationLevel,
     MemberInfo, MentionInfo, MessageInfo, PollInfo, PremiumTier, PresenceStatus, ReactionUserInfo,
     ReadStateInfo, RelationshipInfo, RoleInfo, SnapshotAreas, StreamCaptureTarget,
-    StreamCreateInfo, StreamDeleteInfo, StreamServerInfo, UserProfileInfo, UserSettingsInfo,
-    VoiceConnectionStatus, VoiceScope, VoiceServerInfo, VoiceSoundKind, VoiceStateInfo,
-    is_thread_kind,
+    StreamCreateInfo, StreamDeleteInfo, StreamServerInfo, StreamUpdateInfo, UserProfileInfo,
+    UserSettingsInfo, VoiceConnectionStatus, VoiceScope, VoiceServerInfo, VoiceSoundKind,
+    VoiceStateInfo, is_thread_kind,
 };
 use super::{ApplicationCommandChoiceInfo, ApplicationCommandInfo};
 
@@ -431,6 +431,9 @@ pub enum AppEvent {
     StreamCreate {
         stream: StreamCreateInfo,
     },
+    StreamUpdate {
+        stream: StreamUpdateInfo,
+    },
     StreamServerUpdate {
         server: StreamServerInfo,
     },
@@ -765,6 +768,7 @@ define_app_event_kinds! {
     VoiceSpeakingUpdate: AppEvent::VoiceSpeakingUpdate { .. },
     VoiceServerUpdate: AppEvent::VoiceServerUpdate { .. },
     StreamCreate: AppEvent::StreamCreate { .. },
+    StreamUpdate: AppEvent::StreamUpdate { .. },
     StreamServerUpdate: AppEvent::StreamServerUpdate { .. },
     StreamDelete: AppEvent::StreamDelete { .. },
     VoiceConnectionStatusChanged: AppEvent::VoiceConnectionStatusChanged { .. },
@@ -1855,10 +1859,13 @@ impl AppEventKind {
             | AppEventKind::GatewayReidentified
             | AppEventKind::GatewayClosed => AppEventMetadata::effect_only(),
 
-            AppEventKind::VoiceServerUpdate
-            | AppEventKind::StreamCreate
-            | AppEventKind::StreamServerUpdate
-            | AppEventKind::StreamDelete => AppEventMetadata::inert(),
+            AppEventKind::StreamCreate
+            | AppEventKind::StreamUpdate
+            | AppEventKind::StreamDelete => AppEventMetadata::mutating(SnapshotAreas::navigation()),
+
+            AppEventKind::VoiceServerUpdate | AppEventKind::StreamServerUpdate => {
+                AppEventMetadata::inert()
+            }
 
             // The current user's Nitro tier is stored in the session (part of
             // the navigation snapshot area) so the upload-limit check can read

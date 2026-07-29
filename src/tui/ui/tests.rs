@@ -42,7 +42,8 @@ use super::{
     reaction_users_popup_lines, reaction_users_visible_line_count, render, render_channels,
     render_composer, render_guilds, render_header, render_members, selected_avatar_x_offset,
     selected_message_card_width, selected_message_content_x_offset, selection_marker,
-    sync_view_heights, theme, toast_line, user_profile_popup_has_avatar, user_profile_popup_lines,
+    stream_info_area, stream_info_lines, sync_view_heights, theme, toast_line,
+    user_profile_popup_has_avatar, user_profile_popup_lines,
     user_profile_popup_lines_with_activities, user_profile_popup_text_geometry,
     verification_composer_text,
 };

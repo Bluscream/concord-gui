@@ -320,6 +320,9 @@ fn voice_sound_path(kind: VoiceSoundKind, options: &NotificationOptions) -> Opti
     match kind {
         VoiceSoundKind::Join => options.voice_join_sound.as_deref(),
         VoiceSoundKind::Leave => options.voice_leave_sound.as_deref(),
+        VoiceSoundKind::StreamStart
+        | VoiceSoundKind::StreamViewerJoin
+        | VoiceSoundKind::StreamViewerLeave => None,
     }
 }
 

@@ -656,6 +656,9 @@ impl DiscordState {
             } => {
                 self.update_voice_speaking(*scope, *channel_id, *user_id, *speaking);
             }
+            AppEvent::StreamCreate { stream } => self.record_stream_create(stream),
+            AppEvent::StreamUpdate { stream } => self.record_stream_update(stream),
+            AppEvent::StreamDelete { stream } => self.remove_stream(&stream.stream_key),
             AppEvent::CallDelete { channel_id } => {
                 self.remove_voice_states_for_channel(*channel_id);
             }
@@ -854,9 +857,7 @@ impl DiscordState {
             | AppEvent::UserProfileLoadFailed { .. }
             | AppEvent::UserProfileUpdateFailed { .. }
             | AppEvent::VoiceServerUpdate { .. }
-            | AppEvent::StreamCreate { .. }
             | AppEvent::StreamServerUpdate { .. }
-            | AppEvent::StreamDelete { .. }
             | AppEvent::VoiceConnectionStatusChanged { .. }
             | AppEvent::VoiceSound { .. }
             | AppEvent::GatewayResumed

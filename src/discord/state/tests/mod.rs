@@ -41,6 +41,7 @@ mod permissions;
 mod profiles;
 mod reads;
 mod snapshots;
+mod streams;
 mod upload_limits;
 
 fn profile_info(user_id: u64, guild_nick: Option<&str>) -> UserProfileInfo {

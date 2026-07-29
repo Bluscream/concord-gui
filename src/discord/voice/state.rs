@@ -1,11 +1,13 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::discord::ids::{
     Id,
     marker::{ChannelMarker, GuildMarker, UserMarker},
 };
 use crate::discord::{MicrophoneSensitivityDb, VoiceVolumePercent};
-use crate::discord::{VoiceScope, VoiceSoundKind, VoiceStateInfo};
+use crate::discord::{
+    StreamCreateInfo, StreamUpdateInfo, VoiceScope, VoiceSoundKind, VoiceStateInfo,
+};
 
 use crate::discord::state::DiscordState;
 
@@ -19,6 +21,18 @@ pub struct VoiceParticipantState {
     pub self_mute: bool,
     pub self_stream: bool,
     pub speaking: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct StreamParticipantState {
+    pub(crate) display_name: String,
+    pub(crate) broadcaster: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct StreamParticipantList {
+    pub(crate) paused: bool,
+    pub(crate) participants: Vec<StreamParticipantState>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -98,6 +112,15 @@ pub(in crate::discord) struct VoiceState {
     self_mute: bool,
     self_stream: bool,
     speaking: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::discord) struct StreamState {
+    scope: VoiceScope,
+    channel_id: Id<ChannelMarker>,
+    owner_id: Id<UserMarker>,
+    viewer_ids: BTreeSet<Id<UserMarker>>,
+    paused: bool,
 }
 
 impl DiscordState {
@@ -182,14 +205,27 @@ impl DiscordState {
             .states
             .iter()
             .find(|((_, user_id), _)| *user_id == state.user_id)
-            .map(|(_, current)| current.channel_id);
+            .map(|((scope, _), current)| (*scope, current));
+        let before_channel = before.map(|(_, current)| current.channel_id);
         let after = state.channel_id;
-        if before == after {
+        if self.session.current_user_id != Some(state.user_id)
+            && let Some(active_voice) = self.current_user_voice_connection()
+            && let Some((before_scope, current)) = before
+            && before_scope == active_voice.scope
+            && current.channel_id == active_voice.channel_id
+            && after == Some(active_voice.channel_id)
+            && !current.self_stream
+            && state.self_stream
+        {
+            return Some(VoiceSoundKind::StreamStart);
+        }
+
+        if before_channel == after {
             return None;
         }
 
         if self.session.current_user_id == Some(state.user_id) {
-            return match (before, after) {
+            return match (before_channel, after) {
                 (None, Some(_)) | (Some(_), Some(_)) => Some(VoiceSoundKind::Join),
                 (Some(_), None) => Some(VoiceSoundKind::Leave),
                 (None, None) => None,
@@ -199,12 +235,73 @@ impl DiscordState {
         // For other users, only chime for the channel the current user is in.
         let active_voice_channel = self.current_user_voice_connection()?.channel_id;
         match (
-            before == Some(active_voice_channel),
+            before_channel == Some(active_voice_channel),
             after == Some(active_voice_channel),
         ) {
             (false, true) => Some(VoiceSoundKind::Join),
             (true, false) => Some(VoiceSoundKind::Leave),
             _ => None,
+        }
+    }
+
+    pub(crate) fn stream_viewer_sounds_for_update(
+        &self,
+        update: &StreamUpdateInfo,
+    ) -> Vec<VoiceSoundKind> {
+        let Some(current_user_id) = self.session.current_user_id else {
+            return Vec::new();
+        };
+        let Some(stream) = self.voice.streams.get(&update.stream_key) else {
+            return Vec::new();
+        };
+        if stream.owner_id != current_user_id && !stream.viewer_ids.contains(&current_user_id) {
+            return Vec::new();
+        }
+
+        let next_viewers = update.viewer_ids.iter().copied().collect::<BTreeSet<_>>();
+        let viewer_joined = next_viewers
+            .difference(&stream.viewer_ids)
+            .any(|user_id| *user_id != current_user_id);
+        let viewer_left = stream
+            .viewer_ids
+            .difference(&next_viewers)
+            .any(|user_id| *user_id != current_user_id);
+
+        let mut sounds = Vec::with_capacity(2);
+        if viewer_joined {
+            sounds.push(VoiceSoundKind::StreamViewerJoin);
+        }
+        if viewer_left {
+            sounds.push(VoiceSoundKind::StreamViewerLeave);
+        }
+        sounds
+    }
+
+    pub(crate) fn stream_participants(
+        &self,
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+        owner_id: Id<UserMarker>,
+    ) -> StreamParticipantList {
+        let stream = self.voice.streams.values().find(|stream| {
+            stream.scope == scope && stream.channel_id == channel_id && stream.owner_id == owner_id
+        });
+        let paused = stream.is_some_and(|stream| stream.paused);
+        let viewer_ids = stream
+            .map(|stream| stream.viewer_ids.iter().copied().collect::<Vec<_>>())
+            .unwrap_or_default();
+
+        let mut participants = Vec::with_capacity(viewer_ids.len().saturating_add(1));
+        participants.push(self.stream_participant_state(scope, owner_id, true));
+        participants.extend(
+            viewer_ids
+                .into_iter()
+                .filter(|user_id| *user_id != owner_id)
+                .map(|user_id| self.stream_participant_state(scope, user_id, false)),
+        );
+        StreamParticipantList {
+            paused,
+            participants,
         }
     }
 
@@ -284,6 +381,69 @@ impl DiscordState {
                     .map(|recipient| recipient.display_name.clone())
             }
         }
+    }
+
+    fn stream_participant_state(
+        &self,
+        scope: VoiceScope,
+        user_id: Id<UserMarker>,
+        broadcaster: bool,
+    ) -> StreamParticipantState {
+        let display_name = self
+            .voice_participant_display_name(scope, user_id)
+            .or_else(|| {
+                self.session
+                    .ready_users
+                    .get(&user_id)
+                    .map(|user| user.display_name.clone())
+            })
+            .unwrap_or_else(|| format!("user-{}", user_id.get()));
+        StreamParticipantState {
+            display_name,
+            broadcaster,
+        }
+    }
+
+    pub(in crate::discord) fn record_stream_create(&mut self, stream: &StreamCreateInfo) {
+        let Some((scope, channel_id, owner_id)) = parse_stream_location(&stream.stream_key) else {
+            return;
+        };
+        self.voice_mut().streams.insert(
+            stream.stream_key.clone(),
+            StreamState {
+                scope,
+                channel_id,
+                owner_id,
+                viewer_ids: stream.viewer_ids.iter().copied().collect(),
+                paused: stream.paused,
+            },
+        );
+    }
+
+    pub(in crate::discord) fn record_stream_update(&mut self, stream: &StreamUpdateInfo) {
+        if let Some(current) = self.voice_mut().streams.get_mut(&stream.stream_key) {
+            current.viewer_ids = stream.viewer_ids.iter().copied().collect();
+            current.paused = stream.paused;
+            return;
+        }
+
+        let Some((scope, channel_id, owner_id)) = parse_stream_location(&stream.stream_key) else {
+            return;
+        };
+        self.voice_mut().streams.insert(
+            stream.stream_key.clone(),
+            StreamState {
+                scope,
+                channel_id,
+                owner_id,
+                viewer_ids: stream.viewer_ids.iter().copied().collect(),
+                paused: stream.paused,
+            },
+        );
+    }
+
+    pub(in crate::discord) fn remove_stream(&mut self, stream_key: &str) {
+        self.voice_mut().streams.remove(stream_key);
     }
 
     pub(in crate::discord) fn update_voice_state(&mut self, state: &VoiceStateInfo) {
@@ -385,6 +545,9 @@ impl DiscordState {
         self.voice_mut()
             .states
             .retain(|(scope, _), _| *scope != VoiceScope::Guild(guild_id));
+        self.voice_mut()
+            .streams
+            .retain(|_, stream| stream.scope != VoiceScope::Guild(guild_id));
     }
 
     pub(in crate::discord) fn remove_voice_states_for_channel(
@@ -394,6 +557,9 @@ impl DiscordState {
         self.voice_mut()
             .states
             .retain(|_, state| state.channel_id != channel_id);
+        self.voice_mut()
+            .streams
+            .retain(|_, stream| stream.channel_id != channel_id);
     }
 
     fn clear_voice_speaking_for_channel(
@@ -407,6 +573,30 @@ impl DiscordState {
             }
         }
     }
+}
+
+fn parse_stream_location(
+    stream_key: &str,
+) -> Option<(VoiceScope, Id<ChannelMarker>, Id<UserMarker>)> {
+    let parts = stream_key.split(':').collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["guild", guild_id, channel_id, owner_id] => {
+            let guild_id = parse_stream_id::<GuildMarker>(guild_id)?;
+            let channel_id = parse_stream_id::<ChannelMarker>(channel_id)?;
+            let owner_id = parse_stream_id::<UserMarker>(owner_id)?;
+            Some((VoiceScope::Guild(guild_id), channel_id, owner_id))
+        }
+        ["call", channel_id, owner_id] => {
+            let channel_id = parse_stream_id::<ChannelMarker>(channel_id)?;
+            let owner_id = parse_stream_id::<UserMarker>(owner_id)?;
+            Some((VoiceScope::Private(channel_id), channel_id, owner_id))
+        }
+        _ => None,
+    }
+}
+
+fn parse_stream_id<T>(raw: &str) -> Option<Id<T>> {
+    raw.parse::<u64>().ok().and_then(Id::new_checked)
 }
 
 fn sort_voice_participants(participants: &mut [VoiceParticipantState]) {

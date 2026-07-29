@@ -448,6 +448,35 @@ fn dm_call_join_and_leave_both_chime() {
 }
 
 #[test]
+fn another_participant_starting_a_stream_chimes_in_the_active_voice_channel() {
+    use crate::discord::VoiceSoundKind;
+
+    let guild_id = Id::new(1);
+    let channel_id = Id::new(10);
+    let me = Id::new(20);
+    let broadcaster = Id::new(30);
+    let mut state = DiscordState::default();
+    state.apply_event(&AppEvent::Ready {
+        user: "Me".to_owned(),
+        user_id: Some(me),
+    });
+    for user_id in [me, broadcaster] {
+        state.apply_event(&AppEvent::VoiceStateUpdate {
+            state: voice_state(guild_id, Some(channel_id), user_id),
+        });
+    }
+
+    let started = VoiceStateInfo {
+        self_stream: true,
+        ..voice_state(guild_id, Some(channel_id), broadcaster)
+    };
+    assert_eq!(
+        state.voice_sound_for_state_update(&started),
+        Some(VoiceSoundKind::StreamStart)
+    );
+}
+
+#[test]
 fn guild_create_replaces_cached_voice_state_snapshot() {
     let guild_id = Id::new(1);
     let voice = Id::new(10);

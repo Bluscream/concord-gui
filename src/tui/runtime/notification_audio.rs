@@ -319,11 +319,44 @@ fn generated_push_to_talk_sound(pressed: bool) -> NotificationAudio {
 
 #[cfg(any(test, feature = "voice-playback"))]
 fn generated_voice_sound_frequency(kind: VoiceSoundKind, progress: f32) -> f32 {
-    match (kind, progress < 0.5) {
-        (VoiceSoundKind::Join, true) => 660.0,
-        (VoiceSoundKind::Join, false) => 880.0,
-        (VoiceSoundKind::Leave, true) => 880.0,
-        (VoiceSoundKind::Leave, false) => 660.0,
+    match kind {
+        VoiceSoundKind::Join => {
+            if progress < 0.5 {
+                660.0
+            } else {
+                880.0
+            }
+        }
+        VoiceSoundKind::Leave => {
+            if progress < 0.5 {
+                880.0
+            } else {
+                660.0
+            }
+        }
+        VoiceSoundKind::StreamStart => {
+            if progress < 0.34 {
+                523.3
+            } else if progress < 0.67 {
+                659.3
+            } else {
+                784.0
+            }
+        }
+        VoiceSoundKind::StreamViewerJoin => {
+            if progress < 0.5 {
+                740.0
+            } else {
+                987.8
+            }
+        }
+        VoiceSoundKind::StreamViewerLeave => {
+            if progress < 0.5 {
+                987.8
+            } else {
+                740.0
+            }
+        }
     }
 }
 
@@ -481,18 +514,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generated_voice_sound_has_stereo_samples_for_join_and_leave() {
-        let join = generated_voice_sound(VoiceSoundKind::Join);
-        let leave = generated_voice_sound(VoiceSoundKind::Leave);
+    fn generated_voice_sounds_are_stereo_and_distinct() {
+        let kinds = [
+            VoiceSoundKind::Join,
+            VoiceSoundKind::Leave,
+            VoiceSoundKind::StreamStart,
+            VoiceSoundKind::StreamViewerJoin,
+            VoiceSoundKind::StreamViewerLeave,
+        ];
+        let sounds = kinds.map(generated_voice_sound);
+        let join = &sounds[0];
 
         assert_eq!(join.sample_rate, GENERATED_VOICE_SOUND_SAMPLE_RATE);
         assert_eq!(join.channels, GENERATED_VOICE_SOUND_CHANNELS);
         assert_eq!(join.samples.len() % usize::from(join.channels), 0);
-        assert_eq!(leave.samples.len(), join.samples.len());
-        assert_ne!(
-            generated_voice_sound_frequency(VoiceSoundKind::Join, 0.25),
-            generated_voice_sound_frequency(VoiceSoundKind::Leave, 0.25)
+        assert!(
+            sounds
+                .iter()
+                .all(|sound| sound.samples.len() == join.samples.len())
         );
+        for pair in sounds.windows(2) {
+            assert_ne!(pair[0].samples, pair[1].samples);
+        }
     }
 
     #[test]

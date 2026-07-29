@@ -1,8 +1,12 @@
 use serde_json::Value;
 
 use crate::discord::{
-    StreamCreateInfo, StreamDeleteInfo, StreamServerInfo, events::AppEvent,
-    ids::marker::ChannelMarker,
+    StreamCreateInfo, StreamDeleteInfo, StreamServerInfo, StreamUpdateInfo,
+    events::AppEvent,
+    ids::{
+        Id,
+        marker::{ChannelMarker, UserMarker},
+    },
 };
 
 use super::shared::parse_id;
@@ -13,12 +17,26 @@ pub(super) fn parse_stream_create(data: &Value) -> Option<AppEvent> {
     let rtc_channel_id = data
         .get("rtc_channel_id")
         .and_then(parse_id::<ChannelMarker>)?;
+    let viewer_ids = parse_viewer_ids(data);
+    let paused = data.get("paused").and_then(Value::as_bool).unwrap_or(false);
 
     Some(AppEvent::StreamCreate {
         stream: StreamCreateInfo {
             stream_key,
             rtc_server_id,
             rtc_channel_id,
+            viewer_ids,
+            paused,
+        },
+    })
+}
+
+pub(super) fn parse_stream_update(data: &Value) -> Option<AppEvent> {
+    Some(AppEvent::StreamUpdate {
+        stream: StreamUpdateInfo {
+            stream_key: required_string(data, "stream_key")?,
+            viewer_ids: parse_viewer_ids(data),
+            paused: data.get("paused").and_then(Value::as_bool).unwrap_or(false),
         },
     })
 }
@@ -64,4 +82,13 @@ fn required_string(data: &Value, field: &str) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
+}
+
+fn parse_viewer_ids(data: &Value) -> Vec<Id<UserMarker>> {
+    data.get("viewer_ids")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(parse_id::<UserMarker>)
+        .collect()
 }

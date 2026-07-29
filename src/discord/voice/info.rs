@@ -175,6 +175,15 @@ pub struct StreamCreateInfo {
     pub stream_key: String,
     pub rtc_server_id: String,
     pub rtc_channel_id: Id<ChannelMarker>,
+    pub viewer_ids: Vec<Id<UserMarker>>,
+    pub paused: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StreamUpdateInfo {
+    pub stream_key: String,
+    pub viewer_ids: Vec<Id<UserMarker>>,
+    pub paused: bool,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -213,4 +222,7 @@ pub enum VoiceConnectionStatus {
 pub enum VoiceSoundKind {
     Join,
     Leave,
+    StreamStart,
+    StreamViewerJoin,
+    StreamViewerLeave,
 }
