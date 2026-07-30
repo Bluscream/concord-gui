@@ -49,7 +49,9 @@ pub(super) fn view_signature(state: &DashboardState) -> u64 {
     // Header.
     hash_dbg(&mut hasher, &state.current_user());
     hash_dbg(&mut hasher, &state.current_voice_self_status());
+    hash_dbg(&mut hasher, &state.active_voice_connection_label());
     hash_dbg(&mut hasher, &state.update_available_version());
+    hash_dbg(&mut hasher, &state.stream_info_sections());
 
     // Message pane: the live chat plus its footers.
     hash_dbg(&mut hasher, &state.visible_messages());
@@ -160,7 +162,7 @@ mod tests {
     use crate::discord::{
         ActivityInfo, ActivityKind, AppCommand, AppEvent, ChannelInfo, ChannelRecipientInfo,
         MessageHistoryLoadTarget, MessageInfo, MessageSearchPage, PresenceEventFields,
-        PresenceStatus,
+        PresenceStatus, StreamCreateInfo, StreamUpdateInfo, VoiceScope,
     };
     use crate::tui::state::DashboardState;
 
@@ -261,5 +263,44 @@ mod tests {
         });
 
         assert_ne!(game_a, view_signature(&state));
+    }
+
+    #[test]
+    fn view_signature_tracks_stream_viewer_changes() {
+        let guild_id = Id::new(1);
+        let channel_id = Id::new(10);
+        let current_user_id = Id::new(20);
+        let viewer_id = Id::new(30);
+        let scope = VoiceScope::Guild(guild_id);
+        let mut state = DashboardState::new();
+        state.push_event(AppEvent::Ready {
+            user: "Me".to_owned(),
+            user_id: Some(current_user_id),
+        });
+        state.push_event(AppEvent::ReadyUserDirectory {
+            users: vec![ChannelRecipientInfo::test(viewer_id, "Viewer")],
+        });
+        state.push_event(AppEvent::StreamCreate {
+            stream: StreamCreateInfo {
+                stream_key: "guild:1:10:20".to_owned(),
+                rtc_server_id: "100".to_owned(),
+                rtc_channel_id: Id::new(101),
+                viewer_ids: vec![viewer_id],
+                paused: false,
+            },
+        });
+        state.show_stream_broadcast_preparing_toast(scope, channel_id);
+        state.push_effect(AppEvent::StreamBroadcastStarted { scope, channel_id });
+        let with_viewer = view_signature(&state);
+
+        state.push_event(AppEvent::StreamUpdate {
+            stream: StreamUpdateInfo {
+                stream_key: "guild:1:10:20".to_owned(),
+                viewer_ids: Vec::new(),
+                paused: false,
+            },
+        });
+
+        assert_ne!(with_viewer, view_signature(&state));
     }
 }

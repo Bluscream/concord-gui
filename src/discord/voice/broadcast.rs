@@ -1545,7 +1545,13 @@ async fn run_stream_broadcast_media(
     let mut transport =
         BroadcastVideoTransport::new(&description, video, packet_encryptor, Arc::clone(&stats))?;
     let mut received_packet = vec![0u8; STREAM_UDP_RECEIVE_PACKET_BYTES];
-    let mut ready_sent = false;
+    // Capture and both media transports are ready at this point. Do not wait
+    // for the first video frame to pass DAVE because it can hold outbound media
+    // until another participant joins the encrypted session.
+    let _ = events_tx.send(VoiceRuntimeEvent::BroadcastStreamConnectionEstablished {
+        connection_id,
+        stream_key,
+    });
 
     let result = async {
         loop {
@@ -1577,15 +1583,6 @@ async fn run_stream_broadcast_media(
                             frame.is_keyframe,
                         )
                         .await?;
-                    if !ready_sent {
-                        ready_sent = true;
-                        let _ = events_tx.send(
-                            VoiceRuntimeEvent::BroadcastStreamConnectionEstablished {
-                                connection_id,
-                                stream_key: stream_key.clone(),
-                            },
-                        );
-                    }
                 }
                 received = socket.recv(&mut received_packet) => {
                     let length = received

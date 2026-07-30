@@ -116,8 +116,8 @@ use self::{
         message_pin_confirmation_lines, message_remove_embeds_confirmation_lines,
         message_url_picker_lines_for_width, options_popup_lines, poll_vote_picker_lines,
         quit_confirmation_lines, reaction_list_lines_with_ready_urls, reaction_users_popup_lines,
-        stream_info_area, stream_info_lines, toast_line, user_profile_popup_lines,
-        user_profile_popup_lines_with_activities,
+        stream_info_area, stream_info_lines, stream_info_lines_for_width, toast_line,
+        user_profile_popup_lines, user_profile_popup_lines_with_activities,
     },
 };
 use super::theme;
@@ -320,7 +320,7 @@ pub(in crate::tui) fn render_with_message_viewport_plan(
     if state.is_pane_visible(FocusPane::Members) {
         render_members(frame, areas.members, state, &emoji_images);
     }
-    render_stream_info(frame, frame.area(), state);
+    render_stream_info(frame, areas.members, state);
     render_leader_popup(frame, popup_area, state);
     render_guild_action_menu(frame, popup_area, state);
     render_channel_action_menu(frame, popup_area, state);

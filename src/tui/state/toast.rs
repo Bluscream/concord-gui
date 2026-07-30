@@ -177,10 +177,15 @@ impl DashboardState {
         scope: VoiceScope,
         channel_id: Id<ChannelMarker>,
     ) -> bool {
-        let target = StreamBroadcastUiTarget { scope, channel_id };
-        if self.runtime.active_stream_broadcast == Some(target) {
+        if self
+            .runtime
+            .active_stream_broadcast
+            .as_ref()
+            .is_some_and(|target| target.matches(scope, channel_id))
+        {
             return false;
         }
+        let target = StreamBroadcastUiTarget { scope, channel_id };
 
         self.runtime.media_playback_preparing = None;
         self.runtime.active_stream_broadcast = None;
@@ -198,12 +203,20 @@ impl DashboardState {
         scope: VoiceScope,
         channel_id: Id<ChannelMarker>,
     ) -> bool {
-        let target = StreamBroadcastUiTarget { scope, channel_id };
-        if self.runtime.stream_broadcast_preparing != Some(target) {
+        if !self
+            .runtime
+            .stream_broadcast_preparing
+            .as_ref()
+            .is_some_and(|target| target.matches(scope, channel_id))
+        {
             return false;
         }
 
-        self.runtime.stream_broadcast_preparing = None;
+        let target = self
+            .runtime
+            .stream_broadcast_preparing
+            .take()
+            .expect("matching broadcast preparation exists");
         self.runtime.active_stream_broadcast = Some(target);
         if self
             .runtime
@@ -222,16 +235,26 @@ impl DashboardState {
         scope: VoiceScope,
         channel_id: Id<ChannelMarker>,
     ) -> bool {
-        let target = StreamBroadcastUiTarget { scope, channel_id };
-        let tracked = self.runtime.active_stream_broadcast == Some(target)
-            || self.runtime.stream_broadcast_preparing == Some(target);
+        let active_matches = self
+            .runtime
+            .active_stream_broadcast
+            .as_ref()
+            .is_some_and(|target| target.matches(scope, channel_id));
+        let preparing_matches = self
+            .runtime
+            .stream_broadcast_preparing
+            .as_ref()
+            .is_some_and(|target| target.matches(scope, channel_id));
+        let tracked = active_matches || preparing_matches;
         if !tracked {
             return false;
         }
 
-        self.runtime.active_stream_broadcast = None;
-        let was_preparing = self.runtime.stream_broadcast_preparing == Some(target);
-        if was_preparing {
+        if active_matches {
+            self.runtime.active_stream_broadcast = None;
+        }
+        let was_preparing = preparing_matches;
+        if preparing_matches {
             self.runtime.stream_broadcast_preparing = None;
         }
         if was_preparing

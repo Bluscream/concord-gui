@@ -10,6 +10,30 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::BTreeMap;
 
 #[test]
+fn owned_stream_info_omits_local_capture_source_without_viewers() {
+    let current_user_id = Id::new(20);
+    let scope = crate::discord::VoiceScope::Guild(Id::new(1));
+    let channel_id = Id::new(10);
+    let mut state = DashboardState::new();
+    state.push_event(AppEvent::Ready {
+        user: "Me".to_owned(),
+        user_id: Some(current_user_id),
+    });
+    state.push_event(AppEvent::ReadyUserDirectory {
+        users: vec![ChannelRecipientInfo::test(current_user_id, "Me")],
+    });
+    state.show_stream_broadcast_preparing_toast(scope, channel_id);
+
+    state.push_effect(AppEvent::StreamBroadcastStarted { scope, channel_id });
+
+    assert!(state.toast_message().is_none());
+    assert_eq!(
+        line_texts_from_ratatui(&stream_info_lines_for_width(&state, 18)),
+        vec!["Me 🔴", "------------------"]
+    );
+}
+
+#[test]
 fn stream_info_panel_separates_owned_and_watched_streams() {
     let guild_id = Id::new(1);
     let channel_id = Id::new(10);
@@ -60,19 +84,29 @@ fn stream_info_panel_separates_owned_and_watched_streams() {
     assert_eq!(
         line_texts_from_ratatui(&lines),
         vec![
-            "My stream",
-            "● Me  LIVE",
-            "  Viewer",
-            "---",
-            "Watching",
-            "● Broadcaster  LIVE",
-            "  Me",
+            "Me 🔴",
+            "----------------------------------",
+            "Viewer",
+            "==================================",
+            "Broadcaster 🔴",
+            "----------------------------------",
+            "Me",
         ]
     );
     let frame = Rect::new(0, 0, 80, 24);
-    let popup = stream_info_area(frame, &lines);
-    assert_eq!(popup.right(), frame.right());
-    assert_eq!(popup.bottom(), frame.bottom());
+    let members = dashboard_areas(frame, &state).members;
+    let popup = stream_info_area(members, &lines);
+    assert!(popup.x >= members.x);
+    assert!(popup.y >= members.y);
+    assert!(popup.right() <= members.right());
+    assert!(popup.bottom() <= members.bottom());
+
+    let occlusion = background_media_occlusion_areas(frame, &state);
+    let stream_occlusion = occlusion.last().expect("stream panel occludes media");
+    assert!(stream_occlusion.x >= members.x);
+    assert!(stream_occlusion.y >= members.y);
+    assert!(stream_occlusion.right() <= members.right());
+    assert!(stream_occlusion.bottom() <= members.bottom());
 }
 
 #[test]

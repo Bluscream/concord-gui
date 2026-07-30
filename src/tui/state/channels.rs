@@ -942,7 +942,17 @@ impl DashboardState {
             .channel(channel_id)
             .map(|channel| channel.name.clone())
             .unwrap_or_else(|| format!("channel-{}", channel_id.get()));
-        let suffix = if other_client { " (other client)" } else { "" };
+        let broadcasting = self
+            .runtime
+            .active_stream_broadcast
+            .as_ref()
+            .is_some_and(|target| target.matches(scope, channel_id));
+        let suffix = match (other_client, broadcasting) {
+            (true, true) => " (other client) 🔴",
+            (true, false) => " (other client)",
+            (false, true) => " 🔴",
+            (false, false) => "",
+        };
         // Guild voice shows "guild - channel"; a DM/group-DM call has no guild,
         // so it is labeled under "Direct Messages" instead.
         let prefix = match scope.guild_id() {

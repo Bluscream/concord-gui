@@ -36,8 +36,9 @@ impl DashboardState {
         let tracked_here = self
             .runtime
             .active_stream_broadcast
-            .or(self.runtime.stream_broadcast_preparing)
-            .is_some_and(|target| target.scope == scope && target.channel_id == channel_id);
+            .as_ref()
+            .or(self.runtime.stream_broadcast_preparing.as_ref())
+            .is_some_and(|target| target.matches(scope, channel_id));
         if tracked_here {
             return true;
         }

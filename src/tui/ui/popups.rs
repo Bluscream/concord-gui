@@ -107,7 +107,9 @@ pub(super) use reactions::{
 pub(super) use search::{
     render_search_popup, search_popup_area_for_state, search_popup_visible_items,
 };
-pub(super) use stream_info::{render_stream_info, stream_info_area, stream_info_lines};
+pub(super) use stream_info::{render_stream_info, stream_info_area, stream_info_lines_for_area};
+#[cfg(test)]
+pub(super) use stream_info::{stream_info_lines, stream_info_lines_for_width};
 pub(super) use thread_edit::{
     render_thread_edit, render_thread_edit_tag_picker, thread_edit_metrics, thread_edit_popup_area,
     thread_edit_tag_picker_visible_items,
@@ -199,9 +201,10 @@ pub(super) fn background_media_occlusion_areas(
     if let Some(toast) = state.toast_message() {
         areas.push(toast_area(frame_area, toast.text));
     }
-    let stream_lines = stream_info_lines(state);
+    let members = dashboard_areas(frame_area, state).members;
+    let stream_lines = stream_info_lines_for_area(state, members);
     if !stream_lines.is_empty() {
-        areas.push(stream_info_area(frame_area, &stream_lines));
+        areas.push(stream_info_area(members, &stream_lines));
     }
 
     areas.into_iter().filter(|area| !area.is_empty()).collect()

@@ -52,6 +52,12 @@ pub(super) struct StreamBroadcastUiTarget {
     pub(super) channel_id: Id<ChannelMarker>,
 }
 
+impl StreamBroadcastUiTarget {
+    pub(super) fn matches(&self, scope: VoiceScope, channel_id: Id<ChannelMarker>) -> bool {
+        self.scope == scope && self.channel_id == channel_id
+    }
+}
+
 #[derive(Debug, Default)]
 pub(super) struct RuntimeUiState {
     pub(super) toast_message: Option<ToastMessage>,

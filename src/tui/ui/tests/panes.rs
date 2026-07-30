@@ -193,6 +193,43 @@ fn header_labels_other_client_voice_connection() {
 }
 
 #[test]
+fn header_labels_active_voice_broadcast() {
+    let guild_id = Id::new(1);
+    let channel_id = Id::new(11);
+    let current_user_id = Id::new(10);
+    let scope = VoiceScope::Guild(guild_id);
+    let mut state = DashboardState::new();
+    state.push_event(AppEvent::Ready {
+        user: "muri".to_owned(),
+        user_id: Some(current_user_id),
+    });
+    state.push_event(guild_create_event(GuildCreateFixture {
+        channels: vec![ChannelInfo {
+            guild_id: Some(guild_id),
+            position: Some(0),
+            name: "Lobby".to_owned(),
+            ..ChannelInfo::test(channel_id, "GuildVoice")
+        }],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+    state.push_effect(voice_connection_status_changed_event(
+        VoiceConnectionStatusChangedFixture {
+            scope,
+            channel_id: Some(channel_id),
+            status: VoiceConnectionStatus::Connected,
+            ..VoiceConnectionStatusChangedFixture::new()
+        },
+    ));
+    state.show_stream_broadcast_preparing_toast(scope, channel_id);
+    state.push_effect(AppEvent::StreamBroadcastStarted { scope, channel_id });
+
+    let dump = render_dashboard_dump(120, 10, &mut state);
+    let header = dump.first().expect("dashboard render includes header");
+
+    assert!(header.contains("Voice guild - Lobby 🔴"), "{header}");
+}
+
+#[test]
 fn focus_pane_at_maps_dashboard_regions_and_ignores_non_panes() {
     let area = Rect::new(0, 0, 120, 20);
     let state = DashboardState::new();
