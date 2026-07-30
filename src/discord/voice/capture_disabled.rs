@@ -1,6 +1,6 @@
 use tokio::sync::mpsc;
 
-use super::{STREAM_BROADCAST_FEATURE_DISABLED, StreamCaptureTarget};
+use super::{STREAM_BROADCAST_FEATURE_DISABLED, StreamCaptureTarget, preview::StreamPreviewFrame};
 
 pub(super) const STREAM_CAPTURE_WIDTH: u32 = 1280;
 pub(super) const STREAM_CAPTURE_HEIGHT: u32 = 720;
@@ -22,6 +22,10 @@ impl StreamCaptureHandle {
     pub(super) fn request_keyframe(&self) {
         // Disabled builds never construct a capture handle.
     }
+
+    pub(super) async fn shutdown(self) {
+        // Disabled builds never construct a capture handle.
+    }
 }
 
 pub(crate) fn list_stream_capture_targets() -> Result<Vec<StreamCaptureTarget>, String> {
@@ -31,6 +35,8 @@ pub(crate) fn list_stream_capture_targets() -> Result<Vec<StreamCaptureTarget>, 
 pub(super) fn start_stream_capture(
     _target: StreamCaptureTarget,
     _frames_tx: mpsc::Sender<Result<EncodedStreamFrame, String>>,
+    _preview_frames_tx: mpsc::Sender<StreamPreviewFrame>,
+    _errors_tx: mpsc::UnboundedSender<String>,
 ) -> Result<StreamCaptureHandle, String> {
     Err(STREAM_BROADCAST_FEATURE_DISABLED.to_owned())
 }

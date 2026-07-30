@@ -254,6 +254,7 @@ impl DiscordClient {
             .expect("gateway can only be started once");
         let voice_events_tx = self.voice_events_tx.clone();
         let voice_status_publisher = voice::VoiceStatusPublisher::new(self.event_publisher.clone());
+        let stream_preview_uploader = voice::StreamPreviewUploader::new(self.rest.clone());
         if let Some(voice_events) = self
             .voice_events_rx
             .lock()
@@ -265,6 +266,7 @@ impl DiscordClient {
                 voice_events_tx.clone(),
                 self.gateway_commands_tx.clone(),
                 voice_status_publisher,
+                stream_preview_uploader,
             ));
             *self
                 .voice_runtime_task

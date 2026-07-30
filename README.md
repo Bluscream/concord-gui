@@ -36,20 +36,6 @@ brew install chojs23/tap/concord
 npm install -g @chojs23/concord
 ```
 
-You can also run Concord without a global install:
-
-```sh
-npx @chojs23/concord
-```
-
-The npm package installs a prebuilt binary from the GitHub Release artifacts.
-
-Linux release binaries dynamically link ALSA, Opus, EGL, GBM, PipeWire,
-Wayland, and XCB. The custom Homebrew tap declares these runtime libraries, but
-npm and the GitHub Release installer cannot install distribution packages.
-Install the matching runtime packages when they are not already present. The
-Linux development dependency commands below also provide them.
-
 ### Cargo
 
 The default build includes voice playback and stream broadcasting. Install its
@@ -58,7 +44,7 @@ native dependencies first.
 On macOS with Homebrew:
 
 ```sh
-brew install opus pkg-config
+brew install nasm opus pkg-config
 ```
 
 On Fedora:
@@ -70,6 +56,7 @@ sudo dnf install \
   libxcb-devel \
   mesa-libEGL-devel \
   mesa-libgbm-devel \
+  nasm \
   opus-devel \
   pipewire-devel \
   pkgconf-pkg-config \
@@ -88,7 +75,14 @@ sudo apt install \
   libpipewire-0.3-dev \
   libwayland-dev \
   libxcb1-dev \
+  nasm \
   pkg-config
+```
+
+On x86_64 Windows with Chocolatey:
+
+```powershell
+choco install nasm
 ```
 
 ```sh

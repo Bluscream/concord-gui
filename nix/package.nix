@@ -3,6 +3,7 @@
 , craneLib
 , rustPlatform
 , pkg-config
+, nasm
 , opus
 , alsa-lib
 , libgbm
@@ -26,10 +27,13 @@ let
 
     # PipeWire generates bindings at build time. The bindgen hook supplies
     # libclang and its search path without hard-coding a Nix store location.
+    # OpenH264 uses NASM on x86_64, while AArch64 builds its NEON sources with cc.
     nativeBuildInputs = [
       pkg-config
     ] ++ lib.optionals stdenv.isLinux [
       rustPlatform.bindgenHook
+    ] ++ lib.optionals stdenv.hostPlatform.isx86_64 [
+      nasm
     ];
 
     # Networking uses rustls + webpki-roots, so we do not need openssl or a

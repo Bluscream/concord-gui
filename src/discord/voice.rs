@@ -20,6 +20,7 @@ mod dave;
 mod gateway;
 mod info;
 mod levels;
+mod media;
 #[cfg(any(test, feature = "voice-playback"))]
 mod microphone;
 #[cfg(feature = "voice-playback")]
@@ -27,6 +28,7 @@ mod noise;
 mod opus;
 mod outbound;
 mod playback;
+mod preview;
 mod rtp;
 mod runtime;
 mod state;
@@ -51,6 +53,7 @@ use microphone::log_captured_alsa_errors;
 use microphone::run_voice_udp_transmit;
 #[cfg(test)]
 use microphone::*;
+pub(crate) use preview::StreamPreviewUploader;
 #[cfg(test)]
 use runtime::{VoiceRuntimeAction, VoiceRuntimeState};
 pub(crate) use runtime::{forward_app_event, run_voice_runtime};
@@ -342,6 +345,10 @@ pub(crate) enum VoiceRuntimeEvent {
         stream_key: String,
     },
     BroadcastStreamConnectionEstablished {
+        connection_id: u64,
+        stream_key: String,
+    },
+    BroadcastStreamConnectionStable {
         connection_id: u64,
         stream_key: String,
     },

@@ -1,11 +1,10 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     io::Write,
     net::{Ipv4Addr, SocketAddrV4},
     path::Path,
     process::Stdio,
     sync::atomic::{AtomicBool, Ordering},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use tempfile::NamedTempFile;
@@ -15,6 +14,10 @@ use tokio::{
 };
 use uuid::Uuid;
 
+use super::media::{
+    GatewayChildTasks, annex_b_nals, build_rtcp_sender_report, current_unix_time,
+    packetize_h264_payloads,
+};
 use super::runtime::MAX_VOICE_RECONNECT_ATTEMPTS;
 use super::*;
 
@@ -22,14 +25,18 @@ const STREAM_RTP_PACKET_BYTES: usize = 4096;
 const LOCAL_H264_MAX_PAYLOAD_BYTES: usize = 1200;
 const STREAM_STARTUP_BUFFER_MAX_FRAMES: usize = 180;
 const STREAM_STARTUP_REPLAY_FRAME_TICKS: u32 = 90;
+const STREAM_PLAYER_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const OPUS_RTP_CLOCK_RATE: u32 = 48_000;
 const VIDEO_RTP_CLOCK_RATE: u32 = 90_000;
 const STREAM_KEYFRAME_REQUEST_INTERVAL: Duration = Duration::from_secs(1);
+const STREAM_VIDEO_NACK_INTERVAL: Duration = Duration::from_millis(100);
+const STREAM_VIDEO_GAP_TIMEOUT: Duration = Duration::from_millis(500);
+const STREAM_VIDEO_REORDER_WINDOW: u16 = 128;
+const STREAM_VIDEO_MAX_NACK_SEQUENCES: usize = 64;
 const LOCAL_RTCP_REPORT_INTERVAL: Duration = Duration::from_secs(1);
 const STREAM_CONNECTION_STABLE_INTERVAL: Duration = Duration::from_secs(10);
-const NTP_UNIX_EPOCH_OFFSET_SECONDS: u64 = 2_208_988_800;
-const RTCP_SENDER_REPORT_PACKET_TYPE: u8 = 200;
-const RTCP_SENDER_REPORT_LENGTH_WORDS_MINUS_ONE: u16 = 6;
+const RTCP_TRANSPORT_LAYER_FEEDBACK: u8 = 205;
+const RTCP_GENERIC_NACK_FORMAT: u8 = 1;
 const RTCP_PAYLOAD_SPECIFIC_FEEDBACK: u8 = 206;
 const RTCP_PLI_FORMAT: u8 = 1;
 const RTCP_PLI_LENGTH_WORDS_MINUS_ONE: u16 = 2;
@@ -61,67 +68,29 @@ impl std::fmt::Debug for StreamGatewaySession {
     }
 }
 
-#[derive(Default)]
-struct StreamChildTasks {
-    heartbeat: Option<JoinHandle<()>>,
-    keepalive: Option<JoinHandle<()>>,
-    media: Option<JoinHandle<()>>,
+struct StreamPlayerLogTasks {
+    tasks: Vec<JoinHandle<()>>,
 }
 
-impl StreamChildTasks {
-    async fn replace_heartbeat(&mut self, task: JoinHandle<()>) {
-        Self::replace(&mut self.heartbeat, task).await;
-    }
-
-    async fn replace_keepalive(&mut self, task: JoinHandle<()>) {
-        Self::replace(&mut self.keepalive, task).await;
-    }
-
-    async fn replace_media(&mut self, task: JoinHandle<()>) {
-        Self::replace(&mut self.media, task).await;
-    }
-
-    async fn replace(slot: &mut Option<JoinHandle<()>>, task: JoinHandle<()>) {
-        if let Some(previous) = slot.take() {
-            previous.abort();
-            let _ = previous.await;
+impl StreamPlayerLogTasks {
+    fn new(tasks: [JoinHandle<()>; 2]) -> Self {
+        Self {
+            tasks: Vec::from(tasks),
         }
-        *slot = Some(task);
     }
 
-    async fn shutdown(&mut self) {
-        let tasks = [
-            self.heartbeat.take(),
-            self.keepalive.take(),
-            self.media.take(),
-        ];
-        for task in tasks.iter().flatten() {
-            task.abort();
-        }
-        for task in tasks.into_iter().flatten() {
+    async fn finish(mut self) {
+        for task in self.tasks.drain(..) {
             let _ = task.await;
         }
     }
-
-    fn abort_all(&mut self) {
-        for task in [
-            self.heartbeat.take(),
-            self.keepalive.take(),
-            self.media.take(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            task.abort();
-        }
-    }
 }
 
-impl Drop for StreamChildTasks {
+impl Drop for StreamPlayerLogTasks {
     fn drop(&mut self) {
-        // The runtime normally force-cancels watch sessions. Abort every child
-        // here so dropping the parent cannot detach media or keepalive work.
-        self.abort_all();
+        for task in &self.tasks {
+            task.abort();
+        }
     }
 }
 
@@ -137,10 +106,6 @@ struct StreamPlayerReadySignal {
     player_ready: Arc<AtomicBool>,
     ready_tx: mpsc::UnboundedSender<u64>,
     media_generation: u64,
-    status_publisher: VoiceStatusPublisher,
-    scope: VoiceScope,
-    channel_id: Id<ChannelMarker>,
-    user_id: Id<UserMarker>,
     display_name: String,
 }
 
@@ -500,7 +465,7 @@ async fn connect_stream_gateway(
     let heartbeat_ack = Arc::new(Mutex::new(VoiceHeartbeatAckState::default()));
     let (heartbeat_timeout_tx, mut heartbeat_timeout_rx) =
         mpsc::unbounded_channel::<VoiceHeartbeatTimeout>();
-    let mut child_tasks = StreamChildTasks::default();
+    let mut child_tasks = GatewayChildTasks::default();
     let (media_finished_tx, mut media_finished_rx) =
         mpsc::unbounded_channel::<Result<(), StreamConnectionFailure>>();
     let (player_ready_tx, mut player_ready_rx) = mpsc::unbounded_channel::<u64>();
@@ -529,15 +494,22 @@ async fn connect_stream_gateway(
             _ = heartbeat_timeout_rx.recv() => {
                 break Ok(VoiceConnectionEnd::Reconnect);
             }
-            media_result = media_finished_rx.recv(), if child_tasks.media.is_some() => {
+            media_result = media_finished_rx.recv(), if child_tasks.has_media() => {
                 match media_result {
                     Some(Ok(())) => break Ok(VoiceConnectionEnd::Stop),
                     Some(Err(error)) => break Err(error),
                     None => break Ok(VoiceConnectionEnd::Reconnect),
                 }
             }
-            ready_generation = player_ready_rx.recv(), if child_tasks.media.is_some() => {
-                if ready_generation == Some(media_generation) {
+            ready_generation = player_ready_rx.recv(), if child_tasks.has_media() => {
+                if stream_player_ready_is_current(ready_generation, media_generation) {
+                    status_publisher
+                        .publish_stream_playback_ready(
+                            session.request.scope,
+                            session.request.channel_id,
+                            session.request.owner_id,
+                        )
+                        .await;
                     connection_stable_deadline =
                         Some(Instant::now() + STREAM_CONNECTION_STABLE_INTERVAL);
                 }
@@ -635,10 +607,6 @@ async fn connect_stream_gateway(
                             player_ready: Arc::new(AtomicBool::new(false)),
                             ready_tx: player_ready_tx.clone(),
                             media_generation,
-                            status_publisher: status_publisher.clone(),
-                            scope: session.request.scope,
-                            channel_id: session.request.channel_id,
-                            user_id: session.request.owner_id,
                             display_name: session.request.display_name.clone(),
                         };
                         child_tasks
@@ -858,6 +826,146 @@ struct StreamVideoSource {
     rtx_ssrc: Option<u32>,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct RecoveredStreamVideoPacket {
+    header: RtpHeader,
+    payload: Vec<u8>,
+}
+
+#[derive(Default)]
+struct StreamVideoRecovery {
+    next_sequence: Option<u16>,
+    pending: HashMap<u16, RecoveredStreamVideoPacket>,
+    gap_started_at: Option<Instant>,
+    last_nack_at: Option<Instant>,
+}
+
+#[derive(Default)]
+struct StreamVideoRecoveryUpdate {
+    ready: Vec<RecoveredStreamVideoPacket>,
+    reset_decoder: bool,
+}
+
+impl StreamVideoRecovery {
+    fn push(
+        &mut self,
+        packet: RecoveredStreamVideoPacket,
+        now: Instant,
+    ) -> StreamVideoRecoveryUpdate {
+        let sequence = packet.header.sequence;
+        let expected = *self.next_sequence.get_or_insert(sequence);
+        let distance = sequence.wrapping_sub(expected);
+        if distance >= 0x8000 {
+            return StreamVideoRecoveryUpdate::default();
+        }
+
+        let reset_decoder = distance > STREAM_VIDEO_REORDER_WINDOW;
+        if reset_decoder {
+            self.reset();
+            self.next_sequence = Some(sequence);
+        }
+        self.pending.entry(sequence).or_insert(packet);
+
+        let mut ready = Vec::new();
+        while let Some(expected) = self.next_sequence {
+            let Some(packet) = self.pending.remove(&expected) else {
+                break;
+            };
+            self.next_sequence = Some(expected.wrapping_add(1));
+            ready.push(packet);
+        }
+        if self.pending.is_empty() {
+            self.gap_started_at = None;
+            self.last_nack_at = None;
+        } else {
+            self.gap_started_at.get_or_insert(now);
+        }
+
+        StreamVideoRecoveryUpdate {
+            ready,
+            reset_decoder,
+        }
+    }
+
+    fn take_nack_if_due(&mut self, now: Instant) -> Option<Vec<u16>> {
+        if self
+            .last_nack_at
+            .is_some_and(|last| now.saturating_duration_since(last) < STREAM_VIDEO_NACK_INTERVAL)
+        {
+            return None;
+        }
+        let missing = self.missing_sequences();
+        if missing.is_empty() {
+            return None;
+        }
+        self.last_nack_at = Some(now);
+        Some(missing)
+    }
+
+    fn gap_expired(&self, now: Instant) -> bool {
+        self.gap_started_at.is_some_and(|started| {
+            now.saturating_duration_since(started) >= STREAM_VIDEO_GAP_TIMEOUT
+        })
+    }
+
+    fn reset(&mut self) {
+        self.next_sequence = None;
+        self.pending.clear();
+        self.gap_started_at = None;
+        self.last_nack_at = None;
+    }
+
+    fn missing_sequences(&self) -> Vec<u16> {
+        let Some(expected) = self.next_sequence else {
+            return Vec::new();
+        };
+        let Some(farthest) = self
+            .pending
+            .keys()
+            .map(|sequence| sequence.wrapping_sub(expected))
+            .filter(|distance| *distance < 0x8000)
+            .max()
+        else {
+            return Vec::new();
+        };
+        (0..=farthest)
+            .map(|distance| expected.wrapping_add(distance))
+            .filter(|sequence| !self.pending.contains_key(sequence))
+            .take(STREAM_VIDEO_MAX_NACK_SEQUENCES)
+            .collect()
+    }
+}
+
+fn recover_stream_video_packet(
+    header: RtpHeader,
+    mut payload: Vec<u8>,
+    source: StreamVideoSource,
+) -> Option<RecoveredStreamVideoPacket> {
+    if header.payload_type == DISCORD_STREAM_VIDEO_PAYLOAD_TYPE && header.ssrc == source.video_ssrc
+    {
+        return Some(RecoveredStreamVideoPacket { header, payload });
+    }
+    if header.payload_type != DISCORD_STREAM_VIDEO_RTX_PAYLOAD_TYPE
+        || source.rtx_ssrc != Some(header.ssrc)
+    {
+        return None;
+    }
+    let original_sequence = u16::from_be_bytes([*payload.first()?, *payload.get(1)?]);
+    if payload.len() <= 2 {
+        return None;
+    }
+    payload.drain(..2);
+    Some(RecoveredStreamVideoPacket {
+        header: RtpHeader {
+            payload_type: DISCORD_STREAM_VIDEO_PAYLOAD_TYPE,
+            sequence: original_sequence,
+            ssrc: source.video_ssrc,
+            ..header
+        },
+        payload,
+    })
+}
+
 fn parse_stream_video_source(value: &Value, owner_id: Id<UserMarker>) -> Option<StreamVideoSource> {
     let data = value.get("d")?;
     if data.get("user_id").and_then(Value::as_str) != Some(owner_id.to_string().as_str()) {
@@ -948,7 +1056,7 @@ async fn run_stream_media(
         .ok_or_else(|| StreamConnectionFailure::stop("capture stream mpv stderr failed"))?;
     let last_player_error = Arc::new(Mutex::new(None));
     let video_player_ready = Arc::clone(&stream_player_ready.player_ready);
-    let player_log_tasks = [
+    let player_log_tasks = StreamPlayerLogTasks::new([
         tokio::spawn(log_stream_player_output(
             "stream",
             "stdout",
@@ -963,7 +1071,7 @@ async fn run_stream_media(
             Arc::clone(&last_player_error),
             None,
         )),
-    ];
+    ]);
     logging::debug(
         "stream",
         format!(
@@ -984,6 +1092,8 @@ async fn run_stream_media(
     let mut h264 = H264Depacketizer::default();
     let mut h264_startup = H264StartupGate::default();
     let mut h264_startup_buffer: VecDeque<BufferedH264Frame> = VecDeque::new();
+    let mut video_recovery = StreamVideoRecovery::default();
+    let mut active_video_source = (0u32, None);
     let mut local_audio_sequence = 0u16;
     let mut local_video_sequence = 0u16;
     let mut local_audio_packets = 0u32;
@@ -1005,20 +1115,37 @@ async fn run_stream_media(
     let mut local_rtcp_report_ticks = 0u64;
     let mut keyframe_request_interval = tokio::time::interval(STREAM_KEYFRAME_REQUEST_INTERVAL);
     keyframe_request_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut video_recovery_interval = tokio::time::interval(STREAM_VIDEO_NACK_INTERVAL);
+    video_recovery_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut local_rtcp_report_interval = tokio::time::interval(LOCAL_RTCP_REPORT_INTERVAL);
     local_rtcp_report_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let player_ready_timeout = tokio::time::sleep(STREAM_PLAYER_READY_TIMEOUT);
+    tokio::pin!(player_ready_timeout);
 
     loop {
         tokio::select! {
+            _ = &mut player_ready_timeout,
+                if !video_player_ready.load(Ordering::Acquire) =>
+            {
+                let last_error = last_player_error.lock().await.clone();
+                return Err(StreamConnectionFailure::stop(match last_error {
+                    Some(error) => format!(
+                        "stream mpv did not open its SDP input within {} seconds: {error}",
+                        STREAM_PLAYER_READY_TIMEOUT.as_secs(),
+                    ),
+                    None => format!(
+                        "stream mpv did not open its SDP input within {} seconds; local RTP ports may no longer be available",
+                        STREAM_PLAYER_READY_TIMEOUT.as_secs(),
+                    ),
+                }));
+            }
             _ = local_rtcp_report_interval.tick() => {
                 let elapsed = media_started_at.elapsed();
                 let source = *video_source_rx.borrow();
-                let unix_time = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map_err(|error| format!("read local stream wall clock failed: {error}"))?;
+                let unix_time = current_unix_time();
                 let mut sent_report = false;
                 if source.audio_ssrc != 0 && local_audio_packets != 0 {
-                    let report = build_local_rtcp_sender_report(
+                    let report = build_rtcp_sender_report(
                         source.audio_ssrc,
                         unix_time,
                         elapsed_rtp_timestamp(elapsed, OPUS_RTP_CLOCK_RATE),
@@ -1029,7 +1156,7 @@ async fn run_stream_media(
                     sent_report = true;
                 }
                 if source.video_ssrc != 0 && local_video_packets != 0 {
-                    let report = build_local_rtcp_sender_report(
+                    let report = build_rtcp_sender_report(
                         source.video_ssrc,
                         unix_time,
                         elapsed_rtp_timestamp(elapsed, VIDEO_RTP_CLOCK_RATE),
@@ -1061,21 +1188,67 @@ async fn run_stream_media(
                     }
                 }
             }
+            _ = video_recovery_interval.tick() => {
+                let source = *video_source_rx.borrow();
+                let source_identity = (source.video_ssrc, source.rtx_ssrc);
+                if source_identity != active_video_source {
+                    active_video_source = source_identity;
+                    video_recovery.reset();
+                    reset_stream_h264_pipeline(
+                        &mut h264,
+                        &mut h264_startup,
+                        &mut h264_startup_buffer,
+                    );
+                }
+                let now = Instant::now();
+                if video_recovery.gap_expired(now) {
+                    video_recovery.reset();
+                    reset_stream_h264_pipeline(
+                        &mut h264,
+                        &mut h264_startup,
+                        &mut h264_startup_buffer,
+                    );
+                    if source.video_ssrc != 0 {
+                        let feedback = build_rtcp_pli(local_ssrc, source.video_ssrc);
+                        send_stream_rtcp_feedback(
+                            &discord_socket,
+                            &encryptor,
+                            &mut rtcp_feedback_nonce,
+                            &feedback,
+                            "PLI",
+                        )
+                        .await?;
+                    }
+                    logging::debug(
+                        "stream",
+                        "stream video packet gap expired; requested a new keyframe",
+                    );
+                } else if let Some(missing) = video_recovery.take_nack_if_due(now)
+                    && source.video_ssrc != 0
+                {
+                    let feedback = build_rtcp_nack(local_ssrc, source.video_ssrc, &missing);
+                    send_stream_rtcp_feedback(
+                        &discord_socket,
+                        &encryptor,
+                        &mut rtcp_feedback_nonce,
+                        &feedback,
+                        "NACK",
+                    )
+                    .await?;
+                }
+            }
             _ = keyframe_request_interval.tick(), if !h264_startup.is_started() => {
                 let source = *video_source_rx.borrow();
                 if source.video_ssrc != 0 {
                     let feedback = build_rtcp_pli(local_ssrc, source.video_ssrc);
-                    let encrypted = encryptor.encrypt_rtcp_feedback(
+                    send_stream_rtcp_feedback(
+                        &discord_socket,
+                        &encryptor,
+                        &mut rtcp_feedback_nonce,
                         &feedback,
-                        rtcp_feedback_nonce.to_be_bytes(),
-                    )?;
-                    rtcp_feedback_nonce = rtcp_feedback_nonce
-                        .checked_add(1)
-                        .ok_or_else(|| "stream RTCP feedback nonce exhausted".to_owned())?;
-                    discord_socket
-                        .send(&encrypted)
-                        .await
-                        .map_err(|error| format!("send stream RTCP PLI failed: {error}"))?;
+                        "PLI",
+                    )
+                    .await?;
                     if !logged_keyframe_request {
                         logged_keyframe_request = true;
                         logging::debug(
@@ -1094,9 +1267,7 @@ async fn run_stream_media(
                         "wait for stream mpv failed: {error}"
                     ))
                 })?;
-                for log_task in player_log_tasks {
-                    let _ = log_task.await;
-                }
+                player_log_tasks.finish().await;
                 let last_error = last_player_error.lock().await.clone();
                 logging::debug("stream", format!("stream mpv exited: status={status}"));
                 if status.success() {
@@ -1119,16 +1290,19 @@ async fn run_stream_media(
                     Err(_) => continue,
                 };
                 let source = *video_source_rx.borrow();
-                // TODO: Add RTCP NACK and RTX repair. The first viewer path
-                // drops retransmission packets and waits for the next complete
-                // H264 frame after loss.
-                if header.payload_type == DISCORD_STREAM_VIDEO_RTX_PAYLOAD_TYPE
-                    || source.rtx_ssrc == Some(header.ssrc)
-                {
-                    continue;
+                let source_identity = (source.video_ssrc, source.rtx_ssrc);
+                if source_identity != active_video_source {
+                    active_video_source = source_identity;
+                    video_recovery.reset();
+                    reset_stream_h264_pipeline(
+                        &mut h264,
+                        &mut h264_startup,
+                        &mut h264_startup_buffer,
+                    );
                 }
                 if header.payload_type != DISCORD_VOICE_PAYLOAD_TYPE
                     && header.payload_type != DISCORD_STREAM_VIDEO_PAYLOAD_TYPE
+                    && header.payload_type != DISCORD_STREAM_VIDEO_RTX_PAYLOAD_TYPE
                 {
                     continue;
                 }
@@ -1182,142 +1356,176 @@ async fn run_stream_media(
                             ),
                         );
                     }
-                } else if header.payload_type == DISCORD_STREAM_VIDEO_PAYLOAD_TYPE
-                    && source.video_ssrc != 0
-                    && header.ssrc == source.video_ssrc
-                    && let Some(frame) = h264.push(&header, &decrypted.media_payload)
+                } else if source.video_ssrc != 0
+                    && let Some(video_packet) =
+                        recover_stream_video_packet(header, decrypted.media_payload, source)
                 {
-                    let frame = match dave_state
-                        .lock()
-                        .await
-                        .decrypt_video_frame(owner_id, &frame)
-                    {
-                        Ok(Some(frame)) => frame,
-                        Ok(None) => continue,
-                        Err(error) => {
-                            logging::debug("stream", error);
-                            continue;
-                        }
-                    };
-                    if !logged_first_video_frame {
-                        logged_first_video_frame = true;
-                        logging::debug(
-                            "stream",
-                            format!(
-                                "first stream video frame decrypted: elapsed_ms={} nal_types={:?}",
-                                media_started_at.elapsed().as_millis(),
-                                h264_nal_types(&frame),
-                            ),
+                    let now = Instant::now();
+                    let recovery = video_recovery.push(video_packet, now);
+                    if recovery.reset_decoder {
+                        reset_stream_h264_pipeline(
+                            &mut h264,
+                            &mut h264_startup,
+                            &mut h264_startup_buffer,
                         );
+                        let feedback = build_rtcp_pli(local_ssrc, source.video_ssrc);
+                        send_stream_rtcp_feedback(
+                            &discord_socket,
+                            &encryptor,
+                            &mut rtcp_feedback_nonce,
+                            &feedback,
+                            "PLI",
+                        )
+                        .await?;
                     }
-                    let player_ready = video_player_ready.load(Ordering::Acquire);
-                    if player_ready && !h264_startup_buffer.is_empty() {
-                        let buffered_frames = h264_startup_buffer.len();
-                        let replay_origin = elapsed_rtp_timestamp(
+                    if let Some(missing) = video_recovery.take_nack_if_due(now) {
+                        let feedback = build_rtcp_nack(local_ssrc, source.video_ssrc, &missing);
+                        send_stream_rtcp_feedback(
+                            &discord_socket,
+                            &encryptor,
+                            &mut rtcp_feedback_nonce,
+                            &feedback,
+                            "NACK",
+                        )
+                        .await?;
+                    }
+                    for video_packet in recovery.ready {
+                        let header = video_packet.header;
+                        let Some(frame) = h264.push(&header, &video_packet.payload) else {
+                            continue;
+                        };
+                        let frame = match dave_state
+                            .lock()
+                            .await
+                            .decrypt_video_frame(owner_id, &frame)
+                        {
+                            Ok(Some(frame)) => frame,
+                            Ok(None) => continue,
+                            Err(error) => {
+                                logging::debug("stream", error);
+                                continue;
+                            }
+                        };
+                        if !logged_first_video_frame {
+                            logged_first_video_frame = true;
+                            logging::debug(
+                                "stream",
+                                format!(
+                                    "first stream video frame decrypted: elapsed_ms={} nal_types={:?}",
+                                    media_started_at.elapsed().as_millis(),
+                                    h264_nal_types(&frame),
+                                ),
+                            );
+                        }
+                        let player_ready = video_player_ready.load(Ordering::Acquire);
+                        if player_ready && !h264_startup_buffer.is_empty() {
+                            let buffered_frames = h264_startup_buffer.len();
+                            let replay_origin = elapsed_rtp_timestamp(
+                                media_started_at.elapsed(),
+                                VIDEO_RTP_CLOCK_RATE,
+                            );
+                            let mut replay_anchor = None;
+                            for (index, buffered) in h264_startup_buffer.drain(..).enumerate() {
+                                let local_timestamp = replay_origin.wrapping_add(
+                                    u32::try_from(index)
+                                        .expect("startup buffer length is bounded")
+                                        .wrapping_mul(STREAM_STARTUP_REPLAY_FRAME_TICKS),
+                                );
+                                let (packet_count, octet_count) = send_local_h264_frame(
+                                    &local_socket,
+                                    video_target,
+                                    &buffered.encoded,
+                                    local_timestamp,
+                                    source.video_ssrc,
+                                    &mut local_video_sequence,
+                                )
+                                .await;
+                                local_video_packets = local_video_packets.wrapping_add(packet_count);
+                                local_video_octets = local_video_octets.wrapping_add(octet_count);
+                                local_video_frames = local_video_frames.wrapping_add(1);
+                                last_local_video_timestamp = Some(local_timestamp);
+                                replay_anchor = Some((buffered.source_timestamp, local_timestamp));
+                                if !logged_first_video {
+                                    logged_first_video = true;
+                                    logging::debug(
+                                        "stream",
+                                        format!(
+                                            "first buffered stream video forwarded: elapsed_ms={} source_timestamp={} local_timestamp={local_timestamp}",
+                                            media_started_at.elapsed().as_millis(),
+                                            buffered.source_timestamp,
+                                        ),
+                                    );
+                                }
+                            }
+                            if let Some((source_timestamp, local_timestamp)) = replay_anchor {
+                                local_video_clock.anchor(source_timestamp, local_timestamp);
+                            }
+                            logging::debug(
+                                "stream",
+                                format!(
+                                    "buffered H264 startup replayed: elapsed_ms={} frames={buffered_frames}",
+                                    media_started_at.elapsed().as_millis()
+                                ),
+                            );
+                        }
+                        if !player_ready && !logged_video_before_player_ready {
+                            logged_video_before_player_ready = true;
+                            logging::debug(
+                                "stream",
+                                "buffering stream video until mpv opens its SDP input",
+                            );
+                        }
+                        let waiting_for_keyframe = !h264_startup.is_started();
+                        let frame = accept_or_buffer_h264(
+                            player_ready,
+                            &mut h264_startup,
+                            &mut h264_startup_buffer,
+                            frame,
+                            header.timestamp,
+                        );
+                        if waiting_for_keyframe && h264_startup.is_started() {
+                            logging::debug(
+                                "stream",
+                                format!(
+                                    "stream H264 keyframe {}: elapsed_ms={}",
+                                    if player_ready { "accepted" } else { "buffered" },
+                                    media_started_at.elapsed().as_millis()
+                                ),
+                            );
+                        }
+                        let Some(frame) = frame else {
+                            continue;
+                        };
+                        let local_timestamp = local_video_clock.rebase(
+                            frame.source_timestamp,
                             media_started_at.elapsed(),
                             VIDEO_RTP_CLOCK_RATE,
                         );
-                        let mut replay_anchor = None;
-                        for (index, buffered) in h264_startup_buffer.drain(..).enumerate() {
-                            let local_timestamp = replay_origin.wrapping_add(
-                                u32::try_from(index)
-                                    .expect("startup buffer length is bounded")
-                                    .wrapping_mul(STREAM_STARTUP_REPLAY_FRAME_TICKS),
+                        let (packet_count, octet_count) = send_local_h264_frame(
+                            &local_socket,
+                            video_target,
+                            &frame.encoded,
+                            local_timestamp,
+                            source.video_ssrc,
+                            &mut local_video_sequence,
+                        )
+                        .await;
+                        local_video_packets = local_video_packets.wrapping_add(packet_count);
+                        local_video_octets = local_video_octets.wrapping_add(octet_count);
+                        local_video_frames = local_video_frames.wrapping_add(1);
+                        last_local_video_timestamp = Some(local_timestamp);
+                        if !logged_first_video {
+                            logged_first_video = true;
+                            logging::debug(
+                                "stream",
+                                format!(
+                                    "first stream video forwarded: elapsed_ms={} source_timestamp={} local_timestamp={}",
+                                    media_started_at.elapsed().as_millis(),
+                                    frame.source_timestamp,
+                                    local_timestamp
+                                ),
                             );
-                            let (packet_count, octet_count) = send_local_h264_frame(
-                                &local_socket,
-                                video_target,
-                                &buffered.encoded,
-                                local_timestamp,
-                                source.video_ssrc,
-                                &mut local_video_sequence,
-                            )
-                            .await;
-                            local_video_packets = local_video_packets.wrapping_add(packet_count);
-                            local_video_octets = local_video_octets.wrapping_add(octet_count);
-                            local_video_frames = local_video_frames.wrapping_add(1);
-                            last_local_video_timestamp = Some(local_timestamp);
-                            replay_anchor = Some((buffered.source_timestamp, local_timestamp));
-                            if !logged_first_video {
-                                logged_first_video = true;
-                                logging::debug(
-                                    "stream",
-                                    format!(
-                                        "first buffered stream video forwarded: elapsed_ms={} source_timestamp={} local_timestamp={local_timestamp}",
-                                        media_started_at.elapsed().as_millis(),
-                                        buffered.source_timestamp,
-                                    ),
-                                );
-                            }
                         }
-                        if let Some((source_timestamp, local_timestamp)) = replay_anchor {
-                            local_video_clock.anchor(source_timestamp, local_timestamp);
-                        }
-                        logging::debug(
-                            "stream",
-                            format!(
-                                "buffered H264 startup replayed: elapsed_ms={} frames={buffered_frames}",
-                                media_started_at.elapsed().as_millis()
-                            ),
-                        );
-                    }
-                    if !player_ready && !logged_video_before_player_ready {
-                        logged_video_before_player_ready = true;
-                        logging::debug(
-                            "stream",
-                            "buffering stream video until mpv opens its SDP input",
-                        );
-                    }
-                    let waiting_for_keyframe = !h264_startup.is_started();
-                    let frame = accept_or_buffer_h264(
-                        player_ready,
-                        &mut h264_startup,
-                        &mut h264_startup_buffer,
-                        frame,
-                        header.timestamp,
-                    );
-                    if waiting_for_keyframe && h264_startup.is_started() {
-                        logging::debug(
-                            "stream",
-                            format!(
-                                "stream H264 keyframe {}: elapsed_ms={}",
-                                if player_ready { "accepted" } else { "buffered" },
-                                media_started_at.elapsed().as_millis()
-                            ),
-                        );
-                    }
-                    let Some(frame) = frame else {
-                        continue;
-                    };
-                    let local_timestamp = local_video_clock.rebase(
-                        frame.source_timestamp,
-                        media_started_at.elapsed(),
-                        VIDEO_RTP_CLOCK_RATE,
-                    );
-                    let (packet_count, octet_count) = send_local_h264_frame(
-                        &local_socket,
-                        video_target,
-                        &frame.encoded,
-                        local_timestamp,
-                        source.video_ssrc,
-                        &mut local_video_sequence,
-                    )
-                    .await;
-                    local_video_packets = local_video_packets.wrapping_add(packet_count);
-                    local_video_octets = local_video_octets.wrapping_add(octet_count);
-                    local_video_frames = local_video_frames.wrapping_add(1);
-                    last_local_video_timestamp = Some(local_timestamp);
-                    if !logged_first_video {
-                        logged_first_video = true;
-                        logging::debug(
-                            "stream",
-                            format!(
-                                "first stream video forwarded: elapsed_ms={} source_timestamp={} local_timestamp={}",
-                                media_started_at.elapsed().as_millis(),
-                                frame.source_timestamp,
-                                local_timestamp
-                            ),
-                        );
                     }
                 }
             }
@@ -1421,28 +1629,62 @@ fn build_rtcp_pli(sender_ssrc: u32, media_ssrc: u32) -> [u8; 12] {
     packet
 }
 
-fn build_local_rtcp_sender_report(
-    sender_ssrc: u32,
-    unix_time: Duration,
-    rtp_timestamp: u32,
-    packet_count: u32,
-    octet_count: u32,
-) -> [u8; 28] {
-    let ntp_seconds = unix_time
-        .as_secs()
-        .wrapping_add(NTP_UNIX_EPOCH_OFFSET_SECONDS) as u32;
-    let ntp_fraction = ((u64::from(unix_time.subsec_nanos()) << 32) / 1_000_000_000) as u32;
-    let mut report = [0u8; 28];
-    report[0] = RTP_VERSION << 6;
-    report[1] = RTCP_SENDER_REPORT_PACKET_TYPE;
-    report[2..4].copy_from_slice(&RTCP_SENDER_REPORT_LENGTH_WORDS_MINUS_ONE.to_be_bytes());
-    report[4..8].copy_from_slice(&sender_ssrc.to_be_bytes());
-    report[8..12].copy_from_slice(&ntp_seconds.to_be_bytes());
-    report[12..16].copy_from_slice(&ntp_fraction.to_be_bytes());
-    report[16..20].copy_from_slice(&rtp_timestamp.to_be_bytes());
-    report[20..24].copy_from_slice(&packet_count.to_be_bytes());
-    report[24..28].copy_from_slice(&octet_count.to_be_bytes());
-    report
+fn build_rtcp_nack(sender_ssrc: u32, media_ssrc: u32, missing: &[u16]) -> Vec<u8> {
+    let mut feedback_control = Vec::new();
+    let mut index = 0usize;
+    while let Some(&packet_id) = missing.get(index) {
+        index += 1;
+        let mut bitmask = 0u16;
+        while let Some(&sequence) = missing.get(index) {
+            let distance = sequence.wrapping_sub(packet_id);
+            if !(1..=16).contains(&distance) {
+                break;
+            }
+            bitmask |= 1 << (distance - 1);
+            index += 1;
+        }
+        feedback_control.extend_from_slice(&packet_id.to_be_bytes());
+        feedback_control.extend_from_slice(&bitmask.to_be_bytes());
+    }
+
+    let mut packet = Vec::with_capacity(12 + feedback_control.len());
+    packet.push((RTP_VERSION << 6) | RTCP_GENERIC_NACK_FORMAT);
+    packet.push(RTCP_TRANSPORT_LAYER_FEEDBACK);
+    let length_words_minus_one =
+        u16::try_from((12 + feedback_control.len()) / 4 - 1).expect("RTCP NACK length fits u16");
+    packet.extend_from_slice(&length_words_minus_one.to_be_bytes());
+    packet.extend_from_slice(&sender_ssrc.to_be_bytes());
+    packet.extend_from_slice(&media_ssrc.to_be_bytes());
+    packet.extend_from_slice(&feedback_control);
+    packet
+}
+
+async fn send_stream_rtcp_feedback(
+    socket: &UdpSocket,
+    encryptor: &VoiceRtpEncryptor,
+    nonce: &mut u32,
+    feedback: &[u8],
+    kind: &str,
+) -> Result<(), String> {
+    let encrypted = encryptor.encrypt_rtcp_feedback(feedback, nonce.to_be_bytes())?;
+    *nonce = nonce
+        .checked_add(1)
+        .ok_or_else(|| "stream RTCP feedback nonce exhausted".to_owned())?;
+    socket
+        .send(&encrypted)
+        .await
+        .map_err(|error| format!("send stream RTCP {kind} failed: {error}"))?;
+    Ok(())
+}
+
+fn reset_stream_h264_pipeline(
+    h264: &mut H264Depacketizer,
+    startup: &mut H264StartupGate,
+    startup_buffer: &mut VecDeque<BufferedH264Frame>,
+) {
+    *h264 = H264Depacketizer::default();
+    *startup = H264StartupGate::default();
+    startup_buffer.clear();
 }
 
 async fn log_stream_player_output(
@@ -1465,14 +1707,6 @@ async fn log_stream_player_output(
                 {
                     logging::debug("stream", format!("stream {kind} mpv input ready"));
                     let _ = player_ready.ready_tx.send(player_ready.media_generation);
-                    player_ready
-                        .status_publisher
-                        .publish_stream_playback_ready(
-                            player_ready.scope,
-                            player_ready.channel_id,
-                            player_ready.user_id,
-                        )
-                        .await;
                 }
             }
             Ok(Some(_)) => {}
@@ -1486,6 +1720,10 @@ async fn log_stream_player_output(
             }
         }
     }
+}
+
+fn stream_player_ready_is_current(ready_generation: Option<u64>, media_generation: u64) -> bool {
+    ready_generation == Some(media_generation)
 }
 
 fn stream_player_input_is_ready(line: &str) -> bool {
@@ -1770,32 +2008,7 @@ fn packetize_h264_frame(
     ssrc: u32,
     sequence: &mut u16,
 ) -> Vec<Vec<u8>> {
-    let nals = annex_b_nals(frame);
-    let mut payloads = Vec::new();
-    for nal in nals {
-        if nal.len() <= LOCAL_H264_MAX_PAYLOAD_BYTES {
-            payloads.push(nal.to_vec());
-            continue;
-        }
-        let Some((&nal_header, body)) = nal.split_first() else {
-            continue;
-        };
-        let fu_indicator = (nal_header & 0xe0) | 28;
-        let nal_type = nal_header & 0x1f;
-        let chunks = body.chunks(LOCAL_H264_MAX_PAYLOAD_BYTES - 2);
-        let chunk_count = chunks.len();
-        for (index, chunk) in chunks.enumerate() {
-            let mut payload = Vec::with_capacity(chunk.len() + 2);
-            payload.push(fu_indicator);
-            payload.push(
-                nal_type
-                    | if index == 0 { 0x80 } else { 0 }
-                    | if index + 1 == chunk_count { 0x40 } else { 0 },
-            );
-            payload.extend_from_slice(chunk);
-            payloads.push(payload);
-        }
-    }
+    let payloads = packetize_h264_payloads(frame, LOCAL_H264_MAX_PAYLOAD_BYTES);
     let payload_count = payloads.len();
     payloads
         .into_iter()
@@ -1834,38 +2047,6 @@ async fn send_local_h264_frame(
     (packet_count, octet_count)
 }
 
-fn annex_b_nals(frame: &[u8]) -> Vec<&[u8]> {
-    let mut starts = Vec::new();
-    let mut index = 0usize;
-    while index + 3 <= frame.len() {
-        let start_len = if frame.get(index..index + 4) == Some(&[0, 0, 0, 1]) {
-            4
-        } else if frame.get(index..index + 3) == Some(&[0, 0, 1]) {
-            3
-        } else {
-            index += 1;
-            continue;
-        };
-        starts.push((index, start_len));
-        index += start_len;
-    }
-    if starts.is_empty() {
-        return (!frame.is_empty()).then_some(frame).into_iter().collect();
-    }
-    starts
-        .iter()
-        .enumerate()
-        .filter_map(|(position, (start, start_len))| {
-            let nal_start = start + start_len;
-            let nal_end = starts
-                .get(position + 1)
-                .map(|(next, _)| *next)
-                .unwrap_or(frame.len());
-            (nal_start < nal_end).then_some(&frame[nal_start..nal_end])
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1897,11 +2078,10 @@ mod tests {
         let (heartbeat, heartbeat_started, heartbeat_dropped) = cancellable_test_task();
         let (keepalive, keepalive_started, keepalive_dropped) = cancellable_test_task();
         let (media, media_started, media_dropped) = cancellable_test_task();
-        let child_tasks = StreamChildTasks {
-            heartbeat: Some(heartbeat),
-            keepalive: Some(keepalive),
-            media: Some(media),
-        };
+        let mut child_tasks = GatewayChildTasks::default();
+        child_tasks.replace_heartbeat(heartbeat).await;
+        child_tasks.replace_keepalive(keepalive).await;
+        child_tasks.replace_media(media).await;
 
         heartbeat_started.await.expect("heartbeat test task starts");
         keepalive_started.await.expect("keepalive test task starts");
@@ -1914,6 +2094,31 @@ mod tests {
                 .expect("stream child task is aborted promptly")
                 .expect("stream child task drop signal is sent");
         }
+    }
+
+    #[tokio::test]
+    async fn dropping_stream_player_log_tasks_aborts_both_readers() {
+        let (stdout, stdout_started, stdout_dropped) = cancellable_test_task();
+        let (stderr, stderr_started, stderr_dropped) = cancellable_test_task();
+        let log_tasks = StreamPlayerLogTasks::new([stdout, stderr]);
+
+        stdout_started.await.expect("stdout test task starts");
+        stderr_started.await.expect("stderr test task starts");
+        drop(log_tasks);
+
+        for dropped in [stdout_dropped, stderr_dropped] {
+            timeout(Duration::from_secs(1), dropped)
+                .await
+                .expect("stream player log task is aborted promptly")
+                .expect("stream player log task drop signal is sent");
+        }
+    }
+
+    #[test]
+    fn stream_player_readiness_accepts_only_the_current_media_generation() {
+        assert!(stream_player_ready_is_current(Some(8), 8));
+        assert!(!stream_player_ready_is_current(Some(7), 8));
+        assert!(!stream_player_ready_is_current(None, 8));
     }
 
     fn stream_request() -> StreamWatchRequest {
@@ -1999,6 +2204,114 @@ mod tests {
             decoded = depacketizer.push(&header, &packet[header.payload_offset..]);
         }
         assert_eq!(decoded, Some(frame));
+    }
+
+    fn stream_video_header(
+        payload_type: u8,
+        sequence: u16,
+        timestamp: u32,
+        ssrc: u32,
+    ) -> RtpHeader {
+        RtpHeader {
+            has_padding: false,
+            marker: true,
+            payload_type,
+            sequence,
+            timestamp,
+            ssrc,
+            authenticated_header_len: RTP_HEADER_MIN_LEN,
+            encrypted_extension_body_len: 0,
+            payload_offset: RTP_HEADER_MIN_LEN,
+        }
+    }
+
+    #[test]
+    fn stream_video_reorders_primary_and_rtx_packets_before_depacketization() {
+        let source = StreamVideoSource {
+            audio_ssrc: 7,
+            video_ssrc: 42,
+            rtx_ssrc: Some(43),
+        };
+        let now = Instant::now();
+        let mut recovery = StreamVideoRecovery::default();
+
+        let first_payload = b"first".to_vec();
+        let first_payload_ptr = first_payload.as_ptr();
+        let first = recover_stream_video_packet(
+            stream_video_header(DISCORD_STREAM_VIDEO_PAYLOAD_TYPE, 10, 90_000, 42),
+            first_payload,
+            source,
+        )
+        .expect("primary video packet should be accepted");
+        assert_eq!(first.payload.as_ptr(), first_payload_ptr);
+        assert_eq!(
+            recovery
+                .push(first, now)
+                .ready
+                .into_iter()
+                .map(|packet| packet.header.sequence)
+                .collect::<Vec<_>>(),
+            vec![10]
+        );
+
+        let third = recover_stream_video_packet(
+            stream_video_header(DISCORD_STREAM_VIDEO_PAYLOAD_TYPE, 12, 90_000, 42),
+            b"third".to_vec(),
+            source,
+        )
+        .expect("later primary video packet should be accepted");
+        assert!(recovery.push(third, now).ready.is_empty());
+        assert_eq!(recovery.take_nack_if_due(now), Some(vec![11]));
+
+        let repaired = recover_stream_video_packet(
+            stream_video_header(DISCORD_STREAM_VIDEO_RTX_PAYLOAD_TYPE, 800, 90_000, 43),
+            vec![0, 11, b's', b'e', b'c', b'o', b'n', b'd'],
+            source,
+        )
+        .expect("RTX video packet should recover its original packet");
+        assert_eq!(repaired.header.sequence, 11);
+        assert_eq!(repaired.header.ssrc, source.video_ssrc);
+        assert_eq!(repaired.payload, b"second");
+        assert_eq!(
+            recovery
+                .push(repaired, now)
+                .ready
+                .into_iter()
+                .map(|packet| packet.header.sequence)
+                .collect::<Vec<_>>(),
+            vec![11, 12]
+        );
+        assert_eq!(recovery.take_nack_if_due(now), None);
+    }
+
+    #[test]
+    fn stream_video_recovery_expires_an_unrepaired_gap() {
+        let now = Instant::now();
+        let mut recovery = StreamVideoRecovery::default();
+        let first = RecoveredStreamVideoPacket {
+            header: stream_video_header(DISCORD_STREAM_VIDEO_PAYLOAD_TYPE, 20, 90_000, 42),
+            payload: vec![1],
+        };
+        let third = RecoveredStreamVideoPacket {
+            header: stream_video_header(DISCORD_STREAM_VIDEO_PAYLOAD_TYPE, 22, 90_000, 42),
+            payload: vec![3],
+        };
+
+        assert_eq!(recovery.push(first, now).ready.len(), 1);
+        assert!(recovery.push(third, now).ready.is_empty());
+        assert!(!recovery.gap_expired(now + STREAM_VIDEO_GAP_TIMEOUT / 2));
+        assert!(recovery.gap_expired(now + STREAM_VIDEO_GAP_TIMEOUT));
+    }
+
+    #[test]
+    fn stream_generic_nack_groups_missing_sequences_into_pid_and_bitmask() {
+        let nack = build_rtcp_nack(7, 42, &[1_000, 1_001, 1_003, 1_020]);
+
+        assert_eq!(&nack[..4], &[0x81, 205, 0, 4]);
+        assert_eq!(&nack[4..8], &7u32.to_be_bytes());
+        assert_eq!(&nack[8..12], &42u32.to_be_bytes());
+        assert_eq!(&nack[12..16], &[0x03, 0xe8, 0, 5]);
+        assert_eq!(&nack[16..20], &[0x03, 0xfc, 0, 0]);
     }
 
     #[test]
@@ -2128,7 +2441,7 @@ mod tests {
 
     #[test]
     fn local_sender_report_maps_rtp_to_a_shared_ntp_clock() {
-        let report = build_local_rtcp_sender_report(
+        let report = build_rtcp_sender_report(
             0x0102_0304,
             Duration::new(1, 500_000_000),
             90_000,
@@ -2138,10 +2451,7 @@ mod tests {
 
         assert_eq!(&report[..4], &[0x80, 200, 0, 6]);
         assert_eq!(&report[4..8], &0x0102_0304u32.to_be_bytes());
-        assert_eq!(
-            &report[8..12],
-            &((NTP_UNIX_EPOCH_OFFSET_SECONDS + 1) as u32).to_be_bytes()
-        );
+        assert_eq!(&report[8..12], &2_208_988_801u32.to_be_bytes());
         assert_eq!(&report[12..16], &0x8000_0000u32.to_be_bytes());
         assert_eq!(&report[16..20], &90_000u32.to_be_bytes());
         assert_eq!(&report[20..24], &30u32.to_be_bytes());

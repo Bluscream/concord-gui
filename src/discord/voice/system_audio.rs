@@ -35,6 +35,40 @@ pub(super) struct SystemAudioCapture {
     stats: Arc<SystemAudioCaptureStats>,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub(super) struct SystemAudioCaptureError {
+    message: String,
+    unavailable: bool,
+}
+
+impl SystemAudioCaptureError {
+    fn unavailable(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            unavailable: true,
+        }
+    }
+
+    pub(super) fn is_unavailable(&self) -> bool {
+        self.unavailable
+    }
+}
+
+impl From<String> for SystemAudioCaptureError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            unavailable: false,
+        }
+    }
+}
+
+impl std::fmt::Display for SystemAudioCaptureError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
 #[cfg(feature = "voice-playback")]
 impl SystemAudioCapture {
     pub(super) fn dropped_frames(&self) -> u64 {
@@ -141,7 +175,7 @@ fn interpolate_i16(current: i16, next: i16, fraction: f64) -> i16 {
 #[cfg(feature = "voice-playback")]
 pub(super) fn start_system_audio_capture(
     frames_tx: mpsc::Sender<SystemAudioFrame>,
-) -> Result<SystemAudioCapture, String> {
+) -> Result<SystemAudioCapture, SystemAudioCaptureError> {
     let (host, device, capture_output_device) = system_audio_device()?;
     let description = device
         .description()
@@ -205,18 +239,23 @@ pub(super) fn start_system_audio_capture(
 #[cfg(not(feature = "voice-playback"))]
 pub(super) fn start_system_audio_capture(
     frames_tx: mpsc::Sender<SystemAudioFrame>,
-) -> Result<SystemAudioCapture, String> {
+) -> Result<SystemAudioCapture, SystemAudioCaptureError> {
     drop(frames_tx);
-    Err("system audio capture requires the voice-playback feature".to_owned())
+    Err(SystemAudioCaptureError::unavailable(
+        "system audio capture requires the voice-playback feature",
+    ))
 }
 
 #[cfg(all(feature = "voice-playback", target_os = "linux"))]
-fn system_audio_device() -> Result<(cpal::Host, cpal::Device, bool), String> {
-    let host = cpal::host_from_id(cpal::HostId::PulseAudio)
-        .map_err(|error| format!("PulseAudio system audio host unavailable: {error}"))?;
-    let default_output = host
-        .default_output_device()
-        .ok_or_else(|| "no default system audio output device is available".to_owned())?;
+fn system_audio_device() -> Result<(cpal::Host, cpal::Device, bool), SystemAudioCaptureError> {
+    let host = cpal::host_from_id(cpal::HostId::PulseAudio).map_err(|error| {
+        SystemAudioCaptureError::unavailable(format!(
+            "PulseAudio system audio host unavailable: {error}"
+        ))
+    })?;
+    let default_output = host.default_output_device().ok_or_else(|| {
+        SystemAudioCaptureError::unavailable("no default system audio output device is available")
+    })?;
     let sink_id = default_output
         .id()
         .map_err(|error| format!("default system audio output id failed: {error}"))?;
@@ -231,10 +270,10 @@ fn system_audio_device() -> Result<(cpal::Host, cpal::Device, bool), String> {
             return Ok((host, device, false));
         }
     }
-    Err(format!(
+    Err(SystemAudioCaptureError::unavailable(format!(
         "no PulseAudio monitor source is available for output {}",
         sink_id.id()
-    ))
+    )))
 }
 
 #[cfg(any(test, all(feature = "voice-playback", target_os = "linux")))]
@@ -245,20 +284,19 @@ fn is_pulse_monitor_for_sink(sink_id: &str, input_id: &str) -> bool {
 }
 
 #[cfg(all(feature = "voice-playback", not(target_os = "linux")))]
-fn system_audio_device() -> Result<(cpal::Host, cpal::Device, bool), String> {
+fn system_audio_device() -> Result<(cpal::Host, cpal::Device, bool), SystemAudioCaptureError> {
     let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .ok_or_else(|| "no default system audio output device is available".to_owned())?;
+    let device = host.default_output_device().ok_or_else(|| {
+        SystemAudioCaptureError::unavailable("no default system audio output device is available")
+    })?;
 
     // CPAL currently treats a duplex CoreAudio device as a normal input. Do
     // not risk broadcasting a microphone when the selected output is duplex.
     #[cfg(target_os = "macos")]
     if device.supports_input() {
-        return Err(
-            "the default macOS output is duplex, so CPAL cannot safely select system loopback"
-                .to_owned(),
-        );
+        return Err(SystemAudioCaptureError::unavailable(
+            "the default macOS output is duplex, so CPAL cannot safely select system loopback",
+        ));
     }
 
     Ok((host, device, true))
@@ -368,6 +406,15 @@ impl Drop for SystemAudioCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_audio_errors_distinguish_expected_unavailability() {
+        let unavailable = SystemAudioCaptureError::unavailable("unsupported device");
+        let failure = SystemAudioCaptureError::from("capture failed".to_owned());
+
+        assert!(unavailable.is_unavailable());
+        assert!(!failure.is_unavailable());
+    }
 
     #[test]
     fn pulse_monitor_selection_accepts_only_the_default_output() {

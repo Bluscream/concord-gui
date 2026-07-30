@@ -3,6 +3,7 @@ use super::broadcast::{
 };
 use super::stream::{StreamGatewaySession, StreamRuntimeState, run_stream_gateway_session};
 use super::*;
+use std::future::Future;
 use tokio::sync::oneshot;
 
 pub(super) const MAX_VOICE_RECONNECT_ATTEMPTS: u8 = 3;
@@ -159,6 +160,7 @@ impl VoiceRuntimeState {
             | VoiceRuntimeEvent::BroadcastStreamCancelled { .. }
             | VoiceRuntimeEvent::BroadcastStreamStopRequested { .. }
             | VoiceRuntimeEvent::BroadcastStreamConnectionEstablished { .. }
+            | VoiceRuntimeEvent::BroadcastStreamConnectionStable { .. }
             | VoiceRuntimeEvent::BroadcastStreamConnectionEnded { .. } => {}
             VoiceRuntimeEvent::ConnectionEstablished { connection_id } => {
                 if self
@@ -365,6 +367,7 @@ pub(crate) async fn run_voice_runtime(
     events_tx: mpsc::UnboundedSender<VoiceRuntimeEvent>,
     gateway_commands_tx: mpsc::UnboundedSender<GatewayCommand>,
     status_publisher: VoiceStatusPublisher,
+    stream_preview_uploader: StreamPreviewUploader,
 ) {
     let mut state = VoiceRuntimeState::default();
     let mut stream_state = StreamRuntimeState::default();
@@ -448,35 +451,32 @@ pub(crate) async fn run_voice_runtime(
                 .publish_stream_broadcast_ended(ended.scope, ended.channel_id)
                 .await;
         }
+        let replacing_broadcast = broadcast_update.connect.is_some();
         if let Some(stream_key) = broadcast_update.close_stream_key {
-            let _ = stop_stream_broadcast_task(
-                &mut broadcast_task,
-                &mut broadcast_session,
-                &mut broadcast_stop_tx,
-                "stopping active stream broadcast task",
-            )
-            .await;
+            if !replacing_broadcast {
+                let _ = stop_stream_broadcast_task(
+                    &mut broadcast_task,
+                    &mut broadcast_session,
+                    &mut broadcast_stop_tx,
+                    "stopping active stream broadcast task",
+                )
+                .await;
+            }
             if broadcast_update.send_delete {
                 let _ = gateway_commands_tx.send(GatewayCommand::DeleteStream { stream_key });
             }
         }
         if let Some(session) = broadcast_update.connect {
-            let _ = stop_stream_broadcast_task(
+            replace_stream_broadcast_task(
                 &mut broadcast_task,
                 &mut broadcast_session,
                 &mut broadcast_stop_tx,
-                "stopping previous stream broadcast task before reconnect",
-            )
-            .await;
-            let (stop_tx, stop_rx) = oneshot::channel();
-            broadcast_stop_tx = Some(stop_tx);
-            broadcast_session = Some(session.clone());
-            broadcast_task = Some(tokio::spawn(run_stream_broadcast_session(
                 session,
                 events_tx.clone(),
                 status_publisher.clone(),
-                stop_rx,
-            )));
+                stream_preview_uploader.clone(),
+                "stopping previous stream broadcast task before reconnect",
+            );
         }
         if broadcast_started && let Some(session) = broadcast_session.as_ref() {
             status_publisher
@@ -597,7 +597,7 @@ pub(crate) async fn run_voice_runtime(
         "stopping stream connection task during voice runtime shutdown",
     )
     .await;
-    let _ = stop_stream_broadcast_task(
+    let _ = shutdown_stream_broadcast_task(
         &mut broadcast_task,
         &mut broadcast_session,
         &mut broadcast_stop_tx,
@@ -635,7 +635,88 @@ async fn stop_stream_broadcast_task(
         return stopped_session;
     };
     logging::debug("stream", label);
-    match timeout(VOICE_CONNECTION_SHUTDOWN_TIMEOUT, &mut task).await {
+    *stream_task = Some(tokio::spawn(async move {
+        reap_stream_broadcast_task(&mut task).await;
+    }));
+    stopped_session
+}
+
+async fn shutdown_stream_broadcast_task(
+    stream_task: &mut Option<JoinHandle<()>>,
+    stream_session: &mut Option<StreamBroadcastGatewaySession>,
+    stop_tx: &mut Option<oneshot::Sender<()>>,
+    label: &str,
+) -> Option<StreamBroadcastGatewaySession> {
+    let stopped_session = stream_session.take();
+    let stopping_active_task = stopped_session.is_some() || stop_tx.is_some();
+    if let Some(stop_tx) = stop_tx.take() {
+        let _ = stop_tx.send(());
+    }
+    let Some(mut task) = stream_task.take() else {
+        return stopped_session;
+    };
+    logging::debug("stream", label);
+    if stopping_active_task {
+        reap_stream_broadcast_task(&mut task).await;
+    } else {
+        // A normal stop keeps its bounded reaper in `stream_task` so a later
+        // replacement can wait for it. Final shutdown waits for that reaper
+        // directly rather than detaching it with the runtime.
+        match task.await {
+            Ok(()) => logging::debug("stream", "stream broadcast cleanup finished"),
+            Err(error) => {
+                logging::debug("stream", format!("stream broadcast cleanup ended: {error}"));
+            }
+        }
+    }
+    stopped_session
+}
+
+#[allow(clippy::too_many_arguments)]
+fn replace_stream_broadcast_task(
+    stream_task: &mut Option<JoinHandle<()>>,
+    stream_session: &mut Option<StreamBroadcastGatewaySession>,
+    stop_tx: &mut Option<oneshot::Sender<()>>,
+    session: StreamBroadcastGatewaySession,
+    events_tx: mpsc::UnboundedSender<VoiceRuntimeEvent>,
+    status_publisher: VoiceStatusPublisher,
+    stream_preview_uploader: StreamPreviewUploader,
+    label: &str,
+) {
+    if let Some(stop_tx) = stop_tx.take() {
+        let _ = stop_tx.send(());
+    }
+    let previous = stream_task.take();
+    if previous.is_some() {
+        logging::debug("stream", label);
+    }
+    let (next_stop_tx, stop_rx) = oneshot::channel();
+    *stop_tx = Some(next_stop_tx);
+    *stream_session = Some(session.clone());
+    *stream_task = Some(tokio::spawn(run_after_stream_broadcast_task(
+        previous,
+        run_stream_broadcast_session(
+            session,
+            events_tx,
+            status_publisher,
+            stream_preview_uploader,
+            stop_rx,
+        ),
+    )));
+}
+
+async fn run_after_stream_broadcast_task(
+    previous: Option<JoinHandle<()>>,
+    next: impl Future<Output = ()>,
+) {
+    if let Some(mut previous) = previous {
+        reap_stream_broadcast_task(&mut previous).await;
+    }
+    next.await;
+}
+
+async fn reap_stream_broadcast_task(task: &mut JoinHandle<()>) {
+    match timeout(VOICE_CONNECTION_SHUTDOWN_TIMEOUT, &mut *task).await {
         Ok(Ok(())) => {
             logging::debug("stream", "stream broadcast task stopped cleanly");
         }
@@ -645,10 +726,9 @@ async fn stop_stream_broadcast_task(
         Err(_) => {
             logging::debug("stream", "stream broadcast graceful stop timed out");
             task.abort();
-            let _ = timeout(Duration::from_millis(100), &mut task).await;
+            let _ = timeout(Duration::from_millis(100), &mut *task).await;
         }
     }
-    stopped_session
 }
 
 pub(super) async fn stop_voice_connection_task(
@@ -685,31 +765,137 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn broadcast_stop_waits_for_graceful_cleanup() {
+    async fn broadcast_stop_does_not_block_voice_runtime_cleanup() {
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let (cleaned_tx, cleaned_rx) = tokio::sync::oneshot::channel();
         let mut task = Some(tokio::spawn(async move {
             let _ = started_tx.send(());
             let _ = stop_rx.await;
+            let _ = release_rx.await;
             let _ = cleaned_tx.send(());
         }));
         let mut stop_tx = Some(stop_tx);
         let mut session = None;
         started_rx.await.expect("test broadcast task should start");
 
-        stop_stream_broadcast_task(
-            &mut task,
-            &mut session,
-            &mut stop_tx,
-            "stopping test broadcast task",
+        timeout(
+            Duration::from_secs(1),
+            stop_stream_broadcast_task(
+                &mut task,
+                &mut session,
+                &mut stop_tx,
+                "stopping test broadcast task",
+            ),
         )
-        .await;
+        .await
+        .expect("broadcast stop must not wait for task cleanup");
 
+        release_tx
+            .send(())
+            .expect("test broadcast cleanup should be released");
         cleaned_rx
             .await
-            .expect("broadcast task should clean up before stop returns");
-        assert!(task.is_none());
+            .expect("broadcast task should still clean up asynchronously");
+        let cleanup_task = task
+            .take()
+            .expect("broadcast cleanup task should remain tracked");
+        cleanup_task
+            .await
+            .expect("broadcast cleanup tracker should finish");
         assert!(stop_tx.is_none());
+    }
+
+    #[tokio::test]
+    async fn replacement_broadcast_waits_for_previous_cleanup() {
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let (cleaned_tx, cleaned_rx) = tokio::sync::oneshot::channel();
+        let previous = tokio::spawn(async move {
+            let _ = release_rx.await;
+            let _ = cleaned_tx.send(());
+        });
+        let (replacement_tx, mut replacement_rx) = tokio::sync::oneshot::channel();
+        let replacement = tokio::spawn(run_after_stream_broadcast_task(
+            Some(previous),
+            async move {
+                let _ = replacement_tx.send(());
+            },
+        ));
+
+        assert!(
+            timeout(Duration::from_millis(25), &mut replacement_rx)
+                .await
+                .is_err(),
+            "replacement must not start while previous cleanup is pending"
+        );
+        release_tx
+            .send(())
+            .expect("previous broadcast cleanup should be released");
+        cleaned_rx
+            .await
+            .expect("previous broadcast should report cleanup");
+        timeout(Duration::from_secs(1), &mut replacement_rx)
+            .await
+            .expect("replacement should start after cleanup")
+            .expect("replacement should report startup");
+        replacement
+            .await
+            .expect("replacement sequencing task should finish");
+    }
+
+    #[tokio::test]
+    async fn final_broadcast_shutdown_waits_for_active_and_tracked_cleanup() {
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let (cleaned_tx, cleaned_rx) = tokio::sync::oneshot::channel();
+        let mut active_task = Some(tokio::spawn(async move {
+            let _ = stop_rx.await;
+            let _ = cleaned_tx.send(());
+        }));
+        let mut active_session = None;
+        let mut active_stop_tx = Some(stop_tx);
+
+        shutdown_stream_broadcast_task(
+            &mut active_task,
+            &mut active_session,
+            &mut active_stop_tx,
+            "shutting down active test broadcast",
+        )
+        .await;
+        cleaned_rx
+            .await
+            .expect("active broadcast cleanup should finish before shutdown returns");
+        assert!(active_task.is_none());
+
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let mut tracked_cleanup = Some(tokio::spawn(async move {
+            let _ = release_rx.await;
+        }));
+        let shutdown = tokio::spawn(async move {
+            let mut session = None;
+            let mut stop_tx = None;
+            shutdown_stream_broadcast_task(
+                &mut tracked_cleanup,
+                &mut session,
+                &mut stop_tx,
+                "awaiting tracked test broadcast cleanup",
+            )
+            .await;
+        });
+        tokio::pin!(shutdown);
+
+        assert!(
+            timeout(Duration::from_millis(25), &mut shutdown)
+                .await
+                .is_err(),
+            "final shutdown must wait for a previously tracked cleanup task"
+        );
+        release_tx
+            .send(())
+            .expect("tracked broadcast cleanup should be released");
+        timeout(Duration::from_secs(1), &mut shutdown)
+            .await
+            .expect("tracked broadcast cleanup should complete")
+            .expect("final shutdown task should join");
     }
 }

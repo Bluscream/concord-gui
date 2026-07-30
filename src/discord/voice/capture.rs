@@ -10,7 +10,7 @@ use std::{
 
 use fast_image_resize::{
     FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer,
-    images::{Image, ImageRef},
+    images::{CroppedImageMut, Image, ImageRef},
 };
 use image::RgbaImage;
 use openh264::{
@@ -28,13 +28,16 @@ use yuv::{
     rgba_to_yuv420,
 };
 
-use super::{StreamCaptureTarget, StreamCaptureTargetKind};
+use super::{
+    StreamCaptureTarget, StreamCaptureTargetKind,
+    preview::{StreamPreviewCadence, StreamPreviewFrame},
+};
 use crate::logging;
 
 pub(super) const STREAM_CAPTURE_WIDTH: u32 = 1280;
 pub(super) const STREAM_CAPTURE_HEIGHT: u32 = 720;
 pub(super) const STREAM_CAPTURE_FPS: u32 = 30;
-pub(super) const STREAM_CAPTURE_BITRATE: u32 = 6_000_000;
+pub(super) const STREAM_CAPTURE_BITRATE: u32 = 8_000_000;
 // Explicit feedback can still request immediate recovery frames, so the
 // fallback GOP can avoid a large encoded-frame burst every second.
 const STREAM_INTRA_FRAME_PERIOD_FRAMES: u32 = STREAM_CAPTURE_FPS * 2;
@@ -42,6 +45,9 @@ const STREAM_CAPTURE_FRAME_INTERVAL: Duration =
     Duration::from_nanos(1_000_000_000 / STREAM_CAPTURE_FPS as u64);
 const STREAM_CAPTURE_STATS_INTERVAL: Duration = Duration::from_secs(5);
 const STREAM_RECORDER_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const STREAM_CAPTURE_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+const STREAM_CAPTURE_REAPER_TIMEOUT: Duration = Duration::from_secs(3);
+const STREAM_CAPTURE_REAPER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Debug)]
 pub(super) struct EncodedStreamFrame {
@@ -64,9 +70,11 @@ enum CaptureSource {
     Window(Window),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CaptureFrameOutcome {
     Queued,
     QueueFull,
+    QueueClosed,
     EncoderSkipped,
 }
 
@@ -84,6 +92,11 @@ struct FramePreparationTimings {
     color_convert: Duration,
 }
 
+struct PreparedStreamFrame {
+    timings: FramePreparationTimings,
+    preview: Option<StreamPreviewFrame>,
+}
+
 struct CapturePerformanceStats {
     window_started_at: Instant,
     captured_frames: u64,
@@ -98,6 +111,40 @@ struct CapturePerformanceStats {
     encode_duration: Duration,
     total_duration: Duration,
     max_frame_duration: Duration,
+}
+
+struct StreamFramePacer {
+    next_deadline: Instant,
+}
+
+impl StreamFramePacer {
+    fn new(started_at: Instant) -> Self {
+        Self {
+            next_deadline: started_at + STREAM_CAPTURE_FRAME_INTERVAL,
+        }
+    }
+
+    fn wait_for_next_frame(&mut self) {
+        let deadline = next_stream_frame_deadline(self.next_deadline, Instant::now());
+        if let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+            thread::sleep(remaining);
+        }
+        self.next_deadline = deadline + STREAM_CAPTURE_FRAME_INTERVAL;
+    }
+}
+
+fn next_stream_frame_deadline(current_deadline: Instant, now: Instant) -> Instant {
+    let Some(overdue) = now.checked_duration_since(current_deadline) else {
+        return current_deadline;
+    };
+    let missed_intervals = overdue.as_nanos() / STREAM_CAPTURE_FRAME_INTERVAL.as_nanos() + 1;
+    let Ok(missed_intervals) = u32::try_from(missed_intervals) else {
+        return now + STREAM_CAPTURE_FRAME_INTERVAL;
+    };
+
+    current_deadline
+        .checked_add(STREAM_CAPTURE_FRAME_INTERVAL * missed_intervals)
+        .unwrap_or(now + STREAM_CAPTURE_FRAME_INTERVAL)
 }
 
 impl CapturePerformanceStats {
@@ -130,6 +177,7 @@ impl CapturePerformanceStats {
         match outcome {
             CaptureFrameOutcome::Queued => self.queued_frames += 1,
             CaptureFrameOutcome::QueueFull => self.queue_full_frames += 1,
+            CaptureFrameOutcome::QueueClosed => {}
             CaptureFrameOutcome::EncoderSkipped => self.encoder_skipped_frames += 1,
         }
         self.encoded_bytes = self.encoded_bytes.saturating_add(encoded_bytes as u64);
@@ -183,6 +231,10 @@ impl CaptureSource {
                         while let Ok(newer_frame) = frames.try_recv() {
                             frame = newer_frame;
                         }
+                        // `from_raw` takes ownership of xcap's frame buffer. The
+                        // current xcap API does not expose capture scaling or a
+                        // native YUV format, so keeping this ownership transfer
+                        // avoids adding another full-resolution RGBA copy here.
                         return RgbaImage::from_raw(frame.width, frame.height, frame.raw)
                             .map(Some)
                             .ok_or_else(|| {
@@ -222,10 +274,16 @@ impl StreamFrameGeometry {
 
         let scale = (STREAM_CAPTURE_WIDTH as f64 / source_width as f64)
             .min(STREAM_CAPTURE_HEIGHT as f64 / source_height as f64);
-        let scaled_width =
-            ((source_width as f64 * scale).round() as u32).clamp(2, STREAM_CAPTURE_WIDTH) & !1;
-        let scaled_height =
-            ((source_height as f64 * scale).round() as u32).clamp(2, STREAM_CAPTURE_HEIGHT) & !1;
+        // Multiples of four keep the scaled content and letterbox offsets
+        // aligned to the YUV420 chroma grid used after RGBA resizing.
+        let scaled_width = align_yuv420_dimension(
+            (source_width as f64 * scale).round() as u32,
+            STREAM_CAPTURE_WIDTH,
+        );
+        let scaled_height = align_yuv420_dimension(
+            (source_height as f64 * scale).round() as u32,
+            STREAM_CAPTURE_HEIGHT,
+        );
 
         Ok(Self {
             source_dimensions,
@@ -238,10 +296,13 @@ impl StreamFrameGeometry {
     }
 }
 
+fn align_yuv420_dimension(value: u32, maximum: u32) -> u32 {
+    value.clamp(4, maximum) & !3
+}
+
 struct StreamFrameProcessor {
     resizer: Resizer,
     resize_options: ResizeOptions,
-    resized: Image<'static>,
     rgba: Image<'static>,
     yuv: YuvPlanarImageMut<'static, u8>,
     geometry: Option<StreamFrameGeometry>,
@@ -259,7 +320,6 @@ impl StreamFrameProcessor {
             resize_options: ResizeOptions::new()
                 .resize_alg(ResizeAlg::Convolution(FilterType::Box))
                 .use_alpha(false),
-            resized: Image::new(2, 2, PixelType::U8x4),
             rgba,
             yuv: YuvPlanarImageMut::alloc(
                 STREAM_CAPTURE_WIDTH,
@@ -270,11 +330,16 @@ impl StreamFrameProcessor {
         }
     }
 
-    fn prepare(&mut self, image: RgbaImage) -> Result<FramePreparationTimings, String> {
-        let resize_started_at = Instant::now();
+    fn prepare(
+        &mut self,
+        image: RgbaImage,
+        include_preview: bool,
+    ) -> Result<PreparedStreamFrame, String> {
+        let original_dimensions = image.dimensions();
         let geometry = StreamFrameGeometry::for_source(image.dimensions())?;
         self.update_geometry(geometry);
 
+        let resize_started_at = Instant::now();
         let source = ImageRef::new(
             geometry.source_dimensions.0,
             geometry.source_dimensions.1,
@@ -282,41 +347,43 @@ impl StreamFrameProcessor {
             PixelType::U8x4,
         )
         .map_err(|error| format!("captured RGBA frame is invalid: {error}"))?;
-
-        if geometry.scaled_dimensions == (STREAM_CAPTURE_WIDTH, STREAM_CAPTURE_HEIGHT) {
-            self.resizer
-                .resize(&source, &mut self.rgba, &self.resize_options)
-                .map_err(|error| format!("stream frame resize failed: {error}"))?;
-        } else {
-            self.resizer
-                .resize(&source, &mut self.resized, &self.resize_options)
-                .map_err(|error| format!("stream frame resize failed: {error}"))?;
-            copy_resized_frame(
-                self.resized.buffer(),
-                geometry.scaled_dimensions,
-                self.rgba.buffer_mut(),
-                geometry.offsets,
-            );
-        }
+        let mut destination = CroppedImageMut::new(
+            &mut self.rgba,
+            geometry.offsets.0,
+            geometry.offsets.1,
+            geometry.scaled_dimensions.0,
+            geometry.scaled_dimensions.1,
+        )
+        .map_err(|error| format!("stream RGBA destination crop is invalid: {error}"))?;
+        self.resizer
+            .resize(&source, &mut destination, &self.resize_options)
+            .map_err(|error| format!("stream RGBA resize failed: {error}"))?;
         let resize = resize_started_at.elapsed();
 
         let color_convert_started_at = Instant::now();
-        // The previous OpenH264 conversion also used low-precision BT.601
-        // limited-range math. Fast mode preserves that behavior and selects
-        // SIMD instructions at runtime on supported x86 and Arm processors.
+        // The measured Apple Silicon path is faster when conversion runs on
+        // the final 720p buffer instead of the full-resolution capture.
         rgba_to_yuv420(
             &mut self.yuv,
             self.rgba.buffer(),
             STREAM_CAPTURE_WIDTH * 4,
             YuvRange::Limited,
-            YuvStandardMatrix::Bt601,
+            YuvStandardMatrix::Bt709,
             YuvConversionMode::Fast,
         )
         .map_err(|error| format!("RGBA to YUV conversion failed: {error}"))?;
+        let color_convert = color_convert_started_at.elapsed();
 
-        Ok(FramePreparationTimings {
-            resize,
-            color_convert: color_convert_started_at.elapsed(),
+        Ok(PreparedStreamFrame {
+            timings: FramePreparationTimings {
+                resize,
+                color_convert,
+            },
+            preview: include_preview.then(|| StreamPreviewFrame {
+                width: original_dimensions.0,
+                height: original_dimensions.1,
+                rgba: image.into_raw(),
+            }),
         })
     }
 
@@ -344,14 +411,7 @@ impl StreamFrameProcessor {
             return;
         }
 
-        if geometry.scaled_dimensions != (STREAM_CAPTURE_WIDTH, STREAM_CAPTURE_HEIGHT) {
-            self.resized = Image::new(
-                geometry.scaled_dimensions.0,
-                geometry.scaled_dimensions.1,
-                PixelType::U8x4,
-            );
-            fill_opaque_black(self.rgba.buffer_mut());
-        }
+        fill_opaque_black(self.rgba.buffer_mut());
         self.geometry = Some(geometry);
     }
 }
@@ -360,27 +420,6 @@ fn fill_opaque_black(rgba: &mut [u8]) {
     rgba.fill(0);
     for alpha in rgba.iter_mut().skip(3).step_by(4) {
         *alpha = 255;
-    }
-}
-
-fn copy_resized_frame(
-    source: &[u8],
-    source_dimensions: (u32, u32),
-    destination: &mut [u8],
-    offsets: (u32, u32),
-) {
-    let source_stride = source_dimensions.0 as usize * 4;
-    let destination_stride = STREAM_CAPTURE_WIDTH as usize * 4;
-    let destination_x = offsets.0 as usize * 4;
-    let destination_y = offsets.1 as usize;
-
-    for (row, source_row) in source
-        .chunks_exact(source_stride)
-        .take(source_dimensions.1 as usize)
-        .enumerate()
-    {
-        let start = (destination_y + row) * destination_stride + destination_x;
-        destination[start..start + source_stride].copy_from_slice(source_row);
     }
 }
 
@@ -400,20 +439,78 @@ impl Drop for CaptureSource {
 impl Drop for StreamCaptureHandle {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        if let Some(worker) = self.worker.take()
-            && let Err(error) = worker.join()
-        {
-            logging::debug(
-                "stream",
-                format!("stream capture worker panicked during shutdown: {error:?}"),
-            );
+        if let Some(worker) = self.worker.take() {
+            reap_capture_worker(worker);
         }
+    }
+}
+
+fn reap_capture_worker(worker: JoinHandle<()>) {
+    if let Err(error) = thread::Builder::new()
+        .name("stream-capture-reaper".to_owned())
+        .spawn(move || {
+            let deadline = Instant::now() + STREAM_CAPTURE_REAPER_TIMEOUT;
+            while !worker.is_finished() {
+                if Instant::now() >= deadline {
+                    logging::debug(
+                        "stream",
+                        "stream capture worker did not stop before reaper timeout; detaching it",
+                    );
+                    return;
+                }
+                thread::sleep(STREAM_CAPTURE_REAPER_POLL_INTERVAL);
+            }
+            if let Err(error) = worker.join() {
+                logging::debug(
+                    "stream",
+                    format!("stream capture worker panicked during shutdown: {error:?}"),
+                );
+            }
+        })
+    {
+        // Dropping the join handle detaches the worker, so a reaper spawn
+        // failure still leaves shutdown nonblocking.
+        logging::debug(
+            "stream",
+            format!("stream capture reaper spawn failed: {error}"),
+        );
     }
 }
 
 impl StreamCaptureHandle {
     pub(super) fn request_keyframe(&self) {
         self.force_keyframe.store(true, Ordering::Release);
+    }
+
+    pub(super) async fn shutdown(mut self) {
+        self.stop.store(true, Ordering::Release);
+        let Some(worker) = self.worker.take() else {
+            return;
+        };
+        let mut join_task = tokio::task::spawn_blocking(move || worker.join());
+        match tokio::time::timeout(STREAM_CAPTURE_GRACEFUL_SHUTDOWN_TIMEOUT, &mut join_task).await {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(error))) => {
+                logging::debug(
+                    "stream",
+                    format!("stream capture worker panicked during shutdown: {error:?}"),
+                );
+            }
+            Ok(Err(error)) => {
+                logging::debug(
+                    "stream",
+                    format!("stream capture shutdown task failed: {error}"),
+                );
+            }
+            Err(_) => {
+                // The blocking join keeps owning the worker after this handle
+                // is dropped, so cleanup can finish without blocking runtime.
+                logging::debug(
+                    "stream",
+                    "stream capture worker did not stop before graceful shutdown timeout",
+                );
+            }
+        }
     }
 }
 
@@ -490,6 +587,8 @@ pub(crate) fn list_stream_capture_targets() -> Result<Vec<StreamCaptureTarget>, 
 pub(super) fn start_stream_capture(
     target: StreamCaptureTarget,
     frames_tx: mpsc::Sender<Result<EncodedStreamFrame, String>>,
+    preview_frames_tx: mpsc::Sender<StreamPreviewFrame>,
+    errors_tx: mpsc::UnboundedSender<String>,
 ) -> Result<StreamCaptureHandle, String> {
     let stop = Arc::new(AtomicBool::new(false));
     let force_keyframe = Arc::new(AtomicBool::new(false));
@@ -498,7 +597,14 @@ pub(super) fn start_stream_capture(
     let worker = thread::Builder::new()
         .name("stream-capture".to_owned())
         .spawn(move || {
-            run_capture_worker(target, frames_tx, worker_stop, worker_force_keyframe);
+            run_capture_worker(
+                target,
+                frames_tx,
+                preview_frames_tx,
+                errors_tx,
+                worker_stop,
+                worker_force_keyframe,
+            );
         })
         .map_err(|error| format!("stream capture worker spawn failed: {error}"))?;
     Ok(StreamCaptureHandle {
@@ -511,17 +617,26 @@ pub(super) fn start_stream_capture(
 fn run_capture_worker(
     target: StreamCaptureTarget,
     frames_tx: mpsc::Sender<Result<EncodedStreamFrame, String>>,
+    preview_frames_tx: mpsc::Sender<StreamPreviewFrame>,
+    errors_tx: mpsc::UnboundedSender<String>,
     stop: Arc<AtomicBool>,
     force_keyframe: Arc<AtomicBool>,
 ) {
-    if let Err(error) = run_capture_loop(&target, &frames_tx, &stop, &force_keyframe) {
-        let _ = frames_tx.blocking_send(Err(error));
+    if let Err(error) = run_capture_loop(
+        &target,
+        &frames_tx,
+        &preview_frames_tx,
+        &stop,
+        &force_keyframe,
+    ) {
+        let _ = errors_tx.send(error);
     }
 }
 
 fn run_capture_loop(
     target: &StreamCaptureTarget,
     frames_tx: &mpsc::Sender<Result<EncodedStreamFrame, String>>,
+    preview_frames_tx: &mpsc::Sender<StreamPreviewFrame>,
     stop: &AtomicBool,
     force_keyframe: &AtomicBool,
 ) -> Result<(), String> {
@@ -529,8 +644,10 @@ fn run_capture_loop(
     let mut encoder = Encoder::with_api_config(OpenH264API::from_source(), stream_encoder_config())
         .map_err(|error| format!("H264 encoder creation failed: {error}"))?;
     let started_at = Instant::now();
+    let mut frame_pacer = StreamFramePacer::new(started_at);
     let mut stats = CapturePerformanceStats::new();
     let mut frame_processor = StreamFrameProcessor::new();
+    let mut preview_cadence = StreamPreviewCadence::default();
 
     while !stop.load(Ordering::Acquire) {
         let frame_started_at = Instant::now();
@@ -541,9 +658,41 @@ fn run_capture_loop(
         };
         let capture_time = capture_started_at.elapsed();
 
+        let preview_now = Instant::now();
+        let preview_permit = preview_cadence
+            .is_due(preview_now)
+            .then(|| preview_frames_tx.try_reserve().ok())
+            .flatten();
         let prepare_started_at = Instant::now();
-        let preparation_timings = frame_processor.prepare(image)?;
+        let prepared = frame_processor.prepare(image, preview_permit.is_some())?;
         let prepare_time = prepare_started_at.elapsed();
+        if let (Some(permit), Some(preview)) = (preview_permit, prepared.preview) {
+            permit.send(preview);
+            preview_cadence.record_queued(preview_now);
+        }
+
+        let frame_slot = match try_reserve_encoded_frame_slot(frames_tx) {
+            Ok(permit) => permit,
+            Err(CaptureFrameOutcome::QueueFull) => {
+                stats.record_frame(
+                    CaptureFrameOutcome::QueueFull,
+                    0,
+                    CaptureFrameTimings {
+                        capture: capture_time,
+                        prepare: prepare_time,
+                        resize: prepared.timings.resize,
+                        color_convert: prepared.timings.color_convert,
+                        encode: Duration::ZERO,
+                        total: frame_started_at.elapsed(),
+                    },
+                    &target.title,
+                );
+                frame_pacer.wait_for_next_frame();
+                continue;
+            }
+            Err(CaptureFrameOutcome::QueueClosed) => return Ok(()),
+            Err(_) => unreachable!("frame reservation only reports queue availability"),
+        };
 
         let encode_started_at = Instant::now();
         if force_keyframe.swap(false, Ordering::AcqRel) {
@@ -561,15 +710,12 @@ fn run_capture_loop(
             CaptureFrameOutcome::EncoderSkipped
         } else {
             let timestamp = stream_rtp_timestamp(started_at.elapsed());
-            match frames_tx.try_send(Ok(EncodedStreamFrame {
+            frame_slot.send(Ok(EncodedStreamFrame {
                 timestamp,
                 annex_b,
                 is_keyframe,
-            })) {
-                Ok(()) => CaptureFrameOutcome::Queued,
-                Err(mpsc::error::TrySendError::Full(_)) => CaptureFrameOutcome::QueueFull,
-                Err(mpsc::error::TrySendError::Closed(_)) => return Ok(()),
-            }
+            }));
+            CaptureFrameOutcome::Queued
         };
         stats.record_frame(
             outcome,
@@ -577,21 +723,27 @@ fn run_capture_loop(
             CaptureFrameTimings {
                 capture: capture_time,
                 prepare: prepare_time,
-                resize: preparation_timings.resize,
-                color_convert: preparation_timings.color_convert,
+                resize: prepared.timings.resize,
+                color_convert: prepared.timings.color_convert,
                 encode: encode_time,
                 total: frame_started_at.elapsed(),
             },
             &target.title,
         );
 
-        if let Some(remaining) =
-            STREAM_CAPTURE_FRAME_INTERVAL.checked_sub(frame_started_at.elapsed())
-        {
-            thread::sleep(remaining);
-        }
+        frame_pacer.wait_for_next_frame();
     }
     Ok(())
+}
+
+fn try_reserve_encoded_frame_slot(
+    frames_tx: &mpsc::Sender<Result<EncodedStreamFrame, String>>,
+) -> Result<mpsc::Permit<'_, Result<EncodedStreamFrame, String>>, CaptureFrameOutcome> {
+    match frames_tx.try_reserve() {
+        Ok(permit) => Ok(permit),
+        Err(mpsc::error::TrySendError::Full(_)) => Err(CaptureFrameOutcome::QueueFull),
+        Err(mpsc::error::TrySendError::Closed(_)) => Err(CaptureFrameOutcome::QueueClosed),
+    }
 }
 
 fn stream_encoder_config() -> EncoderConfig {
@@ -610,7 +762,7 @@ fn stream_encoder_config() -> EncoderConfig {
         .intra_frame_period(IntraFramePeriod::from_num_frames(
             STREAM_INTRA_FRAME_PERIOD_FRAMES,
         ))
-        .vui(VuiConfig::bt709_full())
+        .vui(VuiConfig::bt709())
 }
 
 fn resolve_capture_source(target: &StreamCaptureTarget) -> Result<CaptureSource, String> {
@@ -682,6 +834,16 @@ mod tests {
     }
 
     #[test]
+    fn screen_content_encoder_targets_eight_megabits_per_second() {
+        let config = format!("{:?}", stream_encoder_config());
+
+        assert!(
+            config.contains("bitrate: BitRate(8000000)"),
+            "unexpected stream encoder configuration: {config}"
+        );
+    }
+
+    #[test]
     fn capture_handle_coalesces_keyframe_requests() {
         let mut handle = StreamCaptureHandle {
             stop: Arc::new(AtomicBool::new(false)),
@@ -698,6 +860,103 @@ mod tests {
     }
 
     #[test]
+    fn capture_handle_drop_does_not_wait_for_worker_shutdown() {
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _ = release_rx.recv();
+        });
+        let handle = StreamCaptureHandle {
+            stop: Arc::new(AtomicBool::new(false)),
+            force_keyframe: Arc::new(AtomicBool::new(false)),
+            worker: Some(worker),
+        };
+        let (dropped_tx, dropped_rx) = std::sync::mpsc::channel();
+        let dropper = std::thread::spawn(move || {
+            drop(handle);
+            let _ = dropped_tx.send(());
+        });
+
+        dropped_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("capture handle drop must not wait for the worker");
+        release_tx
+            .send(())
+            .expect("test capture worker should be released");
+        dropper.join().expect("test handle dropper should finish");
+    }
+
+    #[test]
+    fn capture_error_uses_a_separate_nonblocking_channel() {
+        let (frames_tx, mut frames_rx) = mpsc::channel::<Result<EncodedStreamFrame, String>>(1);
+        frames_tx
+            .try_send(Ok(EncodedStreamFrame {
+                timestamp: 1,
+                annex_b: vec![1],
+                is_keyframe: false,
+            }))
+            .expect("test frame should fill the queue");
+        let (errors_tx, mut errors_rx) = mpsc::unbounded_channel();
+
+        errors_tx
+            .send("capture failed".to_owned())
+            .expect("capture error should not depend on frame queue capacity");
+
+        let queued = frames_rx
+            .try_recv()
+            .expect("the queued frame should remain available");
+        assert!(queued.is_ok());
+        assert_eq!(
+            errors_rx
+                .try_recv()
+                .expect("capture error should remain available"),
+            "capture failed"
+        );
+    }
+
+    #[test]
+    fn full_encoded_frame_queue_skips_encoding_without_consuming_keyframe_request() {
+        let (frames_tx, mut frames_rx) = mpsc::channel(1);
+        let force_keyframe = AtomicBool::new(true);
+        frames_tx
+            .try_send(Ok(EncodedStreamFrame {
+                timestamp: 1,
+                annex_b: vec![1],
+                is_keyframe: false,
+            }))
+            .expect("first test frame should fill the queue");
+
+        match try_reserve_encoded_frame_slot(&frames_tx) {
+            Err(outcome) => assert_eq!(outcome, CaptureFrameOutcome::QueueFull),
+            Ok(_) => panic!("a full frame queue must not reserve another slot"),
+        }
+        assert!(force_keyframe.load(Ordering::Acquire));
+        assert_eq!(
+            frames_rx
+                .try_recv()
+                .expect("the older queued frame should remain")
+                .expect("the older queued frame should be valid")
+                .timestamp,
+            1
+        );
+
+        let permit = try_reserve_encoded_frame_slot(&frames_tx)
+            .expect("a drained frame queue should reserve a slot");
+        permit.send(Ok(EncodedStreamFrame {
+            timestamp: 2,
+            annex_b: vec![2],
+            is_keyframe: true,
+        }));
+        assert_eq!(
+            frames_rx
+                .try_recv()
+                .expect("the reserved frame should be queued")
+                .expect("the reserved frame should be valid")
+                .timestamp,
+            2
+        );
+    }
+
+    #[test]
     fn letterbox_preserves_source_aspect_ratio_for_common_shapes() {
         let cases = [
             ((800, 600), Some((159, 0)), (160, 0)),
@@ -709,44 +968,47 @@ mod tests {
             let image = RgbaImage::from_pixel(dimensions.0, dimensions.1, Rgba([255, 0, 0, 255]));
             let mut processor = StreamFrameProcessor::new();
             processor
-                .prepare(image)
+                .prepare(image, false)
                 .expect("stream frame should be prepared");
 
-            assert_eq!(
-                rgba_pixel(processor.rgba.buffer(), 640, 360),
-                [255, 0, 0, 255]
-            );
-            assert_eq!(
-                rgba_pixel(processor.rgba.buffer(), content_edge.0, content_edge.1),
-                [255, 0, 0, 255]
-            );
+            assert!(luma_pixel(&processor, 640, 360).abs_diff(63) <= 1);
+            assert!(luma_pixel(&processor, content_edge.0, content_edge.1).abs_diff(63) <= 1);
             if let Some(black_bar) = black_bar {
-                assert_eq!(
-                    rgba_pixel(processor.rgba.buffer(), black_bar.0, black_bar.1),
-                    [0, 0, 0, 255]
-                );
+                assert_eq!(luma_pixel(&processor, black_bar.0, black_bar.1), 16);
             }
         }
     }
 
     #[test]
-    fn simd_color_conversion_preserves_bt601_limited_output() {
-        let mut output = YuvPlanarImageMut::alloc(2, 2, YuvChromaSubsampling::Yuv420);
-        rgba_to_yuv420(
-            &mut output,
-            &[255, 0, 0, 255].repeat(4),
-            8,
-            YuvRange::Limited,
-            YuvStandardMatrix::Bt601,
-            YuvConversionMode::Fast,
-        )
-        .expect("RGBA frame should convert to YUV");
+    fn broadcast_color_conversion_and_vui_use_bt709_limited() {
+        let mut processor = StreamFrameProcessor::new();
+        processor
+            .prepare(
+                RgbaImage::from_pixel(
+                    STREAM_CAPTURE_WIDTH,
+                    STREAM_CAPTURE_HEIGHT,
+                    Rgba([255, 0, 0, 255]),
+                ),
+                false,
+            )
+            .expect("red stream frame should be prepared");
 
-        for value in output.y_plane.borrow() {
-            assert!(value.abs_diff(81) <= 1);
+        for value in processor.yuv.y_plane.borrow() {
+            assert!(
+                value.abs_diff(63) <= 1,
+                "unexpected BT.709 limited red luma: {value}"
+            );
         }
-        assert!(output.u_plane.borrow()[0].abs_diff(90) <= 1);
-        assert!(output.v_plane.borrow()[0].abs_diff(239) <= 1);
+        let u = processor.yuv.u_plane.borrow()[0];
+        let v = processor.yuv.v_plane.borrow()[0];
+        assert!(u.abs_diff(102) <= 1, "unexpected BT.709 limited red U: {u}");
+        assert!(v.abs_diff(240) <= 1, "unexpected BT.709 limited red V: {v}");
+
+        let config = format!("{:?}", stream_encoder_config());
+        assert!(
+            config.contains("matrix_coefficients: Bt709") && config.contains("full_range: false"),
+            "unexpected stream VUI configuration: {config}"
+        );
     }
 
     #[test]
@@ -754,10 +1016,9 @@ mod tests {
         let mut processor = StreamFrameProcessor::new();
         let image = RgbaImage::from_pixel(800, 600, Rgba([12, 34, 56, 255]));
         processor
-            .prepare(image.clone())
+            .prepare(image.clone(), false)
             .expect("first stream frame should be prepared");
         let addresses = (
-            processor.resized.buffer().as_ptr(),
             processor.rgba.buffer().as_ptr(),
             processor.yuv.y_plane.borrow().as_ptr(),
             processor.yuv.u_plane.borrow().as_ptr(),
@@ -765,18 +1026,77 @@ mod tests {
         );
 
         processor
-            .prepare(image)
+            .prepare(image, false)
             .expect("second stream frame should be prepared");
 
         assert_eq!(
             addresses,
             (
-                processor.resized.buffer().as_ptr(),
                 processor.rgba.buffer().as_ptr(),
                 processor.yuv.y_plane.borrow().as_ptr(),
                 processor.yuv.u_plane.borrow().as_ptr(),
                 processor.yuv.v_plane.borrow().as_ptr(),
             )
+        );
+    }
+
+    #[test]
+    fn preview_reuses_the_owned_capture_buffer() {
+        let image = RgbaImage::from_pixel(800, 600, Rgba([12, 34, 56, 255]));
+        let capture_buffer = image.as_raw().as_ptr();
+        let mut processor = StreamFrameProcessor::new();
+
+        let prepared = processor
+            .prepare(image, true)
+            .expect("stream frame should be prepared");
+        let preview = prepared.preview.expect("preview should be returned");
+
+        assert_eq!(preview.rgba.as_ptr(), capture_buffer);
+        assert_eq!((preview.width, preview.height), (800, 600));
+    }
+
+    #[test]
+    fn odd_capture_dimensions_keep_yuv420_output_aligned() {
+        let geometry =
+            StreamFrameGeometry::for_source((2057, 1329)).expect("source should be accepted");
+        let mut processor = StreamFrameProcessor::new();
+        processor
+            .prepare(
+                RgbaImage::from_pixel(801, 601, Rgba([12, 34, 56, 255])),
+                false,
+            )
+            .expect("odd-sized stream frame should be prepared");
+
+        assert_eq!(geometry.source_dimensions, (2057, 1329));
+        assert_eq!(geometry.scaled_dimensions.0 % 4, 0);
+        assert_eq!(geometry.scaled_dimensions.1 % 4, 0);
+        assert_eq!(geometry.offsets.0 % 2, 0);
+        assert_eq!(geometry.offsets.1 % 2, 0);
+    }
+
+    #[test]
+    fn frame_deadline_corrects_sleep_overshoot_without_drift() {
+        let started_at = Instant::now();
+        let deadline = started_at + STREAM_CAPTURE_FRAME_INTERVAL;
+        let woke_late = deadline + Duration::from_millis(4);
+
+        assert_eq!(
+            next_stream_frame_deadline(deadline, woke_late),
+            deadline + STREAM_CAPTURE_FRAME_INTERVAL
+        );
+    }
+
+    #[test]
+    fn frame_deadline_skips_missed_intervals_without_catch_up_bursts() {
+        let started_at = Instant::now();
+        let deadline = started_at + STREAM_CAPTURE_FRAME_INTERVAL;
+        let second_deadline = deadline + STREAM_CAPTURE_FRAME_INTERVAL;
+        let third_deadline = second_deadline + STREAM_CAPTURE_FRAME_INTERVAL;
+        let finished_after_third_deadline = third_deadline + Duration::from_millis(1);
+
+        assert_eq!(
+            next_stream_frame_deadline(deadline, finished_after_third_deadline),
+            third_deadline + STREAM_CAPTURE_FRAME_INTERVAL
         );
     }
 
@@ -795,10 +1115,7 @@ mod tests {
         assert_eq!(stream_rtp_timestamp(Duration::from_secs(1)), 90_000);
     }
 
-    fn rgba_pixel(buffer: &[u8], x: u32, y: u32) -> [u8; 4] {
-        let start = ((y * STREAM_CAPTURE_WIDTH + x) * 4) as usize;
-        buffer[start..start + 4]
-            .try_into()
-            .expect("RGBA pixel has four channels")
+    fn luma_pixel(processor: &StreamFrameProcessor, x: u32, y: u32) -> u8 {
+        processor.yuv.y_plane.borrow()[(y * processor.yuv.y_stride + x) as usize]
     }
 }

@@ -4,7 +4,7 @@ use std::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicU32, Ordering},
     },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 use futures::{SinkExt, StreamExt};
@@ -14,11 +14,14 @@ use tokio::{
     net::UdpSocket,
     sync::{Mutex, mpsc, oneshot},
     task::JoinHandle,
-    time::{Instant as TokioInstant, sleep_until, timeout},
+    time::{Instant as TokioInstant, sleep, sleep_until, timeout},
 };
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 use uuid::Uuid;
 
+use super::media::{
+    GatewayChildTasks, build_rtcp_sender_report, current_unix_time, packetize_h264_payloads,
+};
 use super::runtime::MAX_VOICE_RECONNECT_ATTEMPTS;
 use super::{
     DISCORD_OPUS_FRAME_DURATION, DISCORD_OPUS_TIMESTAMP_INCREMENT,
@@ -35,6 +38,7 @@ use super::{
     dave::VoiceDaveOutboundPayload,
     gateway,
     opus::VoiceOpusEncode,
+    preview::{StreamPreviewFrame, StreamPreviewUploader},
     rtp::{
         VoiceRtpDecryptor, VoiceRtpEncryptor, build_voice_rtp_packet_with_marker,
         looks_like_rtcp_packet, parse_rtp_header,
@@ -59,6 +63,7 @@ const RTP_EXTENSION_TRANSPORT_SEQUENCE: u8 = 5;
 const RTP_EXTENSION_PLAYOUT_DELAY: u8 = 6;
 const RTP_EXTENSION_VIDEO_CONTENT_TYPE: u8 = 7;
 const RTP_EXTENSION_RID: u8 = 11;
+const RTP_EXTENSION_REPAIRED_RID: u8 = 12;
 const VIDEO_CONTENT_TYPE_SCREEN: u8 = 1;
 const RTCP_SENDER_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 const BROADCAST_SEND_STATS_INTERVAL: Duration = Duration::from_secs(5);
@@ -68,6 +73,9 @@ const STREAM_RTP_HISTORY_CAPACITY: usize = 2_048;
 const STREAM_RTX_MAX_RETRANSMISSIONS_PER_FEEDBACK: usize = 128;
 const STREAM_UDP_RECEIVE_PACKET_BYTES: usize = 2_048;
 const SOUNDSHARE_SPEAKING_FLAG: u8 = 2;
+const STREAM_BROADCAST_CONNECTION_STABLE_INTERVAL: Duration = Duration::from_secs(10);
+const STREAM_BROADCAST_RECONNECT_BASE_DELAY: Duration = Duration::from_millis(250);
+const STREAM_BROADCAST_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Eq, PartialEq)]
 pub(super) struct StreamBroadcastGatewaySession {
@@ -79,6 +87,7 @@ pub(super) struct StreamBroadcastGatewaySession {
     pub(super) rtc_channel_id: Id<ChannelMarker>,
     pub(super) endpoint: String,
     pub(super) token: String,
+    reconnect_delay: Duration,
 }
 
 impl std::fmt::Debug for StreamBroadcastGatewaySession {
@@ -91,72 +100,37 @@ impl std::fmt::Debug for StreamBroadcastGatewaySession {
             .field("rtc_server_id", &self.rtc_server_id)
             .field("rtc_channel_id", &self.rtc_channel_id)
             .field("endpoint", &self.endpoint)
+            .field("reconnect_delay", &self.reconnect_delay)
             .field("token", &"<redacted>")
             .finish()
     }
 }
 
-#[derive(Default)]
-struct BroadcastChildTasks {
-    heartbeat: Option<JoinHandle<()>>,
-    keepalive: Option<JoinHandle<()>>,
-    media: Option<JoinHandle<()>>,
+#[derive(Debug, Eq, PartialEq)]
+struct BroadcastConnectionFailure {
+    message: String,
+    outcome: VoiceConnectionEnd,
 }
 
-impl BroadcastChildTasks {
-    async fn replace_heartbeat(&mut self, task: JoinHandle<()>) {
-        Self::replace(&mut self.heartbeat, task).await;
-    }
-
-    async fn replace_keepalive(&mut self, task: JoinHandle<()>) {
-        Self::replace(&mut self.keepalive, task).await;
-    }
-
-    async fn replace_media(&mut self, task: JoinHandle<()>) {
-        Self::replace(&mut self.media, task).await;
-    }
-
-    async fn replace(slot: &mut Option<JoinHandle<()>>, task: JoinHandle<()>) {
-        if let Some(previous) = slot.take() {
-            previous.abort();
-            let _ = previous.await;
-        }
-        *slot = Some(task);
-    }
-
-    async fn shutdown(&mut self) {
-        let tasks = [
-            self.heartbeat.take(),
-            self.keepalive.take(),
-            self.media.take(),
-        ];
-        for task in tasks.iter().flatten() {
-            task.abort();
-        }
-        for task in tasks.into_iter().flatten() {
-            let _ = task.await;
+impl BroadcastConnectionFailure {
+    fn reconnect(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            outcome: VoiceConnectionEnd::Reconnect,
         }
     }
 
-    fn abort_all(&mut self) {
-        for task in [
-            self.heartbeat.take(),
-            self.keepalive.take(),
-            self.media.take(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            task.abort();
+    fn stop(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            outcome: VoiceConnectionEnd::Stop,
         }
     }
 }
 
-impl Drop for BroadcastChildTasks {
-    fn drop(&mut self) {
-        // Normal shutdown awaits every child. This fallback also stops children
-        // if the parent broadcast future itself is forcefully cancelled.
-        self.abort_all();
+impl From<String> for BroadcastConnectionFailure {
+    fn from(message: String) -> Self {
+        Self::reconnect(message)
     }
 }
 
@@ -198,7 +172,7 @@ impl StreamBroadcastRuntimeState {
                 if self
                     .requested
                     .as_ref()
-                    .is_some_and(|current| current.stream_key != request.stream_key)
+                    .is_none_or(|current| current.stream_key != request.stream_key)
                 {
                     update.broadcast_ended = self.requested.take();
                     update.close_stream_key =
@@ -260,7 +234,8 @@ impl StreamBroadcastRuntimeState {
                 }
                 self.clear_matching(&stream.stream_key, &mut update, false);
             }
-            VoiceRuntimeEvent::BroadcastStreamConnectionEstablished {
+            VoiceRuntimeEvent::BroadcastStreamConnectionEstablished { .. } => {}
+            VoiceRuntimeEvent::BroadcastStreamConnectionStable {
                 connection_id,
                 stream_key,
             } => {
@@ -438,26 +413,72 @@ impl StreamBroadcastRuntimeState {
             rtc_channel_id: create.rtc_channel_id,
             endpoint,
             token: server.token.clone(),
+            reconnect_delay: broadcast_reconnect_delay(self.reconnect_attempts),
         };
         self.active = Some(session.clone());
         Some(session)
     }
 }
 
+fn broadcast_reconnect_delay(reconnect_attempts: u8) -> Duration {
+    if reconnect_attempts <= 1 {
+        return Duration::ZERO;
+    }
+    let multiplier = 1u32 << u32::from(reconnect_attempts.saturating_sub(2).min(3));
+    let base_delay = STREAM_BROADCAST_RECONNECT_BASE_DELAY
+        .saturating_mul(multiplier)
+        .min(STREAM_BROADCAST_RECONNECT_MAX_DELAY);
+    let jitter_limit_millis =
+        u64::try_from((base_delay / 4).as_millis()).expect("bounded retry jitter fits u64");
+    let jitter = Duration::from_millis(random::<u64>() % (jitter_limit_millis + 1));
+    base_delay
+        .saturating_add(jitter)
+        .min(STREAM_BROADCAST_RECONNECT_MAX_DELAY)
+}
+
 pub(super) async fn run_stream_broadcast_session(
     session: StreamBroadcastGatewaySession,
     events_tx: mpsc::UnboundedSender<VoiceRuntimeEvent>,
     status_publisher: VoiceStatusPublisher,
-    stop_rx: oneshot::Receiver<()>,
+    stream_preview_uploader: StreamPreviewUploader,
+    mut stop_rx: oneshot::Receiver<()>,
 ) {
-    let outcome = match connect_stream_broadcast(&session, &events_tx, stop_rx).await {
+    if !session.reconnect_delay.is_zero() {
+        logging::debug(
+            "stream",
+            format!(
+                "waiting {:?} before reconnecting stream broadcast",
+                session.reconnect_delay
+            ),
+        );
+        let stopped = tokio::select! {
+            _ = sleep(session.reconnect_delay) => false,
+            _ = &mut stop_rx => true,
+        };
+        if stopped {
+            let _ = events_tx.send(VoiceRuntimeEvent::BroadcastStreamConnectionEnded {
+                connection_id: session.connection_id,
+                stream_key: session.request.stream_key.clone(),
+                outcome: VoiceConnectionEnd::Stop,
+            });
+            return;
+        }
+    }
+    let outcome = match connect_stream_broadcast(
+        &session,
+        &events_tx,
+        stream_preview_uploader,
+        stop_rx,
+    )
+    .await
+    {
         Ok(outcome) => outcome,
         Err(error) => {
-            logging::error("stream", &error);
+            logging::error("stream", &error.message);
             status_publisher
-                .publish_error(format!("Could not broadcast stream: {error}"))
+                .publish_error(format!("Could not broadcast stream: {}", error.message))
                 .await;
-            VoiceConnectionEnd::Stop
+            error.outcome
         }
     };
     let _ = events_tx.send(VoiceRuntimeEvent::BroadcastStreamConnectionEnded {
@@ -470,8 +491,9 @@ pub(super) async fn run_stream_broadcast_session(
 async fn connect_stream_broadcast(
     session: &StreamBroadcastGatewaySession,
     events_tx: &mpsc::UnboundedSender<VoiceRuntimeEvent>,
+    stream_preview_uploader: StreamPreviewUploader,
     mut stop_rx: oneshot::Receiver<()>,
-) -> Result<VoiceConnectionEnd, String> {
+) -> Result<VoiceConnectionEnd, BroadcastConnectionFailure> {
     let url = gateway::voice_gateway_url(&session.endpoint)?;
     logging::debug("stream", format!("connecting broadcast websocket: {url}"));
     let (ws, response) = timeout(VOICE_WEBSOCKET_CONNECT_TIMEOUT, connect_async(&url))
@@ -492,8 +514,9 @@ async fn connect_stream_broadcast(
     let (heartbeat_timeout_tx, mut heartbeat_timeout_rx) =
         mpsc::unbounded_channel::<VoiceHeartbeatTimeout>();
     let (media_finished_tx, mut media_finished_rx) =
-        mpsc::unbounded_channel::<Result<(), String>>();
-    let mut child_tasks = BroadcastChildTasks::default();
+        mpsc::unbounded_channel::<(u64, Result<(), BroadcastConnectionFailure>)>();
+    let mut child_tasks = GatewayChildTasks::default();
+    let mut media_generation = 0u64;
     let dave_group_id = session
         .rtc_server_id
         .parse::<u64>()
@@ -512,7 +535,7 @@ async fn connect_stream_broadcast(
     gateway::send_voice_text(&writer, stream_broadcast_identify_payload(session)).await?;
     logging::debug("stream", "broadcast identify sent");
 
-    let result = loop {
+    let result: Result<VoiceConnectionEnd, BroadcastConnectionFailure> = loop {
         let frame = tokio::select! {
             _ = &mut stop_rx => {
                 break Ok(VoiceConnectionEnd::Stop);
@@ -520,10 +543,21 @@ async fn connect_stream_broadcast(
             _ = heartbeat_timeout_rx.recv() => {
                 break Ok(VoiceConnectionEnd::Reconnect);
             }
-            media_result = media_finished_rx.recv(), if child_tasks.media.is_some() => {
+            media_result = media_finished_rx.recv(), if child_tasks.has_media() => {
                 match media_result {
-                    Some(Ok(())) => break Ok(VoiceConnectionEnd::Stop),
-                    Some(Err(error)) => break Err(error),
+                    Some((generation, result)) => {
+                        let Some(result) = broadcast_media_result_for_generation(
+                            media_generation,
+                            generation,
+                            result,
+                        ) else {
+                            continue;
+                        };
+                        match result {
+                            Ok(()) => break Ok(VoiceConnectionEnd::Stop),
+                            Err(error) => break Err(error),
+                        }
+                    }
                     None => break Ok(VoiceConnectionEnd::Reconnect),
                 }
             }
@@ -580,10 +614,10 @@ async fn connect_stream_broadcast(
                             .as_deref()
                             .is_some_and(|codec| !codec.eq_ignore_ascii_case("H264"))
                         {
-                            break Err(format!(
+                            break Err(BroadcastConnectionFailure::stop(format!(
                                 "stream selected unsupported video codec: {}",
                                 description.video_codec.as_deref().unwrap_or("none")
-                            ));
+                            )));
                         }
                         if let Some(version) = description.dave_protocol_version {
                             let version = u16::try_from(version)
@@ -612,22 +646,29 @@ async fn connect_stream_broadcast(
                         let stream_key = session.request.stream_key.clone();
                         let connection_id = session.connection_id;
                         let media_description = description.clone();
+                        let preview_uploader = stream_preview_uploader.clone();
+                        media_generation = media_generation.wrapping_add(1).max(1);
+                        let generation = media_generation;
+                        let (media_stop_tx, media_stop_rx) = oneshot::channel();
+                        let media_task = tokio::spawn(async move {
+                            let result = run_stream_broadcast_media(
+                                socket,
+                                media_description,
+                                dave_for_media,
+                                target,
+                                audio_ssrc,
+                                video,
+                                events_for_media,
+                                connection_id,
+                                stream_key,
+                                preview_uploader,
+                                media_stop_rx,
+                            )
+                            .await;
+                            let _ = finished.send((generation, result));
+                        });
                         child_tasks
-                            .replace_media(tokio::spawn(async move {
-                                let result = run_stream_broadcast_media(
-                                    socket,
-                                    media_description,
-                                    dave_for_media,
-                                    target,
-                                    audio_ssrc,
-                                    video,
-                                    events_for_media,
-                                    connection_id,
-                                    stream_key,
-                                )
-                                .await;
-                                let _ = finished.send(result);
-                            }))
+                            .replace_media_gracefully(media_task, media_stop_tx)
                             .await;
                         child_tasks
                             .replace_keepalive(tokio::spawn(gateway::run_voice_udp_keepalive(
@@ -721,6 +762,14 @@ async fn connect_stream_broadcast(
 
     child_tasks.shutdown().await;
     result
+}
+
+fn broadcast_media_result_for_generation(
+    current_generation: u64,
+    result_generation: u64,
+    result: Result<(), BroadcastConnectionFailure>,
+) -> Option<Result<(), BroadcastConnectionFailure>> {
+    (current_generation == result_generation).then_some(result)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -910,12 +959,13 @@ impl BroadcastRtpHistory {
         Ok(())
     }
 
-    fn get(&self, sequence: u16) -> Option<Vec<u8>> {
+    fn get(&self, sequence: u16) -> Option<&[u8]> {
+        let (base_sequence, _) = self.packets.front()?;
+        let offset = usize::from(sequence.wrapping_sub(*base_sequence));
         self.packets
-            .iter()
-            .rev()
-            .find(|(stored_sequence, _)| *stored_sequence == sequence)
-            .map(|(_, packet)| packet.clone())
+            .get(offset)
+            .filter(|(stored_sequence, _)| *stored_sequence == sequence)
+            .map(|(_, packet)| packet.as_slice())
     }
 }
 
@@ -1157,6 +1207,7 @@ impl BroadcastAudioTransport {
 
         let sender_report = build_rtcp_sender_report(
             self.audio_ssrc,
+            current_unix_time(),
             self.timestamp,
             self.sent_packets,
             self.sent_octets,
@@ -1266,18 +1317,14 @@ impl BroadcastVideoTransport {
             return Ok(false);
         }
 
-        let decrypted = if is_plain_rtcp_compound_packet(packet) {
-            packet.to_vec()
-        } else {
-            match self.decryptor.decrypt_rtcp_feedback(packet) {
-                Ok(decrypted) => decrypted,
-                Err(error) => {
-                    logging::debug(
-                        "stream",
-                        format!("ignoring invalid broadcast RTCP packet: {error}"),
-                    );
-                    return Ok(false);
-                }
+        let decrypted = match self.decryptor.decrypt_rtcp_feedback(packet) {
+            Ok(decrypted) => decrypted,
+            Err(error) => {
+                logging::debug(
+                    "stream",
+                    format!("ignoring invalid broadcast RTCP packet: {error}"),
+                );
+                return Ok(false);
             }
         };
         let feedback = match parse_broadcast_rtcp_feedback(&decrypted, self.video.video_ssrc) {
@@ -1329,7 +1376,7 @@ impl BroadcastVideoTransport {
                 continue;
             };
             let rtx_packet = build_discord_video_rtx_packet(
-                &original,
+                original,
                 self.video.rtx_ssrc,
                 self.rtx_sequence,
                 self.transport_sequence,
@@ -1382,6 +1429,7 @@ impl BroadcastVideoTransport {
 
         let sender_report = build_rtcp_sender_report(
             self.video.video_ssrc,
+            current_unix_time(),
             timestamp,
             self.video_sent_packets,
             self.video_sent_octets,
@@ -1415,10 +1463,12 @@ impl BroadcastAudioTask {
         let capture = match system_audio::start_system_audio_capture(frames_tx) {
             Ok(capture) => capture,
             Err(error) => {
-                logging::error(
-                    "stream",
-                    format!("system audio unavailable, continuing video-only: {error}"),
-                );
+                let message = format!("system audio unavailable, continuing video-only: {error}");
+                if error.is_unavailable() {
+                    logging::debug("stream", message);
+                } else {
+                    logging::error("stream", message);
+                }
                 return Self::default();
             }
         };
@@ -1530,10 +1580,19 @@ async fn run_stream_broadcast_media(
     events_tx: mpsc::UnboundedSender<VoiceRuntimeEvent>,
     connection_id: u64,
     stream_key: String,
-) -> Result<(), String> {
+    stream_preview_uploader: StreamPreviewUploader,
+    mut stop_rx: oneshot::Receiver<()>,
+) -> Result<(), BroadcastConnectionFailure> {
     let (frames_tx, mut frames_rx) = mpsc::channel(2);
-    let capture = capture::start_stream_capture(target, frames_tx)?;
-    let packet_encryptor = Arc::new(BroadcastPacketEncryptor::new(&description)?);
+    let (preview_frames_tx, preview_frames_rx) = mpsc::channel::<StreamPreviewFrame>(1);
+    let (capture_errors_tx, mut capture_errors_rx) = mpsc::unbounded_channel();
+    let capture =
+        capture::start_stream_capture(target, frames_tx, preview_frames_tx, capture_errors_tx)
+            .map_err(BroadcastConnectionFailure::stop)?;
+    let preview_task = stream_preview_uploader.start(stream_key.clone(), preview_frames_rx);
+    let packet_encryptor = Arc::new(
+        BroadcastPacketEncryptor::new(&description).map_err(BroadcastConnectionFailure::stop)?,
+    );
     let stats = Arc::new(StdMutex::new(BroadcastSendStats::new()));
     let mut audio_task = BroadcastAudioTask::start(
         Arc::clone(&socket),
@@ -1543,24 +1602,42 @@ async fn run_stream_broadcast_media(
         Arc::clone(&stats),
     );
     let mut transport =
-        BroadcastVideoTransport::new(&description, video, packet_encryptor, Arc::clone(&stats))?;
+        BroadcastVideoTransport::new(&description, video, packet_encryptor, Arc::clone(&stats))
+            .map_err(BroadcastConnectionFailure::stop)?;
     let mut received_packet = vec![0u8; STREAM_UDP_RECEIVE_PACKET_BYTES];
     // Capture and both media transports are ready at this point. Do not wait
     // for the first video frame to pass DAVE because it can hold outbound media
     // until another participant joins the encrypted session.
     let _ = events_tx.send(VoiceRuntimeEvent::BroadcastStreamConnectionEstablished {
         connection_id,
-        stream_key,
+        stream_key: stream_key.clone(),
     });
+    let mut stable_deadline: Option<TokioInstant> = None;
+    let mut stable = false;
 
     let result = async {
         loop {
             tokio::select! {
+                _ = &mut stop_rx => return Ok(()),
+                _ = sleep_until(stable_deadline.unwrap_or_else(TokioInstant::now)),
+                    if stable_deadline.is_some() =>
+                {
+                    stable_deadline = None;
+                    stable = true;
+                    let _ = events_tx.send(VoiceRuntimeEvent::BroadcastStreamConnectionStable {
+                        connection_id,
+                        stream_key: stream_key.clone(),
+                    });
+                }
                 frame = frames_rx.recv() => {
                     let Some(frame) = frame else {
                         return Ok(());
                     };
-                    let frame = frame?;
+                    let frame = frame.map_err(BroadcastConnectionFailure::stop)?;
+                    if !stable && stable_deadline.is_none() {
+                        stable_deadline =
+                            Some(TokioInstant::now() + STREAM_BROADCAST_CONNECTION_STABLE_INTERVAL);
+                    }
                     let dave_payload = dave_state
                         .lock()
                         .await
@@ -1584,6 +1661,12 @@ async fn run_stream_broadcast_media(
                         )
                         .await?;
                 }
+                error = capture_errors_rx.recv() => {
+                    return match error {
+                        Some(error) => Err(BroadcastConnectionFailure::stop(error)),
+                        None => Ok(()),
+                    };
+                }
                 received = socket.recv(&mut received_packet) => {
                     let length = received
                         .map_err(|error| format!("broadcast UDP receive failed: {error}"))?;
@@ -1599,35 +1682,10 @@ async fn run_stream_broadcast_media(
     }
     .await;
 
+    preview_task.shutdown().await;
+    capture.shutdown().await;
     audio_task.shutdown().await;
     result
-}
-
-fn build_rtcp_sender_report(
-    ssrc: u32,
-    rtp_timestamp: u32,
-    packet_count: u32,
-    octet_count: u32,
-) -> Vec<u8> {
-    const NTP_UNIX_EPOCH_OFFSET_SECONDS: u64 = 2_208_988_800;
-    let elapsed = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let ntp_seconds = elapsed
-        .as_secs()
-        .wrapping_add(NTP_UNIX_EPOCH_OFFSET_SECONDS) as u32;
-    let ntp_fraction = ((u64::from(elapsed.subsec_nanos())) << 32) / 1_000_000_000;
-
-    let mut packet = Vec::with_capacity(28);
-    packet.extend_from_slice(&[RTP_VERSION << 6, 200]);
-    packet.extend_from_slice(&6u16.to_be_bytes());
-    packet.extend_from_slice(&ssrc.to_be_bytes());
-    packet.extend_from_slice(&ntp_seconds.to_be_bytes());
-    packet.extend_from_slice(&(ntp_fraction as u32).to_be_bytes());
-    packet.extend_from_slice(&rtp_timestamp.to_be_bytes());
-    packet.extend_from_slice(&packet_count.to_be_bytes());
-    packet.extend_from_slice(&octet_count.to_be_bytes());
-    packet
 }
 
 fn broadcast_audio_elapsed_frames(previous: Option<Instant>, captured_at: Instant) -> u32 {
@@ -1656,17 +1714,6 @@ fn receiver_report_has_new_loss(
 ) -> bool {
     let previous = previous.insert(reporter_ssrc, current);
     current > 0 && previous.is_none_or(|previous| current > previous)
-}
-
-fn is_plain_rtcp_compound_packet(packet: &[u8]) -> bool {
-    let mut offset = 0usize;
-    while offset < packet.len() {
-        let Ok(packet_len) = rtcp_packet_len(&packet[offset..]) else {
-            return false;
-        };
-        offset = offset.saturating_add(packet_len);
-    }
-    offset == packet.len()
 }
 
 fn parse_broadcast_rtcp_feedback(
@@ -1817,31 +1864,7 @@ fn packetize_discord_h264_frame(
     sequence: &mut u16,
     transport_sequence: &mut u16,
 ) -> Vec<Vec<u8>> {
-    let mut payloads = Vec::new();
-    for nal in annex_b_nals(frame) {
-        if nal.len() <= STREAM_RTP_MAX_PAYLOAD_BYTES {
-            payloads.push(nal.to_vec());
-            continue;
-        }
-        let Some((&nal_header, body)) = nal.split_first() else {
-            continue;
-        };
-        let fu_indicator = (nal_header & 0xe0) | 28;
-        let nal_type = nal_header & 0x1f;
-        let chunks = body.chunks(STREAM_RTP_MAX_PAYLOAD_BYTES - 2);
-        let chunk_count = chunks.len();
-        for (index, chunk) in chunks.enumerate() {
-            let mut payload = Vec::with_capacity(chunk.len() + 2);
-            payload.push(fu_indicator);
-            payload.push(
-                nal_type
-                    | if index == 0 { 0x80 } else { 0 }
-                    | if index + 1 == chunk_count { 0x40 } else { 0 },
-            );
-            payload.extend_from_slice(chunk);
-            payloads.push(payload);
-        }
-    }
+    let payloads = packetize_h264_payloads(frame, STREAM_RTP_MAX_PAYLOAD_BYTES);
     let payload_count = payloads.len();
     payloads
         .into_iter()
@@ -1877,6 +1900,7 @@ fn build_discord_video_rtp_packet(
         marker,
         transport_sequence,
         DISCORD_STREAM_VIDEO_PAYLOAD_TYPE,
+        RTP_EXTENSION_RID,
         payload,
     )
 }
@@ -1901,6 +1925,7 @@ fn build_discord_video_rtx_packet(
         header.marker,
         transport_sequence,
         DISCORD_STREAM_VIDEO_RTX_PAYLOAD_TYPE,
+        RTP_EXTENSION_REPAIRED_RID,
         &rtx_payload,
     ))
 }
@@ -1913,6 +1938,7 @@ fn build_discord_video_rtp_packet_with_payload_type(
     marker: bool,
     transport_sequence: u16,
     payload_type: u8,
+    rid_extension: u8,
     payload: &[u8],
 ) -> Vec<u8> {
     let mut extensions = Vec::with_capacity(16);
@@ -1927,7 +1953,7 @@ fn build_discord_video_rtp_packet_with_payload_type(
         RTP_EXTENSION_VIDEO_CONTENT_TYPE,
         &[VIDEO_CONTENT_TYPE_SCREEN],
     );
-    push_one_byte_extension(&mut extensions, RTP_EXTENSION_RID, STREAM_RID.as_bytes());
+    push_one_byte_extension(&mut extensions, rid_extension, STREAM_RID.as_bytes());
     while extensions.len() % 4 != 0 {
         extensions.push(0);
     }
@@ -1954,38 +1980,6 @@ fn push_one_byte_extension(output: &mut Vec<u8>, id: u8, value: &[u8]) {
     debug_assert!((1..=16).contains(&value.len()));
     output.push((id << 4) | (u8::try_from(value.len()).expect("extension length fits u8") - 1));
     output.extend_from_slice(value);
-}
-
-fn annex_b_nals(frame: &[u8]) -> Vec<&[u8]> {
-    let mut starts = Vec::new();
-    let mut index = 0usize;
-    while index + 3 <= frame.len() {
-        let start_len = if frame.get(index..index + 4) == Some(&[0, 0, 0, 1]) {
-            4
-        } else if frame.get(index..index + 3) == Some(&[0, 0, 1]) {
-            3
-        } else {
-            index += 1;
-            continue;
-        };
-        starts.push((index, start_len));
-        index += start_len;
-    }
-    if starts.is_empty() {
-        return (!frame.is_empty()).then_some(frame).into_iter().collect();
-    }
-    starts
-        .iter()
-        .enumerate()
-        .filter_map(|(position, (start, start_len))| {
-            let nal_start = start + start_len;
-            let nal_end = starts
-                .get(position + 1)
-                .map(|(next, _)| *next)
-                .unwrap_or(frame.len());
-            (nal_start < nal_end).then_some(&frame[nal_start..nal_end])
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -2022,6 +2016,7 @@ mod tests {
             rtc_channel_id: Id::new(20),
             endpoint: "streams.example".to_owned(),
             token: "token".to_owned(),
+            reconnect_delay: Duration::ZERO,
         }
     }
 
@@ -2033,6 +2028,17 @@ mod tests {
 
         assert!(!debug.contains("broadcast-secret-token"));
         assert!(debug.contains("<redacted>"));
+    }
+
+    #[test]
+    fn broadcast_failure_classifies_transport_as_reconnect_and_local_media_as_stop() {
+        let transport =
+            BroadcastConnectionFailure::from("broadcast websocket connection failed".to_owned());
+        let local_media =
+            BroadcastConnectionFailure::stop("start stream capture failed".to_owned());
+
+        assert_eq!(transport.outcome, VoiceConnectionEnd::Reconnect);
+        assert_eq!(local_media.outcome, VoiceConnectionEnd::Stop);
     }
 
     fn connected_broadcast_runtime() -> (StreamBroadcastRuntimeState, StreamBroadcastGatewaySession)
@@ -2110,7 +2116,7 @@ mod tests {
         started_rx
             .await
             .expect("test broadcast child task should start");
-        let mut tasks = BroadcastChildTasks::default();
+        let mut tasks = GatewayChildTasks::default();
         tasks.replace_media(task).await;
 
         drop(tasks);
@@ -2119,6 +2125,36 @@ mod tests {
             .await
             .expect("broadcast child task should stop")
             .expect("broadcast child task should report cleanup");
+    }
+
+    #[tokio::test]
+    async fn broadcast_child_tasks_await_graceful_media_cleanup() {
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let (cleaned_tx, cleaned_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _ = stop_rx.await;
+            let _ = cleaned_tx.send(());
+        });
+        let mut tasks = GatewayChildTasks::default();
+        tasks.replace_media_gracefully(task, stop_tx).await;
+
+        tasks.shutdown().await;
+
+        cleaned_rx
+            .await
+            .expect("graceful media task should finish cleanup");
+    }
+
+    #[test]
+    fn broadcast_media_replacement_ignores_previous_cleanup_result() {
+        assert!(
+            broadcast_media_result_for_generation(2, 1, Ok(())).is_none(),
+            "a replaced media task must not stop its replacement"
+        );
+        assert_eq!(
+            broadcast_media_result_for_generation(2, 2, Ok(())),
+            Some(Ok(()))
+        );
     }
 
     #[tokio::test]
@@ -2214,6 +2250,25 @@ mod tests {
     }
 
     #[test]
+    fn broadcast_request_repairs_an_orphaned_active_session() {
+        let active = session();
+        let mut state = StreamBroadcastRuntimeState {
+            active: Some(active.clone()),
+            ..StreamBroadcastRuntimeState::default()
+        };
+
+        let update = state.apply(&VoiceRuntimeEvent::BroadcastStreamRequested(request()));
+
+        assert_eq!(
+            update.close_stream_key.as_deref(),
+            Some(active.request.stream_key.as_str())
+        );
+        assert!(update.send_delete);
+        assert!(state.active.is_none());
+        assert_eq!(state.requested, Some(request()));
+    }
+
+    #[test]
     fn broadcast_runtime_rotates_active_stream_servers() {
         let (mut state, initial) = connected_broadcast_runtime();
 
@@ -2278,6 +2333,10 @@ mod tests {
         let (mut state, mut active) = connected_broadcast_runtime();
 
         for attempt in 1..=MAX_VOICE_RECONNECT_ATTEMPTS {
+            state.apply(&VoiceRuntimeEvent::BroadcastStreamConnectionEstablished {
+                connection_id: active.connection_id,
+                stream_key: active.request.stream_key.clone(),
+            });
             let update = state.apply(&broadcast_connection_ended(
                 &active,
                 VoiceConnectionEnd::Reconnect,
@@ -2291,6 +2350,10 @@ mod tests {
                 .expect("retry within the limit should reconnect broadcast");
         }
 
+        state.apply(&VoiceRuntimeEvent::BroadcastStreamConnectionEstablished {
+            connection_id: active.connection_id,
+            stream_key: active.request.stream_key.clone(),
+        });
         let stopped = state.apply(&broadcast_connection_ended(
             &active,
             VoiceConnectionEnd::Reconnect,
@@ -2301,6 +2364,57 @@ mod tests {
             Some(active.request.stream_key.as_str())
         );
         assert!(stopped.send_delete);
+    }
+
+    #[test]
+    fn broadcast_runtime_resets_reconnect_budget_only_after_stable_connection() {
+        let (mut state, initial) = connected_broadcast_runtime();
+        let retry = state
+            .apply(&broadcast_connection_ended(
+                &initial,
+                VoiceConnectionEnd::Reconnect,
+            ))
+            .connect
+            .expect("first failure should reconnect");
+        assert_eq!(state.reconnect_attempts, 1);
+
+        state.apply(&VoiceRuntimeEvent::BroadcastStreamConnectionStable {
+            connection_id: initial.connection_id,
+            stream_key: initial.request.stream_key,
+        });
+        assert_eq!(
+            state.reconnect_attempts, 1,
+            "a stale connection must not reset the active retry budget"
+        );
+
+        state.apply(&VoiceRuntimeEvent::BroadcastStreamConnectionEstablished {
+            connection_id: retry.connection_id,
+            stream_key: retry.request.stream_key.clone(),
+        });
+        assert_eq!(
+            state.reconnect_attempts, 1,
+            "initial media setup must not reset the retry budget"
+        );
+
+        state.apply(&VoiceRuntimeEvent::BroadcastStreamConnectionStable {
+            connection_id: retry.connection_id,
+            stream_key: retry.request.stream_key,
+        });
+        assert_eq!(state.reconnect_attempts, 0);
+    }
+
+    #[test]
+    fn broadcast_reconnect_backoff_keeps_the_first_retry_immediate() {
+        assert_eq!(broadcast_reconnect_delay(0), Duration::ZERO);
+        assert_eq!(broadcast_reconnect_delay(1), Duration::ZERO);
+
+        let second_retry = broadcast_reconnect_delay(2);
+        assert!(second_retry >= Duration::from_millis(250));
+        assert!(second_retry <= Duration::from_millis(312));
+
+        let third_retry = broadcast_reconnect_delay(3);
+        assert!(third_retry >= Duration::from_millis(500));
+        assert!(third_retry <= Duration::from_millis(625));
     }
 
     #[test]
@@ -2557,7 +2671,8 @@ mod tests {
 
     #[test]
     fn sender_report_maps_video_clock_and_counters() {
-        let packet = build_rtcp_sender_report(42, 90_000, 12, 34_567);
+        let packet =
+            build_rtcp_sender_report(42, Duration::from_secs(1_700_000_000), 90_000, 12, 34_567);
         assert_eq!(packet.len(), 28);
         assert_eq!(&packet[..4], &[0x80, 200, 0, 6]);
         assert_eq!(
@@ -2575,6 +2690,63 @@ mod tests {
         assert_eq!(
             u32::from_be_bytes(packet[24..28].try_into().expect("octet count")),
             34_567
+        );
+    }
+
+    #[test]
+    fn broadcast_rtp_history_indexes_across_wrap_and_evicts_old_packets() {
+        let mut history = BroadcastRtpHistory::new();
+        let start = u16::MAX - 1;
+        for offset in 0..=3 {
+            let sequence = start.wrapping_add(offset);
+            history
+                .remember(
+                    build_voice_rtp_packet_with_marker(
+                        sequence,
+                        90_000,
+                        42,
+                        false,
+                        &[offset as u8],
+                    )
+                    .expect("test RTP packet should build"),
+                )
+                .expect("test RTP packet should enter history");
+        }
+
+        for offset in 0..=3 {
+            let sequence = start.wrapping_add(offset);
+            let packet = history
+                .get(sequence)
+                .expect("wrapped sequence should remain addressable");
+            assert_eq!(
+                parse_rtp_header(packet)
+                    .expect("history packet should remain valid")
+                    .sequence,
+                sequence
+            );
+        }
+
+        for offset in 4..STREAM_RTP_HISTORY_CAPACITY + 4 {
+            let sequence = start.wrapping_add(offset as u16);
+            history
+                .remember(
+                    build_voice_rtp_packet_with_marker(
+                        sequence,
+                        90_000,
+                        42,
+                        false,
+                        &[offset as u8],
+                    )
+                    .expect("test RTP packet should build"),
+                )
+                .expect("test RTP packet should enter history");
+        }
+
+        assert!(history.get(start).is_none());
+        assert!(
+            history
+                .get(start.wrapping_add((STREAM_RTP_HISTORY_CAPACITY + 3) as u16))
+                .is_some()
         );
     }
 
@@ -2619,6 +2791,49 @@ mod tests {
         let total_pacing = large_frame_interval * (packet_count as u32 - 1);
         assert!(total_pacing <= STREAM_RTP_PACING_BUDGET);
         assert!(total_pacing >= STREAM_RTP_PACING_BUDGET - Duration::from_millis(1));
+    }
+
+    #[tokio::test]
+    async fn broadcast_rtcp_feedback_requires_transport_authentication() {
+        let description = voice_description();
+        let packet_encryptor =
+            Arc::new(BroadcastPacketEncryptor::new(&description).expect("encryptor should build"));
+        let stats = Arc::new(StdMutex::new(BroadcastSendStats::new()));
+        let mut transport = BroadcastVideoTransport::new(
+            &description,
+            BroadcastVideoSsrcs {
+                video_ssrc: 42,
+                rtx_ssrc: 43,
+            },
+            Arc::clone(&packet_encryptor),
+            stats,
+        )
+        .expect("video transport should build");
+        let socket = UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("test RTCP socket should bind");
+        let mut pli = vec![0x81, 206, 0, 2];
+        pli.extend_from_slice(&7u32.to_be_bytes());
+        pli.extend_from_slice(&42u32.to_be_bytes());
+
+        assert!(
+            !transport
+                .handle_udp_packet(&socket, &pli)
+                .await
+                .expect("plaintext RTCP should be ignored"),
+            "plaintext RTCP must not request a keyframe"
+        );
+
+        let encrypted = packet_encryptor
+            .encrypt_rtcp_packet(&pli, "test RTCP")
+            .expect("test RTCP should encrypt");
+        assert!(
+            transport
+                .handle_udp_packet(&socket, &encrypted)
+                .await
+                .expect("authenticated RTCP should be accepted"),
+            "authenticated PLI should request a keyframe"
+        );
     }
 
     #[test]
@@ -2680,6 +2895,28 @@ mod tests {
         ));
     }
 
+    fn one_byte_rtp_extension(packet: &[u8], wanted_id: u8) -> Option<&[u8]> {
+        let header = parse_rtp_header(packet).ok()?;
+        let mut extensions = packet.get(header.authenticated_header_len..header.payload_offset)?;
+        while let Some((&descriptor, remaining)) = extensions.split_first() {
+            if descriptor == 0 {
+                extensions = remaining;
+                continue;
+            }
+            let extension_id = descriptor >> 4;
+            if extension_id == 15 {
+                return None;
+            }
+            let value_len = usize::from(descriptor & 0x0f) + 1;
+            let value = remaining.get(..value_len)?;
+            if extension_id == wanted_id {
+                return Some(value);
+            }
+            extensions = remaining.get(value_len..)?;
+        }
+        None
+    }
+
     #[test]
     fn rtx_packet_preserves_original_packet_identity_and_payload() {
         let original = build_discord_video_rtp_packet(10, 90_000, 42, true, 20, b"h264");
@@ -2704,6 +2941,19 @@ mod tests {
         assert_eq!(
             &rtx[rtx_header.payload_offset + 2..],
             &original[original_header.payload_offset..]
+        );
+        assert_eq!(
+            one_byte_rtp_extension(&original, RTP_EXTENSION_RID),
+            Some(STREAM_RID.as_bytes())
+        );
+        assert_eq!(
+            one_byte_rtp_extension(&original, RTP_EXTENSION_REPAIRED_RID),
+            None
+        );
+        assert_eq!(one_byte_rtp_extension(&rtx, RTP_EXTENSION_RID), None);
+        assert_eq!(
+            one_byte_rtp_extension(&rtx, RTP_EXTENSION_REPAIRED_RID),
+            Some(STREAM_RID.as_bytes())
         );
     }
 }

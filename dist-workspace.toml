@@ -35,6 +35,7 @@ publish-jobs = ["homebrew", "npm"]
 allow-dirty = ["ci"]
 
 [dist.dependencies.homebrew]
+nasm = { stage = ["build"], targets = ["x86_64-apple-darwin"] }
 opus = { stage = ["build", "run"] }
 pkg-config = { stage = ["build"] }
 alsa-lib = { stage = [
@@ -77,4 +78,8 @@ libgbm-dev = { stage = ["build"] }
 "libpipewire-0.3-dev" = { stage = ["build"] }
 libwayland-dev = { stage = ["build"] }
 libxcb1-dev = { stage = ["build"] }
+nasm = { stage = ["build"], targets = ["x86_64-unknown-linux-gnu"] }
 pkg-config = { stage = ["build"] }
+
+[dist.dependencies.chocolatey]
+nasm = { stage = ["build"], targets = ["x86_64-pc-windows-msvc"] }

@@ -101,6 +101,23 @@ fn rest_rate_limit_routes_normalize_ids_but_keep_major_scope() {
 }
 
 #[test]
+fn stream_preview_routes_keep_each_stream_as_a_major_scope() {
+    let first = RestRateLimitRoute::from_request(&test_request_with_method(
+        reqwest::Method::POST,
+        "https://discord.com/api/v9/streams/guild:123:456:789/preview",
+    ));
+    let second = RestRateLimitRoute::from_request(&test_request_with_method(
+        reqwest::Method::POST,
+        "https://discord.com/api/v9/streams/guild:123:456:999/preview",
+    ));
+
+    assert_eq!(first.family, second.family);
+    assert_eq!(first.family.template, "/api/v9/streams/:major/preview");
+    assert_eq!(first.major_parameter, "guild:123:456:789");
+    assert_eq!(second.major_parameter, "guild:123:456:999");
+}
+
+#[test]
 fn rest_request_pacing_separates_message_sends_from_other_requests() {
     let cases = [
         (

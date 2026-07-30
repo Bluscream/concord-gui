@@ -55,6 +55,7 @@ jobs:
             libpipewire-0.3-dev \
             libwayland-dev \
             libxcb1-dev \
+            nasm \
             pkg-config
 
       - uses: dtolnay/rust-toolchain@stable

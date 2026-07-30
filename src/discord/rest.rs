@@ -37,6 +37,7 @@ mod profile;
 mod reactions;
 mod read_state;
 mod search;
+mod streams;
 mod user_settings;
 
 pub use forum::{CreatedForumPost, ForumPostPage};
@@ -762,7 +763,10 @@ impl RestRateLimitRoute {
 
         for (index, segment) in segments.iter().enumerate() {
             let previous = index.checked_sub(1).and_then(|index| segments.get(index));
-            let is_major_id = matches!(previous, Some(&"channels" | &"guilds" | &"webhooks"));
+            let is_major_id = matches!(
+                previous,
+                Some(&"channels" | &"guilds" | &"streams" | &"webhooks")
+            );
             let is_webhook_token = webhook_index.is_some_and(|webhook| index == webhook + 2);
             if is_major_id || is_webhook_token {
                 normalized.push(if is_webhook_token {
