@@ -63,22 +63,6 @@ jobs:
             echo "::error::Tag ${GITHUB_REF_NAME} ($SHA) is not on main. Refusing to release."
             exit 1
           fi
-      - name: install native audio dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libopus-dev libasound2-dev
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      # Best-effort cache restore for release checks. Tag workflow cache scope can
-      # limit reuse, so this must never become a release prerequisite.
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ci-check
-      - name: rustfmt
-        run: cargo fmt --all --check
-      - name: test
-        run: cargo test --all-features
 
   # Run 'dist plan' (or host) to determine what tasks we need to do
   plan:

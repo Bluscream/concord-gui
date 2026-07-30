@@ -11,6 +11,10 @@ use std::{
 mod audio_buffer;
 mod audio_runtime;
 mod broadcast;
+#[cfg(feature = "stream-broadcast")]
+mod capture;
+#[cfg(not(feature = "stream-broadcast"))]
+#[path = "voice/capture_disabled.rs"]
 mod capture;
 mod dave;
 mod gateway;
@@ -123,6 +127,21 @@ use super::{client::AppEventPublisher, events::AppEvent, gateway::GatewayCommand
 
 const VOICE_GATEWAY_VERSION: u8 = 9;
 const VOICE_WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(not(feature = "stream-broadcast"))]
+const STREAM_BROADCAST_FEATURE_DISABLED: &str =
+    "stream broadcasting requires the stream-broadcast feature";
+
+pub(crate) fn ensure_stream_broadcast_available() -> Result<(), String> {
+    #[cfg(feature = "stream-broadcast")]
+    {
+        Ok(())
+    }
+    #[cfg(not(feature = "stream-broadcast"))]
+    {
+        Err(STREAM_BROADCAST_FEATURE_DISABLED.to_owned())
+    }
+}
+
 const VOICE_RESUME_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 const VOICE_CONNECTION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const VOICE_CONNECTION_STABLE_INTERVAL: Duration = Duration::from_secs(10);

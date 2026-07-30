@@ -17,10 +17,8 @@
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs { inherit system overlays; };
 
-        # Pin the Rust toolchain. Cargo.toml declares rust-version = "1.88",
-        # but several transitive deps (quantette, ratatui, image, instability,
-        # safe_arch, wide, time) require newer rustc, so the effective MSRV
-        # is 1.90.
+        # Keep the Nix toolchain aligned with Cargo.toml's minimum supported
+        # Rust version so source builds behave consistently across installers.
         rustToolchain = pkgs.rust-bin.stable."1.90.0".default;
 
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;

@@ -442,6 +442,7 @@ impl DiscordClient {
         channel_id: Id<ChannelMarker>,
         target: StreamCaptureTarget,
     ) -> std::result::Result<(), String> {
+        voice::ensure_stream_broadcast_available()?;
         let state = self.read_state();
         let current_voice = state
             .current_user_voice_connection()

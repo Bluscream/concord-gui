@@ -43,10 +43,19 @@ jobs:
             exit 1
           fi
 
-      - name: install native audio dependencies
+      - name: install native media dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libopus-dev libasound2-dev
+          sudo apt-get install -y \
+            libasound2-dev \
+            libclang-dev \
+            libegl-dev \
+            libgbm-dev \
+            libopus-dev \
+            libpipewire-0.3-dev \
+            libwayland-dev \
+            libxcb1-dev \
+            pkg-config
 
       - uses: dtolnay/rust-toolchain@stable
 

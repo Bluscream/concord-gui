@@ -44,9 +44,16 @@ npx @chojs23/concord
 
 The npm package installs a prebuilt binary from the GitHub Release artifacts.
 
+Linux release binaries dynamically link ALSA, Opus, EGL, GBM, PipeWire,
+Wayland, and XCB. The custom Homebrew tap declares these runtime libraries, but
+npm and the GitHub Release installer cannot install distribution packages.
+Install the matching runtime packages when they are not already present. The
+Linux development dependency commands below also provide them.
+
 ### Cargo
 
-Install native dependencies first.
+The default build includes voice playback and stream broadcasting. Install its
+native dependencies first.
 
 On macOS with Homebrew:
 
@@ -57,20 +64,48 @@ brew install opus pkg-config
 On Fedora:
 
 ```sh
-sudo dnf install opus-devel alsa-lib-devel pkgconf-pkg-config
+sudo dnf install \
+  alsa-lib-devel \
+  clang-devel \
+  libxcb-devel \
+  mesa-libEGL-devel \
+  mesa-libgbm-devel \
+  opus-devel \
+  pipewire-devel \
+  pkgconf-pkg-config \
+  wayland-devel
 ```
 
 On Debian or Ubuntu:
 
 ```sh
-sudo apt install libopus-dev libasound2-dev pkg-config
+sudo apt install \
+  libasound2-dev \
+  libclang-dev \
+  libegl-dev \
+  libgbm-dev \
+  libopus-dev \
+  libpipewire-0.3-dev \
+  libwayland-dev \
+  libxcb1-dev \
+  pkg-config
 ```
 
 ```sh
 cargo install concord --locked
 ```
 
-To install without local voice playback and microphone support:
+To keep voice support while omitting stream broadcasting:
+
+```sh
+cargo install concord --locked --no-default-features --features voice-playback
+```
+
+This voice-only build needs only `opus-devel`, `alsa-lib-devel`, and
+`pkgconf-pkg-config` on Fedora, or `libopus-dev`, `libasound2-dev`, and
+`pkg-config` on Debian or Ubuntu.
+
+To install without local voice playback, microphone, or stream broadcasting:
 
 ```sh
 cargo install concord --locked --no-default-features
@@ -150,7 +185,14 @@ The release binary is produced at:
 target/release/concord
 ```
 
-To build without local voice playback and microphone support, disable default features:
+To keep voice support while omitting stream broadcasting:
+
+```sh
+cargo build --release --no-default-features --features voice-playback
+```
+
+To build without local voice playback, microphone, or stream broadcasting,
+disable default features:
 
 ```sh
 cargo build --release --no-default-features

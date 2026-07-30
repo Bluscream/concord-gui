@@ -1,27 +1,36 @@
-{
-  lib,
-  stdenv,
-  craneLib,
-  pkg-config,
-  opus,
-  alsa-lib,
-  src,
-  pname,
-  version,
-  description,
-  homepage,
+{ lib
+, stdenv
+, craneLib
+, rustPlatform
+, pkg-config
+, opus
+, alsa-lib
+, libgbm
+, libglvnd
+, libxcb
+, pipewire
+, wayland
+, src
+, pname
+, version
+, description
+, homepage
+,
 }:
 
 let
   commonArgs = {
     inherit pname version src;
 
-    cargoExtraArgs = "--locked --features voice-playback";
+    cargoExtraArgs = "--locked";
 
-    # audiopus_sys and ALSA use pkg-config to find system libraries.
-    # Providing Opus here avoids falling back to bundled Opus CMake builds,
-    # which are sensitive to the host CMake version.
-    nativeBuildInputs = [ pkg-config ];
+    # PipeWire generates bindings at build time. The bindgen hook supplies
+    # libclang and its search path without hard-coding a Nix store location.
+    nativeBuildInputs = [
+      pkg-config
+    ] ++ lib.optionals stdenv.isLinux [
+      rustPlatform.bindgenHook
+    ];
 
     # Networking uses rustls + webpki-roots, so we do not need openssl or a
     # system CA bundle here. Darwin stdenv provides the SDK by default, so avoid
@@ -30,6 +39,11 @@ let
       opus
     ] ++ lib.optionals stdenv.isLinux [
       alsa-lib
+      libgbm
+      libglvnd
+      libxcb
+      pipewire
+      wayland
     ];
 
     # The unit tests in this repo do not require network or a TTY, but disable
