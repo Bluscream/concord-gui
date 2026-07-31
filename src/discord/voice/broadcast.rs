@@ -772,6 +772,17 @@ fn broadcast_media_result_for_generation(
     (current_generation == result_generation).then_some(result)
 }
 
+fn capture_completion_after_frame_channel_closed(
+    errors_rx: &mut mpsc::UnboundedReceiver<String>,
+) -> Result<(), BroadcastConnectionFailure> {
+    // The capture worker sends its error before dropping the frame sender.
+    // Preserve it when both channel events become ready at the same time.
+    match errors_rx.try_recv() {
+        Ok(error) => Err(BroadcastConnectionFailure::stop(error)),
+        Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => Ok(()),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct BroadcastVideoSsrcs {
     video_ssrc: u32,
@@ -1631,7 +1642,9 @@ async fn run_stream_broadcast_media(
                 }
                 frame = frames_rx.recv() => {
                     let Some(frame) = frame else {
-                        return Ok(());
+                        return capture_completion_after_frame_channel_closed(
+                            &mut capture_errors_rx,
+                        );
                     };
                     let frame = frame.map_err(BroadcastConnectionFailure::stop)?;
                     if !stable && stable_deadline.is_none() {
@@ -2039,6 +2052,23 @@ mod tests {
 
         assert_eq!(transport.outcome, VoiceConnectionEnd::Reconnect);
         assert_eq!(local_media.outcome, VoiceConnectionEnd::Stop);
+    }
+
+    #[test]
+    fn closed_capture_frame_channel_preserves_pending_error() {
+        let (errors_tx, mut errors_rx) = mpsc::unbounded_channel();
+        errors_tx
+            .send("display recorder creation failed".to_owned())
+            .expect("capture error receiver should remain open");
+        drop(errors_tx);
+
+        let failure = capture_completion_after_frame_channel_closed(&mut errors_rx)
+            .expect_err("pending capture error should stop the broadcast");
+
+        assert_eq!(
+            failure,
+            BroadcastConnectionFailure::stop("display recorder creation failed")
+        );
     }
 
     fn connected_broadcast_runtime() -> (StreamBroadcastRuntimeState, StreamBroadcastGatewaySession)
