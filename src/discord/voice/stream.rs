@@ -7,6 +7,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+use rand::random;
 use tempfile::NamedTempFile;
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, BufReader},
@@ -35,6 +36,8 @@ const STREAM_VIDEO_REORDER_WINDOW: u16 = 128;
 const STREAM_VIDEO_MAX_NACK_SEQUENCES: usize = 64;
 const LOCAL_RTCP_REPORT_INTERVAL: Duration = Duration::from_secs(1);
 const STREAM_CONNECTION_STABLE_INTERVAL: Duration = Duration::from_secs(10);
+const STREAM_WATCH_RECONNECT_BASE_DELAY: Duration = Duration::from_millis(250);
+const STREAM_WATCH_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(2);
 const RTCP_TRANSPORT_LAYER_FEEDBACK: u8 = 205;
 const RTCP_GENERIC_NACK_FORMAT: u8 = 1;
 const RTCP_PAYLOAD_SPECIFIC_FEEDBACK: u8 = 206;
@@ -51,6 +54,7 @@ pub(super) struct StreamGatewaySession {
     pub(super) rtc_channel_id: Id<ChannelMarker>,
     pub(super) endpoint: String,
     pub(super) token: String,
+    reconnect_delay: Duration,
 }
 
 impl std::fmt::Debug for StreamGatewaySession {
@@ -64,6 +68,7 @@ impl std::fmt::Debug for StreamGatewaySession {
             .field("rtc_channel_id", &self.rtc_channel_id)
             .field("endpoint", &self.endpoint)
             .field("token", &"<redacted>")
+            .field("reconnect_delay", &self.reconnect_delay)
             .finish()
     }
 }
@@ -413,10 +418,27 @@ impl StreamRuntimeState {
             rtc_channel_id: create.rtc_channel_id,
             endpoint,
             token: server.token.clone(),
+            reconnect_delay: stream_watch_reconnect_delay(self.reconnect_attempts),
         };
         self.active = Some(session.clone());
         Some(session)
     }
+}
+
+fn stream_watch_reconnect_delay(reconnect_attempts: u8) -> Duration {
+    if reconnect_attempts == 0 {
+        return Duration::ZERO;
+    }
+    let multiplier = 1u32 << u32::from(reconnect_attempts.saturating_sub(1).min(3));
+    let base_delay = STREAM_WATCH_RECONNECT_BASE_DELAY
+        .saturating_mul(multiplier)
+        .min(STREAM_WATCH_RECONNECT_MAX_DELAY);
+    let jitter_limit_millis =
+        u64::try_from((base_delay / 4).as_millis()).expect("bounded retry jitter fits u64");
+    let jitter = Duration::from_millis(random::<u64>() % (jitter_limit_millis + 1));
+    base_delay
+        .saturating_add(jitter)
+        .min(STREAM_WATCH_RECONNECT_MAX_DELAY)
 }
 
 pub(super) async fn run_stream_gateway_session(
@@ -424,6 +446,16 @@ pub(super) async fn run_stream_gateway_session(
     events_tx: mpsc::UnboundedSender<VoiceRuntimeEvent>,
     status_publisher: VoiceStatusPublisher,
 ) {
+    if !session.reconnect_delay.is_zero() {
+        logging::debug(
+            "stream",
+            format!(
+                "waiting {:?} before reconnecting stream watch",
+                session.reconnect_delay
+            ),
+        );
+        sleep(session.reconnect_delay).await;
+    }
     let outcome = match connect_stream_gateway(&session, &events_tx, &status_publisher).await {
         Ok(outcome) => outcome,
         Err(error) => {
@@ -2705,6 +2737,7 @@ mod tests {
             rtc_channel_id: Id::new(401),
             endpoint: "stream.example.com".to_owned(),
             token: "stream-token".to_owned(),
+            reconnect_delay: Duration::ZERO,
         };
         let identify: Value =
             serde_json::from_str(&stream_identify_payload(&session)).expect("valid identify json");
