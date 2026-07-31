@@ -46,8 +46,7 @@ const STREAM_CAPTURE_FRAME_INTERVAL: Duration =
 const STREAM_CAPTURE_STATS_INTERVAL: Duration = Duration::from_secs(5);
 const STREAM_RECORDER_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const STREAM_CAPTURE_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
-const STREAM_CAPTURE_REAPER_TIMEOUT: Duration = Duration::from_secs(3);
-const STREAM_CAPTURE_REAPER_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const STREAM_CAPTURE_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Debug)]
 pub(super) struct EncodedStreamFrame {
@@ -449,17 +448,6 @@ fn reap_capture_worker(worker: JoinHandle<()>) {
     if let Err(error) = thread::Builder::new()
         .name("stream-capture-reaper".to_owned())
         .spawn(move || {
-            let deadline = Instant::now() + STREAM_CAPTURE_REAPER_TIMEOUT;
-            while !worker.is_finished() {
-                if Instant::now() >= deadline {
-                    logging::debug(
-                        "stream",
-                        "stream capture worker did not stop before reaper timeout; detaching it",
-                    );
-                    return;
-                }
-                thread::sleep(STREAM_CAPTURE_REAPER_POLL_INTERVAL);
-            }
             if let Err(error) = worker.join() {
                 logging::debug(
                     "stream",
@@ -487,29 +475,25 @@ impl StreamCaptureHandle {
         let Some(worker) = self.worker.take() else {
             return;
         };
-        let mut join_task = tokio::task::spawn_blocking(move || worker.join());
-        match tokio::time::timeout(STREAM_CAPTURE_GRACEFUL_SHUTDOWN_TIMEOUT, &mut join_task).await {
-            Ok(Ok(Ok(()))) => {}
-            Ok(Ok(Err(error))) => {
+        let deadline = Instant::now() + STREAM_CAPTURE_GRACEFUL_SHUTDOWN_TIMEOUT;
+        while !worker.is_finished() {
+            if Instant::now() >= deadline {
+                // A native window snapshot cannot be interrupted safely. Move
+                // ownership outside Tokio so runtime shutdown stays bounded.
                 logging::debug(
                     "stream",
-                    format!("stream capture worker panicked during shutdown: {error:?}"),
+                    "stream capture worker did not stop before graceful shutdown timeout; reaping outside Tokio",
                 );
+                reap_capture_worker(worker);
+                return;
             }
-            Ok(Err(error)) => {
-                logging::debug(
-                    "stream",
-                    format!("stream capture shutdown task failed: {error}"),
-                );
-            }
-            Err(_) => {
-                // The blocking join keeps owning the worker after this handle
-                // is dropped, so cleanup can finish without blocking runtime.
-                logging::debug(
-                    "stream",
-                    "stream capture worker did not stop before graceful shutdown timeout",
-                );
-            }
+            tokio::time::sleep(STREAM_CAPTURE_SHUTDOWN_POLL_INTERVAL).await;
+        }
+        if let Err(error) = worker.join() {
+            logging::debug(
+                "stream",
+                format!("stream capture worker panicked during shutdown: {error:?}"),
+            );
         }
     }
 }
