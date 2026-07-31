@@ -1457,42 +1457,24 @@ impl BroadcastVideoTransport {
     }
 }
 
-#[derive(Default)]
 struct BroadcastAudioTask {
     task: Option<JoinHandle<()>>,
 }
 
 impl BroadcastAudioTask {
     fn start(
+        target: &super::StreamCaptureTarget,
         socket: Arc<UdpSocket>,
         dave_state: Arc<Mutex<VoiceDaveState>>,
         audio_ssrc: u32,
         packet_encryptor: Arc<BroadcastPacketEncryptor>,
         stats: SharedBroadcastSendStats,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let (frames_tx, frames_rx) = mpsc::channel(SYSTEM_AUDIO_FRAME_QUEUE);
-        let capture = match system_audio::start_system_audio_capture(frames_tx) {
-            Ok(capture) => capture,
-            Err(error) => {
-                let message = format!("system audio unavailable, continuing video-only: {error}");
-                if error.is_unavailable() {
-                    logging::debug("stream", message);
-                } else {
-                    logging::error("stream", message);
-                }
-                return Self::default();
-            }
-        };
-        let encoder = match VoiceOpusEncode::new_system_audio() {
-            Ok(encoder) => encoder,
-            Err(error) => {
-                logging::error(
-                    "stream",
-                    format!("system audio encoder unavailable, continuing video-only: {error}"),
-                );
-                return Self::default();
-            }
-        };
+        let capture = system_audio::start_system_audio_capture(target, frames_tx)
+            .map_err(|error| format!("system audio capture failed: {error}"))?;
+        let encoder = VoiceOpusEncode::new_system_audio()
+            .map_err(|error| format!("system audio encoder failed: {error}"))?;
         let transport = BroadcastAudioTransport::new(audio_ssrc, packet_encryptor, stats);
         let task = tokio::spawn(async move {
             if let Err(error) = run_stream_broadcast_audio(
@@ -1505,13 +1487,10 @@ impl BroadcastAudioTask {
             )
             .await
             {
-                logging::error(
-                    "stream",
-                    format!("system audio sender stopped, continuing video-only: {error}"),
-                );
+                logging::error("stream", format!("system audio sender stopped: {error}"));
             }
         });
-        Self { task: Some(task) }
+        Ok(Self { task: Some(task) })
     }
 
     async fn shutdown(&mut self) {
@@ -1520,6 +1499,18 @@ impl BroadcastAudioTask {
         };
         task.abort();
         let _ = task.await;
+    }
+
+    async fn completion(&mut self) -> Result<(), String> {
+        let Some(task) = self.task.as_mut() else {
+            return std::future::pending().await;
+        };
+        let result = task.await;
+        self.task.take();
+        match result {
+            Ok(()) => Err("system audio sender stopped unexpectedly".to_owned()),
+            Err(error) => Err(format!("system audio sender task failed: {error}")),
+        }
     }
 
     fn abort(&mut self) {
@@ -1597,24 +1588,34 @@ async fn run_stream_broadcast_media(
     let (frames_tx, mut frames_rx) = mpsc::channel(2);
     let (preview_frames_tx, preview_frames_rx) = mpsc::channel::<StreamPreviewFrame>(1);
     let (capture_errors_tx, mut capture_errors_rx) = mpsc::unbounded_channel();
-    let capture =
-        capture::start_stream_capture(target, frames_tx, preview_frames_tx, capture_errors_tx)
-            .map_err(BroadcastConnectionFailure::stop)?;
+    let capture = capture::start_stream_capture(
+        target.clone(),
+        frames_tx,
+        preview_frames_tx,
+        capture_errors_tx,
+    )
+    .map_err(BroadcastConnectionFailure::stop)?;
     let preview_task = stream_preview_uploader.start(stream_key.clone(), preview_frames_rx);
     let packet_encryptor = Arc::new(
         BroadcastPacketEncryptor::new(&description).map_err(BroadcastConnectionFailure::stop)?,
     );
     let stats = Arc::new(StdMutex::new(BroadcastSendStats::new()));
+    let mut transport = BroadcastVideoTransport::new(
+        &description,
+        video,
+        Arc::clone(&packet_encryptor),
+        Arc::clone(&stats),
+    )
+    .map_err(BroadcastConnectionFailure::stop)?;
     let mut audio_task = BroadcastAudioTask::start(
+        &target,
         Arc::clone(&socket),
         Arc::clone(&dave_state),
         audio_ssrc,
         Arc::clone(&packet_encryptor),
         Arc::clone(&stats),
-    );
-    let mut transport =
-        BroadcastVideoTransport::new(&description, video, packet_encryptor, Arc::clone(&stats))
-            .map_err(BroadcastConnectionFailure::stop)?;
+    )
+    .map_err(BroadcastConnectionFailure::stop)?;
     let mut received_packet = vec![0u8; STREAM_UDP_RECEIVE_PACKET_BYTES];
     // Capture and both media transports are ready at this point. Do not wait
     // for the first video frame to pass DAVE because it can hold outbound media
@@ -1630,6 +1631,9 @@ async fn run_stream_broadcast_media(
         loop {
             tokio::select! {
                 _ = &mut stop_rx => return Ok(()),
+                audio_result = audio_task.completion() => {
+                    return audio_result.map_err(BroadcastConnectionFailure::stop);
+                }
                 _ = sleep_until(stable_deadline.unwrap_or_else(TokioInstant::now)),
                     if stable_deadline.is_some() =>
                 {
@@ -1695,9 +1699,9 @@ async fn run_stream_broadcast_media(
     }
     .await;
 
+    audio_task.shutdown().await;
     preview_task.shutdown().await;
     capture.shutdown().await;
-    audio_task.shutdown().await;
     result
 }
 
