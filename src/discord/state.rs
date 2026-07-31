@@ -837,6 +837,7 @@ impl DiscordState {
             | AppEvent::StreamPlaybackEnded { .. }
             | AppEvent::StreamCaptureTargetsLoaded { .. }
             | AppEvent::StreamBroadcastStarted { .. }
+            | AppEvent::StreamBroadcastAudioUnavailable { .. }
             | AppEvent::StreamBroadcastEnded { .. }
             | AppEvent::ApplicationCommandsLoaded { .. }
             | AppEvent::ApplicationCommandIndexUpdated { .. }

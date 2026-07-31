@@ -495,6 +495,12 @@ impl VoiceStatusPublisher {
             .await;
     }
 
+    async fn publish_stream_broadcast_audio_unavailable(&self, message: String) {
+        self.events
+            .publish(AppEvent::StreamBroadcastAudioUnavailable { message })
+            .await;
+    }
+
     async fn publish_stream_broadcast_ended(
         &self,
         scope: VoiceScope,

@@ -1,3 +1,4 @@
+use super::media::GatewayChildTasks;
 use super::*;
 
 pub(super) async fn run_voice_gateway_session(
@@ -500,6 +501,140 @@ pub(super) enum VoiceCloseAction {
     Resume,
     Reconnect,
     Stop,
+}
+
+pub(super) struct StreamVoiceGatewayControl {
+    writer: VoiceWriter,
+    last_sequence: Arc<Mutex<Option<i64>>>,
+    heartbeat_ack: Arc<Mutex<VoiceHeartbeatAckState>>,
+    heartbeat_timeout_tx: mpsc::UnboundedSender<VoiceHeartbeatTimeout>,
+    heartbeat_timeout_rx: mpsc::UnboundedReceiver<VoiceHeartbeatTimeout>,
+    dave_state: Arc<Mutex<VoiceDaveState>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum StreamVoiceGatewayFrameAction {
+    Payload,
+    Continue,
+    End(VoiceConnectionEnd),
+}
+
+impl StreamVoiceGatewayControl {
+    pub(super) fn new(
+        writer: VoiceWriter,
+        current_user_id: Id<UserMarker>,
+        rtc_server_id: &str,
+    ) -> Result<Self, String> {
+        let (heartbeat_timeout_tx, heartbeat_timeout_rx) = mpsc::unbounded_channel();
+        Ok(Self {
+            writer,
+            last_sequence: Arc::new(Mutex::new(None)),
+            heartbeat_ack: Arc::new(Mutex::new(VoiceHeartbeatAckState::default())),
+            heartbeat_timeout_tx,
+            heartbeat_timeout_rx,
+            dave_state: Arc::new(Mutex::new(VoiceDaveState::new_for_stream(
+                current_user_id,
+                rtc_server_id,
+            )?)),
+        })
+    }
+
+    pub(super) fn dave_state(&self) -> Arc<Mutex<VoiceDaveState>> {
+        Arc::clone(&self.dave_state)
+    }
+
+    pub(super) async fn heartbeat_timed_out(&mut self) {
+        let _ = self.heartbeat_timeout_rx.recv().await;
+    }
+
+    pub(super) async fn record_sequence(&self, value: &Value) {
+        if let Some(sequence) = value.get("seq").and_then(Value::as_i64) {
+            *self.last_sequence.lock().await = Some(sequence);
+        }
+    }
+
+    pub(super) async fn handle_json_op(
+        &self,
+        opcode: u8,
+        value: &Value,
+        child_tasks: &mut GatewayChildTasks,
+    ) -> Result<bool, String> {
+        match opcode {
+            VOICE_OP_HEARTBEAT_ACK => {
+                self.heartbeat_ack.lock().await.mark_acknowledged();
+            }
+            VOICE_OP_HELLO => {
+                let interval = value
+                    .get("d")
+                    .and_then(|data| data.get("heartbeat_interval"))
+                    .and_then(Value::as_u64)
+                    .map(Duration::from_millis)
+                    .ok_or_else(|| "stream voice hello missing heartbeat interval".to_owned())?;
+                self.heartbeat_ack.lock().await.reset();
+                child_tasks
+                    .replace_heartbeat(tokio::spawn(run_voice_heartbeat(
+                        Arc::clone(&self.writer),
+                        interval,
+                        Arc::clone(&self.last_sequence),
+                        Arc::clone(&self.heartbeat_ack),
+                        self.heartbeat_timeout_tx.clone(),
+                        0,
+                    )))
+                    .await;
+            }
+            opcode if dave::handles_gateway_json_op(opcode) => {
+                self.dave_state
+                    .lock()
+                    .await
+                    .handle_json_op(&self.writer, opcode, value)
+                    .await?;
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    pub(super) async fn handle_binary(&self, payload: &[u8]) -> Result<(), String> {
+        let frame = parse_voice_binary_frame(payload)?;
+        *self.last_sequence.lock().await = Some(frame.sequence);
+        self.dave_state
+            .lock()
+            .await
+            .handle_binary_frame(&self.writer, frame)
+            .await
+    }
+
+    pub(super) async fn frame_action(
+        &self,
+        frame: &WsMessage,
+    ) -> Result<StreamVoiceGatewayFrameAction, String> {
+        match frame {
+            WsMessage::Text(_) | WsMessage::Binary(_) => Ok(StreamVoiceGatewayFrameAction::Payload),
+            WsMessage::Ping(payload) => {
+                self.writer
+                    .lock()
+                    .await
+                    .send(WsMessage::Pong(payload.clone()))
+                    .await
+                    .map_err(|error| format!("stream voice websocket pong failed: {error}"))?;
+                Ok(StreamVoiceGatewayFrameAction::Continue)
+            }
+            WsMessage::Close(frame) => {
+                let action = frame
+                    .as_ref()
+                    .map(|frame| voice_close_action(u16::from(frame.code)))
+                    .unwrap_or(VoiceCloseAction::Reconnect);
+                let outcome = match action {
+                    VoiceCloseAction::Stop => VoiceConnectionEnd::Stop,
+                    VoiceCloseAction::Resume | VoiceCloseAction::Reconnect => {
+                        VoiceConnectionEnd::Reconnect
+                    }
+                };
+                Ok(StreamVoiceGatewayFrameAction::End(outcome))
+            }
+            WsMessage::Pong(_) | WsMessage::Frame(_) => Ok(StreamVoiceGatewayFrameAction::Continue),
+        }
+    }
 }
 
 pub(super) fn voice_close_action(code: u16) -> VoiceCloseAction {

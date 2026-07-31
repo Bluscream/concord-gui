@@ -87,6 +87,30 @@ impl VoiceDaveState {
         }
     }
 
+    pub(super) fn new_for_stream(
+        user_id: Id<UserMarker>,
+        rtc_server_id: &str,
+    ) -> Result<Self, String> {
+        let group_id = rtc_server_id
+            .parse::<u64>()
+            .ok()
+            .and_then(|server_id| server_id.checked_sub(1))
+            .ok_or_else(|| "stream RTC server id is not a valid DAVE group id".to_owned())?;
+        Ok(Self::new_for_identity(user_id, group_id))
+    }
+
+    pub(super) fn apply_protocol_version(
+        &mut self,
+        protocol_version: Option<u64>,
+    ) -> Result<(), String> {
+        let Some(protocol_version) = protocol_version else {
+            return Ok(());
+        };
+        let protocol_version = u16::try_from(protocol_version)
+            .map_err(|_| "DAVE protocol version does not fit u16".to_owned())?;
+        self.reinit(protocol_version)
+    }
+
     pub(super) async fn handle_json_op(
         &mut self,
         writer: &VoiceWriter,
@@ -533,6 +557,21 @@ impl VoiceDaveState {
             self.known_user_ids.insert(user_id);
         }
     }
+}
+
+pub(super) fn handles_gateway_json_op(opcode: u8) -> bool {
+    matches!(
+        opcode,
+        VOICE_OP_SPEAKING
+            | VOICE_OP_CLIENTS_CONNECT
+            | VOICE_OP_CLIENT_DISCONNECT
+            | VOICE_OP_MEDIA_SINK_WANTS
+            | VOICE_OP_CLIENT_FLAGS
+            | VOICE_OP_CLIENT_PLATFORM
+            | VOICE_OP_DAVE_PREPARE_TRANSITION
+            | VOICE_OP_DAVE_EXECUTE_TRANSITION
+            | VOICE_OP_DAVE_PREPARE_EPOCH
+    )
 }
 
 async fn send_dave_transition_ready(

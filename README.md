@@ -18,6 +18,62 @@ Concord is a feature-rich TUI (terminal user interface) client for Discord, writ
 
 ## Installation
 
+### Prerequisites
+
+Cargo and source builds require the native dependencies below. Linux users
+installing through npm or the GitHub Release installer also need them.
+
+#### macOS
+
+```sh
+xcode-select --install
+brew install opus pkg-config
+```
+
+Intel only:
+
+```sh
+brew install nasm
+```
+
+#### Fedora
+
+```sh
+sudo dnf install \
+  alsa-lib-devel \
+  clang-devel \
+  libxcb-devel \
+  mesa-libEGL-devel \
+  mesa-libgbm-devel \
+  nasm \
+  opus-devel \
+  pipewire-devel \
+  pkgconf-pkg-config \
+  wayland-devel
+```
+
+#### Debian or Ubuntu
+
+```sh
+sudo apt install \
+  libasound2-dev \
+  libclang-dev \
+  libegl-dev \
+  libgbm-dev \
+  libopus-dev \
+  libpipewire-0.3-dev \
+  libwayland-dev \
+  libxcb1-dev \
+  nasm \
+  pkg-config
+```
+
+#### x86_64 Windows
+
+```powershell
+choco install nasm
+```
+
 ### Homebrew
 
 ```sh
@@ -38,52 +94,7 @@ npm install -g @chojs23/concord
 
 ### Cargo
 
-The default build includes voice playback and stream broadcasting. Install its
-native dependencies first.
-
-On macOS with Homebrew:
-
-```sh
-brew install nasm opus pkg-config
-```
-
-On Fedora:
-
-```sh
-sudo dnf install \
-  alsa-lib-devel \
-  clang-devel \
-  libxcb-devel \
-  mesa-libEGL-devel \
-  mesa-libgbm-devel \
-  nasm \
-  opus-devel \
-  pipewire-devel \
-  pkgconf-pkg-config \
-  wayland-devel
-```
-
-On Debian or Ubuntu:
-
-```sh
-sudo apt install \
-  libasound2-dev \
-  libclang-dev \
-  libegl-dev \
-  libgbm-dev \
-  libopus-dev \
-  libpipewire-0.3-dev \
-  libwayland-dev \
-  libxcb1-dev \
-  nasm \
-  pkg-config
-```
-
-On x86_64 Windows with Chocolatey:
-
-```powershell
-choco install nasm
-```
+The default build includes voice playback and stream broadcasting.
 
 ```sh
 cargo install concord --locked
@@ -165,7 +176,7 @@ The installer places `concord` under `$CARGO_HOME/bin`, which is usually
 ### Build from source
 
 You need the Rust stable toolchain, Cargo, and the native dependencies listed in
-the Cargo install section.
+the Prerequisites section.
 
 ```sh
 git clone https://github.com/chojs23/concord.git
@@ -224,10 +235,7 @@ choose `[o] sign out`.
 
 - Full voice support with push-to-talk
 - Supports noise suppression
-- Watch another participant's H264 Go Live stream in mpv while staying in the
-  parent voice channel
-- Share a whole display or one window as a low-latency H264 Go Live stream on
-  macOS, Windows, and Linux
+- Watch & Broadcast live stream in voice channels
 
 ### Guilds & Channels
 
@@ -266,7 +274,7 @@ Concord renders a practical subset of Discord-style Markdown in message bodies:
 - Use custom emoji from other servers as reactions when your account supports it
 - View and vote on polls
 
-### Media & Images
+### Media Support
 
 Image rendering is powered by [ratatui-image](https://github.com/benjajaja/ratatui-image). On startup, Concord queries the terminal to detect the best available graphics protocol. Supported protocols:
 
@@ -285,19 +293,12 @@ External media playback is off by default. You can enable it with
 `media_playback = true` under `[display]`, or toggle it from the in-app Display
 options menu.
 
-Go Live viewing also uses mpv. Join the streamer's voice channel, focus the
-streaming participant, and choose `Watch stream`. Closing the mpv window stops
-the stream connection without leaving voice.
+Watch live streaming also uses mpv. Join the streamer's voice channel, focus the
+streaming participant, and choose `Watch stream`.
 
 To broadcast, join a voice channel, open its channel actions, choose
-`Share screen`, then select a whole display or one window. While sharing, the
-same `s` action changes to `Stop sharing`. The default `<leader>vs` voice
-shortcut performs the same toggle. The first version sends 1280x720 H264 video
-at up to 30 FPS and includes system audio when an output loopback source is
-available. If audio capture is unavailable, the broadcast continues with video
-only. macOS may ask for Screen Recording permission. Linux screen capture
-depends on the active X11 or Wayland support, and system audio uses a PulseAudio
-monitor source.
+`Share screen`, then select a whole display or one window. The default `<leader>vs` voice
+shortcut performs the same toggle. Linux screen capture depends on the active X11 or Wayland support.
 
 ### Members & Profiles
 

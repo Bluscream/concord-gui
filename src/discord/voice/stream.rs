@@ -493,25 +493,17 @@ async fn connect_stream_gateway(
     );
     let (writer, mut reader) = ws.split();
     let writer = Arc::new(Mutex::new(writer));
-    let last_sequence = Arc::new(Mutex::new(None));
-    let heartbeat_ack = Arc::new(Mutex::new(VoiceHeartbeatAckState::default()));
-    let (heartbeat_timeout_tx, mut heartbeat_timeout_rx) =
-        mpsc::unbounded_channel::<VoiceHeartbeatTimeout>();
+    let mut gateway_control = gateway::StreamVoiceGatewayControl::new(
+        Arc::clone(&writer),
+        session.current_user_id,
+        &session.rtc_server_id,
+    )?;
+    let dave_state = gateway_control.dave_state();
     let mut child_tasks = GatewayChildTasks::default();
     let (media_finished_tx, mut media_finished_rx) =
         mpsc::unbounded_channel::<Result<(), StreamConnectionFailure>>();
     let (player_ready_tx, mut player_ready_rx) = mpsc::unbounded_channel::<u64>();
     let (video_source_tx, video_source_rx) = watch::channel(StreamVideoSource::default());
-    let dave_group_id = session
-        .rtc_server_id
-        .parse::<u64>()
-        .ok()
-        .and_then(|server_id| server_id.checked_sub(1))
-        .ok_or_else(|| "stream RTC server id is not a valid DAVE group id".to_owned())?;
-    let dave_state = Arc::new(Mutex::new(VoiceDaveState::new_for_identity(
-        session.current_user_id,
-        dave_group_id,
-    )));
     let mut udp_socket: Option<Arc<UdpSocket>> = None;
     let mut local_ssrc: Option<u32> = None;
     let mut current_description: Option<VoiceSessionDescription> = None;
@@ -523,7 +515,7 @@ async fn connect_stream_gateway(
 
     let result = loop {
         let frame = tokio::select! {
-            _ = heartbeat_timeout_rx.recv() => {
+            _ = gateway_control.heartbeat_timed_out() => {
                 break Ok(VoiceConnectionEnd::Reconnect);
             }
             media_result = media_finished_rx.recv(), if child_tasks.has_media() => {
@@ -570,13 +562,16 @@ async fn connect_stream_gateway(
                 )));
             }
         };
+        match gateway_control.frame_action(&frame).await? {
+            gateway::StreamVoiceGatewayFrameAction::Payload => {}
+            gateway::StreamVoiceGatewayFrameAction::Continue => continue,
+            gateway::StreamVoiceGatewayFrameAction::End(outcome) => break Ok(outcome),
+        }
         match frame {
             WsMessage::Text(text) => {
                 let value: Value = serde_json::from_str(&text)
                     .map_err(|error| format!("stream websocket JSON parse failed: {error}"))?;
-                if let Some(sequence) = value.get("seq").and_then(Value::as_i64) {
-                    *last_sequence.lock().await = Some(sequence);
-                }
+                gateway_control.record_sequence(&value).await;
                 let opcode = value.get("op").and_then(Value::as_u64).unwrap_or_default() as u8;
                 match opcode {
                     VOICE_OP_READY => {
@@ -609,11 +604,10 @@ async fn connect_stream_gateway(
                                 description.video_codec.as_deref().unwrap_or("none")
                             )));
                         }
-                        if let Some(version) = description.dave_protocol_version {
-                            let version = u16::try_from(version)
-                                .map_err(|_| "DAVE protocol version does not fit u16".to_owned())?;
-                            dave_state.lock().await.reinit(version)?;
-                        }
+                        dave_state
+                            .lock()
+                            .await
+                            .apply_protocol_version(description.dave_protocol_version)?;
                         let Some(socket) = udp_socket.as_ref() else {
                             break Err(StreamConnectionFailure::reconnect(
                                 "stream session description arrived before UDP ready",
@@ -663,28 +657,6 @@ async fn connect_stream_gateway(
                             .await;
                         current_description = Some(description);
                     }
-                    VOICE_OP_HEARTBEAT_ACK => {
-                        heartbeat_ack.lock().await.mark_acknowledged();
-                    }
-                    VOICE_OP_HELLO => {
-                        let interval = value
-                            .get("d")
-                            .and_then(|data| data.get("heartbeat_interval"))
-                            .and_then(Value::as_u64)
-                            .map(Duration::from_millis)
-                            .ok_or_else(|| "stream hello missing heartbeat interval".to_owned())?;
-                        heartbeat_ack.lock().await.reset();
-                        child_tasks
-                            .replace_heartbeat(tokio::spawn(gateway::run_voice_heartbeat(
-                                Arc::clone(&writer),
-                                interval,
-                                Arc::clone(&last_sequence),
-                                Arc::clone(&heartbeat_ack),
-                                heartbeat_timeout_tx.clone(),
-                                0,
-                            )))
-                            .await;
-                    }
                     VOICE_OP_VIDEO => {
                         if let Some(source) =
                             parse_stream_video_source(&value, session.request.owner_id)
@@ -712,58 +684,25 @@ async fn connect_stream_gateway(
                             video_source_tx.send_replace(source);
                         }
                     }
-                    VOICE_OP_SPEAKING => {
-                        dave_state.lock().await.handle_speaking_op(&value);
-                    }
-                    VOICE_OP_CLIENTS_CONNECT
-                    | VOICE_OP_CLIENT_DISCONNECT
-                    | VOICE_OP_MEDIA_SINK_WANTS
-                    | VOICE_OP_CLIENT_FLAGS
-                    | VOICE_OP_CLIENT_PLATFORM
-                    | VOICE_OP_DAVE_PREPARE_TRANSITION
-                    | VOICE_OP_DAVE_EXECUTE_TRANSITION
-                    | VOICE_OP_DAVE_PREPARE_EPOCH => {
-                        dave_state
-                            .lock()
-                            .await
-                            .handle_json_op(&writer, opcode, &value)
-                            .await?;
-                    }
                     other => {
-                        logging::debug("stream", format!("unhandled stream gateway op={other}"))
+                        if !gateway_control
+                            .handle_json_op(other, &value, &mut child_tasks)
+                            .await?
+                        {
+                            logging::debug(
+                                "stream",
+                                format!("unhandled stream gateway op={other}"),
+                            );
+                        }
                     }
                 }
             }
             WsMessage::Binary(payload) => {
-                let frame = gateway::parse_voice_binary_frame(&payload)?;
-                *last_sequence.lock().await = Some(frame.sequence);
-                dave_state
-                    .lock()
-                    .await
-                    .handle_binary_frame(&writer, frame)
-                    .await?;
+                gateway_control.handle_binary(&payload).await?;
             }
-            WsMessage::Ping(payload) => {
-                writer
-                    .lock()
-                    .await
-                    .send(WsMessage::Pong(payload))
-                    .await
-                    .map_err(|error| format!("stream websocket pong failed: {error}"))?;
+            WsMessage::Ping(_) | WsMessage::Pong(_) | WsMessage::Close(_) | WsMessage::Frame(_) => {
+                unreachable!("gateway control frames are handled first")
             }
-            WsMessage::Close(frame) => {
-                let action = frame
-                    .as_ref()
-                    .map(|frame| gateway::voice_close_action(u16::from(frame.code)))
-                    .unwrap_or(gateway::VoiceCloseAction::Reconnect);
-                break Ok(match action {
-                    gateway::VoiceCloseAction::Stop => VoiceConnectionEnd::Stop,
-                    gateway::VoiceCloseAction::Resume | gateway::VoiceCloseAction::Reconnect => {
-                        VoiceConnectionEnd::Reconnect
-                    }
-                });
-            }
-            WsMessage::Pong(_) | WsMessage::Frame(_) => {}
         }
     };
 

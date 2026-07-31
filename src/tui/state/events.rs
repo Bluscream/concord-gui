@@ -246,6 +246,9 @@ impl DashboardState {
             AppEvent::StreamBroadcastStarted { scope, channel_id } => {
                 self.clear_stream_broadcast_preparing(*scope, *channel_id);
             }
+            AppEvent::StreamBroadcastAudioUnavailable { message } => {
+                self.show_error_toast(message, Instant::now());
+            }
             AppEvent::StreamBroadcastEnded { scope, channel_id } => {
                 self.record_stream_broadcast_ended(*scope, *channel_id);
             }

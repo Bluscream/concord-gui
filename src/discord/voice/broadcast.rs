@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use futures::{SinkExt, StreamExt};
+use futures::StreamExt;
 use rand::random;
 use serde_json::{Value, json};
 use tokio::{
@@ -27,13 +27,9 @@ use super::{
     DISCORD_OPUS_FRAME_DURATION, DISCORD_OPUS_TIMESTAMP_INCREMENT,
     DISCORD_STREAM_VIDEO_PAYLOAD_TYPE, DISCORD_STREAM_VIDEO_RTX_PAYLOAD_TYPE,
     DISCORD_VOICE_PAYLOAD_TYPE, DiscoveredVoiceAddress, RTP_HEADER_MIN_LEN, RTP_VERSION,
-    StreamBroadcastRequest, StreamCreateInfo, StreamServerInfo, VOICE_OP_CLIENT_DISCONNECT,
-    VOICE_OP_CLIENT_FLAGS, VOICE_OP_CLIENT_PLATFORM, VOICE_OP_CLIENTS_CONNECT,
-    VOICE_OP_DAVE_EXECUTE_TRANSITION, VOICE_OP_DAVE_PREPARE_EPOCH,
-    VOICE_OP_DAVE_PREPARE_TRANSITION, VOICE_OP_HEARTBEAT_ACK, VOICE_OP_HELLO,
-    VOICE_OP_MEDIA_SINK_WANTS, VOICE_OP_READY, VOICE_OP_SESSION_DESCRIPTION, VOICE_OP_SPEAKING,
-    VOICE_WEBSOCKET_CONNECT_TIMEOUT, VoiceConnectionEnd, VoiceDaveState, VoiceHeartbeatAckState,
-    VoiceHeartbeatTimeout, VoiceRuntimeEvent, VoiceScope, VoiceSessionDescription,
+    StreamBroadcastRequest, StreamCreateInfo, StreamServerInfo, VOICE_OP_READY,
+    VOICE_OP_SESSION_DESCRIPTION, VOICE_OP_SPEAKING, VOICE_WEBSOCKET_CONNECT_TIMEOUT,
+    VoiceConnectionEnd, VoiceDaveState, VoiceRuntimeEvent, VoiceScope, VoiceSessionDescription,
     VoiceStatusPublisher, capture,
     dave::VoiceDaveOutboundPayload,
     gateway,
@@ -467,6 +463,7 @@ pub(super) async fn run_stream_broadcast_session(
     let outcome = match connect_stream_broadcast(
         &session,
         &events_tx,
+        &status_publisher,
         stream_preview_uploader,
         stop_rx,
     )
@@ -491,6 +488,7 @@ pub(super) async fn run_stream_broadcast_session(
 async fn connect_stream_broadcast(
     session: &StreamBroadcastGatewaySession,
     events_tx: &mpsc::UnboundedSender<VoiceRuntimeEvent>,
+    status_publisher: &VoiceStatusPublisher,
     stream_preview_uploader: StreamPreviewUploader,
     mut stop_rx: oneshot::Receiver<()>,
 ) -> Result<VoiceConnectionEnd, BroadcastConnectionFailure> {
@@ -509,24 +507,16 @@ async fn connect_stream_broadcast(
     );
     let (writer, mut reader) = ws.split();
     let writer = Arc::new(Mutex::new(writer));
-    let last_sequence = Arc::new(Mutex::new(None));
-    let heartbeat_ack = Arc::new(Mutex::new(VoiceHeartbeatAckState::default()));
-    let (heartbeat_timeout_tx, mut heartbeat_timeout_rx) =
-        mpsc::unbounded_channel::<VoiceHeartbeatTimeout>();
+    let mut gateway_control = gateway::StreamVoiceGatewayControl::new(
+        Arc::clone(&writer),
+        session.current_user_id,
+        &session.rtc_server_id,
+    )?;
+    let dave_state = gateway_control.dave_state();
     let (media_finished_tx, mut media_finished_rx) =
         mpsc::unbounded_channel::<(u64, Result<(), BroadcastConnectionFailure>)>();
     let mut child_tasks = GatewayChildTasks::default();
     let mut media_generation = 0u64;
-    let dave_group_id = session
-        .rtc_server_id
-        .parse::<u64>()
-        .ok()
-        .and_then(|server_id| server_id.checked_sub(1))
-        .ok_or_else(|| "stream RTC server id is not a valid DAVE group id".to_owned())?;
-    let dave_state = Arc::new(Mutex::new(VoiceDaveState::new_for_identity(
-        session.current_user_id,
-        dave_group_id,
-    )));
     let mut udp_socket: Option<Arc<UdpSocket>> = None;
     let mut ready_audio_ssrc: Option<u32> = None;
     let mut ready_video: Option<BroadcastVideoSsrcs> = None;
@@ -540,7 +530,7 @@ async fn connect_stream_broadcast(
             _ = &mut stop_rx => {
                 break Ok(VoiceConnectionEnd::Stop);
             }
-            _ = heartbeat_timeout_rx.recv() => {
+            _ = gateway_control.heartbeat_timed_out() => {
                 break Ok(VoiceConnectionEnd::Reconnect);
             }
             media_result = media_finished_rx.recv(), if child_tasks.has_media() => {
@@ -567,13 +557,16 @@ async fn connect_stream_broadcast(
             break Ok(VoiceConnectionEnd::Reconnect);
         };
         let frame = frame.map_err(|error| format!("broadcast websocket read failed: {error}"))?;
+        match gateway_control.frame_action(&frame).await? {
+            gateway::StreamVoiceGatewayFrameAction::Payload => {}
+            gateway::StreamVoiceGatewayFrameAction::Continue => continue,
+            gateway::StreamVoiceGatewayFrameAction::End(outcome) => break Ok(outcome),
+        }
         match frame {
             WsMessage::Text(text) => {
                 let value: Value = serde_json::from_str(&text)
                     .map_err(|error| format!("broadcast websocket JSON parse failed: {error}"))?;
-                if let Some(sequence) = value.get("seq").and_then(Value::as_i64) {
-                    *last_sequence.lock().await = Some(sequence);
-                }
+                gateway_control.record_sequence(&value).await;
                 let opcode = value.get("op").and_then(Value::as_u64).unwrap_or_default() as u8;
                 match opcode {
                     VOICE_OP_READY => {
@@ -619,11 +612,10 @@ async fn connect_stream_broadcast(
                                 description.video_codec.as_deref().unwrap_or("none")
                             )));
                         }
-                        if let Some(version) = description.dave_protocol_version {
-                            let version = u16::try_from(version)
-                                .map_err(|_| "DAVE protocol version does not fit u16".to_owned())?;
-                            dave_state.lock().await.reinit(version)?;
-                        }
+                        dave_state
+                            .lock()
+                            .await
+                            .apply_protocol_version(description.dave_protocol_version)?;
                         let socket = udp_socket
                             .as_ref()
                             .ok_or_else(|| {
@@ -646,6 +638,7 @@ async fn connect_stream_broadcast(
                         let stream_key = session.request.stream_key.clone();
                         let connection_id = session.connection_id;
                         let media_description = description.clone();
+                        let media_status_publisher = status_publisher.clone();
                         let preview_uploader = stream_preview_uploader.clone();
                         media_generation = media_generation.wrapping_add(1).max(1);
                         let generation = media_generation;
@@ -661,6 +654,7 @@ async fn connect_stream_broadcast(
                                 events_for_media,
                                 connection_id,
                                 stream_key,
+                                media_status_publisher,
                                 preview_uploader,
                                 media_stop_rx,
                             )
@@ -681,82 +675,25 @@ async fn connect_stream_broadcast(
                             .await;
                         current_description = Some(description);
                     }
-                    VOICE_OP_HEARTBEAT_ACK => {
-                        heartbeat_ack.lock().await.mark_acknowledged();
-                    }
-                    VOICE_OP_HELLO => {
-                        let interval = value
-                            .get("d")
-                            .and_then(|data| data.get("heartbeat_interval"))
-                            .and_then(Value::as_u64)
-                            .map(Duration::from_millis)
-                            .ok_or_else(|| {
-                                "broadcast hello missing heartbeat interval".to_owned()
-                            })?;
-                        heartbeat_ack.lock().await.reset();
-                        child_tasks
-                            .replace_heartbeat(tokio::spawn(gateway::run_voice_heartbeat(
-                                Arc::clone(&writer),
-                                interval,
-                                Arc::clone(&last_sequence),
-                                Arc::clone(&heartbeat_ack),
-                                heartbeat_timeout_tx.clone(),
-                                0,
-                            )))
-                            .await;
-                    }
-                    VOICE_OP_SPEAKING => {
-                        dave_state.lock().await.handle_speaking_op(&value);
-                    }
-                    VOICE_OP_CLIENTS_CONNECT
-                    | VOICE_OP_CLIENT_DISCONNECT
-                    | VOICE_OP_MEDIA_SINK_WANTS
-                    | VOICE_OP_CLIENT_FLAGS
-                    | VOICE_OP_CLIENT_PLATFORM
-                    | VOICE_OP_DAVE_PREPARE_TRANSITION
-                    | VOICE_OP_DAVE_EXECUTE_TRANSITION
-                    | VOICE_OP_DAVE_PREPARE_EPOCH => {
-                        dave_state
-                            .lock()
-                            .await
-                            .handle_json_op(&writer, opcode, &value)
-                            .await?;
-                    }
                     other => {
-                        logging::debug("stream", format!("unhandled broadcast gateway op={other}"));
+                        if !gateway_control
+                            .handle_json_op(other, &value, &mut child_tasks)
+                            .await?
+                        {
+                            logging::debug(
+                                "stream",
+                                format!("unhandled broadcast gateway op={other}"),
+                            );
+                        }
                     }
                 }
             }
             WsMessage::Binary(payload) => {
-                let frame = gateway::parse_voice_binary_frame(&payload)?;
-                *last_sequence.lock().await = Some(frame.sequence);
-                dave_state
-                    .lock()
-                    .await
-                    .handle_binary_frame(&writer, frame)
-                    .await?;
+                gateway_control.handle_binary(&payload).await?;
             }
-            WsMessage::Ping(payload) => {
-                writer
-                    .lock()
-                    .await
-                    .send(WsMessage::Pong(payload))
-                    .await
-                    .map_err(|error| format!("broadcast websocket pong failed: {error}"))?;
+            WsMessage::Ping(_) | WsMessage::Pong(_) | WsMessage::Close(_) | WsMessage::Frame(_) => {
+                unreachable!("gateway control frames are handled first")
             }
-            WsMessage::Close(frame) => {
-                let action = frame
-                    .as_ref()
-                    .map(|frame| gateway::voice_close_action(u16::from(frame.code)))
-                    .unwrap_or(gateway::VoiceCloseAction::Reconnect);
-                break Ok(match action {
-                    gateway::VoiceCloseAction::Stop => VoiceConnectionEnd::Stop,
-                    gateway::VoiceCloseAction::Resume | gateway::VoiceCloseAction::Reconnect => {
-                        VoiceConnectionEnd::Reconnect
-                    }
-                });
-            }
-            WsMessage::Pong(_) | WsMessage::Frame(_) => {}
         }
     };
 
@@ -1462,6 +1399,10 @@ struct BroadcastAudioTask {
 }
 
 impl BroadcastAudioTask {
+    fn disabled() -> Self {
+        Self { task: None }
+    }
+
     fn start(
         target: &super::StreamCaptureTarget,
         socket: Arc<UdpSocket>,
@@ -1526,6 +1467,20 @@ impl Drop for BroadcastAudioTask {
     }
 }
 
+async fn report_system_audio_fallback(
+    status_publisher: &VoiceStatusPublisher,
+    error: impl AsRef<str>,
+) {
+    let message = format!(
+        "System audio is unavailable. The broadcast will continue with video only. {}",
+        error.as_ref()
+    );
+    logging::error("stream", &message);
+    status_publisher
+        .publish_stream_broadcast_audio_unavailable(message)
+        .await;
+}
+
 async fn run_stream_broadcast_audio(
     socket: Arc<UdpSocket>,
     dave_state: Arc<Mutex<VoiceDaveState>>,
@@ -1582,6 +1537,7 @@ async fn run_stream_broadcast_media(
     events_tx: mpsc::UnboundedSender<VoiceRuntimeEvent>,
     connection_id: u64,
     stream_key: String,
+    status_publisher: VoiceStatusPublisher,
     stream_preview_uploader: StreamPreviewUploader,
     mut stop_rx: oneshot::Receiver<()>,
 ) -> Result<(), BroadcastConnectionFailure> {
@@ -1607,19 +1563,25 @@ async fn run_stream_broadcast_media(
         Arc::clone(&stats),
     )
     .map_err(BroadcastConnectionFailure::stop)?;
-    let mut audio_task = BroadcastAudioTask::start(
+    let mut audio_task = match BroadcastAudioTask::start(
         &target,
         Arc::clone(&socket),
         Arc::clone(&dave_state),
         audio_ssrc,
         Arc::clone(&packet_encryptor),
         Arc::clone(&stats),
-    )
-    .map_err(BroadcastConnectionFailure::stop)?;
+    ) {
+        Ok(audio_task) => audio_task,
+        Err(error) => {
+            report_system_audio_fallback(&status_publisher, error).await;
+            BroadcastAudioTask::disabled()
+        }
+    };
     let mut received_packet = vec![0u8; STREAM_UDP_RECEIVE_PACKET_BYTES];
-    // Capture and both media transports are ready at this point. Do not wait
-    // for the first video frame to pass DAVE because it can hold outbound media
-    // until another participant joins the encrypted session.
+    // Capture and the video transport are ready at this point. System audio is
+    // optional because permissions and platform backends may be unavailable.
+    // Do not wait for the first video frame to pass DAVE because it can hold
+    // outbound media until another participant joins the encrypted session.
     let _ = events_tx.send(VoiceRuntimeEvent::BroadcastStreamConnectionEstablished {
         connection_id,
         stream_key: stream_key.clone(),
@@ -1632,7 +1594,9 @@ async fn run_stream_broadcast_media(
             tokio::select! {
                 _ = &mut stop_rx => return Ok(()),
                 audio_result = audio_task.completion() => {
-                    return audio_result.map_err(BroadcastConnectionFailure::stop);
+                    if let Err(error) = audio_result {
+                        report_system_audio_fallback(&status_publisher, error).await;
+                    }
                 }
                 _ = sleep_until(stable_deadline.unwrap_or_else(TokioInstant::now)),
                     if stable_deadline.is_some() =>
