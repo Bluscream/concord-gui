@@ -18,6 +18,13 @@ pub(super) struct EncodedStreamFrame {
 
 pub(super) struct StreamCaptureHandle;
 
+pub(super) struct PreparedStreamCapture {
+    pub(super) handle: StreamCaptureHandle,
+    pub(super) frames: mpsc::Receiver<Result<EncodedStreamFrame, String>>,
+    pub(super) preview_frames: Option<mpsc::Receiver<StreamPreviewFrame>>,
+    pub(super) errors: mpsc::UnboundedReceiver<String>,
+}
+
 impl StreamCaptureHandle {
     pub(super) fn request_keyframe(&self) {
         // Disabled builds never construct a capture handle.
@@ -32,12 +39,9 @@ pub(crate) fn list_stream_capture_targets() -> Result<Vec<StreamCaptureTarget>, 
     Err(STREAM_BROADCAST_FEATURE_DISABLED.to_owned())
 }
 
-pub(super) fn start_stream_capture(
+pub(super) fn prepare_stream_capture(
     _target: StreamCaptureTarget,
-    _frames_tx: mpsc::Sender<Result<EncodedStreamFrame, String>>,
-    _preview_frames_tx: mpsc::Sender<StreamPreviewFrame>,
-    _errors_tx: mpsc::UnboundedSender<String>,
-) -> Result<StreamCaptureHandle, String> {
+) -> Result<PreparedStreamCapture, String> {
     Err(STREAM_BROADCAST_FEATURE_DISABLED.to_owned())
 }
 

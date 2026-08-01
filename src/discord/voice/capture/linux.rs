@@ -20,7 +20,10 @@ use pw::{properties::properties, spa};
 use spa::pod::Pod;
 
 use super::{CaptureFrame, STREAM_CAPTURE_FPS};
-use crate::discord::voice::{StreamCaptureTarget, StreamCaptureTargetKind};
+use crate::{
+    discord::voice::{StreamCaptureTarget, StreamCaptureTargetKind},
+    logging,
+};
 
 const FRAME_QUEUE_CAPACITY: usize = 2;
 const START_TIMEOUT: Duration = Duration::from_secs(5);
@@ -202,13 +205,11 @@ fn run_pipewire_capture(
     pw::init();
     let mainloop = pw::main_loop::MainLoopRc::new(None)
         .map_err(|error| format!("PipeWire main loop creation failed: {error}"))?;
-    let context = pw::context::ContextRc::new(
-        &mainloop,
-        Some(properties! {
-            *pw::keys::CONFIG_NAME => "null",
-        }),
-    )
-    .map_err(|error| format!("PipeWire context creation failed: {error}"))?;
+    let context = pw::context::ContextRc::new(&mainloop, None).map_err(|error| {
+        format!(
+            "PipeWire context creation failed: {error}. Ensure the PipeWire client configuration is installed"
+        )
+    })?;
     let core = context
         .connect_fd_rc(portal.remote_fd, None)
         .map_err(|error| format!("PipeWire portal connection failed: {error}"))?;
@@ -258,11 +259,28 @@ fn run_pipewire_capture(
             {
                 return;
             }
-            if let Err(error) = state.format.parse(param) {
-                send_latest(
-                    &state.frames_tx,
-                    Err(format!("PipeWire video format parse failed: {error}")),
-                );
+            match state.format.parse(param) {
+                Ok(_) => {
+                    let size = state.format.size();
+                    let framerate = state.format.framerate();
+                    logging::debug(
+                        "stream",
+                        format!(
+                            "PipeWire video format negotiated: format={:?} width={} height={} framerate={}/{}",
+                            state.format.format(),
+                            size.width,
+                            size.height,
+                            framerate.num,
+                            framerate.denom,
+                        ),
+                    );
+                }
+                Err(error) => {
+                    send_latest(
+                        &state.frames_tx,
+                        Err(format!("PipeWire video format parse failed: {error}")),
+                    );
+                }
             }
         })
         .process(|stream, state| {
@@ -282,6 +300,8 @@ fn run_pipewire_capture(
     let size = portal.stream.size().unwrap_or((1280, 720));
     let width = u32::try_from(size.0.max(2)).unwrap_or(1280);
     let height = u32::try_from(size.1.max(2)).unwrap_or(720);
+    let maximum_width = width.max(8192);
+    let maximum_height = height.max(4320);
     let format = spa::pod::object!(
         spa::utils::SpaTypes::ObjectParamFormat,
         spa::param::ParamType::EnumFormat,
@@ -308,16 +328,30 @@ fn run_pipewire_capture(
         ),
         spa::pod::property!(
             spa::param::format::FormatProperties::VideoSize,
+            Choice,
+            Range,
             Rectangle,
-            spa::utils::Rectangle { width, height }
+            spa::utils::Rectangle { width, height },
+            spa::utils::Rectangle {
+                width: 2,
+                height: 2,
+            },
+            spa::utils::Rectangle {
+                width: maximum_width,
+                height: maximum_height,
+            }
         ),
         spa::pod::property!(
             spa::param::format::FormatProperties::VideoFramerate,
+            Choice,
+            Range,
             Fraction,
             spa::utils::Fraction {
                 num: STREAM_CAPTURE_FPS,
                 denom: 1,
-            }
+            },
+            spa::utils::Fraction { num: 0, denom: 1 },
+            spa::utils::Fraction { num: 360, denom: 1 }
         ),
     );
     let values = spa::pod::serialize::PodSerializer::serialize(

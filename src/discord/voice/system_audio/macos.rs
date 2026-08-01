@@ -5,8 +5,6 @@ use std::sync::{Mutex, PoisonError, mpsc};
 
 use block2::{DynBlock, RcBlock};
 use dispatch2::{DispatchQueue, DispatchQueueAttr, DispatchRetained};
-use flexaudio_core::backend::{CaptureBackend, RawSink};
-use flexaudio_core::types::{Error, ProcessMode, Result};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{AllocAnyThread, DefinedClass, define_class, msg_send};
@@ -19,24 +17,65 @@ use objc2_screen_capture_kit::{
     SCStreamOutput, SCStreamOutputType, SCWindow,
 };
 
-use crate::logging;
-
-use super::{StreamCaptureTarget, StreamCaptureTargetKind};
+use super::{
+    AudioFrameAssembler, AudioProcessMode, SYSTEM_AUDIO_CHANNELS, SYSTEM_AUDIO_SAMPLE_RATE,
+    StreamCaptureTarget, StreamCaptureTargetKind,
+};
 
 pub(super) const BACKEND_NAME: &str = "screencapturekit-audio";
 
-const SAMPLE_RATE: u32 = 48_000;
-const CHANNELS: u16 = 2;
 const AUDIO_SCRATCH_SAMPLES: usize = 8_192;
 
-pub(super) fn capture_backend(
+pub(super) fn start_capture(
     target: &StreamCaptureTarget,
     _target_pid: u32,
-    _mode: ProcessMode,
-) -> Box<dyn CaptureBackend> {
-    Box::new(ScreenCaptureKitAudioBackend {
-        target: target.clone(),
-        active_stream: None,
+    _mode: AudioProcessMode,
+    assembler: AudioFrameAssembler,
+) -> Result<CaptureSession, String> {
+    let content = shareable_content()?;
+    let filter = content_filter(&content, target)?;
+    let configuration = unsafe { SCStreamConfiguration::new() };
+    unsafe {
+        configuration.setCapturesAudio(true);
+        configuration.setSampleRate(SYSTEM_AUDIO_SAMPLE_RATE as isize);
+        configuration.setChannelCount(SYSTEM_AUDIO_CHANNELS as isize);
+        // ScreenCaptureKit filters window audio at the owning app level.
+        // Excluding Concord prevents received voice audio from being broadcast again.
+        configuration.setExcludesCurrentProcessAudio(true);
+    }
+
+    let stream = unsafe {
+        SCStream::initWithFilter_configuration_delegate(
+            SCStream::alloc(),
+            &filter,
+            &configuration,
+            None,
+        )
+    };
+    let output = MacAudioOutput::new(assembler);
+    let output_protocol = ProtocolObject::<dyn SCStreamOutput>::from_ref(&*output);
+    let queue = DispatchQueue::new("concord.stream-system-audio", DispatchQueueAttr::SERIAL);
+    unsafe {
+        stream.addStreamOutput_type_sampleHandlerQueue_error(
+            output_protocol,
+            SCStreamOutputType::Audio,
+            Some(&queue),
+        )
+    }
+    .map_err(|error| map_screen_capture_error(&error))?;
+
+    let active_stream = ActiveStream {
+        stream,
+        _output: output,
+        _queue: queue,
+    };
+    wait_for_completion(|completion| unsafe {
+        active_stream
+            .stream
+            .startCaptureWithCompletionHandler(Some(completion));
+    })?;
+    Ok(CaptureSession {
+        active_stream: Some(active_stream),
     })
 }
 
@@ -46,8 +85,7 @@ pub(super) fn target_process_id(
     Ok(None)
 }
 
-struct ScreenCaptureKitAudioBackend {
-    target: StreamCaptureTarget,
+pub(super) struct CaptureSession {
     active_stream: Option<ActiveStream>,
 }
 
@@ -63,86 +101,20 @@ struct ActiveStream {
 // stream before releasing the output or queue.
 unsafe impl Send for ActiveStream {}
 
-impl CaptureBackend for ScreenCaptureKitAudioBackend {
-    fn native_format(&self) -> (u32, u16) {
-        (SAMPLE_RATE, CHANNELS)
-    }
-
-    fn start(&mut self, sink: RawSink) -> Result<()> {
-        if self.active_stream.is_some() {
+impl CaptureSession {
+    pub(super) fn stop(&mut self) -> Result<(), String> {
+        let Some(active_stream) = self.active_stream.take() else {
             return Ok(());
-        }
-
-        let content = shareable_content()?;
-        let filter = content_filter(&content, &self.target)?;
-        let configuration = unsafe { SCStreamConfiguration::new() };
-        unsafe {
-            configuration.setCapturesAudio(true);
-            configuration.setSampleRate(SAMPLE_RATE as isize);
-            configuration.setChannelCount(CHANNELS as isize);
-            // ScreenCaptureKit filters window audio at the owning app level.
-            // Excluding Concord prevents received voice audio from being broadcast again.
-            configuration.setExcludesCurrentProcessAudio(true);
-        }
-
-        let stream = unsafe {
-            SCStream::initWithFilter_configuration_delegate(
-                SCStream::alloc(),
-                &filter,
-                &configuration,
-                None,
-            )
-        };
-        let output = MacAudioOutput::new(sink);
-        let output_protocol = ProtocolObject::<dyn SCStreamOutput>::from_ref(&*output);
-        let queue = DispatchQueue::new("concord.stream-system-audio", DispatchQueueAttr::SERIAL);
-        unsafe {
-            stream.addStreamOutput_type_sampleHandlerQueue_error(
-                output_protocol,
-                SCStreamOutputType::Audio,
-                Some(&queue),
-            )
-        }
-        .map_err(|error| map_screen_capture_error(&error))?;
-
-        let active_stream = ActiveStream {
-            stream,
-            _output: output,
-            _queue: queue,
         };
         wait_for_completion(|completion| unsafe {
             active_stream
                 .stream
-                .startCaptureWithCompletionHandler(Some(completion));
-        })?;
-        self.active_stream = Some(active_stream);
-        Ok(())
-    }
-
-    fn stop(&mut self) {
-        let Some(active_stream) = self.active_stream.take() else {
-            return;
-        };
-        if let Err(error) = wait_for_completion(|completion| unsafe {
-            active_stream
-                .stream
                 .stopCaptureWithCompletionHandler(Some(completion));
-        }) {
-            logging::debug(
-                "stream",
-                format!("ScreenCaptureKit audio stop failed: {error}"),
-            );
-        }
+        })
     }
 }
 
-impl Drop for ScreenCaptureKitAudioBackend {
-    fn drop(&mut self) {
-        self.stop();
-    }
-}
-
-fn shareable_content() -> Result<Retained<SCShareableContent>> {
+fn shareable_content() -> Result<Retained<SCShareableContent>, String> {
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     let completion: RcBlock<dyn Fn(*mut SCShareableContent, *mut NSError)> = RcBlock::new(
         move |content: *mut SCShareableContent, error: *mut NSError| {
@@ -151,9 +123,7 @@ fn shareable_content() -> Result<Retained<SCShareableContent>> {
             } else {
                 unsafe { Retained::retain(content) }
                     .map(|content| Retained::into_raw(content) as usize)
-                    .ok_or_else(|| {
-                        Error::Backend("ScreenCaptureKit returned no shareable content".to_owned())
-                    })
+                    .ok_or_else(|| "ScreenCaptureKit returned no shareable content".to_owned())
             };
             let _ = result_tx.send(result);
         },
@@ -162,26 +132,27 @@ fn shareable_content() -> Result<Retained<SCShareableContent>> {
         SCShareableContent::getShareableContentWithCompletionHandler(&completion);
     }
 
-    let content_address = result_rx.recv().map_err(|_| {
-        Error::Backend("ScreenCaptureKit shareable content request was cancelled".to_owned())
-    })??;
+    let content_address = result_rx
+        .recv()
+        .map_err(|_| "ScreenCaptureKit shareable content request was cancelled".to_owned())??;
     let content = unsafe { Retained::from_raw(content_address as *mut SCShareableContent) }
-        .ok_or_else(|| Error::Backend("ScreenCaptureKit returned invalid content".to_owned()))?;
+        .ok_or_else(|| "ScreenCaptureKit returned invalid content".to_owned())?;
     Ok(content)
 }
 
 fn content_filter(
     content: &SCShareableContent,
     target: &StreamCaptureTarget,
-) -> Result<Retained<SCContentFilter>> {
-    let target_id = u32::try_from(target.id).map_err(|_| Error::DeviceNotFound)?;
+) -> Result<Retained<SCContentFilter>, String> {
+    let target_id = u32::try_from(target.id)
+        .map_err(|_| "system audio capture target is invalid".to_owned())?;
     match target.kind {
         StreamCaptureTargetKind::Display => {
             let displays = unsafe { content.displays() };
             let display = (0..displays.count())
                 .map(|index| displays.objectAtIndex(index))
                 .find(|display| unsafe { display.displayID() } == target_id)
-                .ok_or(Error::DeviceNotFound)?;
+                .ok_or_else(|| "system audio display is unavailable".to_owned())?;
             let excluded_windows = NSArray::<SCWindow>::new();
             Ok(unsafe {
                 SCContentFilter::initWithDisplay_excludingWindows(
@@ -196,16 +167,20 @@ fn content_filter(
             let window = (0..windows.count())
                 .map(|index| windows.objectAtIndex(index))
                 .find(|window| unsafe { window.windowID() } == target_id)
-                .ok_or(Error::DeviceNotFound)?;
+                .ok_or_else(|| "system audio window is unavailable".to_owned())?;
             Ok(unsafe {
                 SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &window)
             })
         }
-        StreamCaptureTargetKind::Portal => Err(Error::DeviceNotFound),
+        StreamCaptureTargetKind::Portal => {
+            Err("system audio portal target is unavailable on macOS".to_owned())
+        }
     }
 }
 
-fn wait_for_completion(operation: impl FnOnce(&DynBlock<dyn Fn(*mut NSError)>)) -> Result<()> {
+fn wait_for_completion(
+    operation: impl FnOnce(&DynBlock<dyn Fn(*mut NSError)>),
+) -> Result<(), String> {
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     let completion: RcBlock<dyn Fn(*mut NSError)> = RcBlock::new(move |error: *mut NSError| {
         let result =
@@ -213,9 +188,9 @@ fn wait_for_completion(operation: impl FnOnce(&DynBlock<dyn Fn(*mut NSError)>)) 
         let _ = result_tx.send(result);
     });
     operation(&completion);
-    result_rx.recv().map_err(|_| {
-        Error::Backend("ScreenCaptureKit operation completion was cancelled".to_owned())
-    })?
+    result_rx
+        .recv()
+        .map_err(|_| "ScreenCaptureKit operation completion was cancelled".to_owned())?
 }
 
 struct MacAudioOutputIvars {
@@ -252,10 +227,10 @@ define_class!(
 unsafe impl NSObjectProtocol for MacAudioOutput {}
 
 impl MacAudioOutput {
-    fn new(sink: RawSink) -> Retained<Self> {
+    fn new(assembler: AudioFrameAssembler) -> Retained<Self> {
         let this = Self::alloc().set_ivars(MacAudioOutputIvars {
             state: Mutex::new(MacAudioOutputState {
-                sink,
+                assembler,
                 scratch: Vec::with_capacity(AUDIO_SCRATCH_SAMPLES),
             }),
         });
@@ -264,7 +239,7 @@ impl MacAudioOutput {
 }
 
 struct MacAudioOutputState {
-    sink: RawSink,
+    assembler: AudioFrameAssembler,
     scratch: Vec<f32>,
 }
 
@@ -284,9 +259,9 @@ impl MacAudioOutputState {
         };
 
         self.scratch.clear();
-        if first.mNumberChannels >= u32::from(CHANNELS) {
+        if first.mNumberChannels >= u32::from(SYSTEM_AUDIO_CHANNELS) {
             append_f32_samples(&mut self.scratch, first_data);
-        } else if buffer_count >= usize::from(CHANNELS) {
+        } else if buffer_count >= usize::from(SYSTEM_AUDIO_CHANNELS) {
             let Some(second_data) = audio_buffer_bytes(&buffers.list.buffers[1]) else {
                 return;
             };
@@ -296,7 +271,7 @@ impl MacAudioOutputState {
         }
 
         if !self.scratch.is_empty() {
-            self.sink.push(&self.scratch, 0);
+            self.assembler.push(&self.scratch);
         }
     }
 }
@@ -382,14 +357,14 @@ fn append_mono_as_stereo(output: &mut Vec<f32>, bytes: &[u8]) {
     }
 }
 
-fn map_screen_capture_error(error: &NSError) -> Error {
+fn map_screen_capture_error(error: &NSError) -> String {
     match SCStreamErrorCode(error.code()) {
         SCStreamErrorCode::UserDeclined | SCStreamErrorCode::MissingEntitlements => {
-            Error::PermissionDenied
+            "system audio permission denied".to_owned()
         }
         SCStreamErrorCode::NoWindowList
         | SCStreamErrorCode::NoDisplayList
-        | SCStreamErrorCode::NoCaptureSource => Error::DeviceNotFound,
-        _ => Error::Backend(error.to_string()),
+        | SCStreamErrorCode::NoCaptureSource => "system audio source is unavailable".to_owned(),
+        _ => format!("ScreenCaptureKit system audio failed: {error}"),
     }
 }

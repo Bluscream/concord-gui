@@ -1,19 +1,558 @@
-use flexaudio_core::backend::CaptureBackend;
-use flexaudio_core::types::ProcessMode;
-use flexaudio_os_linux::PwProcessBackend;
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    fs,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    thread::{self, JoinHandle},
+    time::Duration,
+};
 
-use super::StreamCaptureTarget;
+use pipewire as pw;
+use pw::{properties::properties, spa};
+use spa::pod::Pod;
+
+use crate::logging;
+
+use super::{
+    AudioFrameAssembler, AudioProcessMode, SYSTEM_AUDIO_CHANNELS, SYSTEM_AUDIO_SAMPLE_RATE,
+    StreamCaptureTarget,
+};
 
 pub(super) const BACKEND_NAME: &str = "pipewire-process";
 
-pub(super) fn capture_backend(
+const START_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_PROCESS_ANCESTORS: usize = 32;
+
+pub(super) struct CaptureSession {
+    stop_tx: pw::channel::Sender<()>,
+    stopping: Arc<AtomicBool>,
+    worker: Option<JoinHandle<Result<(), String>>>,
+}
+
+struct PipeWireAudioState {
+    format: spa::param::audio::AudioInfoRaw,
+    assembler: AudioFrameAssembler,
+    scratch: Vec<f32>,
+}
+
+#[derive(Clone, Copy)]
+struct OutputNode {
+    client_id: Option<u32>,
+    application_pid: Option<u32>,
+}
+
+#[derive(Clone)]
+struct AudioPort {
+    node_id: u32,
+    direction: String,
+    channel: String,
+}
+
+#[derive(Default)]
+struct RegistryState {
+    clients: HashMap<u32, u32>,
+    nodes: HashMap<u32, OutputNode>,
+    ports: HashMap<u32, AudioPort>,
+    links: HashMap<u32, Vec<pw::link::Link>>,
+}
+
+pub(super) fn start_capture(
     _target: &StreamCaptureTarget,
     target_pid: u32,
-    mode: ProcessMode,
-) -> Box<dyn CaptureBackend> {
-    Box::new(PwProcessBackend::new(target_pid, mode))
+    mode: AudioProcessMode,
+    assembler: AudioFrameAssembler,
+) -> Result<CaptureSession, String> {
+    let (stop_tx, stop_rx) = pw::channel::channel();
+    let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+    let stopping = Arc::new(AtomicBool::new(false));
+    let worker_stopping = Arc::clone(&stopping);
+    let worker = thread::Builder::new()
+        .name("stream-pipewire-system-audio".to_owned())
+        .spawn(move || {
+            run_capture(
+                target_pid,
+                mode,
+                assembler,
+                stop_rx,
+                ready_tx,
+                worker_stopping,
+            )
+        })
+        .map_err(|error| format!("PipeWire system audio worker spawn failed: {error}"))?;
+
+    match ready_rx.recv_timeout(START_TIMEOUT) {
+        Ok(Ok(())) => Ok(CaptureSession {
+            stop_tx,
+            stopping,
+            worker: Some(worker),
+        }),
+        Ok(Err(error)) => {
+            let _ = worker.join();
+            Err(error)
+        }
+        Err(_) => {
+            stopping.store(true, Ordering::Release);
+            let _ = stop_tx.send(());
+            let _ = worker.join();
+            Err("PipeWire system audio capture did not start in time".to_owned())
+        }
+    }
 }
 
 pub(super) fn target_process_id(_target: &StreamCaptureTarget) -> Result<Option<u32>, String> {
     Ok(None)
+}
+
+impl CaptureSession {
+    pub(super) fn stop(&mut self) -> Result<(), String> {
+        self.stopping.store(true, Ordering::Release);
+        let _ = self.stop_tx.send(());
+        let Some(worker) = self.worker.take() else {
+            return Ok(());
+        };
+        worker
+            .join()
+            .map_err(|panic| format!("PipeWire system audio worker panicked: {panic:?}"))?
+    }
+}
+
+fn run_capture(
+    target_pid: u32,
+    mode: AudioProcessMode,
+    assembler: AudioFrameAssembler,
+    stop_rx: pw::channel::Receiver<()>,
+    ready_tx: mpsc::SyncSender<Result<(), String>>,
+    stopping: Arc<AtomicBool>,
+) -> Result<(), String> {
+    pw::init();
+    let mainloop = pw::main_loop::MainLoopRc::new(None)
+        .map_err(|error| format!("PipeWire audio main loop creation failed: {error}"))?;
+    let context = pw::context::ContextRc::new(&mainloop, None).map_err(|error| {
+        format!(
+            "PipeWire audio context creation failed: {error}. Ensure the PipeWire client configuration is installed"
+        )
+    })?;
+    let core = context
+        .connect_rc(None)
+        .map_err(|error| format!("PipeWire audio connection failed: {error}"))?;
+    let registry = core
+        .get_registry_rc()
+        .map_err(|error| format!("PipeWire audio registry creation failed: {error}"))?;
+    let stream = pw::stream::StreamRc::new(
+        core.clone(),
+        "concord-system-audio",
+        properties! {
+            *pw::keys::MEDIA_TYPE => "Audio",
+            *pw::keys::MEDIA_CATEGORY => "Capture",
+            *pw::keys::MEDIA_CLASS => "Stream/Input/Audio",
+            *pw::keys::MEDIA_ROLE => "Screen",
+            *pw::keys::NODE_NAME => "concord-system-audio",
+        },
+    )
+    .map_err(|error| format!("PipeWire system audio stream creation failed: {error}"))?;
+
+    let runtime_error = Rc::new(RefCell::new(None::<String>));
+    let error_mainloop = mainloop.clone();
+    let state_error = Rc::clone(&runtime_error);
+    let format_mainloop = mainloop.clone();
+    let format_error = Rc::clone(&runtime_error);
+    let process_mainloop = mainloop.clone();
+    let _stream_listener = stream
+        .add_local_listener_with_user_data(PipeWireAudioState {
+            format: spa::param::audio::AudioInfoRaw::new(),
+            assembler,
+            scratch: Vec::with_capacity(4_096),
+        })
+        .state_changed(move |_, _, _, state| {
+            if let pw::stream::StreamState::Error(error) = state {
+                *state_error.borrow_mut() =
+                    Some(format!("PipeWire system audio stream failed: {error}"));
+                error_mainloop.quit();
+            }
+        })
+        .param_changed(move |_, state, id, param| {
+            let Some(param) = param else {
+                return;
+            };
+            if id != spa::param::ParamType::Format.as_raw() {
+                return;
+            }
+            let Ok((media_type, media_subtype)) = spa::param::format_utils::parse_format(param)
+            else {
+                return;
+            };
+            if media_type != spa::param::format::MediaType::Audio
+                || media_subtype != spa::param::format::MediaSubtype::Raw
+            {
+                return;
+            }
+            if let Err(error) = state.format.parse(param) {
+                *format_error.borrow_mut() = Some(format!(
+                    "PipeWire system audio format parse failed: {error}"
+                ));
+                format_mainloop.quit();
+                return;
+            }
+            if state.format.format() != spa::param::audio::AudioFormat::F32LE
+                || state.format.rate() != SYSTEM_AUDIO_SAMPLE_RATE
+                || state.format.channels() != u32::from(SYSTEM_AUDIO_CHANNELS)
+            {
+                *format_error.borrow_mut() = Some(format!(
+                    "PipeWire system audio negotiated an unsupported format: format={:?} rate={} channels={}",
+                    state.format.format(),
+                    state.format.rate(),
+                    state.format.channels(),
+                ));
+                format_mainloop.quit();
+                return;
+            }
+            logging::debug(
+                "stream",
+                format!(
+                    "PipeWire system audio format negotiated: format={:?} rate={} channels={}",
+                    state.format.format(),
+                    state.format.rate(),
+                    state.format.channels(),
+                ),
+            );
+        })
+        .process(move |stream, state| {
+            let Some(mut buffer) = stream.dequeue_buffer() else {
+                return;
+            };
+            let Some(data) = buffer.datas_mut().first_mut() else {
+                return;
+            };
+            let chunk = data.chunk();
+            let offset = chunk.offset() as usize;
+            let size = chunk.size() as usize;
+            let Some(bytes) = data.data() else {
+                return;
+            };
+            let Some(end) = offset.checked_add(size).filter(|end| *end <= bytes.len()) else {
+                return;
+            };
+
+            state.scratch.clear();
+            state.scratch.extend(
+                bytes[offset..end]
+                    .chunks_exact(size_of::<f32>())
+                    .map(|sample| f32::from_le_bytes([sample[0], sample[1], sample[2], sample[3]])),
+            );
+            if !state.scratch.is_empty() && !state.assembler.push(&state.scratch) {
+                process_mainloop.quit();
+            }
+        })
+        .register()
+        .map_err(|error| format!("PipeWire system audio listener setup failed: {error}"))?;
+
+    let values = audio_format_pod()?;
+    let mut params = [Pod::from_bytes(&values).expect("serialized audio format is valid")];
+    stream
+        .connect(
+            spa::utils::Direction::Input,
+            None,
+            pw::stream::StreamFlags::MAP_BUFFERS,
+            &mut params,
+        )
+        .map_err(|error| format!("PipeWire system audio stream connection failed: {error}"))?;
+
+    let registry_state = Rc::new(RefCell::new(RegistryState::default()));
+    let global_state = Rc::clone(&registry_state);
+    let global_core = core.clone();
+    let global_stream = stream.clone();
+    let remove_state = Rc::clone(&registry_state);
+    let remove_core = core.clone();
+    let remove_stream = stream.clone();
+    let _registry_listener = registry
+        .add_listener_local()
+        .global(move |global| {
+            let Some(props) = global.props else {
+                return;
+            };
+            match global.type_ {
+                pw::types::ObjectType::Client => {
+                    if let Some(pid) = property_pid(props, *pw::keys::APP_PROCESS_ID)
+                        .or_else(|| property_pid(props, *pw::keys::SEC_PID))
+                    {
+                        global_state.borrow_mut().clients.insert(global.id, pid);
+                    }
+                }
+                pw::types::ObjectType::Node => {
+                    if props.get(*pw::keys::MEDIA_CLASS) != Some("Stream/Output/Audio") {
+                        return;
+                    }
+                    let client_id = props
+                        .get(*pw::keys::CLIENT_ID)
+                        .and_then(|value| value.parse().ok());
+                    let application_pid = property_pid(props, *pw::keys::APP_PROCESS_ID)
+                        .or_else(|| property_pid(props, *pw::keys::SEC_PID));
+                    global_state.borrow_mut().nodes.insert(
+                        global.id,
+                        OutputNode {
+                            client_id,
+                            application_pid,
+                        },
+                    );
+                }
+                pw::types::ObjectType::Port => {
+                    let Some(node_id) = props
+                        .get(*pw::keys::NODE_ID)
+                        .and_then(|value| value.parse().ok())
+                    else {
+                        return;
+                    };
+                    let direction = props
+                        .get(*pw::keys::PORT_DIRECTION)
+                        .unwrap_or("")
+                        .to_owned();
+                    if direction != "in" && direction != "out" {
+                        return;
+                    }
+                    let channel = props.get(*pw::keys::AUDIO_CHANNEL).unwrap_or("").to_owned();
+                    let mut state = global_state.borrow_mut();
+                    state.ports.insert(
+                        global.id,
+                        AudioPort {
+                            node_id,
+                            direction,
+                            channel,
+                        },
+                    );
+                    if state.links.contains_key(&node_id) || node_id == global_stream.node_id() {
+                        state.links.clear();
+                    }
+                }
+                _ => return,
+            }
+            link_matching_outputs(
+                &global_core,
+                &global_stream,
+                target_pid,
+                mode,
+                &global_state,
+            );
+        })
+        .global_remove(move |id| {
+            let self_node_id = remove_stream.node_id();
+            let mut state = remove_state.borrow_mut();
+            let removed_port = state.ports.remove(&id);
+            let removed_node = state.nodes.remove(&id).is_some();
+            let removed_client = state.clients.remove(&id).is_some();
+            if removed_node {
+                state.links.remove(&id);
+            }
+            if let Some(port) = removed_port {
+                if port.node_id == self_node_id {
+                    state.links.clear();
+                } else {
+                    state.links.remove(&port.node_id);
+                }
+            }
+            if removed_client {
+                state.links.clear();
+            }
+            drop(state);
+            link_matching_outputs(
+                &remove_core,
+                &remove_stream,
+                target_pid,
+                mode,
+                &remove_state,
+            );
+        })
+        .register();
+
+    let stop_mainloop = mainloop.clone();
+    let _stop_listener = stop_rx.attach(mainloop.loop_(), move |_| stop_mainloop.quit());
+    if ready_tx.send(Ok(())).is_err() {
+        return Ok(());
+    }
+
+    mainloop.run();
+    if let Some(error) = runtime_error.borrow_mut().take()
+        && !stopping.load(Ordering::Acquire)
+    {
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn audio_format_pod() -> Result<Vec<u8>, String> {
+    let mut audio = spa::param::audio::AudioInfoRaw::new();
+    audio.set_format(spa::param::audio::AudioFormat::F32LE);
+    audio.set_rate(SYSTEM_AUDIO_SAMPLE_RATE);
+    audio.set_channels(u32::from(SYSTEM_AUDIO_CHANNELS));
+    let format = spa::pod::Object {
+        type_: spa::utils::SpaTypes::ObjectParamFormat.as_raw(),
+        id: spa::param::ParamType::EnumFormat.as_raw(),
+        properties: audio.into(),
+    };
+    spa::pod::serialize::PodSerializer::serialize(
+        std::io::Cursor::new(Vec::new()),
+        &spa::pod::Value::Object(format),
+    )
+    .map(|serialized| serialized.0.into_inner())
+    .map_err(|error| format!("PipeWire system audio format serialization failed: {error}"))
+}
+
+fn property_pid(props: &spa::utils::dict::DictRef, key: &str) -> Option<u32> {
+    props.get(key)?.parse().ok()
+}
+
+fn resolve_node_pid(node: OutputNode, clients: &HashMap<u32, u32>) -> Option<u32> {
+    node.application_pid
+        .or_else(|| node.client_id.and_then(|id| clients.get(&id).copied()))
+}
+
+fn process_matches(candidate: u32, target: u32) -> bool {
+    if candidate == target {
+        return true;
+    }
+
+    let mut current = candidate;
+    for _ in 0..MAX_PROCESS_ANCESTORS {
+        let Ok(status) = fs::read_to_string(format!("/proc/{current}/status")) else {
+            return false;
+        };
+        let Some(parent) = status.lines().find_map(|line| {
+            line.strip_prefix("PPid:")
+                .and_then(|value| value.trim().parse::<u32>().ok())
+        }) else {
+            return false;
+        };
+        if parent == target {
+            return true;
+        }
+        if parent == 0 || parent == current {
+            return false;
+        }
+        current = parent;
+    }
+    false
+}
+
+fn link_matching_outputs(
+    core: &pw::core::CoreRc,
+    stream: &pw::stream::StreamRc,
+    target_pid: u32,
+    mode: AudioProcessMode,
+    state: &RefCell<RegistryState>,
+) {
+    let self_node_id = stream.node_id();
+    if self_node_id == 0 || self_node_id == pw::constants::ID_ANY {
+        return;
+    }
+
+    let (input_ports, targets) = {
+        let state = state.borrow();
+        let input_ports = state
+            .ports
+            .iter()
+            .filter(|(_, port)| port.node_id == self_node_id && port.direction == "in")
+            .map(|(id, port)| (*id, port.channel.clone()))
+            .collect::<Vec<_>>();
+        let targets = state
+            .nodes
+            .iter()
+            .filter_map(|(node_id, node)| {
+                if state.links.contains_key(node_id) {
+                    return None;
+                }
+                let pid = resolve_node_pid(*node, &state.clients)?;
+                let matches = process_matches(pid, target_pid);
+                match mode {
+                    AudioProcessMode::Include if matches => Some(*node_id),
+                    AudioProcessMode::Exclude if !matches => Some(*node_id),
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>();
+        (input_ports, targets)
+    };
+    if input_ports.is_empty() {
+        return;
+    }
+
+    for node_id in targets {
+        let output_ports = {
+            let state = state.borrow();
+            state
+                .ports
+                .iter()
+                .filter(|(_, port)| port.node_id == node_id && port.direction == "out")
+                .map(|(id, port)| (*id, port.channel.clone()))
+                .collect::<Vec<_>>()
+        };
+        let pairs = pair_audio_ports(&output_ports, &input_ports);
+        if pairs.is_empty() {
+            continue;
+        }
+
+        let mut links = Vec::with_capacity(pairs.len());
+        for (output_port, input_port) in &pairs {
+            let properties = properties! {
+                *pw::keys::LINK_OUTPUT_NODE => node_id.to_string(),
+                *pw::keys::LINK_OUTPUT_PORT => output_port.to_string(),
+                *pw::keys::LINK_INPUT_NODE => self_node_id.to_string(),
+                *pw::keys::LINK_INPUT_PORT => input_port.to_string(),
+            };
+            let Ok(link) = core.create_object::<pw::link::Link>("link-factory", &properties) else {
+                links.clear();
+                break;
+            };
+            links.push(link);
+        }
+        if links.len() == pairs.len() {
+            state.borrow_mut().links.insert(node_id, links);
+            logging::debug(
+                "stream",
+                format!("PipeWire system audio linked output node: node_id={node_id}"),
+            );
+        }
+    }
+}
+
+fn pair_audio_ports(outputs: &[(u32, String)], inputs: &[(u32, String)]) -> Vec<(u32, u32)> {
+    if outputs.is_empty() || inputs.is_empty() {
+        return Vec::new();
+    }
+    if outputs.len() == 1 {
+        return inputs
+            .iter()
+            .map(|(input, _)| (outputs[0].0, *input))
+            .collect();
+    }
+
+    let mut pairs = Vec::new();
+    let mut used_inputs = vec![false; inputs.len()];
+    for (output, output_channel) in outputs {
+        if let Some((index, (input, _))) =
+            inputs.iter().enumerate().find(|(index, (_, channel))| {
+                !used_inputs[*index] && !output_channel.is_empty() && channel == output_channel
+            })
+        {
+            used_inputs[index] = true;
+            pairs.push((*output, *input));
+        }
+    }
+    for (output, _) in outputs {
+        if pairs.iter().any(|(paired, _)| paired == output) {
+            continue;
+        }
+        if let Some((index, (input, _))) = inputs
+            .iter()
+            .enumerate()
+            .find(|(index, _)| !used_inputs[*index])
+        {
+            used_inputs[index] = true;
+            pairs.push((*output, *input));
+        }
+    }
+    pairs
 }

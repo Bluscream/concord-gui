@@ -1,5 +1,6 @@
 use super::broadcast::{
-    StreamBroadcastGatewaySession, StreamBroadcastRuntimeState, run_stream_broadcast_session,
+    StreamBroadcastCaptureRegistry, StreamBroadcastGatewaySession, StreamBroadcastRuntimeState,
+    run_stream_broadcast_session,
 };
 use super::stream::{StreamGatewaySession, StreamRuntimeState, run_stream_gateway_session};
 use super::*;
@@ -157,11 +158,14 @@ impl VoiceRuntimeState {
             | VoiceRuntimeEvent::StreamConnectionEstablished { .. }
             | VoiceRuntimeEvent::StreamConnectionEnded { .. }
             | VoiceRuntimeEvent::BroadcastStreamRequested(_)
-            | VoiceRuntimeEvent::BroadcastStreamCancelled { .. }
+            | VoiceRuntimeEvent::BroadcastStreamCaptureReady { .. }
+            | VoiceRuntimeEvent::BroadcastStreamCaptureFailed { .. }
             | VoiceRuntimeEvent::BroadcastStreamStopRequested { .. }
             | VoiceRuntimeEvent::BroadcastStreamConnectionEstablished { .. }
             | VoiceRuntimeEvent::BroadcastStreamConnectionStable { .. }
             | VoiceRuntimeEvent::BroadcastStreamConnectionEnded { .. } => {}
+            #[cfg(test)]
+            VoiceRuntimeEvent::BroadcastStreamCancelled { .. } => {}
             VoiceRuntimeEvent::ConnectionEstablished { connection_id } => {
                 if self
                     .active
@@ -384,9 +388,29 @@ pub(crate) async fn run_voice_runtime(
     let mut broadcast_task: Option<JoinHandle<()>> = None;
     let mut broadcast_session: Option<StreamBroadcastGatewaySession> = None;
     let mut broadcast_stop_tx: Option<oneshot::Sender<()>> = None;
+    let mut broadcast_capture_prepare_task: Option<JoinHandle<()>> = None;
+    let broadcast_captures = StreamBroadcastCaptureRegistry::default();
 
     while let Some(event) = events.recv().await {
         let shutdown = matches!(event, VoiceRuntimeEvent::Shutdown);
+        let broadcast_capture_request = match &event {
+            VoiceRuntimeEvent::BroadcastStreamRequested(request) => {
+                Some((request.stream_key.clone(), request.target.clone()))
+            }
+            _ => None,
+        };
+        let broadcast_capture_ready = match &event {
+            VoiceRuntimeEvent::BroadcastStreamCaptureReady { stream_key } => {
+                Some(stream_key.clone())
+            }
+            _ => None,
+        };
+        let broadcast_capture_failed = match &event {
+            VoiceRuntimeEvent::BroadcastStreamCaptureFailed { stream_key, .. } => {
+                Some(stream_key.clone())
+            }
+            _ => None,
+        };
         let broadcast_started = match (&event, broadcast_session.as_ref()) {
             (
                 VoiceRuntimeEvent::BroadcastStreamConnectionEstablished {
@@ -451,6 +475,59 @@ pub(crate) async fn run_voice_runtime(
                 .publish_stream_broadcast_ended(ended.scope, ended.channel_id)
                 .await;
         }
+        if let Some((stream_key, target)) = broadcast_capture_request {
+            if let Some(task) = broadcast_capture_prepare_task.take() {
+                task.abort();
+            }
+            broadcast_captures.activate(stream_key.clone());
+            let captures = broadcast_captures.clone();
+            let capture_events_tx = events_tx.clone();
+            broadcast_capture_prepare_task = Some(tokio::spawn(async move {
+                logging::debug(
+                    "stream",
+                    "preparing stream capture before creating Discord stream",
+                );
+                let prepared_stream_key = stream_key.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    captures.prepare(prepared_stream_key, target)
+                })
+                .await
+                .map_err(|error| format!("stream capture preparation task failed: {error}"))
+                .and_then(|result| result);
+                match result {
+                    Ok(true) => {
+                        let _ = capture_events_tx
+                            .send(VoiceRuntimeEvent::BroadcastStreamCaptureReady { stream_key });
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        let _ = capture_events_tx.send(
+                            VoiceRuntimeEvent::BroadcastStreamCaptureFailed { stream_key, error },
+                        );
+                    }
+                }
+            }));
+        }
+        if let Some(stream_key) = broadcast_capture_ready {
+            broadcast_capture_prepare_task.take();
+            if let Some((scope, channel_id)) = broadcast_state.requested_destination(&stream_key) {
+                if gateway_commands_tx
+                    .send(GatewayCommand::CreateStream { scope, channel_id })
+                    .is_err()
+                {
+                    let _ = events_tx.send(VoiceRuntimeEvent::BroadcastStreamCaptureFailed {
+                        stream_key,
+                        error: "gateway command channel closed".to_owned(),
+                    });
+                }
+            } else {
+                broadcast_captures.discard(&stream_key);
+            }
+        }
+        if let Some(stream_key) = broadcast_capture_failed {
+            broadcast_capture_prepare_task.take();
+            broadcast_captures.discard(&stream_key);
+        }
         let replacing_broadcast = broadcast_update.connect.is_some();
         if let Some(stream_key) = broadcast_update.close_stream_key {
             if !replacing_broadcast {
@@ -461,6 +538,7 @@ pub(crate) async fn run_voice_runtime(
                     "stopping active stream broadcast task",
                 )
                 .await;
+                broadcast_captures.discard(&stream_key);
             }
             if broadcast_update.send_delete {
                 let _ = gateway_commands_tx.send(GatewayCommand::DeleteStream { stream_key });
@@ -475,6 +553,7 @@ pub(crate) async fn run_voice_runtime(
                 events_tx.clone(),
                 status_publisher.clone(),
                 stream_preview_uploader.clone(),
+                broadcast_captures.clone(),
                 "stopping previous stream broadcast task before reconnect",
             );
         }
@@ -574,6 +653,9 @@ pub(crate) async fn run_voice_runtime(
             participant_playback_tx.send_replace(state.participant_playback_settings.clone());
         }
         if shutdown {
+            if let Some(task) = broadcast_capture_prepare_task.take() {
+                task.abort();
+            }
             break;
         }
     }
@@ -681,6 +763,7 @@ fn replace_stream_broadcast_task(
     events_tx: mpsc::UnboundedSender<VoiceRuntimeEvent>,
     status_publisher: VoiceStatusPublisher,
     stream_preview_uploader: StreamPreviewUploader,
+    broadcast_captures: StreamBroadcastCaptureRegistry,
     label: &str,
 ) {
     if let Some(stop_tx) = stop_tx.take() {
@@ -700,6 +783,7 @@ fn replace_stream_broadcast_task(
             events_tx,
             status_publisher,
             stream_preview_uploader,
+            broadcast_captures,
             stop_rx,
         ),
     )));

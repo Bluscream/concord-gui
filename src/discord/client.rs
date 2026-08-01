@@ -464,23 +464,14 @@ impl DiscordClient {
         drop(state);
 
         let request = StreamBroadcastRequest {
-            stream_key: stream_key.clone(),
+            stream_key,
             scope,
             channel_id,
             target,
         };
         self.voice_events_tx
             .send(VoiceRuntimeEvent::BroadcastStreamRequested(request))
-            .map_err(|_| "voice runtime stopped".to_owned())?;
-        if let Err(error) =
-            self.send_gateway_command(GatewayCommand::CreateStream { scope, channel_id })
-        {
-            let _ = self
-                .voice_events_tx
-                .send(VoiceRuntimeEvent::BroadcastStreamCancelled { stream_key });
-            return Err(error);
-        }
-        Ok(())
+            .map_err(|_| "voice runtime stopped".to_owned())
     }
 
     pub fn request_stream_stop(

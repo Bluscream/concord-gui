@@ -4,21 +4,9 @@ use std::time::Instant;
 #[cfg(feature = "stream-broadcast")]
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicU64, Ordering},
 };
-#[cfg(feature = "stream-broadcast")]
-use std::thread::{self, JoinHandle};
-#[cfg(feature = "stream-broadcast")]
-use std::time::Duration;
 
-#[cfg(feature = "stream-broadcast")]
-use flexaudio_core::backend::{CaptureBackend, RawSink};
-#[cfg(feature = "stream-broadcast")]
-use flexaudio_core::normalizer::Normalizer;
-#[cfg(feature = "stream-broadcast")]
-use flexaudio_core::raw_ring::{RawConsumer, raw_ring};
-#[cfg(feature = "stream-broadcast")]
-use flexaudio_core::types::{Error as FlexAudioError, OutputFormat, ProcessMode};
 use tokio::sync::mpsc;
 
 #[cfg(feature = "stream-broadcast")]
@@ -43,9 +31,9 @@ mod platform;
 pub(super) const SYSTEM_AUDIO_FRAME_QUEUE: usize = 8;
 
 #[cfg(feature = "stream-broadcast")]
-const SYSTEM_AUDIO_RAW_RING_SAMPLES: usize = 48_000;
+pub(super) const SYSTEM_AUDIO_SAMPLE_RATE: u32 = 48_000;
 #[cfg(feature = "stream-broadcast")]
-const SYSTEM_AUDIO_POLL_INTERVAL: Duration = Duration::from_millis(2);
+pub(super) const SYSTEM_AUDIO_CHANNELS: u16 = 2;
 
 #[derive(Debug)]
 pub(super) struct SystemAudioFrame {
@@ -54,10 +42,11 @@ pub(super) struct SystemAudioFrame {
 }
 
 pub(super) struct SystemAudioCapture {
-    #[cfg(feature = "stream-broadcast")]
-    stop: Arc<AtomicBool>,
-    #[cfg(feature = "stream-broadcast")]
-    worker: Option<JoinHandle<()>>,
+    #[cfg(all(
+        feature = "stream-broadcast",
+        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    ))]
+    session: platform::CaptureSession,
     #[cfg(feature = "stream-broadcast")]
     stats: Arc<SystemAudioCaptureStats>,
 }
@@ -83,23 +72,86 @@ impl fmt::Display for SystemAudioCaptureError {
 
 #[cfg(feature = "stream-broadcast")]
 #[derive(Default)]
-struct SystemAudioCaptureStats {
+pub(super) struct SystemAudioCaptureStats {
     source_samples: AtomicU64,
     queued_frames: AtomicU64,
     queue_dropped_frames: AtomicU64,
-    raw_dropped_samples: AtomicU64,
+}
+
+#[cfg(feature = "stream-broadcast")]
+pub(super) struct AudioFrameAssembler {
+    pending: Vec<f32>,
+    frames_tx: mpsc::Sender<SystemAudioFrame>,
+    stats: Arc<SystemAudioCaptureStats>,
+}
+
+#[cfg(feature = "stream-broadcast")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum AudioProcessMode {
+    Include,
+    Exclude,
+}
+
+#[cfg(feature = "stream-broadcast")]
+impl AudioFrameAssembler {
+    pub(super) fn new(
+        frames_tx: mpsc::Sender<SystemAudioFrame>,
+        stats: Arc<SystemAudioCaptureStats>,
+    ) -> Self {
+        Self {
+            pending: Vec::with_capacity(DISCORD_OPUS_20MS_STEREO_SAMPLES * 2),
+            frames_tx,
+            stats,
+        }
+    }
+
+    /// Accepts interleaved 48 kHz stereo float samples and emits exact 20 ms
+    /// frames expected by the broadcast Opus encoder.
+    pub(super) fn push(&mut self, samples: &[f32]) -> bool {
+        self.stats
+            .source_samples
+            .fetch_add(samples.len() as u64, Ordering::Relaxed);
+        self.pending.extend_from_slice(samples);
+
+        let mut consumed = 0;
+        while self.pending.len() - consumed >= DISCORD_OPUS_20MS_STEREO_SAMPLES {
+            let end = consumed + DISCORD_OPUS_20MS_STEREO_SAMPLES;
+            let frame = SystemAudioFrame {
+                samples: self.pending[consumed..end]
+                    .iter()
+                    .copied()
+                    .map(audio_output::f32_sample_to_i16)
+                    .collect(),
+                captured_at: Instant::now(),
+            };
+            consumed = end;
+
+            match self.frames_tx.try_send(frame) {
+                Ok(()) => {
+                    self.stats.queued_frames.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    self.stats
+                        .queue_dropped_frames
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => return false,
+            }
+        }
+
+        if consumed > 0 {
+            let remaining = self.pending.len() - consumed;
+            self.pending.copy_within(consumed.., 0);
+            self.pending.truncate(remaining);
+        }
+        true
+    }
 }
 
 #[cfg(feature = "stream-broadcast")]
 impl SystemAudioCapture {
     pub(super) fn dropped_frames(&self) -> u64 {
-        self.stats
-            .queue_dropped_frames
-            .load(Ordering::Relaxed)
-            .saturating_add(
-                self.stats.raw_dropped_samples.load(Ordering::Relaxed)
-                    / DISCORD_OPUS_20MS_STEREO_SAMPLES as u64,
-            )
+        self.stats.queue_dropped_frames.load(Ordering::Relaxed)
     }
 }
 
@@ -119,55 +171,22 @@ pub(super) fn start_system_audio_capture(
     frames_tx: mpsc::Sender<SystemAudioFrame>,
 ) -> Result<SystemAudioCapture, SystemAudioCaptureError> {
     let scope = resolve_audio_scope(target)?;
-    let mut backend = platform::capture_backend(target, scope.target_pid, scope.mode);
-    let (sample_rate, channels) = backend.native_format();
-    if sample_rate == 0 || channels == 0 {
-        return Err(SystemAudioCaptureError::new(format!(
-            "{} system audio backend returned an invalid format: sample_rate={sample_rate} channels={channels}",
-            platform::BACKEND_NAME,
-        )));
-    }
-
-    let normalizer = Normalizer::new(sample_rate, channels, OutputFormat::default())
-        .map_err(system_audio_backend_error)?;
-    let (raw_tx, raw_rx) = raw_ring(SYSTEM_AUDIO_RAW_RING_SAMPLES);
-    backend
-        .start(RawSink::new(raw_tx, sample_rate, channels))
-        .map_err(system_audio_backend_error)?;
-
-    let stop = Arc::new(AtomicBool::new(false));
     let stats = Arc::new(SystemAudioCaptureStats::default());
-    let worker_stop = Arc::clone(&stop);
-    let worker_stats = Arc::clone(&stats);
-    let scope_description = scope.description;
-    let worker = thread::Builder::new()
-        .name("stream-system-audio".to_owned())
-        .spawn(move || {
-            run_system_audio_capture(
-                backend,
-                raw_rx,
-                normalizer,
-                frames_tx,
-                worker_stop,
-                worker_stats,
-            );
-        })
-        .map_err(|error| {
-            SystemAudioCaptureError::new(format!("system audio worker spawn failed: {error}"))
-        })?;
+    let assembler = AudioFrameAssembler::new(frames_tx, Arc::clone(&stats));
+    let session = platform::start_capture(target, scope.target_pid, scope.mode, assembler)
+        .map_err(SystemAudioCaptureError::new)?;
 
     logging::debug(
         "stream",
         format!(
-            "system audio capture started: backend={} scope={scope_description} sample_rate={sample_rate} channels={channels}",
+            "system audio capture started: backend={} scope={} sample_rate={} channels={}",
             platform::BACKEND_NAME,
+            scope.description,
+            SYSTEM_AUDIO_SAMPLE_RATE,
+            SYSTEM_AUDIO_CHANNELS,
         ),
     );
-    Ok(SystemAudioCapture {
-        stop,
-        worker: Some(worker),
-        stats,
-    })
+    Ok(SystemAudioCapture { session, stats })
 }
 
 #[cfg(all(
@@ -198,7 +217,7 @@ pub(super) fn start_system_audio_capture(
 #[cfg(feature = "stream-broadcast")]
 struct SystemAudioScope {
     target_pid: u32,
-    mode: ProcessMode,
+    mode: AudioProcessMode,
     description: String,
 }
 
@@ -210,7 +229,7 @@ fn resolve_audio_scope(
         StreamCaptureTargetKind::Display | StreamCaptureTargetKind::Portal => {
             Ok(SystemAudioScope {
                 target_pid: std::process::id(),
-                mode: ProcessMode::Exclude,
+                mode: AudioProcessMode::Exclude,
                 description: format!("display excluding concord pid={}", std::process::id()),
             })
         }
@@ -220,7 +239,7 @@ fn resolve_audio_scope(
             else {
                 return Ok(SystemAudioScope {
                     target_pid: std::process::id(),
-                    mode: ProcessMode::Exclude,
+                    mode: AudioProcessMode::Exclude,
                     description: format!("window excluding concord pid={}", std::process::id()),
                 });
             };
@@ -231,110 +250,32 @@ fn resolve_audio_scope(
             }
             Ok(SystemAudioScope {
                 target_pid,
-                mode: ProcessMode::Include,
+                mode: AudioProcessMode::Include,
                 description: format!("window pid={target_pid}"),
             })
         }
     }
 }
 
-#[cfg(feature = "stream-broadcast")]
-fn run_system_audio_capture(
-    mut backend: Box<dyn CaptureBackend>,
-    mut raw_rx: RawConsumer,
-    mut normalizer: Normalizer,
-    frames_tx: mpsc::Sender<SystemAudioFrame>,
-    stop: Arc<AtomicBool>,
-    stats: Arc<SystemAudioCaptureStats>,
-) {
-    let channels = usize::from(backend.native_format().1.max(1));
-    let mut raw_samples = vec![0.0_f32; 4_096 * channels];
-    let capture_started = Instant::now();
-
-    while !stop.load(Ordering::Acquire) {
-        let sample_count = raw_rx.pop_slice(&mut raw_samples);
-        stats
-            .raw_dropped_samples
-            .store(raw_rx.overflow_count(), Ordering::Relaxed);
-        if sample_count == 0 {
-            thread::park_timeout(SYSTEM_AUDIO_POLL_INTERVAL);
-            continue;
-        }
-
-        stats
-            .source_samples
-            .fetch_add(sample_count as u64, Ordering::Relaxed);
-        let captured_ns = capture_started.elapsed().as_nanos().min(i64::MAX as u128) as i64;
-        if let Err(error) = normalizer.push(&raw_samples[..sample_count], captured_ns) {
-            logging::error(
-                "stream",
-                format!("system audio normalization failed: {error}"),
-            );
-            break;
-        }
-
-        while let Some((samples, _pts_ns)) = normalizer.pop_chunk() {
-            let frame = SystemAudioFrame {
-                samples: samples
-                    .into_iter()
-                    .map(audio_output::f32_sample_to_i16)
-                    .collect(),
-                captured_at: Instant::now(),
-            };
-            match frames_tx.try_send(frame) {
-                Ok(()) => {
-                    stats.queued_frames.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    stats.queue_dropped_frames.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(mpsc::error::TrySendError::Closed(_)) => {
-                    stop.store(true, Ordering::Release);
-                    break;
-                }
-            }
-        }
-    }
-
-    backend.stop();
-}
-
-#[cfg(feature = "stream-broadcast")]
-fn system_audio_backend_error(error: FlexAudioError) -> SystemAudioCaptureError {
-    let context = match error {
-        FlexAudioError::PermissionDenied => "system audio permission denied".to_owned(),
-        FlexAudioError::DeviceNotFound => "system audio process is not available".to_owned(),
-        FlexAudioError::UnsupportedOsVersion => {
-            "system audio capture is unsupported on this OS version".to_owned()
-        }
-        FlexAudioError::Unsupported => {
-            "system audio capture is unsupported on this operating system".to_owned()
-        }
-        error => format!("system audio backend failed: {error}"),
-    };
-    SystemAudioCaptureError::new(context)
-}
-
-#[cfg(feature = "stream-broadcast")]
+#[cfg(all(
+    feature = "stream-broadcast",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
 impl Drop for SystemAudioCapture {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        if let Some(worker) = self.worker.take()
-            && let Err(error) = worker.join()
-        {
+        if let Err(error) = self.session.stop() {
             logging::debug(
                 "stream",
-                format!("system audio worker panicked during shutdown: {error:?}"),
+                format!("system audio capture stop failed: {error}"),
             );
         }
         logging::debug(
             "stream",
             format!(
-                "system audio capture stopped: source_samples={} queued_20ms_frames={} dropped_20ms_frames={} raw_dropped_samples={}",
+                "system audio capture stopped: source_samples={} queued_20ms_frames={} dropped_20ms_frames={}",
                 self.stats.source_samples.load(Ordering::Relaxed),
                 self.stats.queued_frames.load(Ordering::Relaxed),
                 self.stats.queue_dropped_frames.load(Ordering::Relaxed),
-                self.stats.raw_dropped_samples.load(Ordering::Relaxed),
             ),
         );
     }

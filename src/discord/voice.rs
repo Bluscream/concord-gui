@@ -338,6 +338,14 @@ pub(crate) enum VoiceRuntimeEvent {
         outcome: VoiceConnectionEnd,
     },
     BroadcastStreamRequested(StreamBroadcastRequest),
+    BroadcastStreamCaptureReady {
+        stream_key: String,
+    },
+    BroadcastStreamCaptureFailed {
+        stream_key: String,
+        error: String,
+    },
+    #[cfg(test)]
     BroadcastStreamCancelled {
         stream_key: String,
     },

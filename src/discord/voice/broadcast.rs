@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicU32, Ordering},
@@ -34,7 +34,7 @@ use super::{
     dave::VoiceDaveOutboundPayload,
     gateway,
     opus::VoiceOpusEncode,
-    preview::{StreamPreviewFrame, StreamPreviewUploader},
+    preview::{StreamPreviewUploadTask, StreamPreviewUploader},
     rtp::{
         VoiceRtpDecryptor, VoiceRtpEncryptor, build_voice_rtp_packet_with_marker,
         looks_like_rtcp_packet, parse_rtp_header,
@@ -158,6 +158,86 @@ pub(super) struct StreamBroadcastRuntimeUpdate {
     pub(super) error: Option<String>,
 }
 
+struct PreparedBroadcastCapture {
+    capture: capture::PreparedStreamCapture,
+    preview_task: Option<StreamPreviewUploadTask>,
+}
+
+#[derive(Default)]
+struct StreamBroadcastCaptureRegistryState {
+    active_streams: HashSet<String>,
+    captures: HashMap<String, PreparedBroadcastCapture>,
+}
+
+#[derive(Clone, Default)]
+pub(super) struct StreamBroadcastCaptureRegistry {
+    state: Arc<StdMutex<StreamBroadcastCaptureRegistryState>>,
+}
+
+impl StreamBroadcastCaptureRegistry {
+    pub(super) fn activate(&self, stream_key: String) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("stream capture registry lock is not poisoned");
+        state.active_streams.insert(stream_key);
+    }
+
+    pub(super) fn prepare(
+        &self,
+        stream_key: String,
+        target: super::StreamCaptureTarget,
+    ) -> Result<bool, String> {
+        let capture = capture::prepare_stream_capture(target)?;
+        let prepared = PreparedBroadcastCapture {
+            capture,
+            preview_task: None,
+        };
+        let mut state = self
+            .state
+            .lock()
+            .expect("stream capture registry lock is not poisoned");
+        if !state.active_streams.contains(&stream_key) {
+            return Ok(false);
+        }
+        state.captures.insert(stream_key, prepared);
+        Ok(true)
+    }
+
+    fn take(&self, stream_key: &str) -> Option<PreparedBroadcastCapture> {
+        self.state
+            .lock()
+            .expect("stream capture registry lock is not poisoned")
+            .captures
+            .remove(stream_key)
+    }
+
+    fn restore(
+        &self,
+        stream_key: String,
+        prepared: PreparedBroadcastCapture,
+    ) -> Result<(), PreparedBroadcastCapture> {
+        let mut state = self
+            .state
+            .lock()
+            .expect("stream capture registry lock is not poisoned");
+        if !state.active_streams.contains(&stream_key) {
+            return Err(prepared);
+        }
+        state.captures.insert(stream_key, prepared);
+        Ok(())
+    }
+
+    pub(super) fn discard(&self, stream_key: &str) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("stream capture registry lock is not poisoned");
+        state.active_streams.remove(stream_key);
+        state.captures.remove(stream_key);
+    }
+}
+
 impl StreamBroadcastRuntimeState {
     pub(super) fn apply(&mut self, event: &VoiceRuntimeEvent) -> StreamBroadcastRuntimeUpdate {
         let mut update = StreamBroadcastRuntimeUpdate::default();
@@ -180,6 +260,18 @@ impl StreamBroadcastRuntimeState {
                 self.create = None;
                 self.server = None;
             }
+            VoiceRuntimeEvent::BroadcastStreamCaptureReady { .. } => {}
+            VoiceRuntimeEvent::BroadcastStreamCaptureFailed { stream_key, error } => {
+                if self
+                    .requested
+                    .as_ref()
+                    .is_some_and(|request| request.stream_key == *stream_key)
+                {
+                    update.error = Some(format!("Could not broadcast stream: {error}"));
+                    self.clear_matching(stream_key, &mut update, false);
+                }
+            }
+            #[cfg(test)]
             VoiceRuntimeEvent::BroadcastStreamCancelled { stream_key } => {
                 self.clear_matching(stream_key, &mut update, false);
             }
@@ -289,6 +381,16 @@ impl StreamBroadcastRuntimeState {
             update.connect = self.connect_if_ready();
         }
         update
+    }
+
+    pub(super) fn requested_destination(
+        &self,
+        stream_key: &str,
+    ) -> Option<(VoiceScope, Id<ChannelMarker>)> {
+        self.requested
+            .as_ref()
+            .filter(|request| request.stream_key == stream_key)
+            .map(|request| (request.scope, request.channel_id))
     }
 
     fn record_voice_state(
@@ -437,6 +539,7 @@ pub(super) async fn run_stream_broadcast_session(
     events_tx: mpsc::UnboundedSender<VoiceRuntimeEvent>,
     status_publisher: VoiceStatusPublisher,
     stream_preview_uploader: StreamPreviewUploader,
+    broadcast_captures: StreamBroadcastCaptureRegistry,
     mut stop_rx: oneshot::Receiver<()>,
 ) {
     if !session.reconnect_delay.is_zero() {
@@ -465,6 +568,7 @@ pub(super) async fn run_stream_broadcast_session(
         &events_tx,
         &status_publisher,
         stream_preview_uploader,
+        broadcast_captures,
         stop_rx,
     )
     .await
@@ -490,6 +594,7 @@ async fn connect_stream_broadcast(
     events_tx: &mpsc::UnboundedSender<VoiceRuntimeEvent>,
     status_publisher: &VoiceStatusPublisher,
     stream_preview_uploader: StreamPreviewUploader,
+    broadcast_captures: StreamBroadcastCaptureRegistry,
     mut stop_rx: oneshot::Receiver<()>,
 ) -> Result<VoiceConnectionEnd, BroadcastConnectionFailure> {
     let url = gateway::voice_gateway_url(&session.endpoint)?;
@@ -640,6 +745,7 @@ async fn connect_stream_broadcast(
                         let media_description = description.clone();
                         let media_status_publisher = status_publisher.clone();
                         let preview_uploader = stream_preview_uploader.clone();
+                        let captures = broadcast_captures.clone();
                         media_generation = media_generation.wrapping_add(1).max(1);
                         let generation = media_generation;
                         let (media_stop_tx, media_stop_rx) = oneshot::channel();
@@ -656,6 +762,7 @@ async fn connect_stream_broadcast(
                                 stream_key,
                                 media_status_publisher,
                                 preview_uploader,
+                                captures,
                                 media_stop_rx,
                             )
                             .await;
@@ -1539,19 +1646,26 @@ async fn run_stream_broadcast_media(
     stream_key: String,
     status_publisher: VoiceStatusPublisher,
     stream_preview_uploader: StreamPreviewUploader,
+    broadcast_captures: StreamBroadcastCaptureRegistry,
     mut stop_rx: oneshot::Receiver<()>,
 ) -> Result<(), BroadcastConnectionFailure> {
-    let (frames_tx, mut frames_rx) = mpsc::channel(2);
-    let (preview_frames_tx, preview_frames_rx) = mpsc::channel::<StreamPreviewFrame>(1);
-    let (capture_errors_tx, mut capture_errors_rx) = mpsc::unbounded_channel();
-    let capture = capture::start_stream_capture(
-        target.clone(),
-        frames_tx,
-        preview_frames_tx,
-        capture_errors_tx,
-    )
-    .map_err(BroadcastConnectionFailure::stop)?;
-    let preview_task = stream_preview_uploader.start(stream_key.clone(), preview_frames_rx);
+    let mut prepared_capture = broadcast_captures.take(&stream_key).ok_or_else(|| {
+        BroadcastConnectionFailure::stop("prepared stream capture is unavailable")
+    })?;
+    let preview_task = match prepared_capture.preview_task.take() {
+        Some(preview_task) => preview_task,
+        None => {
+            let preview_frames =
+                prepared_capture
+                    .capture
+                    .preview_frames
+                    .take()
+                    .ok_or_else(|| {
+                        BroadcastConnectionFailure::stop("stream preview capture is unavailable")
+                    })?;
+            stream_preview_uploader.start(stream_key.clone(), preview_frames)
+        }
+    };
     let packet_encryptor = Arc::new(
         BroadcastPacketEncryptor::new(&description).map_err(BroadcastConnectionFailure::stop)?,
     );
@@ -1608,10 +1722,10 @@ async fn run_stream_broadcast_media(
                         stream_key: stream_key.clone(),
                     });
                 }
-                frame = frames_rx.recv() => {
+                frame = prepared_capture.capture.frames.recv() => {
                     let Some(frame) = frame else {
                         return capture_completion_after_frame_channel_closed(
-                            &mut capture_errors_rx,
+                            &mut prepared_capture.capture.errors,
                         );
                     };
                     let frame = frame.map_err(BroadcastConnectionFailure::stop)?;
@@ -1642,7 +1756,7 @@ async fn run_stream_broadcast_media(
                         )
                         .await?;
                 }
-                error = capture_errors_rx.recv() => {
+                error = prepared_capture.capture.errors.recv() => {
                     return match error {
                         Some(error) => Err(BroadcastConnectionFailure::stop(error)),
                         None => Ok(()),
@@ -1655,7 +1769,7 @@ async fn run_stream_broadcast_media(
                         .handle_udp_packet(&socket, &received_packet[..length])
                         .await?
                     {
-                        capture.request_keyframe();
+                        prepared_capture.capture.handle.request_keyframe();
                     }
                 }
             }
@@ -1664,9 +1778,26 @@ async fn run_stream_broadcast_media(
     .await;
 
     audio_task.shutdown().await;
-    preview_task.shutdown().await;
-    capture.shutdown().await;
+    prepared_capture.preview_task = Some(preview_task);
+    let keep_capture = match &result {
+        Ok(()) => true,
+        Err(error) => error.outcome == VoiceConnectionEnd::Reconnect,
+    };
+    if keep_capture {
+        if let Err(prepared_capture) = broadcast_captures.restore(stream_key, prepared_capture) {
+            shutdown_prepared_broadcast_capture(prepared_capture).await;
+        }
+    } else {
+        shutdown_prepared_broadcast_capture(prepared_capture).await;
+    }
     result
+}
+
+async fn shutdown_prepared_broadcast_capture(mut prepared: PreparedBroadcastCapture) {
+    if let Some(preview_task) = prepared.preview_task.take() {
+        preview_task.shutdown().await;
+    }
+    prepared.capture.handle.shutdown().await;
 }
 
 fn broadcast_audio_elapsed_frames(previous: Option<Instant>, captured_at: Instant) -> u32 {

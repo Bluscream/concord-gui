@@ -60,8 +60,8 @@ sudo apt install \
   pkg-config
 ```
 
-Linux screen sharing also requires XDG Desktop Portal and the portal backend
-provided by your desktop environment.
+Linux screen sharing also requires the PipeWire client runtime configuration,
+XDG Desktop Portal, and the portal backend provided by your desktop environment.
 
 #### x86_64 Windows
 

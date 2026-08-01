@@ -3,6 +3,7 @@
 , craneLib
 , rustPlatform
 , pkg-config
+, makeWrapper
 , nasm
 , opus
 , alsa-lib
@@ -28,6 +29,7 @@ let
       pkg-config
     ] ++ lib.optionals stdenv.isLinux [
       rustPlatform.bindgenHook
+      makeWrapper
     ] ++ lib.optionals stdenv.hostPlatform.isx86_64 [
       nasm
     ];
@@ -46,6 +48,11 @@ let
     # them by default to keep `nix build` fast and reproducible. Run `cargo test`
     # inside `nix develop` for the full test suite.
     doCheck = false;
+
+    postFixup = lib.optionalString stdenv.isLinux ''
+      wrapProgram "$out/bin/concord" \
+        --set-default PIPEWIRE_CONFIG_DIR "${pipewire}/share/pipewire"
+    '';
   };
 
   cargoArtifacts = craneLib.buildDepsOnly commonArgs;

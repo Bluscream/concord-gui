@@ -2,7 +2,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{Receiver, RecvTimeoutError},
+        mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -71,6 +71,13 @@ pub(super) struct StreamCaptureHandle {
     stop: Arc<AtomicBool>,
     force_keyframe: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
+}
+
+pub(super) struct PreparedStreamCapture {
+    pub(super) handle: StreamCaptureHandle,
+    pub(super) frames: mpsc::Receiver<Result<EncodedStreamFrame, String>>,
+    pub(super) preview_frames: Option<mpsc::Receiver<StreamPreviewFrame>>,
+    pub(super) errors: mpsc::UnboundedReceiver<String>,
 }
 
 pub(super) struct CaptureFrame {
@@ -517,16 +524,18 @@ pub(crate) fn list_stream_capture_targets() -> Result<Vec<StreamCaptureTarget>, 
     Ok(targets)
 }
 
-pub(super) fn start_stream_capture(
+pub(super) fn prepare_stream_capture(
     target: StreamCaptureTarget,
-    frames_tx: mpsc::Sender<Result<EncodedStreamFrame, String>>,
-    preview_frames_tx: mpsc::Sender<StreamPreviewFrame>,
-    errors_tx: mpsc::UnboundedSender<String>,
-) -> Result<StreamCaptureHandle, String> {
+) -> Result<PreparedStreamCapture, String> {
+    let (frames_tx, frames) = mpsc::channel(2);
+    let (preview_frames_tx, preview_frames) = mpsc::channel(1);
+    let (errors_tx, errors) = mpsc::unbounded_channel();
+    let (ready_tx, ready_rx) = sync_channel(1);
     let stop = Arc::new(AtomicBool::new(false));
     let force_keyframe = Arc::new(AtomicBool::new(false));
     let worker_stop = Arc::clone(&stop);
     let worker_force_keyframe = Arc::clone(&force_keyframe);
+    let worker_ready_tx = ready_tx.clone();
     let worker = thread::Builder::new()
         .name("stream-capture".to_owned())
         .spawn(move || {
@@ -537,13 +546,24 @@ pub(super) fn start_stream_capture(
                 errors_tx,
                 worker_stop,
                 worker_force_keyframe,
+                worker_ready_tx,
             );
         })
         .map_err(|error| format!("stream capture worker spawn failed: {error}"))?;
-    Ok(StreamCaptureHandle {
+    let handle = StreamCaptureHandle {
         stop,
         force_keyframe,
         worker: Some(worker),
+    };
+
+    ready_rx
+        .recv()
+        .map_err(|_| "stream capture stopped before producing a frame".to_owned())??;
+    Ok(PreparedStreamCapture {
+        handle,
+        frames,
+        preview_frames: Some(preview_frames),
+        errors,
     })
 }
 
@@ -554,6 +574,7 @@ fn run_capture_worker(
     errors_tx: mpsc::UnboundedSender<String>,
     stop: Arc<AtomicBool>,
     force_keyframe: Arc<AtomicBool>,
+    ready_tx: SyncSender<Result<(), String>>,
 ) {
     if let Err(error) = run_capture_loop(
         &target,
@@ -561,7 +582,9 @@ fn run_capture_worker(
         &preview_frames_tx,
         &stop,
         &force_keyframe,
+        ready_tx.clone(),
     ) {
+        let _ = ready_tx.send(Err(error.clone()));
         let _ = errors_tx.send(error);
     }
 }
@@ -572,10 +595,12 @@ fn run_capture_loop(
     preview_frames_tx: &mpsc::Sender<StreamPreviewFrame>,
     stop: &AtomicBool,
     force_keyframe: &AtomicBool,
+    ready_tx: SyncSender<Result<(), String>>,
 ) -> Result<(), String> {
     let source = resolve_capture_source(target)?;
     let mut encoder = Encoder::with_api_config(OpenH264API::from_source(), stream_encoder_config())
         .map_err(|error| format!("H264 encoder creation failed: {error}"))?;
+    let mut ready_tx = Some(ready_tx);
     let started_at = Instant::now();
     let mut frame_pacer = StreamFramePacer::new(started_at);
     let mut stats = CapturePerformanceStats::new();
@@ -648,6 +673,9 @@ fn run_capture_loop(
                 annex_b,
                 is_keyframe,
             }));
+            if let Some(ready_tx) = ready_tx.take() {
+                let _ = ready_tx.send(Ok(()));
+            }
             CaptureFrameOutcome::Queued
         };
         stats.record_frame(
