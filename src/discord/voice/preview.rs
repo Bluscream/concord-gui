@@ -14,7 +14,7 @@ use tokio::{sync::mpsc, task::JoinHandle, time::timeout};
 use crate::{discord::rest::DiscordRest, logging};
 
 #[cfg(feature = "stream-broadcast")]
-const STREAM_PREVIEW_INTERVAL: Duration = Duration::from_secs(30);
+const STREAM_PREVIEW_INTERVAL: Duration = Duration::from_secs(60);
 const STREAM_PREVIEW_UPLOAD_TIMEOUT: Duration = Duration::from_secs(10);
 const STREAM_PREVIEW_WIDTH: u32 = 640;
 const STREAM_PREVIEW_HEIGHT: u32 = 360;
