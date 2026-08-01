@@ -3,7 +3,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, SyncSender, TrySendError},
+        mpsc::{self, Receiver, Sender, SyncSender},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -19,7 +19,7 @@ use pipewire as pw;
 use pw::{properties::properties, spa};
 use spa::pod::Pod;
 
-use super::{CaptureFrame, STREAM_CAPTURE_FPS};
+use super::{CaptureFrame, CaptureOutput, STREAM_CAPTURE_FPS, send_capture_result};
 use crate::{
     discord::voice::{StreamCaptureTarget, StreamCaptureTargetKind},
     logging,
@@ -39,7 +39,8 @@ pub(super) struct CaptureSession {
 
 struct PipeWireState {
     format: spa::param::video::VideoInfoRaw,
-    frames_tx: SyncSender<Result<CaptureFrame, String>>,
+    frames_tx: SyncSender<CaptureFrame>,
+    errors_tx: Sender<String>,
 }
 
 struct PortalCapture {
@@ -64,7 +65,7 @@ pub(super) fn list_targets() -> Result<Vec<StreamCaptureTarget>, String> {
 pub(super) fn start_capture(
     target: &StreamCaptureTarget,
     stop: &AtomicBool,
-) -> Result<(CaptureSession, Receiver<Result<CaptureFrame, String>>), String> {
+) -> Result<(CaptureSession, CaptureOutput), String> {
     if target.kind != StreamCaptureTargetKind::Portal {
         return Err("Linux screen sharing requires a portal capture target".to_owned());
     }
@@ -82,6 +83,7 @@ pub(super) fn start_capture(
     let pipewire_portal = PipeWirePortal { stream, remote_fd };
 
     let (frames_tx, frames_rx) = mpsc::sync_channel(FRAME_QUEUE_CAPACITY);
+    let (errors_tx, errors_rx) = mpsc::channel();
     let (stop_tx, stop_rx) = pw::channel::channel();
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
     let stopping = Arc::new(AtomicBool::new(false));
@@ -92,6 +94,7 @@ pub(super) fn start_capture(
             let result = run_pipewire_capture(
                 pipewire_portal,
                 frames_tx.clone(),
+                errors_tx.clone(),
                 stop_rx,
                 ready_tx.clone(),
             );
@@ -99,7 +102,7 @@ pub(super) fn start_capture(
                 && !worker_stopping.load(Ordering::Acquire)
             {
                 let _ = ready_tx.send(Err(error.clone()));
-                send_latest(&frames_tx, Err(error));
+                let _ = errors_tx.send(error);
             }
         })
         .map_err(|error| format!("PipeWire video worker spawn failed: {error}"));
@@ -120,7 +123,10 @@ pub(super) fn start_capture(
                 portal_runtime: runtime,
                 portal_session: Some(portal_session),
             },
-            frames_rx,
+            CaptureOutput {
+                frames: frames_rx,
+                errors: errors_rx,
+            },
         )),
         Err(error) => {
             stopping.store(true, Ordering::Release);
@@ -279,7 +285,8 @@ async fn close_cancelled_portal_session(session: &Session<Screencast>) {
 
 fn run_pipewire_capture(
     portal: PipeWirePortal,
-    frames_tx: SyncSender<Result<CaptureFrame, String>>,
+    frames_tx: SyncSender<CaptureFrame>,
+    errors_tx: Sender<String>,
     stop_rx: pw::channel::Receiver<()>,
     ready_tx: SyncSender<Result<(), String>>,
 ) -> Result<(), String> {
@@ -309,16 +316,19 @@ fn run_pipewire_capture(
     let _stop_listener = stop_rx.attach(mainloop.loop_(), move |_| stop_mainloop.quit());
     let error_mainloop = mainloop.clone();
     let state_frames_tx = frames_tx.clone();
+    let state_errors_tx = errors_tx.clone();
     let state = PipeWireState {
         format: Default::default(),
         frames_tx,
+        errors_tx,
     };
     let _stream_listener = stream
         .add_local_listener_with_user_data(state)
         .state_changed(move |_, _, _, new| {
             if let pw::stream::StreamState::Error(error) = new {
-                send_latest(
+                send_capture_result(
                     &state_frames_tx,
+                    &state_errors_tx,
                     Err(format!("PipeWire video stream failed: {error}")),
                 );
                 error_mainloop.quit();
@@ -357,8 +367,9 @@ fn run_pipewire_capture(
                     );
                 }
                 Err(error) => {
-                    send_latest(
+                    send_capture_result(
                         &state.frames_tx,
+                        &state.errors_tx,
                         Err(format!("PipeWire video format parse failed: {error}")),
                     );
                 }
@@ -372,7 +383,7 @@ fn run_pipewire_capture(
                 return;
             };
             if let Some(frame) = pipewire_frame(data, state.format) {
-                send_latest(&state.frames_tx, frame);
+                send_capture_result(&state.frames_tx, &state.errors_tx, frame);
             }
         })
         .register()
@@ -539,19 +550,6 @@ fn pipewire_frame(
         height,
         rgba,
     }))
-}
-
-fn send_latest(
-    frames_tx: &SyncSender<Result<CaptureFrame, String>>,
-    frame: Result<CaptureFrame, String>,
-) {
-    if frame.is_err() {
-        let _ = frames_tx.send(frame);
-        return;
-    }
-    match frames_tx.try_send(frame) {
-        Ok(()) | Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {}
-    }
 }
 
 #[cfg(test)]

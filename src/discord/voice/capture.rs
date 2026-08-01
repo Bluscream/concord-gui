@@ -2,7 +2,10 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{Receiver, RecvTimeoutError, SyncSender, TryRecvError, sync_channel},
+        mpsc::{
+            Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError, TrySendError,
+            sync_channel,
+        },
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -57,6 +60,7 @@ const STREAM_CAPTURE_FRAME_INTERVAL: Duration =
     Duration::from_nanos(1_000_000_000 / STREAM_CAPTURE_FPS as u64);
 const STREAM_CAPTURE_STATS_INTERVAL: Duration = Duration::from_secs(5);
 const STREAM_RECORDER_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const STREAM_CAPTURE_PREPARATION_TIMEOUT: Duration = Duration::from_secs(60);
 const STREAM_CAPTURE_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const STREAM_CAPTURE_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
@@ -91,9 +95,15 @@ pub(super) struct CaptureFrame {
     pub(super) rgba: Vec<u8>,
 }
 
+pub(super) struct CaptureOutput {
+    pub(super) frames: Receiver<CaptureFrame>,
+    pub(super) errors: Receiver<String>,
+}
+
 struct CaptureSource {
     session: platform::CaptureSession,
-    frames: Receiver<Result<CaptureFrame, String>>,
+    frames: Receiver<CaptureFrame>,
+    errors: Receiver<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -251,12 +261,15 @@ impl CapturePerformanceStats {
 impl CaptureSource {
     fn wait_for_initial_image(&self, stop: &AtomicBool) -> Result<Option<RgbaImage>, String> {
         loop {
+            self.check_backend_error()?;
             match self.frames.recv_timeout(STREAM_RECORDER_POLL_INTERVAL) {
                 Ok(frame) => {
-                    let mut frame = frame?;
+                    self.check_backend_error()?;
+                    let mut frame = frame;
                     while let Ok(newer_frame) = self.frames.try_recv() {
-                        frame = newer_frame?;
+                        frame = newer_frame;
                     }
+                    self.check_backend_error()?;
                     return capture_frame_image(frame).map(Some);
                 }
                 Err(RecvTimeoutError::Timeout) if stop.load(Ordering::Acquire) => return Ok(None),
@@ -269,7 +282,32 @@ impl CaptureSource {
     }
 
     fn refresh_image(&self, image: &mut RgbaImage) -> Result<bool, String> {
-        refresh_capture_image(&self.frames, image)
+        self.check_backend_error()?;
+        let refreshed = refresh_capture_image(&self.frames, image)?;
+        self.check_backend_error()?;
+        Ok(refreshed)
+    }
+
+    fn check_backend_error(&self) -> Result<(), String> {
+        match self.errors.try_recv() {
+            Ok(error) => Err(error),
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => Ok(()),
+        }
+    }
+}
+
+fn send_capture_result(
+    frames_tx: &SyncSender<CaptureFrame>,
+    errors_tx: &Sender<String>,
+    frame: Result<CaptureFrame, String>,
+) {
+    match frame {
+        Ok(frame) => match frames_tx.try_send(frame) {
+            Ok(()) | Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {}
+        },
+        Err(error) => {
+            let _ = errors_tx.send(error);
+        }
     }
 }
 
@@ -279,13 +317,13 @@ fn capture_frame_image(frame: CaptureFrame) -> Result<RgbaImage, String> {
 }
 
 fn refresh_capture_image(
-    frames: &Receiver<Result<CaptureFrame, String>>,
+    frames: &Receiver<CaptureFrame>,
     image: &mut RgbaImage,
 ) -> Result<bool, String> {
     let mut newest = None;
     loop {
         match frames.try_recv() {
-            Ok(frame) => newest = Some(frame?),
+            Ok(frame) => newest = Some(frame),
             Err(TryRecvError::Empty) => break,
             Err(TryRecvError::Disconnected) => {
                 return Err("capture backend stopped unexpectedly".to_owned());
@@ -545,7 +583,6 @@ impl StreamCaptureCancellation {
         self.cancelled.store(true, Ordering::Release);
     }
 
-    #[cfg(test)]
     pub(super) fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
     }
@@ -583,7 +620,6 @@ pub(super) fn prepare_stream_capture(
     let force_keyframe = Arc::new(AtomicBool::new(false));
     let worker_stop = Arc::clone(&stop);
     let worker_force_keyframe = Arc::clone(&force_keyframe);
-    let worker_ready_tx = ready_tx.clone();
     let worker = thread::Builder::new()
         .name("stream-capture".to_owned())
         .spawn(move || {
@@ -594,7 +630,7 @@ pub(super) fn prepare_stream_capture(
                 errors_tx,
                 worker_stop,
                 worker_force_keyframe,
-                worker_ready_tx,
+                ready_tx,
             );
         })
         .map_err(|error| format!("stream capture worker spawn failed: {error}"))?;
@@ -604,15 +640,38 @@ pub(super) fn prepare_stream_capture(
         worker: Some(worker),
     };
 
-    ready_rx
-        .recv()
-        .map_err(|_| "stream capture stopped before producing a frame".to_owned())??;
+    wait_for_capture_ready(&ready_rx, &handle.stop, STREAM_CAPTURE_PREPARATION_TIMEOUT)?;
     Ok(PreparedStreamCapture {
         handle,
         frames,
         preview_frames: Some(preview_frames),
         errors,
     })
+}
+
+fn wait_for_capture_ready(
+    ready_rx: &Receiver<Result<(), String>>,
+    stop: &AtomicBool,
+    timeout: Duration,
+) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if stop.load(Ordering::Acquire) {
+            return Err("stream capture preparation was cancelled".to_owned());
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Err("stream capture did not become ready in time".to_owned());
+        }
+        let wait = (deadline - now).min(STREAM_RECORDER_POLL_INTERVAL);
+        match ready_rx.recv_timeout(wait) {
+            Ok(result) => return result,
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err("stream capture stopped before becoming ready".to_owned());
+            }
+        }
+    }
 }
 
 fn run_capture_worker(
@@ -630,9 +689,9 @@ fn run_capture_worker(
         &preview_frames_tx,
         &stop,
         &force_keyframe,
-        ready_tx.clone(),
+        &ready_tx,
     ) {
-        let _ = ready_tx.send(Err(error.clone()));
+        let _ = ready_tx.try_send(Err(error.clone()));
         let _ = errors_tx.send(error);
     }
 }
@@ -643,7 +702,7 @@ fn run_capture_loop(
     preview_frames_tx: &mpsc::Sender<StreamPreviewFrame>,
     stop: &AtomicBool,
     force_keyframe: &AtomicBool,
-    ready_tx: SyncSender<Result<(), String>>,
+    ready_tx: &SyncSender<Result<(), String>>,
 ) -> Result<(), String> {
     let source = resolve_capture_source(target, stop)?;
     let Some(mut image) = source.wait_for_initial_image(stop)? else {
@@ -651,7 +710,9 @@ fn run_capture_loop(
     };
     let mut encoder = Encoder::with_api_config(OpenH264API::from_source(), stream_encoder_config())
         .map_err(|error| format!("H264 encoder creation failed: {error}"))?;
-    let mut ready_tx = Some(ready_tx);
+    if ready_tx.send(Ok(())).is_err() {
+        return Ok(());
+    }
     let started_at = Instant::now();
     let mut frame_pacer = StreamFramePacer::new(started_at);
     let mut stats = CapturePerformanceStats::new();
@@ -722,9 +783,6 @@ fn run_capture_loop(
                 annex_b,
                 is_keyframe,
             }));
-            if let Some(ready_tx) = ready_tx.take() {
-                let _ = ready_tx.send(Ok(()));
-            }
             CaptureFrameOutcome::Queued
         };
         stats.record_frame(
@@ -779,9 +837,13 @@ fn resolve_capture_source(
     target: &StreamCaptureTarget,
     stop: &AtomicBool,
 ) -> Result<CaptureSource, String> {
-    let (session, frames) = platform::start_capture(target, stop)?;
+    let (session, output) = platform::start_capture(target, stop)?;
     logging::debug("stream", "native continuous capture started");
-    Ok(CaptureSource { session, frames })
+    Ok(CaptureSource {
+        session,
+        frames: output.frames,
+        errors: output.errors,
+    })
 }
 
 fn stream_rtp_timestamp(elapsed: Duration) -> u32 {
@@ -901,6 +963,55 @@ mod tests {
                 .try_recv()
                 .expect("capture error should remain available"),
             "capture failed"
+        );
+    }
+
+    #[test]
+    fn native_capture_error_does_not_depend_on_frame_queue_capacity() {
+        let (frames_tx, frames_rx) = sync_channel(1);
+        frames_tx
+            .try_send(CaptureFrame {
+                width: 1,
+                height: 1,
+                rgba: vec![0, 0, 0, 255],
+            })
+            .expect("test frame should fill the native queue");
+        let (errors_tx, errors_rx) = std::sync::mpsc::channel();
+
+        send_capture_result(
+            &frames_tx,
+            &errors_tx,
+            Err("native capture failed".to_owned()),
+        );
+
+        let _queued_frame = frames_rx.try_recv().expect("queued frame should remain");
+        assert_eq!(
+            errors_rx
+                .try_recv()
+                .expect("native error should remain available"),
+            "native capture failed"
+        );
+    }
+
+    #[test]
+    fn capture_readiness_wait_honors_cancellation() {
+        let (_ready_tx, ready_rx) = sync_channel(1);
+        let stop = AtomicBool::new(true);
+
+        assert_eq!(
+            wait_for_capture_ready(&ready_rx, &stop, Duration::from_secs(1)),
+            Err("stream capture preparation was cancelled".to_owned())
+        );
+    }
+
+    #[test]
+    fn capture_readiness_wait_has_a_deadline() {
+        let (_ready_tx, ready_rx) = sync_channel(1);
+        let stop = AtomicBool::new(false);
+
+        assert_eq!(
+            wait_for_capture_ready(&ready_rx, &stop, Duration::ZERO),
+            Err("stream capture did not become ready in time".to_owned())
         );
     }
 
@@ -1055,11 +1166,11 @@ mod tests {
         assert_eq!(image.get_pixel(0, 0), &Rgba([1, 2, 3, 255]));
 
         frames_tx
-            .send(Ok(CaptureFrame {
+            .send(CaptureFrame {
                 width: 2,
                 height: 2,
                 rgba: RgbaImage::from_pixel(2, 2, Rgba([4, 5, 6, 255])).into_raw(),
-            }))
+            })
             .expect("updated capture frame should be queued");
         assert!(
             refresh_capture_image(&frames_rx, &mut image)

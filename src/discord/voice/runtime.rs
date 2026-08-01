@@ -69,7 +69,9 @@ struct StreamBroadcastController {
     task: Option<JoinHandle<()>>,
     session: Option<StreamBroadcastGatewaySession>,
     stop_tx: Option<oneshot::Sender<()>>,
+    cleanup: Option<watch::Receiver<bool>>,
     capture_preparation: Option<BroadcastCapturePreparationTask>,
+    capture_preparation_gate: Arc<Mutex<()>>,
     active_capture_request: Option<ActiveBroadcastCaptureRequest>,
     next_capture_request_id: u64,
     captures: StreamBroadcastCaptureRegistry,
@@ -124,7 +126,7 @@ impl StreamBroadcastController {
         }
     }
 
-    async fn stop(&mut self, stream_key: &str, retain_capture: bool) {
+    fn stop(&mut self, stream_key: &str, retain_capture: bool) {
         if !retain_capture {
             if self
                 .active_capture_request
@@ -132,7 +134,9 @@ impl StreamBroadcastController {
                 .is_some_and(|active| active.stream_key == stream_key)
             {
                 self.active_capture_request = None;
-                cancel_broadcast_capture_preparation(&mut self.capture_preparation).await;
+                if let Some(preparation) = self.capture_preparation.as_ref() {
+                    preparation.cancellation.cancel();
+                }
             }
             self.captures.discard(stream_key);
         }
@@ -140,12 +144,12 @@ impl StreamBroadcastController {
             &mut self.task,
             &mut self.session,
             &mut self.stop_tx,
+            &mut self.cleanup,
             "stopping active stream broadcast task",
-        )
-        .await;
+        );
     }
 
-    async fn prepare_capture(
+    fn prepare_capture(
         &mut self,
         request_id: u64,
         stream_key: String,
@@ -155,13 +159,10 @@ impl StreamBroadcastController {
         if let Some(active) = self.active_capture_request.take() {
             self.captures.discard(&active.stream_key);
         }
-        cancel_broadcast_capture_preparation(&mut self.capture_preparation).await;
-        await_stream_broadcast_cleanup_before_capture(
-            &mut self.task,
-            &mut self.session,
-            &mut self.stop_tx,
-        )
-        .await;
+        if let Some(previous) = self.capture_preparation.take() {
+            previous.cancellation.cancel();
+            previous.task.abort();
+        }
         self.captures.activate(stream_key.clone(), request_id);
         self.active_capture_request = Some(ActiveBroadcastCaptureRequest {
             request_id,
@@ -170,40 +171,16 @@ impl StreamBroadcastController {
         let captures = self.captures.clone();
         let cancellation = capture::StreamCaptureCancellation::default();
         let preparation_cancellation = cancellation.clone();
-        let task = tokio::spawn(async move {
-            logging::debug(
-                "stream",
-                "preparing stream capture before creating Discord stream",
-            );
-            let prepared_stream_key = stream_key.clone();
-            let result = tokio::task::spawn_blocking(move || {
-                captures.prepare(
-                    prepared_stream_key,
-                    request_id,
-                    target,
-                    preparation_cancellation,
-                )
-            })
-            .await
-            .map_err(|error| format!("stream capture preparation task failed: {error}"))
-            .and_then(|result| result);
-            match result {
-                Ok(true) => {
-                    let _ = events_tx.send(VoiceRuntimeEvent::BroadcastStreamCaptureReady {
-                        request_id,
-                        stream_key,
-                    });
-                }
-                Ok(false) => {}
-                Err(error) => {
-                    let _ = events_tx.send(VoiceRuntimeEvent::BroadcastStreamCaptureFailed {
-                        request_id,
-                        stream_key,
-                        error,
-                    });
-                }
-            }
-        });
+        let task = tokio::spawn(run_broadcast_capture_preparation(
+            request_id,
+            stream_key,
+            target,
+            events_tx,
+            captures,
+            self.cleanup.clone(),
+            Arc::clone(&self.capture_preparation_gate),
+            preparation_cancellation,
+        ));
         self.capture_preparation = Some(BroadcastCapturePreparationTask { cancellation, task });
     }
 
@@ -250,6 +227,7 @@ impl StreamBroadcastController {
             &mut self.task,
             &mut self.session,
             &mut self.stop_tx,
+            &mut self.cleanup,
             session,
             events_tx,
             status_publisher,
@@ -272,9 +250,91 @@ impl StreamBroadcastController {
             &mut self.task,
             &mut self.session,
             &mut self.stop_tx,
+            &mut self.cleanup,
             "stopping stream broadcast task during voice runtime shutdown",
         )
         .await;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_broadcast_capture_preparation(
+    request_id: u64,
+    stream_key: String,
+    target: StreamCaptureTarget,
+    events_tx: mpsc::UnboundedSender<VoiceRuntimeEvent>,
+    captures: StreamBroadcastCaptureRegistry,
+    cleanup: Option<watch::Receiver<bool>>,
+    preparation_gate: Arc<Mutex<()>>,
+    cancellation: capture::StreamCaptureCancellation,
+) {
+    if let Some(cleanup) = cleanup {
+        logging::debug(
+            "stream",
+            "waiting for previous stream broadcast cleanup before capture",
+        );
+        tokio::select! {
+            () = wait_for_stream_broadcast_cleanup(cleanup) => {}
+            () = wait_for_capture_preparation_cancellation(&cancellation) => return,
+        }
+    }
+
+    let preparation_guard = tokio::select! {
+        guard = Arc::clone(&preparation_gate).lock_owned() => guard,
+        () = wait_for_capture_preparation_cancellation(&cancellation) => return,
+    };
+    if cancellation.is_cancelled() {
+        return;
+    }
+
+    logging::debug(
+        "stream",
+        "preparing stream capture before creating Discord stream",
+    );
+    let prepared_stream_key = stream_key.clone();
+    let capture_cancellation = cancellation.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let _preparation_guard = preparation_guard;
+        captures.prepare(
+            prepared_stream_key,
+            request_id,
+            target,
+            capture_cancellation,
+        )
+    })
+    .await
+    .map_err(|error| format!("stream capture preparation task failed: {error}"))
+    .and_then(|result| result);
+    if cancellation.is_cancelled() {
+        return;
+    }
+    match result {
+        Ok(true) => {
+            let _ = events_tx.send(VoiceRuntimeEvent::BroadcastStreamCaptureReady {
+                request_id,
+                stream_key,
+            });
+        }
+        Ok(false) => {}
+        Err(error) => {
+            let _ = events_tx.send(VoiceRuntimeEvent::BroadcastStreamCaptureFailed {
+                request_id,
+                stream_key,
+                error,
+            });
+        }
+    }
+}
+
+async fn wait_for_stream_broadcast_cleanup(mut cleanup: watch::Receiver<bool>) {
+    while !*cleanup.borrow() && cleanup.changed().await.is_ok() {}
+}
+
+async fn wait_for_capture_preparation_cancellation(
+    cancellation: &capture::StreamCaptureCancellation,
+) {
+    while !cancellation.is_cancelled() {
+        sleep(Duration::from_millis(20)).await;
     }
 }
 
@@ -709,17 +769,13 @@ pub(crate) async fn run_voice_runtime(
         }
         let retaining_broadcast_capture = broadcast_update.retain_capture;
         if let Some(stream_key) = broadcast_update.close_stream_key {
-            broadcast_controller
-                .stop(&stream_key, retaining_broadcast_capture)
-                .await;
+            broadcast_controller.stop(&stream_key, retaining_broadcast_capture);
             if broadcast_update.send_delete {
                 let _ = gateway_commands_tx.send(GatewayCommand::DeleteStream { stream_key });
             }
         }
         if let Some((request_id, stream_key, target)) = broadcast_capture_request {
-            broadcast_controller
-                .prepare_capture(request_id, stream_key, target, events_tx.clone())
-                .await;
+            broadcast_controller.prepare_capture(request_id, stream_key, target, events_tx.clone());
         }
         if let Some((request_id, stream_key)) = broadcast_capture_ready {
             let destination = broadcast_state.requested_destination(&stream_key);
@@ -895,53 +951,43 @@ async fn cancel_broadcast_capture_preparation(
     }
 }
 
-async fn stop_stream_broadcast_task(
+fn stop_stream_broadcast_task(
     stream_task: &mut Option<JoinHandle<()>>,
     stream_session: &mut Option<StreamBroadcastGatewaySession>,
     stop_tx: &mut Option<oneshot::Sender<()>>,
+    cleanup: &mut Option<watch::Receiver<bool>>,
     label: &str,
 ) -> Option<StreamBroadcastGatewaySession> {
     let stopped_session = stream_session.take();
+    let stopping_active_task = stopped_session.is_some() || stop_tx.is_some();
     if let Some(stop_tx) = stop_tx.take() {
         let _ = stop_tx.send(());
     }
+    if !stopping_active_task {
+        return stopped_session;
+    }
     let Some(mut task) = stream_task.take() else {
+        cleanup.take();
         return stopped_session;
     };
     logging::debug("stream", label);
+    let (cleanup_tx, cleanup_rx) = watch::channel(false);
+    *cleanup = Some(cleanup_rx);
     *stream_task = Some(tokio::spawn(async move {
         reap_stream_broadcast_task(&mut task).await;
+        cleanup_tx.send_replace(true);
     }));
     stopped_session
-}
-
-async fn await_stream_broadcast_cleanup_before_capture(
-    stream_task: &mut Option<JoinHandle<()>>,
-    stream_session: &mut Option<StreamBroadcastGatewaySession>,
-    stop_tx: &mut Option<oneshot::Sender<()>>,
-) {
-    if stream_session.is_some() || stop_tx.is_some() || stream_task.is_none() {
-        return;
-    }
-
-    // A tracked cleanup task still owns the previous desktop portal session.
-    // Opening another selector before it exits can leave the new request queued
-    // indefinitely inside the portal service.
-    let _ = shutdown_stream_broadcast_task(
-        stream_task,
-        stream_session,
-        stop_tx,
-        "waiting for previous stream broadcast cleanup before capture",
-    )
-    .await;
 }
 
 async fn shutdown_stream_broadcast_task(
     stream_task: &mut Option<JoinHandle<()>>,
     stream_session: &mut Option<StreamBroadcastGatewaySession>,
     stop_tx: &mut Option<oneshot::Sender<()>>,
+    cleanup: &mut Option<watch::Receiver<bool>>,
     label: &str,
 ) -> Option<StreamBroadcastGatewaySession> {
+    cleanup.take();
     let stopped_session = stream_session.take();
     let stopping_active_task = stopped_session.is_some() || stop_tx.is_some();
     if let Some(stop_tx) = stop_tx.take() {
@@ -972,6 +1018,7 @@ fn replace_stream_broadcast_task(
     stream_task: &mut Option<JoinHandle<()>>,
     stream_session: &mut Option<StreamBroadcastGatewaySession>,
     stop_tx: &mut Option<oneshot::Sender<()>>,
+    cleanup: &mut Option<watch::Receiver<bool>>,
     session: StreamBroadcastGatewaySession,
     events_tx: mpsc::UnboundedSender<VoiceRuntimeEvent>,
     status_publisher: VoiceStatusPublisher,
@@ -979,6 +1026,7 @@ fn replace_stream_broadcast_task(
     broadcast_captures: StreamBroadcastCaptureRegistry,
     label: &str,
 ) {
+    cleanup.take();
     if let Some(stop_tx) = stop_tx.take() {
         let _ = stop_tx.send(());
     }
@@ -1130,12 +1178,7 @@ mod tests {
         };
         started_rx.await.expect("test broadcast task should start");
 
-        timeout(
-            Duration::from_secs(1),
-            controller.stop("guild:10:20:30", false),
-        )
-        .await
-        .expect("broadcast stop must not wait for task cleanup");
+        controller.stop("guild:10:20:30", false);
 
         release_tx
             .send(())
@@ -1192,32 +1235,47 @@ mod tests {
 
     #[tokio::test]
     async fn capture_preparation_waits_for_tracked_broadcast_cleanup() {
-        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
-        let mut tracked_cleanup = Some(tokio::spawn(async move {
-            let _ = release_rx.await;
-        }));
-        let mut session = None;
-        let mut stop_tx = None;
-        {
-            let wait = await_stream_broadcast_cleanup_before_capture(
-                &mut tracked_cleanup,
-                &mut session,
-                &mut stop_tx,
-            );
-            tokio::pin!(wait);
+        let (cleanup_tx, cleanup_rx) = watch::channel(false);
+        let wait = wait_for_stream_broadcast_cleanup(cleanup_rx);
+        tokio::pin!(wait);
 
-            assert!(
-                timeout(Duration::from_millis(25), &mut wait).await.is_err(),
-                "capture preparation must wait while the previous portal session is cleaning up"
-            );
-            release_tx
-                .send(())
-                .expect("previous broadcast cleanup should be released");
-            timeout(Duration::from_secs(1), &mut wait)
-                .await
-                .expect("capture preparation cleanup barrier should finish");
-        }
-        assert!(tracked_cleanup.is_none());
+        assert!(
+            timeout(Duration::from_millis(25), &mut wait).await.is_err(),
+            "capture preparation must wait while the previous portal session is cleaning up"
+        );
+        cleanup_tx.send_replace(true);
+        timeout(Duration::from_secs(1), &mut wait)
+            .await
+            .expect("capture preparation cleanup barrier should finish");
+    }
+
+    #[tokio::test]
+    async fn controller_starts_capture_preparation_without_waiting_for_cleanup() {
+        let (_cleanup_tx, cleanup_rx) = watch::channel(false);
+        let mut controller = StreamBroadcastController {
+            cleanup: Some(cleanup_rx),
+            ..StreamBroadcastController::default()
+        };
+        let (events_tx, _events_rx) = mpsc::unbounded_channel();
+
+        controller.prepare_capture(
+            1,
+            "guild:10:20:30".to_owned(),
+            StreamCaptureTarget {
+                kind: StreamCaptureTargetKind::Portal,
+                id: 0,
+                title: "Screen or window...".to_owned(),
+            },
+            events_tx,
+        );
+
+        let preparation = controller
+            .capture_preparation
+            .take()
+            .expect("capture preparation should be tracked immediately");
+        preparation.cancellation.cancel();
+        preparation.task.abort();
+        let _ = preparation.task.await;
     }
 
     #[tokio::test]

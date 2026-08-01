@@ -4,7 +4,7 @@ use std::{
     sync::{
         Arc, LazyLock, Mutex,
         atomic::AtomicBool,
-        mpsc::{self, Receiver, SyncSender, TrySendError},
+        mpsc::{self, Sender, SyncSender},
     },
 };
 
@@ -46,7 +46,7 @@ use windows::{
     core::{BOOL, IInspectable, Interface, factory},
 };
 
-use super::CaptureFrame;
+use super::{CaptureFrame, CaptureOutput, send_capture_result};
 use crate::discord::voice::{StreamCaptureTarget, StreamCaptureTargetKind};
 
 const FRAME_QUEUE_CAPACITY: usize = 2;
@@ -119,17 +119,21 @@ pub(super) fn list_targets() -> Result<Vec<StreamCaptureTarget>, String> {
 pub(super) fn start_capture(
     target: &StreamCaptureTarget,
     _stop: &AtomicBool,
-) -> Result<(CaptureSession, Receiver<Result<CaptureFrame, String>>), String> {
+) -> Result<(CaptureSession, CaptureOutput), String> {
     let apartment = WinRtApartment::initialize()?;
     let item = capture_item(target)?;
     let (frames_tx, frames_rx) = mpsc::sync_channel(FRAME_QUEUE_CAPACITY);
-    let runtime = WgcRuntime::start(item, frames_tx)?;
+    let (errors_tx, errors_rx) = mpsc::channel();
+    let runtime = WgcRuntime::start(item, frames_tx, errors_tx)?;
     Ok((
         CaptureSession {
             runtime: Some(runtime),
             _apartment: apartment,
         },
-        frames_rx,
+        CaptureOutput {
+            frames: frames_rx,
+            errors: errors_rx,
+        },
     ))
 }
 
@@ -159,7 +163,8 @@ impl Drop for WinRtApartment {
 impl WgcRuntime {
     fn start(
         item: GraphicsCaptureItem,
-        frames_tx: SyncSender<Result<CaptureFrame, String>>,
+        frames_tx: SyncSender<CaptureFrame>,
+        errors_tx: Sender<String>,
     ) -> Result<Self, String> {
         let size = item
             .Size()
@@ -180,6 +185,7 @@ impl WgcRuntime {
         let current_size = Arc::new(Mutex::new(size));
         let callback_size = Arc::clone(&current_size);
         let closed_frames_tx = frames_tx.clone();
+        let closed_errors_tx = errors_tx.clone();
         let frame_arrived_token = frame_pool
             .FrameArrived(
                 &TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new(
@@ -189,7 +195,7 @@ impl WgcRuntime {
                         };
                         let result = capture_next_frame(frame_pool);
                         let next_size = result.as_ref().ok().map(|(_, size)| *size);
-                        send_latest(&frames_tx, result.map(|(frame, _)| frame));
+                        send_capture_result(&frames_tx, &errors_tx, result.map(|(frame, _)| frame));
 
                         if let Some(next_size) = next_size {
                             let mut current_size = callback_size
@@ -209,8 +215,9 @@ impl WgcRuntime {
                                         .map_err(|error| error.to_string())
                                 });
                                 if let Err(error) = recreate {
-                                    send_latest(
+                                    send_capture_result(
                                         &frames_tx,
+                                        &errors_tx,
                                         Err(format!("WGC frame pool resize failed: {error}")),
                                     );
                                 } else {
@@ -242,8 +249,9 @@ impl WgcRuntime {
                 .item
                 .Closed(
                     &TypedEventHandler::<GraphicsCaptureItem, IInspectable>::new(move |_, _| {
-                        send_latest(
+                        send_capture_result(
                             &closed_frames_tx,
+                            &closed_errors_tx,
                             Err("WGC capture source closed".to_owned()),
                         );
                         Ok(())
@@ -614,17 +622,4 @@ fn utf16_string(value: &[u16]) -> String {
         .position(|character| *character == 0)
         .unwrap_or(value.len());
     String::from_utf16_lossy(&value[..length])
-}
-
-fn send_latest(
-    frames_tx: &SyncSender<Result<CaptureFrame, String>>,
-    frame: Result<CaptureFrame, String>,
-) {
-    if frame.is_err() {
-        let _ = frames_tx.send(frame);
-        return;
-    }
-    match frames_tx.try_send(frame) {
-        Ok(()) | Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {}
-    }
 }

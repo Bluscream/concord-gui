@@ -2,7 +2,7 @@ use std::{
     slice,
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError},
+        mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender},
     },
     time::{Duration, Instant},
 };
@@ -25,7 +25,7 @@ use objc2_screen_capture_kit::{
     SCStreamOutput, SCStreamOutputType, SCWindow,
 };
 
-use super::{CaptureFrame, STREAM_CAPTURE_FPS};
+use super::{CaptureFrame, CaptureOutput, STREAM_CAPTURE_FPS, send_capture_result};
 use crate::discord::voice::{StreamCaptureTarget, StreamCaptureTargetKind};
 
 const FRAME_QUEUE_CAPACITY: usize = 2;
@@ -97,7 +97,7 @@ pub(super) fn list_targets() -> Result<Vec<StreamCaptureTarget>, String> {
 pub(super) fn start_capture(
     target: &StreamCaptureTarget,
     stop: &AtomicBool,
-) -> Result<(CaptureSession, Receiver<Result<CaptureFrame, String>>), String> {
+) -> Result<(CaptureSession, CaptureOutput), String> {
     let content = shareable_content(Some(stop))?;
     let (filter, width, height) = capture_filter(&content, target)?;
 
@@ -112,7 +112,8 @@ pub(super) fn start_capture(
     }
 
     let (frames_tx, frames_rx) = mpsc::sync_channel(FRAME_QUEUE_CAPACITY);
-    let output = MacCaptureOutput::new(frames_tx);
+    let (errors_tx, errors_rx) = mpsc::channel();
+    let output = MacCaptureOutput::new(frames_tx, errors_tx);
     let delegate = ProtocolObject::<dyn SCStreamDelegate>::from_ref(&*output);
     let stream = unsafe {
         SCStream::initWithFilter_configuration_delegate(
@@ -148,7 +149,10 @@ pub(super) fn start_capture(
         CaptureSession {
             active: Some(active),
         },
-        frames_rx,
+        CaptureOutput {
+            frames: frames_rx,
+            errors: errors_rx,
+        },
     ))
 }
 
@@ -319,7 +323,8 @@ fn receive_callback<T>(
 }
 
 struct MacCaptureOutputIvars {
-    frames_tx: SyncSender<Result<CaptureFrame, String>>,
+    frames_tx: SyncSender<CaptureFrame>,
+    errors_tx: Sender<String>,
 }
 
 define_class!(
@@ -341,7 +346,7 @@ define_class!(
                 return;
             }
             if let Some(result) = capture_frame(sample_buffer) {
-                send_latest(&self.ivars().frames_tx, result);
+                send_capture_result(&self.ivars().frames_tx, &self.ivars().errors_tx, result);
             }
         }
     }
@@ -350,8 +355,9 @@ define_class!(
         #[unsafe(method(stream:didStopWithError:))]
         #[allow(non_snake_case)]
         unsafe fn stream_didStopWithError(&self, _stream: &SCStream, error: &NSError) {
-            send_latest(
+            send_capture_result(
                 &self.ivars().frames_tx,
+                &self.ivars().errors_tx,
                 Err(format!("ScreenCaptureKit stream stopped: {error}")),
             );
         }
@@ -361,22 +367,12 @@ define_class!(
 unsafe impl NSObjectProtocol for MacCaptureOutput {}
 
 impl MacCaptureOutput {
-    fn new(frames_tx: SyncSender<Result<CaptureFrame, String>>) -> Retained<Self> {
-        let this = Self::alloc().set_ivars(MacCaptureOutputIvars { frames_tx });
+    fn new(frames_tx: SyncSender<CaptureFrame>, errors_tx: Sender<String>) -> Retained<Self> {
+        let this = Self::alloc().set_ivars(MacCaptureOutputIvars {
+            frames_tx,
+            errors_tx,
+        });
         unsafe { msg_send![super(this), init] }
-    }
-}
-
-fn send_latest(
-    frames_tx: &SyncSender<Result<CaptureFrame, String>>,
-    frame: Result<CaptureFrame, String>,
-) {
-    if frame.is_err() {
-        let _ = frames_tx.send(frame);
-        return;
-    }
-    match frames_tx.try_send(frame) {
-        Ok(()) | Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {}
     }
 }
 
