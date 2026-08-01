@@ -22,17 +22,29 @@ use openh264::{
     formats::YUVSlices,
 };
 use tokio::sync::mpsc;
-use xcap::{Frame, Monitor, VideoRecorder, Window};
 use yuv::{
     YuvChromaSubsampling, YuvConversionMode, YuvPlanarImageMut, YuvRange, YuvStandardMatrix,
     rgba_to_yuv420,
 };
 
 use super::{
-    StreamCaptureTarget, StreamCaptureTargetKind,
+    StreamCaptureTarget,
     preview::{StreamPreviewCadence, StreamPreviewFrame},
 };
 use crate::logging;
+
+#[cfg(target_os = "linux")]
+#[path = "capture/linux.rs"]
+mod platform;
+#[cfg(target_os = "macos")]
+#[path = "capture/macos.rs"]
+mod platform;
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+#[path = "capture/unsupported.rs"]
+mod platform;
+#[cfg(target_os = "windows")]
+#[path = "capture/windows.rs"]
+mod platform;
 
 pub(super) const STREAM_CAPTURE_WIDTH: u32 = 1280;
 pub(super) const STREAM_CAPTURE_HEIGHT: u32 = 720;
@@ -61,12 +73,15 @@ pub(super) struct StreamCaptureHandle {
     worker: Option<JoinHandle<()>>,
 }
 
-enum CaptureSource {
-    Display {
-        recorder: VideoRecorder,
-        frames: Receiver<Frame>,
-    },
-    Window(Window),
+pub(super) struct CaptureFrame {
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) rgba: Vec<u8>,
+}
+
+struct CaptureSource {
+    session: platform::CaptureSession,
+    frames: Receiver<Result<CaptureFrame, String>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -223,36 +238,25 @@ impl CapturePerformanceStats {
 
 impl CaptureSource {
     fn capture_image(&self, stop: &AtomicBool) -> Result<Option<RgbaImage>, String> {
-        match self {
-            Self::Display { frames, .. } => loop {
-                match frames.recv_timeout(STREAM_RECORDER_POLL_INTERVAL) {
-                    Ok(mut frame) => {
-                        while let Ok(newer_frame) = frames.try_recv() {
-                            frame = newer_frame;
-                        }
-                        // `from_raw` takes ownership of xcap's frame buffer. The
-                        // current xcap API does not expose capture scaling or a
-                        // native YUV format, so keeping this ownership transfer
-                        // avoids adding another full-resolution RGBA copy here.
-                        return RgbaImage::from_raw(frame.width, frame.height, frame.raw)
-                            .map(Some)
-                            .ok_or_else(|| {
-                                "display recorder returned an invalid RGBA frame".to_owned()
-                            });
+        loop {
+            match self.frames.recv_timeout(STREAM_RECORDER_POLL_INTERVAL) {
+                Ok(frame) => {
+                    let mut frame = frame?;
+                    while let Ok(newer_frame) = self.frames.try_recv() {
+                        frame = newer_frame?;
                     }
-                    Err(RecvTimeoutError::Timeout) if stop.load(Ordering::Acquire) => {
-                        return Ok(None);
-                    }
-                    Err(RecvTimeoutError::Timeout) => {}
-                    Err(RecvTimeoutError::Disconnected) => {
-                        return Err("display recorder stopped unexpectedly".to_owned());
-                    }
+                    return RgbaImage::from_raw(frame.width, frame.height, frame.rgba)
+                        .map(Some)
+                        .ok_or_else(|| {
+                            "capture backend returned an invalid RGBA frame".to_owned()
+                        });
                 }
-            },
-            Self::Window(window) => window
-                .capture_image()
-                .map(Some)
-                .map_err(|error| format!("window capture failed: {error}")),
+                Err(RecvTimeoutError::Timeout) if stop.load(Ordering::Acquire) => return Ok(None),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err("capture backend stopped unexpectedly".to_owned());
+                }
+            }
         }
     }
 }
@@ -424,12 +428,10 @@ fn fill_opaque_black(rgba: &mut [u8]) {
 
 impl Drop for CaptureSource {
     fn drop(&mut self) {
-        if let Self::Display { recorder, .. } = self
-            && let Err(error) = recorder.stop()
-        {
+        if let Err(error) = self.session.stop() {
             logging::debug(
                 "stream",
-                format!("display recorder stop failed during shutdown: {error}"),
+                format!("capture backend stop failed during shutdown: {error}"),
             );
         }
     }
@@ -478,8 +480,9 @@ impl StreamCaptureHandle {
         let deadline = Instant::now() + STREAM_CAPTURE_GRACEFUL_SHUTDOWN_TIMEOUT;
         while !worker.is_finished() {
             if Instant::now() >= deadline {
-                // A native window snapshot cannot be interrupted safely. Move
-                // ownership outside Tokio so runtime shutdown stays bounded.
+                // Native capture shutdown can wait for an operating-system
+                // callback. Move ownership outside Tokio so runtime shutdown
+                // stays bounded.
                 logging::debug(
                     "stream",
                     "stream capture worker did not stop before graceful shutdown timeout; reaping outside Tokio",
@@ -499,61 +502,7 @@ impl StreamCaptureHandle {
 }
 
 pub(crate) fn list_stream_capture_targets() -> Result<Vec<StreamCaptureTarget>, String> {
-    let mut targets = Vec::new();
-
-    let monitors = Monitor::all().map_err(|error| format!("screen enumeration failed: {error}"))?;
-    for (index, monitor) in monitors.into_iter().enumerate() {
-        let id = monitor
-            .id()
-            .map_err(|error| format!("screen id lookup failed: {error}"))?;
-        let name = monitor
-            .friendly_name()
-            .or_else(|_| monitor.name())
-            .unwrap_or_else(|_| format!("Display {}", index + 1));
-        let dimensions = monitor
-            .width()
-            .and_then(|width| monitor.height().map(|height| (width, height)))
-            .ok();
-        let title = match dimensions {
-            Some((width, height)) => format!("{name} ({width}x{height})"),
-            None => name,
-        };
-        targets.push(StreamCaptureTarget {
-            kind: StreamCaptureTargetKind::Display,
-            id,
-            title: format!("Screen: {title}"),
-        });
-    }
-
-    let windows = Window::all().map_err(|error| format!("window enumeration failed: {error}"))?;
-    for window in windows {
-        if window.is_minimized().unwrap_or(true) {
-            continue;
-        }
-        let width = window.width().unwrap_or_default();
-        let height = window.height().unwrap_or_default();
-        if width < 2 || height < 2 {
-            continue;
-        }
-        let title = window.title().unwrap_or_default().trim().to_owned();
-        if title.is_empty() {
-            continue;
-        }
-        let app_name = window.app_name().unwrap_or_default();
-        let label = if app_name.is_empty() || title.starts_with(&app_name) {
-            title
-        } else {
-            format!("{app_name}: {title}")
-        };
-        let id = window
-            .id()
-            .map_err(|error| format!("window id lookup failed: {error}"))?;
-        targets.push(StreamCaptureTarget {
-            kind: StreamCaptureTargetKind::Window,
-            id,
-            title: format!("Window: {label}"),
-        });
-    }
+    let mut targets = platform::list_targets()?;
 
     targets.sort_by(|left, right| {
         left.kind
@@ -750,31 +699,9 @@ fn stream_encoder_config() -> EncoderConfig {
 }
 
 fn resolve_capture_source(target: &StreamCaptureTarget) -> Result<CaptureSource, String> {
-    match target.kind {
-        StreamCaptureTargetKind::Display => Monitor::all()
-            .map_err(|error| format!("screen enumeration failed: {error}"))?
-            .into_iter()
-            .find(|monitor| monitor.id().ok() == Some(target.id))
-            .ok_or_else(|| format!("screen is no longer available: {}", target.title))
-            .and_then(start_display_recorder),
-        StreamCaptureTargetKind::Window => Window::all()
-            .map_err(|error| format!("window enumeration failed: {error}"))?
-            .into_iter()
-            .find(|window| window.id().ok() == Some(target.id))
-            .map(CaptureSource::Window)
-            .ok_or_else(|| format!("window is no longer available: {}", target.title)),
-    }
-}
-
-fn start_display_recorder(monitor: Monitor) -> Result<CaptureSource, String> {
-    let (recorder, frames) = monitor
-        .video_recorder()
-        .map_err(|error| format!("display recorder creation failed: {error}"))?;
-    recorder
-        .start()
-        .map_err(|error| format!("display recorder start failed: {error}"))?;
-    logging::debug("stream", "continuous display recorder started");
-    Ok(CaptureSource::Display { recorder, frames })
+    let (session, frames) = platform::start_capture(target)?;
+    logging::debug("stream", "native continuous capture started");
+    Ok(CaptureSource { session, frames })
 }
 
 fn stream_rtp_timestamp(elapsed: Duration) -> u32 {

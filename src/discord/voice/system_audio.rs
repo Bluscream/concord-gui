@@ -20,8 +20,6 @@ use flexaudio_core::raw_ring::{RawConsumer, raw_ring};
 #[cfg(feature = "stream-broadcast")]
 use flexaudio_core::types::{Error as FlexAudioError, OutputFormat, ProcessMode};
 use tokio::sync::mpsc;
-#[cfg(feature = "stream-broadcast")]
-use xcap::Window;
 
 #[cfg(feature = "stream-broadcast")]
 use crate::logging;
@@ -209,31 +207,23 @@ fn resolve_audio_scope(
     target: &StreamCaptureTarget,
 ) -> Result<SystemAudioScope, SystemAudioCaptureError> {
     match target.kind {
-        StreamCaptureTargetKind::Display => Ok(SystemAudioScope {
-            target_pid: std::process::id(),
-            mode: ProcessMode::Exclude,
-            description: format!("display excluding concord pid={}", std::process::id()),
-        }),
+        StreamCaptureTargetKind::Display | StreamCaptureTargetKind::Portal => {
+            Ok(SystemAudioScope {
+                target_pid: std::process::id(),
+                mode: ProcessMode::Exclude,
+                description: format!("display excluding concord pid={}", std::process::id()),
+            })
+        }
         StreamCaptureTargetKind::Window => {
-            let window = Window::all()
-                .map_err(|error| {
-                    SystemAudioCaptureError::new(format!(
-                        "window enumeration for audio capture failed: {error}"
-                    ))
-                })?
-                .into_iter()
-                .find(|window| window.id().ok() == Some(target.id))
-                .ok_or_else(|| {
-                    SystemAudioCaptureError::new(format!(
-                        "window is no longer available for audio capture: {}",
-                        target.title
-                    ))
-                })?;
-            let target_pid = window.pid().map_err(|error| {
-                SystemAudioCaptureError::new(format!(
-                    "window process lookup for audio capture failed: {error}"
-                ))
-            })?;
+            let Some(target_pid) =
+                platform::target_process_id(target).map_err(SystemAudioCaptureError::new)?
+            else {
+                return Ok(SystemAudioScope {
+                    target_pid: std::process::id(),
+                    mode: ProcessMode::Exclude,
+                    description: format!("window excluding concord pid={}", std::process::id()),
+                });
+            };
             if target_pid == std::process::id() {
                 return Err(SystemAudioCaptureError::new(
                     "Concord cannot broadcast its own window audio",

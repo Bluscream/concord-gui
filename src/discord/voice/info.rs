@@ -20,12 +20,13 @@ pub enum VoiceScope {
 pub enum StreamCaptureTargetKind {
     Display,
     Window,
+    Portal,
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct StreamCaptureTarget {
     pub kind: StreamCaptureTargetKind,
-    pub id: u32,
+    pub id: u64,
     pub title: String,
 }
 

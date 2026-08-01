@@ -40,6 +40,12 @@ pub(super) fn capture_backend(
     })
 }
 
+pub(super) fn target_process_id(
+    _target: &StreamCaptureTarget,
+) -> std::result::Result<Option<u32>, String> {
+    Ok(None)
+}
+
 struct ScreenCaptureKitAudioBackend {
     target: StreamCaptureTarget,
     active_stream: Option<ActiveStream>,
@@ -168,12 +174,13 @@ fn content_filter(
     content: &SCShareableContent,
     target: &StreamCaptureTarget,
 ) -> Result<Retained<SCContentFilter>> {
+    let target_id = u32::try_from(target.id).map_err(|_| Error::DeviceNotFound)?;
     match target.kind {
         StreamCaptureTargetKind::Display => {
             let displays = unsafe { content.displays() };
             let display = (0..displays.count())
                 .map(|index| displays.objectAtIndex(index))
-                .find(|display| unsafe { display.displayID() } == target.id)
+                .find(|display| unsafe { display.displayID() } == target_id)
                 .ok_or(Error::DeviceNotFound)?;
             let excluded_windows = NSArray::<SCWindow>::new();
             Ok(unsafe {
@@ -188,12 +195,13 @@ fn content_filter(
             let windows = unsafe { content.windows() };
             let window = (0..windows.count())
                 .map(|index| windows.objectAtIndex(index))
-                .find(|window| unsafe { window.windowID() } == target.id)
+                .find(|window| unsafe { window.windowID() } == target_id)
                 .ok_or(Error::DeviceNotFound)?;
             Ok(unsafe {
                 SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &window)
             })
         }
+        StreamCaptureTargetKind::Portal => Err(Error::DeviceNotFound),
     }
 }
 

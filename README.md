@@ -42,14 +42,10 @@ brew install nasm
 sudo dnf install \
   alsa-lib-devel \
   clang-devel \
-  libxcb-devel \
-  mesa-libEGL-devel \
-  mesa-libgbm-devel \
   nasm \
   opus-devel \
   pipewire-devel \
-  pkgconf-pkg-config \
-  wayland-devel
+  pkgconf-pkg-config
 ```
 
 #### Debian or Ubuntu
@@ -58,15 +54,14 @@ sudo dnf install \
 sudo apt install \
   libasound2-dev \
   libclang-dev \
-  libegl-dev \
-  libgbm-dev \
   libopus-dev \
   libpipewire-0.3-dev \
-  libwayland-dev \
-  libxcb1-dev \
   nasm \
   pkg-config
 ```
+
+Linux screen sharing also requires XDG Desktop Portal and the portal backend
+provided by your desktop environment.
 
 #### x86_64 Windows
 

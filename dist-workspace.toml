@@ -44,25 +44,7 @@ alsa-lib = { stage = [
   "aarch64-unknown-linux-gnu",
   "x86_64-unknown-linux-gnu",
 ] }
-libxcb = { stage = [
-  "run",
-], targets = [
-  "aarch64-unknown-linux-gnu",
-  "x86_64-unknown-linux-gnu",
-] }
-mesa = { stage = [
-  "run",
-], targets = [
-  "aarch64-unknown-linux-gnu",
-  "x86_64-unknown-linux-gnu",
-] }
 pipewire = { stage = [
-  "run",
-], targets = [
-  "aarch64-unknown-linux-gnu",
-  "x86_64-unknown-linux-gnu",
-] }
-wayland = { stage = [
   "run",
 ], targets = [
   "aarch64-unknown-linux-gnu",
@@ -73,11 +55,7 @@ wayland = { stage = [
 libopus-dev = { stage = ["build"] }
 libasound2-dev = { stage = ["build"] }
 libclang-dev = { stage = ["build"] }
-libegl-dev = { stage = ["build"] }
-libgbm-dev = { stage = ["build"] }
 "libpipewire-0.3-dev" = { stage = ["build"] }
-libwayland-dev = { stage = ["build"] }
-libxcb1-dev = { stage = ["build"] }
 nasm = { stage = ["build"], targets = ["x86_64-unknown-linux-gnu"] }
 pkg-config = { stage = ["build"] }
 

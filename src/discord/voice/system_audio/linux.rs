@@ -13,3 +13,7 @@ pub(super) fn capture_backend(
 ) -> Box<dyn CaptureBackend> {
     Box::new(PwProcessBackend::new(target_pid, mode))
 }
+
+pub(super) fn target_process_id(_target: &StreamCaptureTarget) -> Result<Option<u32>, String> {
+    Ok(None)
+}

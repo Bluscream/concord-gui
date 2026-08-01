@@ -6,11 +6,7 @@
 , nasm
 , opus
 , alsa-lib
-, libgbm
-, libglvnd
-, libxcb
 , pipewire
-, wayland
 , src
 , pname
 , version
@@ -43,11 +39,7 @@ let
       opus
     ] ++ lib.optionals stdenv.isLinux [
       alsa-lib
-      libgbm
-      libglvnd
-      libxcb
       pipewire
-      wayland
     ];
 
     # The unit tests in this repo do not require network or a TTY, but disable
