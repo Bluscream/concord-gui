@@ -8,7 +8,7 @@ on:
 jobs:
   publish:
     name: cargo publish
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     # Only run when Release succeeded and was triggered by a tag push.
     # `head_branch` on workflow_run carries the tag name for tag pushes.
     if: >-
