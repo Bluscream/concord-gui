@@ -2,7 +2,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel},
+        mpsc::{Receiver, RecvTimeoutError, SyncSender, TryRecvError, sync_channel},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -244,7 +244,7 @@ impl CapturePerformanceStats {
 }
 
 impl CaptureSource {
-    fn capture_image(&self, stop: &AtomicBool) -> Result<Option<RgbaImage>, String> {
+    fn wait_for_initial_image(&self, stop: &AtomicBool) -> Result<Option<RgbaImage>, String> {
         loop {
             match self.frames.recv_timeout(STREAM_RECORDER_POLL_INTERVAL) {
                 Ok(frame) => {
@@ -252,11 +252,7 @@ impl CaptureSource {
                     while let Ok(newer_frame) = self.frames.try_recv() {
                         frame = newer_frame?;
                     }
-                    return RgbaImage::from_raw(frame.width, frame.height, frame.rgba)
-                        .map(Some)
-                        .ok_or_else(|| {
-                            "capture backend returned an invalid RGBA frame".to_owned()
-                        });
+                    return capture_frame_image(frame).map(Some);
                 }
                 Err(RecvTimeoutError::Timeout) if stop.load(Ordering::Acquire) => return Ok(None),
                 Err(RecvTimeoutError::Timeout) => {}
@@ -266,6 +262,37 @@ impl CaptureSource {
             }
         }
     }
+
+    fn refresh_image(&self, image: &mut RgbaImage) -> Result<bool, String> {
+        refresh_capture_image(&self.frames, image)
+    }
+}
+
+fn capture_frame_image(frame: CaptureFrame) -> Result<RgbaImage, String> {
+    RgbaImage::from_raw(frame.width, frame.height, frame.rgba)
+        .ok_or_else(|| "capture backend returned an invalid RGBA frame".to_owned())
+}
+
+fn refresh_capture_image(
+    frames: &Receiver<Result<CaptureFrame, String>>,
+    image: &mut RgbaImage,
+) -> Result<bool, String> {
+    let mut newest = None;
+    loop {
+        match frames.try_recv() {
+            Ok(frame) => newest = Some(frame?),
+            Err(TryRecvError::Empty) => break,
+            Err(TryRecvError::Disconnected) => {
+                return Err("capture backend stopped unexpectedly".to_owned());
+            }
+        }
+    }
+
+    let Some(frame) = newest else {
+        return Ok(false);
+    };
+    *image = capture_frame_image(frame)?;
+    Ok(true)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -342,7 +369,7 @@ impl StreamFrameProcessor {
 
     fn prepare(
         &mut self,
-        image: RgbaImage,
+        image: &RgbaImage,
         include_preview: bool,
     ) -> Result<PreparedStreamFrame, String> {
         let original_dimensions = image.dimensions();
@@ -392,7 +419,7 @@ impl StreamFrameProcessor {
             preview: include_preview.then(|| StreamPreviewFrame {
                 width: original_dimensions.0,
                 height: original_dimensions.1,
-                rgba: image.into_raw(),
+                rgba: image.as_raw().clone(),
             }),
         })
     }
@@ -598,6 +625,9 @@ fn run_capture_loop(
     ready_tx: SyncSender<Result<(), String>>,
 ) -> Result<(), String> {
     let source = resolve_capture_source(target)?;
+    let Some(mut image) = source.wait_for_initial_image(stop)? else {
+        return Ok(());
+    };
     let mut encoder = Encoder::with_api_config(OpenH264API::from_source(), stream_encoder_config())
         .map_err(|error| format!("H264 encoder creation failed: {error}"))?;
     let mut ready_tx = Some(ready_tx);
@@ -611,9 +641,7 @@ fn run_capture_loop(
         let frame_started_at = Instant::now();
 
         let capture_started_at = Instant::now();
-        let Some(image) = source.capture_image(stop)? else {
-            return Ok(());
-        };
+        source.refresh_image(&mut image)?;
         let capture_time = capture_started_at.elapsed();
 
         let preview_now = Instant::now();
@@ -622,7 +650,7 @@ fn run_capture_loop(
             .then(|| preview_frames_tx.try_reserve().ok())
             .flatten();
         let prepare_started_at = Instant::now();
-        let prepared = frame_processor.prepare(image, preview_permit.is_some())?;
+        let prepared = frame_processor.prepare(&image, preview_permit.is_some())?;
         let prepare_time = prepare_started_at.elapsed();
         if let (Some(permit), Some(preview)) = (preview_permit, prepared.preview) {
             permit.send(preview);
@@ -907,7 +935,7 @@ mod tests {
             let image = RgbaImage::from_pixel(dimensions.0, dimensions.1, Rgba([255, 0, 0, 255]));
             let mut processor = StreamFrameProcessor::new();
             processor
-                .prepare(image, false)
+                .prepare(&image, false)
                 .expect("stream frame should be prepared");
 
             assert!(luma_pixel(&processor, 640, 360).abs_diff(63) <= 1);
@@ -921,15 +949,13 @@ mod tests {
     #[test]
     fn broadcast_color_conversion_and_vui_use_bt709_limited() {
         let mut processor = StreamFrameProcessor::new();
+        let image = RgbaImage::from_pixel(
+            STREAM_CAPTURE_WIDTH,
+            STREAM_CAPTURE_HEIGHT,
+            Rgba([255, 0, 0, 255]),
+        );
         processor
-            .prepare(
-                RgbaImage::from_pixel(
-                    STREAM_CAPTURE_WIDTH,
-                    STREAM_CAPTURE_HEIGHT,
-                    Rgba([255, 0, 0, 255]),
-                ),
-                false,
-            )
+            .prepare(&image, false)
             .expect("red stream frame should be prepared");
 
         for value in processor.yuv.y_plane.borrow() {
@@ -955,7 +981,7 @@ mod tests {
         let mut processor = StreamFrameProcessor::new();
         let image = RgbaImage::from_pixel(800, 600, Rgba([12, 34, 56, 255]));
         processor
-            .prepare(image.clone(), false)
+            .prepare(&image, false)
             .expect("first stream frame should be prepared");
         let addresses = (
             processor.rgba.buffer().as_ptr(),
@@ -965,7 +991,7 @@ mod tests {
         );
 
         processor
-            .prepare(image, false)
+            .prepare(&image, false)
             .expect("second stream frame should be prepared");
 
         assert_eq!(
@@ -980,18 +1006,48 @@ mod tests {
     }
 
     #[test]
-    fn preview_reuses_the_owned_capture_buffer() {
+    fn preview_copies_the_latest_reusable_capture_frame() {
         let image = RgbaImage::from_pixel(800, 600, Rgba([12, 34, 56, 255]));
-        let capture_buffer = image.as_raw().as_ptr();
         let mut processor = StreamFrameProcessor::new();
 
         let prepared = processor
-            .prepare(image, true)
+            .prepare(&image, true)
             .expect("stream frame should be prepared");
         let preview = prepared.preview.expect("preview should be returned");
 
-        assert_eq!(preview.rgba.as_ptr(), capture_buffer);
+        assert_eq!(preview.rgba, image.as_raw().as_slice());
         assert_eq!((preview.width, preview.height), (800, 600));
+    }
+
+    #[test]
+    fn damage_driven_capture_keeps_the_latest_frame_between_updates() {
+        let (frames_tx, frames_rx) = std::sync::mpsc::sync_channel(1);
+        let mut image = RgbaImage::from_pixel(2, 2, Rgba([1, 2, 3, 255]));
+
+        assert!(
+            !refresh_capture_image(&frames_rx, &mut image)
+                .expect("an idle capture source should remain usable")
+        );
+        assert_eq!(image.get_pixel(0, 0), &Rgba([1, 2, 3, 255]));
+
+        frames_tx
+            .send(Ok(CaptureFrame {
+                width: 2,
+                height: 2,
+                rgba: RgbaImage::from_pixel(2, 2, Rgba([4, 5, 6, 255])).into_raw(),
+            }))
+            .expect("updated capture frame should be queued");
+        assert!(
+            refresh_capture_image(&frames_rx, &mut image)
+                .expect("an updated capture frame should be accepted")
+        );
+        assert_eq!(image.get_pixel(0, 0), &Rgba([4, 5, 6, 255]));
+
+        assert!(
+            !refresh_capture_image(&frames_rx, &mut image)
+                .expect("the latest frame should remain usable without another update")
+        );
+        assert_eq!(image.get_pixel(0, 0), &Rgba([4, 5, 6, 255]));
     }
 
     #[test]
@@ -999,11 +1055,9 @@ mod tests {
         let geometry =
             StreamFrameGeometry::for_source((2057, 1329)).expect("source should be accepted");
         let mut processor = StreamFrameProcessor::new();
+        let image = RgbaImage::from_pixel(801, 601, Rgba([12, 34, 56, 255]));
         processor
-            .prepare(
-                RgbaImage::from_pixel(801, 601, Rgba([12, 34, 56, 255])),
-                false,
-            )
+            .prepare(&image, false)
             .expect("odd-sized stream frame should be prepared");
 
         assert_eq!(geometry.source_dimensions, (2057, 1329));

@@ -145,22 +145,38 @@ impl CaptureSession {
                 .map_err(|error| format!("PipeWire video worker panicked: {error:?}"))
         });
         let portal_result = self.portal_session.take().map_or(Ok(()), |session| {
-            self.portal_runtime
+            logging::debug("stream", "closing screen cast portal session");
+            let result = self
+                .portal_runtime
                 .block_on(session.close())
-                .map_err(|error| format!("screen cast portal session close failed: {error}"))
+                .map_err(|error| format!("screen cast portal session close failed: {error}"));
+            if result.is_ok() {
+                logging::debug("stream", "screen cast portal session closed");
+            }
+            result
         });
         worker_result.and(portal_result)
     }
 }
 
 async fn open_portal() -> Result<PortalCapture, String> {
-    let proxy = Screencast::new()
+    logging::debug("stream", "connecting to screen cast portal");
+    // The default ashpd proxy caches its D-Bus connection process-wide. Our
+    // capture runtime is per session, so that cached connection stops being
+    // driven after the first runtime is dropped. Bind a fresh connection to
+    // each capture runtime so later broadcasts can open another portal.
+    let connection = ashpd::zbus::Connection::session()
         .await
         .map_err(|error| format!("screen cast portal connection failed: {error}"))?;
+    let proxy = Screencast::with_connection(connection)
+        .await
+        .map_err(|error| format!("screen cast portal proxy creation failed: {error}"))?;
+    logging::debug("stream", "screen cast portal connected");
     let session = proxy
         .create_session(Default::default())
         .await
         .map_err(|error| format!("screen cast portal session creation failed: {error}"))?;
+    logging::debug("stream", "screen cast portal session created");
     proxy
         .select_sources(
             &session,
@@ -172,6 +188,7 @@ async fn open_portal() -> Result<PortalCapture, String> {
         )
         .await
         .map_err(|error| format!("screen cast source selection failed: {error}"))?;
+    logging::debug("stream", "waiting for screen cast portal source selection");
 
     let response = proxy
         .start(&session, None, Default::default())
@@ -179,6 +196,7 @@ async fn open_portal() -> Result<PortalCapture, String> {
         .map_err(|error| format!("screen cast portal start request failed: {error}"))?
         .response()
         .map_err(|error| format!("screen cast portal start failed: {error}"))?;
+    logging::debug("stream", "screen cast portal source selected");
     let stream = response
         .streams()
         .first()
@@ -188,6 +206,7 @@ async fn open_portal() -> Result<PortalCapture, String> {
         .open_pipe_wire_remote(&session, Default::default())
         .await
         .map_err(|error| format!("screen cast PipeWire remote open failed: {error}"))?;
+    logging::debug("stream", "screen cast PipeWire remote opened");
 
     Ok(PortalCapture {
         session,

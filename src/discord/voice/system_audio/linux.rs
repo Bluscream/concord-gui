@@ -5,7 +5,7 @@ use std::{
     rc::Rc,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
         mpsc,
     },
     thread::{self, JoinHandle},
@@ -19,14 +19,23 @@ use spa::pod::Pod;
 use crate::logging;
 
 use super::{
-    AudioFrameAssembler, AudioProcessMode, SYSTEM_AUDIO_CHANNELS, SYSTEM_AUDIO_SAMPLE_RATE,
-    StreamCaptureTarget,
+    AudioFrameAssembler, AudioProcessMode, DISCORD_OPUS_20MS_STEREO_SAMPLES, SYSTEM_AUDIO_CHANNELS,
+    SYSTEM_AUDIO_SAMPLE_RATE, StreamCaptureTarget,
 };
 
 pub(super) const BACKEND_NAME: &str = "pipewire-process";
 
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PROCESS_ANCESTORS: usize = 32;
+const PIPEWIRE_AUDIO_REQUESTED_LATENCY: &str = "960/48000";
+const PIPEWIRE_AUDIO_MAX_LATENCY: &str = "8192/48000";
+const PIPEWIRE_AUDIO_MAX_QUANTUM_FRAMES: usize = 8192;
+// Some PipeWire graphs ignore the requested 20 ms quantum and deliver 4096 or
+// 8192 frames at once. Two maximum-size callbacks avoid dropping part of a
+// callback without making that capacity an intentional playback delay.
+const AUDIO_SAMPLE_RING_CAPACITY: usize =
+    PIPEWIRE_AUDIO_MAX_QUANTUM_FRAMES * SYSTEM_AUDIO_CHANNELS as usize * 2 + 1;
+const AUDIO_ASSEMBLER_IDLE_WAIT: Duration = Duration::from_millis(1);
 
 pub(super) struct CaptureSession {
     stop_tx: pw::channel::Sender<()>,
@@ -36,8 +45,23 @@ pub(super) struct CaptureSession {
 
 struct PipeWireAudioState {
     format: spa::param::audio::AudioInfoRaw,
-    assembler: AudioFrameAssembler,
-    scratch: Vec<f32>,
+    samples: Arc<AudioSampleRing>,
+}
+
+// PipeWire runs the process callback on its realtime thread. This SPSC ring
+// keeps that callback allocation-free while conversion and Tokio delivery run
+// on a normal worker thread.
+struct AudioSampleRing {
+    samples: Box<[AtomicU32]>,
+    read: AtomicUsize,
+    write: AtomicUsize,
+    dropped: AtomicU64,
+    maximum_push_samples: AtomicUsize,
+}
+
+struct AudioAssemblerWorker {
+    stopping: Arc<AtomicBool>,
+    worker: Option<JoinHandle<()>>,
 }
 
 #[derive(Clone, Copy)]
@@ -53,12 +77,119 @@ struct AudioPort {
     channel: String,
 }
 
+struct LinkedOutput {
+    pairs: Vec<(u32, u32)>,
+    _links: Vec<pw::link::Link>,
+}
+
 #[derive(Default)]
 struct RegistryState {
     clients: HashMap<u32, u32>,
     nodes: HashMap<u32, OutputNode>,
     ports: HashMap<u32, AudioPort>,
-    links: HashMap<u32, Vec<pw::link::Link>>,
+    links: HashMap<u32, LinkedOutput>,
+}
+
+impl AudioSampleRing {
+    fn new(capacity: usize) -> Self {
+        assert!(capacity >= 2, "audio sample ring needs usable capacity");
+        Self {
+            samples: (0..capacity)
+                .map(|_| AtomicU32::new(0))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+            read: AtomicUsize::new(0),
+            write: AtomicUsize::new(0),
+            dropped: AtomicU64::new(0),
+            maximum_push_samples: AtomicUsize::new(0),
+        }
+    }
+
+    fn push_bytes(&self, bytes: &[u8]) {
+        self.maximum_push_samples
+            .fetch_max(bytes.len() / size_of::<f32>(), Ordering::Relaxed);
+        let read = self.read.load(Ordering::Acquire);
+        let mut write = self.write.load(Ordering::Relaxed);
+        let mut dropped = 0u64;
+
+        for sample in bytes.chunks_exact(size_of::<f32>()) {
+            let next = (write + 1) % self.samples.len();
+            if next == read {
+                dropped = dropped.saturating_add(1);
+                continue;
+            }
+            let sample = f32::from_le_bytes([sample[0], sample[1], sample[2], sample[3]]);
+            self.samples[write].store(sample.to_bits(), Ordering::Relaxed);
+            write = next;
+        }
+
+        self.write.store(write, Ordering::Release);
+        self.dropped.fetch_add(dropped, Ordering::Relaxed);
+    }
+
+    fn pop_into(&self, output: &mut Vec<f32>, maximum: usize) {
+        let mut read = self.read.load(Ordering::Relaxed);
+        let write = self.write.load(Ordering::Acquire);
+
+        while read != write && output.len() < maximum {
+            output.push(f32::from_bits(self.samples[read].load(Ordering::Relaxed)));
+            read = (read + 1) % self.samples.len();
+        }
+
+        self.read.store(read, Ordering::Release);
+    }
+
+    fn dropped_samples(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+
+    fn maximum_push_samples(&self) -> usize {
+        self.maximum_push_samples.load(Ordering::Relaxed)
+    }
+}
+
+impl AudioAssemblerWorker {
+    fn start(
+        samples: Arc<AudioSampleRing>,
+        mut assembler: AudioFrameAssembler,
+    ) -> Result<Self, String> {
+        let stopping = Arc::new(AtomicBool::new(false));
+        let worker_stopping = Arc::clone(&stopping);
+        let worker = thread::Builder::new()
+            .name("stream-pipewire-audio-assembler".to_owned())
+            .spawn(move || {
+                let mut batch = Vec::with_capacity(DISCORD_OPUS_20MS_STEREO_SAMPLES);
+                while !worker_stopping.load(Ordering::Acquire) {
+                    batch.clear();
+                    samples.pop_into(&mut batch, DISCORD_OPUS_20MS_STEREO_SAMPLES);
+                    if batch.is_empty() {
+                        thread::sleep(AUDIO_ASSEMBLER_IDLE_WAIT);
+                        continue;
+                    }
+                    if !assembler.push(&batch) {
+                        return;
+                    }
+                }
+            })
+            .map_err(|error| format!("PipeWire audio assembler worker spawn failed: {error}"))?;
+        Ok(Self {
+            stopping,
+            worker: Some(worker),
+        })
+    }
+
+    fn stop(&mut self) {
+        self.stopping.store(true, Ordering::Release);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+impl Drop for AudioAssemblerWorker {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 pub(super) fn start_capture(
@@ -152,21 +283,23 @@ fn run_capture(
             *pw::keys::MEDIA_CLASS => "Stream/Input/Audio",
             *pw::keys::MEDIA_ROLE => "Screen",
             *pw::keys::NODE_NAME => "concord-system-audio",
+            *pw::keys::NODE_LATENCY => PIPEWIRE_AUDIO_REQUESTED_LATENCY,
+            *pw::keys::NODE_MAX_LATENCY => PIPEWIRE_AUDIO_MAX_LATENCY,
         },
     )
     .map_err(|error| format!("PipeWire system audio stream creation failed: {error}"))?;
+    let samples = Arc::new(AudioSampleRing::new(AUDIO_SAMPLE_RING_CAPACITY));
+    let mut assembler_worker = AudioAssemblerWorker::start(Arc::clone(&samples), assembler)?;
 
     let runtime_error = Rc::new(RefCell::new(None::<String>));
     let error_mainloop = mainloop.clone();
     let state_error = Rc::clone(&runtime_error);
     let format_mainloop = mainloop.clone();
     let format_error = Rc::clone(&runtime_error);
-    let process_mainloop = mainloop.clone();
     let _stream_listener = stream
         .add_local_listener_with_user_data(PipeWireAudioState {
             format: spa::param::audio::AudioInfoRaw::new(),
-            assembler,
-            scratch: Vec::with_capacity(4_096),
+            samples: Arc::clone(&samples),
         })
         .state_changed(move |_, _, _, state| {
             if let pw::stream::StreamState::Error(error) = state {
@@ -238,15 +371,7 @@ fn run_capture(
                 return;
             };
 
-            state.scratch.clear();
-            state.scratch.extend(
-                bytes[offset..end]
-                    .chunks_exact(size_of::<f32>())
-                    .map(|sample| f32::from_le_bytes([sample[0], sample[1], sample[2], sample[3]])),
-            );
-            if !state.scratch.is_empty() && !state.assembler.push(&state.scratch) {
-                process_mainloop.quit();
-            }
+            state.samples.push_bytes(&bytes[offset..end]);
         })
         .register()
         .map_err(|error| format!("PipeWire system audio listener setup failed: {error}"))?;
@@ -257,7 +382,7 @@ fn run_capture(
         .connect(
             spa::utils::Direction::Input,
             None,
-            pw::stream::StreamFlags::MAP_BUFFERS,
+            pw::stream::StreamFlags::MAP_BUFFERS | pw::stream::StreamFlags::RT_PROCESS,
             &mut params,
         )
         .map_err(|error| format!("PipeWire system audio stream connection failed: {error}"))?;
@@ -324,9 +449,6 @@ fn run_capture(
                             channel,
                         },
                     );
-                    if state.links.contains_key(&node_id) || node_id == global_stream.node_id() {
-                        state.links.clear();
-                    }
                 }
                 _ => return,
             }
@@ -375,6 +497,15 @@ fn run_capture(
     }
 
     mainloop.run();
+    assembler_worker.stop();
+    logging::debug(
+        "stream",
+        format!(
+            "PipeWire system audio realtime ring stopped: dropped_samples={} maximum_callback_samples={}",
+            samples.dropped_samples(),
+            samples.maximum_push_samples(),
+        ),
+    );
     if let Some(error) = runtime_error.borrow_mut().take()
         && !stopping.load(Ordering::Acquire)
     {
@@ -461,9 +592,6 @@ fn link_matching_outputs(
             .nodes
             .iter()
             .filter_map(|(node_id, node)| {
-                if state.links.contains_key(node_id) {
-                    return None;
-                }
                 let pid = resolve_node_pid(*node, &state.clients)?;
                 let matches = process_matches(pid, target_pid);
                 match mode {
@@ -489,10 +617,23 @@ fn link_matching_outputs(
                 .map(|(id, port)| (*id, port.channel.clone()))
                 .collect::<Vec<_>>()
         };
-        let pairs = pair_audio_ports(&output_ports, &input_ports);
+        let mut pairs = pair_audio_ports(&output_ports, &input_ports);
+        pairs.sort_unstable();
         if pairs.is_empty() {
             continue;
         }
+        if state
+            .borrow()
+            .links
+            .get(&node_id)
+            .is_some_and(|linked| linked.pairs == pairs)
+        {
+            continue;
+        }
+
+        // Rebuild only the output whose port topology changed. Clearing every
+        // link for unrelated registry events caused audible gaps.
+        state.borrow_mut().links.remove(&node_id);
 
         let mut links = Vec::with_capacity(pairs.len());
         for (output_port, input_port) in &pairs {
@@ -509,7 +650,13 @@ fn link_matching_outputs(
             links.push(link);
         }
         if links.len() == pairs.len() {
-            state.borrow_mut().links.insert(node_id, links);
+            state.borrow_mut().links.insert(
+                node_id,
+                LinkedOutput {
+                    pairs,
+                    _links: links,
+                },
+            );
             logging::debug(
                 "stream",
                 format!("PipeWire system audio linked output node: node_id={node_id}"),
@@ -555,4 +702,45 @@ fn pair_audio_ports(outputs: &[(u32, String)], inputs: &[(u32, String)]) -> Vec<
         }
     }
     pairs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn realtime_audio_ring_keeps_capture_backlog_bounded() {
+        let ring = AudioSampleRing::new(5);
+        let bytes = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect::<Vec<_>>();
+
+        ring.push_bytes(&bytes);
+        let mut captured = Vec::new();
+        ring.pop_into(&mut captured, 8);
+
+        assert_eq!(captured, vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(ring.dropped_samples(), 2);
+        assert_eq!(ring.maximum_push_samples(), 6);
+    }
+
+    #[test]
+    fn realtime_audio_ring_accepts_a_maximum_pipewire_quantum() {
+        let ring = AudioSampleRing::new(AUDIO_SAMPLE_RING_CAPACITY);
+        let sample_count = PIPEWIRE_AUDIO_MAX_QUANTUM_FRAMES * SYSTEM_AUDIO_CHANNELS as usize;
+        let bytes = vec![0.25f32; sample_count]
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect::<Vec<_>>();
+
+        ring.push_bytes(&bytes);
+        let mut captured = Vec::new();
+        ring.pop_into(&mut captured, sample_count);
+
+        assert_eq!(captured.len(), sample_count);
+        assert_eq!(ring.dropped_samples(), 0);
+        assert_eq!(ring.maximum_push_samples(), sample_count);
+        assert!(AUDIO_SAMPLE_RING_CAPACITY - 1 >= sample_count * 2);
+    }
 }

@@ -479,6 +479,12 @@ pub(crate) async fn run_voice_runtime(
             if let Some(task) = broadcast_capture_prepare_task.take() {
                 task.abort();
             }
+            await_stream_broadcast_cleanup_before_capture(
+                &mut broadcast_task,
+                &mut broadcast_session,
+                &mut broadcast_stop_tx,
+            )
+            .await;
             broadcast_captures.activate(stream_key.clone());
             let captures = broadcast_captures.clone();
             let capture_events_tx = events_tx.clone();
@@ -723,6 +729,27 @@ async fn stop_stream_broadcast_task(
     stopped_session
 }
 
+async fn await_stream_broadcast_cleanup_before_capture(
+    stream_task: &mut Option<JoinHandle<()>>,
+    stream_session: &mut Option<StreamBroadcastGatewaySession>,
+    stop_tx: &mut Option<oneshot::Sender<()>>,
+) {
+    if stream_session.is_some() || stop_tx.is_some() || stream_task.is_none() {
+        return;
+    }
+
+    // A tracked cleanup task still owns the previous desktop portal session.
+    // Opening another selector before it exits can leave the new request queued
+    // indefinitely inside the portal service.
+    let _ = shutdown_stream_broadcast_task(
+        stream_task,
+        stream_session,
+        stop_tx,
+        "waiting for previous stream broadcast cleanup before capture",
+    )
+    .await;
+}
+
 async fn shutdown_stream_broadcast_task(
     stream_task: &mut Option<JoinHandle<()>>,
     stream_session: &mut Option<StreamBroadcastGatewaySession>,
@@ -926,6 +953,36 @@ mod tests {
         replacement
             .await
             .expect("replacement sequencing task should finish");
+    }
+
+    #[tokio::test]
+    async fn capture_preparation_waits_for_tracked_broadcast_cleanup() {
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let mut tracked_cleanup = Some(tokio::spawn(async move {
+            let _ = release_rx.await;
+        }));
+        let mut session = None;
+        let mut stop_tx = None;
+        {
+            let wait = await_stream_broadcast_cleanup_before_capture(
+                &mut tracked_cleanup,
+                &mut session,
+                &mut stop_tx,
+            );
+            tokio::pin!(wait);
+
+            assert!(
+                timeout(Duration::from_millis(25), &mut wait).await.is_err(),
+                "capture preparation must wait while the previous portal session is cleaning up"
+            );
+            release_tx
+                .send(())
+                .expect("previous broadcast cleanup should be released");
+            timeout(Duration::from_secs(1), &mut wait)
+                .await
+                .expect("capture preparation cleanup barrier should finish");
+        }
+        assert!(tracked_cleanup.is_none());
     }
 
     #[tokio::test]
