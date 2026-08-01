@@ -39,6 +39,7 @@ pub(super) const SYSTEM_AUDIO_CHANNELS: u16 = 2;
 pub(super) struct SystemAudioFrame {
     pub(super) samples: Vec<i16>,
     pub(super) captured_at: Instant,
+    pub(super) frame_index: u64,
 }
 
 pub(super) struct SystemAudioCapture {
@@ -83,6 +84,7 @@ pub(super) struct AudioFrameAssembler {
     pending: Vec<f32>,
     frames_tx: mpsc::Sender<SystemAudioFrame>,
     stats: Arc<SystemAudioCaptureStats>,
+    next_frame_index: u64,
 }
 
 #[cfg(feature = "stream-broadcast")]
@@ -102,6 +104,7 @@ impl AudioFrameAssembler {
             pending: Vec::with_capacity(DISCORD_OPUS_20MS_STEREO_SAMPLES * 2),
             frames_tx,
             stats,
+            next_frame_index: 0,
         }
     }
 
@@ -123,7 +126,9 @@ impl AudioFrameAssembler {
                     .map(audio_output::f32_sample_to_i16)
                     .collect(),
                 captured_at: Instant::now(),
+                frame_index: self.next_frame_index,
             };
+            self.next_frame_index = self.next_frame_index.saturating_add(1);
             consumed = end;
 
             match self.frames_tx.try_send(frame) {
@@ -278,5 +283,29 @@ impl Drop for SystemAudioCapture {
                 self.stats.queue_dropped_frames.load(Ordering::Relaxed),
             ),
         );
+    }
+}
+
+#[cfg(all(test, feature = "stream-broadcast"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn audio_frame_indices_follow_batched_source_frames_and_queue_drops() {
+        let (frames_tx, mut frames_rx) = mpsc::channel(1);
+        let stats = Arc::new(SystemAudioCaptureStats::default());
+        let mut assembler = AudioFrameAssembler::new(frames_tx, stats);
+
+        assert!(assembler.push(&vec![0.0; DISCORD_OPUS_20MS_STEREO_SAMPLES * 3]));
+        let first = frames_rx
+            .try_recv()
+            .expect("the first batched frame should queue");
+        assert_eq!(first.frame_index, 0);
+
+        assert!(assembler.push(&vec![0.0; DISCORD_OPUS_20MS_STEREO_SAMPLES]));
+        let after_drops = frames_rx
+            .try_recv()
+            .expect("capture should continue after queue drops");
+        assert_eq!(after_drops.frame_index, 3);
     }
 }

@@ -24,13 +24,12 @@ use super::media::{
 };
 use super::runtime::MAX_VOICE_RECONNECT_ATTEMPTS;
 use super::{
-    DISCORD_OPUS_FRAME_DURATION, DISCORD_OPUS_TIMESTAMP_INCREMENT,
-    DISCORD_STREAM_VIDEO_PAYLOAD_TYPE, DISCORD_STREAM_VIDEO_RTX_PAYLOAD_TYPE,
-    DISCORD_VOICE_PAYLOAD_TYPE, DiscoveredVoiceAddress, RTP_HEADER_MIN_LEN, RTP_VERSION,
-    StreamBroadcastRequest, StreamCreateInfo, StreamServerInfo, VOICE_OP_READY,
-    VOICE_OP_SESSION_DESCRIPTION, VOICE_OP_SPEAKING, VOICE_WEBSOCKET_CONNECT_TIMEOUT,
-    VoiceConnectionEnd, VoiceDaveState, VoiceRuntimeEvent, VoiceScope, VoiceSessionDescription,
-    VoiceStatusPublisher, capture,
+    DISCORD_OPUS_TIMESTAMP_INCREMENT, DISCORD_STREAM_VIDEO_PAYLOAD_TYPE,
+    DISCORD_STREAM_VIDEO_RTX_PAYLOAD_TYPE, DISCORD_VOICE_PAYLOAD_TYPE, DiscoveredVoiceAddress,
+    RTP_HEADER_MIN_LEN, RTP_VERSION, StreamBroadcastRequest, StreamCreateInfo, StreamServerInfo,
+    VOICE_OP_READY, VOICE_OP_SESSION_DESCRIPTION, VOICE_OP_SPEAKING,
+    VOICE_WEBSOCKET_CONNECT_TIMEOUT, VoiceConnectionEnd, VoiceDaveState, VoiceRuntimeEvent,
+    VoiceScope, VoiceSessionDescription, VoiceStatusPublisher, capture,
     dave::VoiceDaveOutboundPayload,
     gateway,
     opus::VoiceOpusEncode,
@@ -1213,7 +1212,7 @@ struct BroadcastAudioTransport {
     stats: SharedBroadcastSendStats,
     sequence: u16,
     timestamp: u32,
-    previous_frame_at: Option<Instant>,
+    previous_frame_index: Option<u64>,
     started: bool,
     sent_packets: u32,
     sent_octets: u32,
@@ -1232,7 +1231,7 @@ impl BroadcastAudioTransport {
             stats,
             sequence: random(),
             timestamp: random(),
-            previous_frame_at: None,
+            previous_frame_index: None,
             started: false,
             sent_packets: 0,
             sent_octets: 0,
@@ -1240,9 +1239,9 @@ impl BroadcastAudioTransport {
         }
     }
 
-    fn observe_frame(&mut self, captured_at: Instant) {
-        let elapsed_frames = broadcast_audio_elapsed_frames(self.previous_frame_at, captured_at);
-        self.previous_frame_at = Some(captured_at);
+    fn observe_frame(&mut self, frame_index: u64) {
+        let elapsed_frames = broadcast_audio_elapsed_frames(self.previous_frame_index, frame_index);
+        self.previous_frame_index = Some(frame_index);
         self.timestamp = self
             .timestamp
             .wrapping_add(DISCORD_OPUS_TIMESTAMP_INCREMENT.wrapping_mul(elapsed_frames));
@@ -1626,7 +1625,7 @@ async fn run_stream_broadcast_audio(
             stats.observe_audio_queue(queue_depth, queue_delay, capture_drops);
         });
 
-        transport.observe_frame(frame.captured_at);
+        transport.observe_frame(frame.frame_index);
         let opus = match encoder.encode_20ms_i16(&frame.samples) {
             Ok(opus) => opus,
             Err(error) => {
@@ -1818,13 +1817,12 @@ async fn shutdown_prepared_broadcast_capture(mut prepared: PreparedBroadcastCapt
     prepared.capture.handle.shutdown().await;
 }
 
-fn broadcast_audio_elapsed_frames(previous: Option<Instant>, captured_at: Instant) -> u32 {
+fn broadcast_audio_elapsed_frames(previous: Option<u64>, frame_index: u64) -> u32 {
     previous
         .map(|previous| {
-            let elapsed_us = captured_at.saturating_duration_since(previous).as_micros();
-            let frame_us = DISCORD_OPUS_FRAME_DURATION.as_micros();
-            let rounded_frames = elapsed_us.saturating_add(frame_us / 2) / frame_us;
-            u32::try_from(rounded_frames).unwrap_or(u32::MAX).max(1)
+            u32::try_from(frame_index.saturating_sub(previous))
+                .unwrap_or(u32::MAX)
+                .max(1)
         })
         .unwrap_or(1)
 }
@@ -2675,17 +2673,10 @@ mod tests {
     }
 
     #[test]
-    fn broadcast_audio_clock_preserves_capture_gaps() {
-        let first = Instant::now();
-        assert_eq!(broadcast_audio_elapsed_frames(None, first), 1);
-        assert_eq!(
-            broadcast_audio_elapsed_frames(Some(first), first + DISCORD_OPUS_FRAME_DURATION * 3),
-            3
-        );
-        assert_eq!(
-            broadcast_audio_elapsed_frames(Some(first), first + DISCORD_OPUS_FRAME_DURATION / 4),
-            1
-        );
+    fn broadcast_audio_clock_preserves_capture_frame_gaps() {
+        assert_eq!(broadcast_audio_elapsed_frames(None, 0), 1);
+        assert_eq!(broadcast_audio_elapsed_frames(Some(0), 3), 3);
+        assert_eq!(broadcast_audio_elapsed_frames(Some(3), 3), 1);
     }
 
     #[test]
@@ -2761,12 +2752,12 @@ mod tests {
             .expect("test audio sender should connect");
 
         let (frames_tx, frames_rx) = mpsc::channel(SYSTEM_AUDIO_FRAME_QUEUE);
-        let first_captured_at = Instant::now();
         for index in 0..3 {
             frames_tx
                 .send(system_audio::SystemAudioFrame {
                     samples: vec![index as i16; DISCORD_OPUS_20MS_STEREO_SAMPLES],
-                    captured_at: first_captured_at + DISCORD_OPUS_FRAME_DURATION * index,
+                    captured_at: Instant::now(),
+                    frame_index: index as u64,
                 })
                 .await
                 .expect("test audio frame should queue");
