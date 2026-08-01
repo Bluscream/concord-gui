@@ -1069,20 +1069,14 @@ async fn run_stream_media(
     let mut video_recovery = StreamVideoRecovery::default();
     let mut active_video_source = (0u32, None);
     let mut local_audio_sequence = 0u16;
-    let mut local_video_sequence = 0u16;
     let mut local_audio_packets = 0u32;
     let mut local_audio_octets = 0u32;
-    let mut local_video_packets = 0u32;
-    let mut local_video_octets = 0u32;
-    let mut local_video_frames = 0u64;
-    let mut last_local_video_timestamp = None;
+    let mut local_video = LocalStreamVideoForwarder::default();
     let mut rtcp_feedback_nonce = 0u32;
     let media_started_at = Instant::now();
     let mut local_audio_clock = LocalRtpClock::default();
-    let mut local_video_clock = LocalRtpClock::default();
     let mut logged_first_audio = false;
     let mut logged_first_video_frame = false;
-    let mut logged_first_video = false;
     let mut logged_video_before_player_ready = false;
     let mut logged_keyframe_request = false;
     let mut logged_local_sender_reports = false;
@@ -1129,13 +1123,13 @@ async fn run_stream_media(
                     let _ = local_socket.send_to(&report, audio_rtcp_target).await;
                     sent_report = true;
                 }
-                if source.video_ssrc != 0 && local_video_packets != 0 {
+                if source.video_ssrc != 0 && local_video.packets != 0 {
                     let report = build_rtcp_sender_report(
                         source.video_ssrc,
                         unix_time,
                         elapsed_rtp_timestamp(elapsed, VIDEO_RTP_CLOCK_RATE),
-                        local_video_packets,
-                        local_video_octets,
+                        local_video.packets,
+                        local_video.octets,
                     );
                     let _ = local_socket.send_to(&report, video_rtcp_target).await;
                     sent_report = true;
@@ -1155,8 +1149,11 @@ async fn run_stream_media(
                         logging::debug(
                             "stream",
                             format!(
-                                "local stream RTP stats: elapsed_ms={} audio_packets={local_audio_packets} video_packets={local_video_packets} video_frames={local_video_frames} last_video_timestamp={last_local_video_timestamp:?}",
-                                elapsed.as_millis()
+                                "local stream RTP stats: elapsed_ms={} audio_packets={local_audio_packets} video_packets={} video_frames={} last_video_timestamp={:?}",
+                                elapsed.as_millis(),
+                                local_video.packets,
+                                local_video.frames,
+                                local_video.last_timestamp,
                             ),
                         );
                     }
@@ -1414,57 +1411,19 @@ async fn run_stream_media(
                             );
                         }
                         let player_ready = video_player_ready.load(Ordering::Acquire);
-                        if player_ready && !h264_startup_buffer.is_empty() {
-                            let buffered_frames = h264_startup_buffer.len();
-                            let replay_origin = elapsed_rtp_timestamp(
-                                media_started_at.elapsed(),
-                                VIDEO_RTP_CLOCK_RATE,
-                            );
-                            let mut replay_anchor = None;
-                            for (index, buffered) in
-                                h264_startup_buffer.take().into_iter().enumerate()
-                            {
-                                let local_timestamp = replay_origin.wrapping_add(
-                                    u32::try_from(index)
-                                        .expect("startup buffer length is bounded")
-                                        .wrapping_mul(STREAM_STARTUP_REPLAY_FRAME_TICKS),
-                                );
-                                let (packet_count, octet_count) = send_local_h264_frame(
-                                    &local_socket,
-                                    video_target,
-                                    &buffered.encoded,
-                                    local_timestamp,
-                                    source.video_ssrc,
-                                    &mut local_video_sequence,
+                        let local_video_destination = LocalStreamVideoDestination {
+                            socket: &local_socket,
+                            target: video_target,
+                            ssrc: source.video_ssrc,
+                            media_started_at,
+                        };
+                        if player_ready {
+                            local_video
+                                .replay_startup(
+                                    &mut h264_startup_buffer,
+                                    &local_video_destination,
                                 )
                                 .await;
-                                local_video_packets = local_video_packets.wrapping_add(packet_count);
-                                local_video_octets = local_video_octets.wrapping_add(octet_count);
-                                local_video_frames = local_video_frames.wrapping_add(1);
-                                last_local_video_timestamp = Some(local_timestamp);
-                                replay_anchor = Some((buffered.source_timestamp, local_timestamp));
-                                if !logged_first_video {
-                                    logged_first_video = true;
-                                    logging::debug(
-                                        "stream",
-                                        format!(
-                                            "first buffered stream video forwarded: elapsed_ms={} source_timestamp={} local_timestamp={local_timestamp}",
-                                            media_started_at.elapsed().as_millis(),
-                                            buffered.source_timestamp,
-                                        ),
-                                    );
-                                }
-                            }
-                            if let Some((source_timestamp, local_timestamp)) = replay_anchor {
-                                local_video_clock.anchor(source_timestamp, local_timestamp);
-                            }
-                            logging::debug(
-                                "stream",
-                                format!(
-                                    "buffered H264 startup replayed: elapsed_ms={} frames={buffered_frames}",
-                                    media_started_at.elapsed().as_millis()
-                                ),
-                            );
                         }
                         if !player_ready && !logged_video_before_player_ready {
                             logged_video_before_player_ready = true;
@@ -1494,36 +1453,9 @@ async fn run_stream_media(
                         let Some(frame) = frame else {
                             continue;
                         };
-                        let local_timestamp = local_video_clock.rebase(
-                            frame.source_timestamp,
-                            media_started_at.elapsed(),
-                            VIDEO_RTP_CLOCK_RATE,
-                        );
-                        let (packet_count, octet_count) = send_local_h264_frame(
-                            &local_socket,
-                            video_target,
-                            &frame.encoded,
-                            local_timestamp,
-                            source.video_ssrc,
-                            &mut local_video_sequence,
-                        )
-                        .await;
-                        local_video_packets = local_video_packets.wrapping_add(packet_count);
-                        local_video_octets = local_video_octets.wrapping_add(octet_count);
-                        local_video_frames = local_video_frames.wrapping_add(1);
-                        last_local_video_timestamp = Some(local_timestamp);
-                        if !logged_first_video {
-                            logged_first_video = true;
-                            logging::debug(
-                                "stream",
-                                format!(
-                                    "first stream video forwarded: elapsed_ms={} source_timestamp={} local_timestamp={}",
-                                    media_started_at.elapsed().as_millis(),
-                                    frame.source_timestamp,
-                                    local_timestamp
-                                ),
-                            );
-                        }
+                        local_video
+                            .forward_live(&local_video_destination, &frame)
+                            .await;
                     }
                 }
             }
@@ -1607,6 +1539,109 @@ impl LocalRtpClock {
         });
         self.local_origin
             .wrapping_add(source_timestamp.wrapping_sub(source_origin))
+    }
+}
+
+#[derive(Default)]
+struct LocalStreamVideoForwarder {
+    sequence: u16,
+    packets: u32,
+    octets: u32,
+    frames: u64,
+    last_timestamp: Option<u32>,
+    clock: LocalRtpClock,
+    logged_first_frame: bool,
+}
+
+struct LocalStreamVideoDestination<'a> {
+    socket: &'a UdpSocket,
+    target: SocketAddrV4,
+    ssrc: u32,
+    media_started_at: Instant,
+}
+
+impl LocalStreamVideoForwarder {
+    async fn replay_startup(
+        &mut self,
+        startup_buffer: &mut H264StartupBuffer,
+        destination: &LocalStreamVideoDestination<'_>,
+    ) {
+        if startup_buffer.is_empty() {
+            return;
+        }
+
+        let buffered_frames = startup_buffer.len();
+        let replay_origin =
+            elapsed_rtp_timestamp(destination.media_started_at.elapsed(), VIDEO_RTP_CLOCK_RATE);
+        let mut replay_anchor = None;
+        for (index, buffered) in startup_buffer.take().into_iter().enumerate() {
+            let local_timestamp = replay_origin.wrapping_add(
+                u32::try_from(index)
+                    .expect("startup buffer length is bounded")
+                    .wrapping_mul(STREAM_STARTUP_REPLAY_FRAME_TICKS),
+            );
+            self.forward_at_timestamp(destination, &buffered, local_timestamp, true)
+                .await;
+            replay_anchor = Some((buffered.source_timestamp, local_timestamp));
+        }
+        if let Some((source_timestamp, local_timestamp)) = replay_anchor {
+            self.clock.anchor(source_timestamp, local_timestamp);
+        }
+        logging::debug(
+            "stream",
+            format!(
+                "buffered H264 startup replayed: elapsed_ms={} frames={buffered_frames}",
+                destination.media_started_at.elapsed().as_millis()
+            ),
+        );
+    }
+
+    async fn forward_live(
+        &mut self,
+        destination: &LocalStreamVideoDestination<'_>,
+        frame: &BufferedH264Frame,
+    ) {
+        let local_timestamp = self.clock.rebase(
+            frame.source_timestamp,
+            destination.media_started_at.elapsed(),
+            VIDEO_RTP_CLOCK_RATE,
+        );
+        self.forward_at_timestamp(destination, frame, local_timestamp, false)
+            .await;
+    }
+
+    async fn forward_at_timestamp(
+        &mut self,
+        destination: &LocalStreamVideoDestination<'_>,
+        frame: &BufferedH264Frame,
+        local_timestamp: u32,
+        buffered: bool,
+    ) {
+        let (packet_count, octet_count) = send_local_h264_frame(
+            destination.socket,
+            destination.target,
+            &frame.encoded,
+            local_timestamp,
+            destination.ssrc,
+            &mut self.sequence,
+        )
+        .await;
+        self.packets = self.packets.wrapping_add(packet_count);
+        self.octets = self.octets.wrapping_add(octet_count);
+        self.frames = self.frames.wrapping_add(1);
+        self.last_timestamp = Some(local_timestamp);
+        if !self.logged_first_frame {
+            self.logged_first_frame = true;
+            logging::debug(
+                "stream",
+                format!(
+                    "first {}stream video forwarded: elapsed_ms={} source_timestamp={} local_timestamp={local_timestamp}",
+                    if buffered { "buffered " } else { "" },
+                    destination.media_started_at.elapsed().as_millis(),
+                    frame.source_timestamp,
+                ),
+            );
+        }
     }
 }
 
@@ -2555,6 +2590,61 @@ mod tests {
         assert!(!stream_player_input_is_ready(
             "[cplayer] Starting playback..."
         ));
+    }
+
+    #[tokio::test]
+    async fn local_video_forwarder_replays_then_continues_the_source_clock() {
+        let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("test sender should bind");
+        let receiver = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("test receiver should bind");
+        let target = match receiver
+            .local_addr()
+            .expect("test receiver should have an address")
+        {
+            std::net::SocketAddr::V4(target) => target,
+            std::net::SocketAddr::V6(_) => panic!("test receiver should use IPv4"),
+        };
+        let media_started_at = Instant::now();
+        let destination = LocalStreamVideoDestination {
+            socket: &socket,
+            target,
+            ssrc: 42,
+            media_started_at,
+        };
+        let mut startup = H264StartupBuffer::default();
+        assert!(startup.push(BufferedH264Frame {
+            encoded: vec![0, 0, 0, 1, 0x65, 0x11],
+            source_timestamp: 90_000,
+        }));
+        assert!(startup.push(BufferedH264Frame {
+            encoded: vec![0, 0, 0, 1, 0x41, 0x22],
+            source_timestamp: 93_000,
+        }));
+        let mut forwarder = LocalStreamVideoForwarder::default();
+
+        forwarder.replay_startup(&mut startup, &destination).await;
+        let replay_timestamp = forwarder
+            .last_timestamp
+            .expect("startup replay should set a local timestamp");
+        forwarder
+            .forward_live(
+                &destination,
+                &BufferedH264Frame {
+                    encoded: vec![0, 0, 0, 1, 0x41, 0x33],
+                    source_timestamp: 96_000,
+                },
+            )
+            .await;
+
+        assert!(startup.is_empty());
+        assert_eq!(forwarder.frames, 3);
+        assert_eq!(
+            forwarder.last_timestamp,
+            Some(replay_timestamp.wrapping_add(3_000))
+        );
     }
 
     #[test]

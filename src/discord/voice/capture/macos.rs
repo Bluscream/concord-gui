@@ -25,7 +25,9 @@ use objc2_screen_capture_kit::{
     SCStreamOutput, SCStreamOutputType, SCWindow,
 };
 
-use super::{CaptureFrame, CaptureOutput, STREAM_CAPTURE_FPS, send_capture_result};
+use super::{
+    CaptureFrame, CaptureFrameBufferPool, CaptureOutput, STREAM_CAPTURE_FPS, send_capture_result,
+};
 use crate::discord::voice::{StreamCaptureTarget, StreamCaptureTargetKind};
 
 const FRAME_QUEUE_CAPACITY: usize = 2;
@@ -113,7 +115,7 @@ pub(super) fn start_capture(
 
     let (frames_tx, frames_rx) = mpsc::sync_channel(FRAME_QUEUE_CAPACITY);
     let (errors_tx, errors_rx) = mpsc::channel();
-    let output = MacCaptureOutput::new(frames_tx, errors_tx);
+    let output = MacCaptureOutput::new(frames_tx, errors_tx, CaptureFrameBufferPool::default());
     let delegate = ProtocolObject::<dyn SCStreamDelegate>::from_ref(&*output);
     let stream = unsafe {
         SCStream::initWithFilter_configuration_delegate(
@@ -325,6 +327,7 @@ fn receive_callback<T>(
 struct MacCaptureOutputIvars {
     frames_tx: SyncSender<CaptureFrame>,
     errors_tx: Sender<String>,
+    buffer_pool: CaptureFrameBufferPool,
 }
 
 define_class!(
@@ -345,7 +348,7 @@ define_class!(
             if output_type != SCStreamOutputType::Screen {
                 return;
             }
-            if let Some(result) = capture_frame(sample_buffer) {
+            if let Some(result) = capture_frame(sample_buffer, &self.ivars().buffer_pool) {
                 send_capture_result(&self.ivars().frames_tx, &self.ivars().errors_tx, result);
             }
         }
@@ -367,16 +370,24 @@ define_class!(
 unsafe impl NSObjectProtocol for MacCaptureOutput {}
 
 impl MacCaptureOutput {
-    fn new(frames_tx: SyncSender<CaptureFrame>, errors_tx: Sender<String>) -> Retained<Self> {
+    fn new(
+        frames_tx: SyncSender<CaptureFrame>,
+        errors_tx: Sender<String>,
+        buffer_pool: CaptureFrameBufferPool,
+    ) -> Retained<Self> {
         let this = Self::alloc().set_ivars(MacCaptureOutputIvars {
             frames_tx,
             errors_tx,
+            buffer_pool,
         });
         unsafe { msg_send![super(this), init] }
     }
 }
 
-fn capture_frame(sample_buffer: &CMSampleBuffer) -> Option<Result<CaptureFrame, String>> {
+fn capture_frame(
+    sample_buffer: &CMSampleBuffer,
+    buffer_pool: &CaptureFrameBufferPool,
+) -> Option<Result<CaptureFrame, String>> {
     let pixel_buffer = unsafe { sample_buffer.image_buffer() }?;
     let lock_flags = CVPixelBufferLockFlags::ReadOnly;
     let lock_result = unsafe { CVPixelBufferLockBaseAddress(&pixel_buffer, lock_flags) };
@@ -385,7 +396,7 @@ fn capture_frame(sample_buffer: &CMSampleBuffer) -> Option<Result<CaptureFrame, 
             "ScreenCaptureKit pixel buffer lock failed: {lock_result}"
         )));
     }
-    let result = copy_bgra_frame(&pixel_buffer);
+    let result = copy_bgra_frame(&pixel_buffer, buffer_pool);
     let unlock_result = unsafe { CVPixelBufferUnlockBaseAddress(&pixel_buffer, lock_flags) };
     if unlock_result != kCVReturnSuccess {
         return Some(Err(format!(
@@ -395,7 +406,10 @@ fn capture_frame(sample_buffer: &CMSampleBuffer) -> Option<Result<CaptureFrame, 
     Some(result)
 }
 
-fn copy_bgra_frame(pixel_buffer: &CVPixelBuffer) -> Result<CaptureFrame, String> {
+fn copy_bgra_frame(
+    pixel_buffer: &CVPixelBuffer,
+    buffer_pool: &CaptureFrameBufferPool,
+) -> Result<CaptureFrame, String> {
     let width = CVPixelBufferGetWidth(pixel_buffer);
     let height = CVPixelBufferGetHeight(pixel_buffer);
     let bytes_per_row = CVPixelBufferGetBytesPerRow(pixel_buffer);
@@ -413,7 +427,7 @@ fn copy_bgra_frame(pixel_buffer: &CVPixelBuffer) -> Result<CaptureFrame, String>
     let output_length = row_length
         .checked_mul(height)
         .ok_or_else(|| "ScreenCaptureKit frame size overflowed".to_owned())?;
-    let mut rgba = vec![0; output_length];
+    let mut rgba = buffer_pool.take(output_length);
     for row in 0..height {
         let source =
             unsafe { slice::from_raw_parts(base_address.add(row * bytes_per_row), row_length) };
@@ -423,11 +437,11 @@ fn copy_bgra_frame(pixel_buffer: &CVPixelBuffer) -> Result<CaptureFrame, String>
         }
     }
 
-    Ok(CaptureFrame {
-        width: u32::try_from(width)
-            .map_err(|_| "ScreenCaptureKit frame width is too large".to_owned())?,
-        height: u32::try_from(height)
+    Ok(CaptureFrame::new(
+        u32::try_from(width).map_err(|_| "ScreenCaptureKit frame width is too large".to_owned())?,
+        u32::try_from(height)
             .map_err(|_| "ScreenCaptureKit frame height is too large".to_owned())?,
         rgba,
-    })
+        buffer_pool.clone(),
+    ))
 }

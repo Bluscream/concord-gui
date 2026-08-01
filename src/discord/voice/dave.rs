@@ -21,6 +21,8 @@ use super::{
     VoiceWriter, send_voice_binary, send_voice_text,
 };
 
+const STREAM_RTC_SERVER_DAVE_GROUP_OFFSET: u64 = 1;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[allow(dead_code)]
 pub(super) enum VoiceDaveOutboundPayload {
@@ -91,11 +93,7 @@ impl VoiceDaveState {
         user_id: Id<UserMarker>,
         rtc_server_id: &str,
     ) -> Result<Self, String> {
-        let group_id = rtc_server_id
-            .parse::<u64>()
-            .ok()
-            .and_then(|server_id| server_id.checked_sub(1))
-            .ok_or_else(|| "stream RTC server id is not a valid DAVE group id".to_owned())?;
+        let group_id = stream_dave_group_id(rtc_server_id)?;
         Ok(Self::new_for_identity(user_id, group_id))
     }
 
@@ -559,6 +557,16 @@ impl VoiceDaveState {
     }
 }
 
+fn stream_dave_group_id(rtc_server_id: &str) -> Result<u64, String> {
+    // Discord numbers a Go Live RTC server one step above the MLS group ID
+    // used by the DAVE session for the same stream.
+    rtc_server_id
+        .parse::<u64>()
+        .ok()
+        .and_then(|server_id| server_id.checked_sub(STREAM_RTC_SERVER_DAVE_GROUP_OFFSET))
+        .ok_or_else(|| "stream RTC server id is not a valid DAVE group id".to_owned())
+}
+
 pub(super) fn handles_gateway_json_op(opcode: u8) -> bool {
     matches!(
         opcode,
@@ -712,4 +720,20 @@ fn voice_user_id_value(value: &Value) -> Option<u64> {
 pub(super) fn looks_like_dave_media_frame(payload: &[u8]) -> bool {
     payload.len() >= DAVE_MIN_SUPPLEMENTAL_BYTES
         && payload[payload.len() - DAVE_MAGIC_MARKER.len()..] == DAVE_MAGIC_MARKER
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_rtc_server_id_maps_to_the_previous_dave_group_id() {
+        assert_eq!(stream_dave_group_id("400"), Ok(399));
+        for invalid in ["0", "not-a-server-id"] {
+            assert!(
+                stream_dave_group_id(invalid).is_err(),
+                "invalid stream RTC server id should be rejected: {invalid}"
+            );
+        }
+    }
 }

@@ -19,7 +19,9 @@ use pipewire as pw;
 use pw::{properties::properties, spa};
 use spa::pod::Pod;
 
-use super::{CaptureFrame, CaptureOutput, STREAM_CAPTURE_FPS, send_capture_result};
+use super::{
+    CaptureFrame, CaptureFrameBufferPool, CaptureOutput, STREAM_CAPTURE_FPS, send_capture_result,
+};
 use crate::{
     discord::voice::{StreamCaptureTarget, StreamCaptureTargetKind},
     logging,
@@ -41,6 +43,7 @@ struct PipeWireState {
     format: spa::param::video::VideoInfoRaw,
     frames_tx: SyncSender<CaptureFrame>,
     errors_tx: Sender<String>,
+    buffer_pool: CaptureFrameBufferPool,
 }
 
 struct PortalCapture {
@@ -84,6 +87,7 @@ pub(super) fn start_capture(
 
     let (frames_tx, frames_rx) = mpsc::sync_channel(FRAME_QUEUE_CAPACITY);
     let (errors_tx, errors_rx) = mpsc::channel();
+    let buffer_pool = CaptureFrameBufferPool::default();
     let (stop_tx, stop_rx) = pw::channel::channel();
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
     let stopping = Arc::new(AtomicBool::new(false));
@@ -95,6 +99,7 @@ pub(super) fn start_capture(
                 pipewire_portal,
                 frames_tx.clone(),
                 errors_tx.clone(),
+                buffer_pool,
                 stop_rx,
                 ready_tx.clone(),
             );
@@ -287,6 +292,7 @@ fn run_pipewire_capture(
     portal: PipeWirePortal,
     frames_tx: SyncSender<CaptureFrame>,
     errors_tx: Sender<String>,
+    buffer_pool: CaptureFrameBufferPool,
     stop_rx: pw::channel::Receiver<()>,
     ready_tx: SyncSender<Result<(), String>>,
 ) -> Result<(), String> {
@@ -321,6 +327,7 @@ fn run_pipewire_capture(
         format: Default::default(),
         frames_tx,
         errors_tx,
+        buffer_pool,
     };
     let _stream_listener = stream
         .add_local_listener_with_user_data(state)
@@ -382,7 +389,7 @@ fn run_pipewire_capture(
             let Some(data) = buffer.datas_mut().first_mut() else {
                 return;
             };
-            if let Some(frame) = pipewire_frame(data, state.format) {
+            if let Some(frame) = pipewire_frame(data, state.format, &state.buffer_pool) {
                 send_capture_result(&state.frames_tx, &state.errors_tx, frame);
             }
         })
@@ -471,6 +478,7 @@ fn run_pipewire_capture(
 fn pipewire_frame(
     data: &mut spa::buffer::Data,
     format: spa::param::video::VideoInfoRaw,
+    buffer_pool: &CaptureFrameBufferPool,
 ) -> Option<Result<CaptureFrame, String>> {
     let width = format.size().width;
     let height = format.size().height;
@@ -493,7 +501,8 @@ fn pipewire_frame(
         ));
     }
     let bytes = data.data()?;
-    let mut rgba = vec![0; row_length.checked_mul(height as usize)?];
+    let output_length = row_length.checked_mul(height as usize)?;
+    let mut rgba = buffer_pool.take(output_length);
 
     for row in 0..height as usize {
         let source_offset = offset.checked_add(stride.checked_mul(row as isize)?)?;
@@ -545,11 +554,12 @@ fn pipewire_frame(
         }
     }
 
-    Some(Ok(CaptureFrame {
+    Some(Ok(CaptureFrame::new(
         width,
         height,
         rgba,
-    }))
+        buffer_pool.clone(),
+    )))
 }
 
 #[cfg(test)]

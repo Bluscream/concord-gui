@@ -46,7 +46,7 @@ use windows::{
     core::{BOOL, IInspectable, Interface, factory},
 };
 
-use super::{CaptureFrame, CaptureOutput, send_capture_result};
+use super::{CaptureFrame, CaptureFrameBufferPool, CaptureOutput, send_capture_result};
 use crate::discord::voice::{StreamCaptureTarget, StreamCaptureTargetKind};
 
 const FRAME_QUEUE_CAPACITY: usize = 2;
@@ -124,7 +124,12 @@ pub(super) fn start_capture(
     let item = capture_item(target)?;
     let (frames_tx, frames_rx) = mpsc::sync_channel(FRAME_QUEUE_CAPACITY);
     let (errors_tx, errors_rx) = mpsc::channel();
-    let runtime = WgcRuntime::start(item, frames_tx, errors_tx)?;
+    let runtime = WgcRuntime::start(
+        item,
+        frames_tx,
+        errors_tx,
+        CaptureFrameBufferPool::default(),
+    )?;
     Ok((
         CaptureSession {
             runtime: Some(runtime),
@@ -165,6 +170,7 @@ impl WgcRuntime {
         item: GraphicsCaptureItem,
         frames_tx: SyncSender<CaptureFrame>,
         errors_tx: Sender<String>,
+        buffer_pool: CaptureFrameBufferPool,
     ) -> Result<Self, String> {
         let size = item
             .Size()
@@ -193,7 +199,7 @@ impl WgcRuntime {
                         let Some(frame_pool) = frame_pool.as_ref() else {
                             return Ok(());
                         };
-                        let result = capture_next_frame(frame_pool);
+                        let result = capture_next_frame(frame_pool, &buffer_pool);
                         let next_size = result.as_ref().ok().map(|(_, size)| *size);
                         send_capture_result(&frames_tx, &errors_tx, result.map(|(frame, _)| frame));
 
@@ -325,11 +331,12 @@ fn capture_item(target: &StreamCaptureTarget) -> Result<GraphicsCaptureItem, Str
 
 fn capture_next_frame(
     frame_pool: &Direct3D11CaptureFramePool,
+    buffer_pool: &CaptureFrameBufferPool,
 ) -> Result<(CaptureFrame, SizeInt32), String> {
     let frame = frame_pool
         .TryGetNextFrame()
         .map_err(|error| format!("WGC frame retrieval failed: {error}"))?;
-    let result = copy_wgc_frame(&frame);
+    let result = copy_wgc_frame(&frame, buffer_pool);
     let close_result = frame.Close();
     match (result, close_result) {
         (Ok(frame), Ok(())) => Ok(frame),
@@ -338,7 +345,10 @@ fn capture_next_frame(
     }
 }
 
-fn copy_wgc_frame(frame: &Direct3D11CaptureFrame) -> Result<(CaptureFrame, SizeInt32), String> {
+fn copy_wgc_frame(
+    frame: &Direct3D11CaptureFrame,
+    buffer_pool: &CaptureFrameBufferPool,
+) -> Result<(CaptureFrame, SizeInt32), String> {
     let content_size = frame
         .ContentSize()
         .map_err(|error| format!("WGC frame size lookup failed: {error}"))?;
@@ -361,13 +371,16 @@ fn copy_wgc_frame(frame: &Direct3D11CaptureFrame) -> Result<(CaptureFrame, SizeI
     let context = d3d_context()?
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let rgba = texture_to_rgba(d3d_device()?, &context, &source_texture, width, height)?;
+    let rgba = texture_to_rgba(
+        d3d_device()?,
+        &context,
+        &source_texture,
+        width,
+        height,
+        buffer_pool,
+    )?;
     Ok((
-        CaptureFrame {
-            width,
-            height,
-            rgba,
-        },
+        CaptureFrame::new(width, height, rgba, buffer_pool.clone()),
         content_size,
     ))
 }
@@ -416,6 +429,7 @@ fn texture_to_rgba(
     source_texture: &ID3D11Texture2D,
     width: u32,
     height: u32,
+    buffer_pool: &CaptureFrameBufferPool,
 ) -> Result<Vec<u8>, String> {
     let mut source_description = D3D11_TEXTURE2D_DESC::default();
     unsafe { source_texture.GetDesc(&mut source_description) };
@@ -471,7 +485,7 @@ fn texture_to_rgba(
     let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
     unsafe { d3d_context.Map(Some(&resource), 0, D3D11_MAP_READ, 0, Some(&mut mapped)) }
         .map_err(|error| format!("WGC staging texture map failed: {error}"))?;
-    let result = copy_mapped_bgra(&mapped, width, height);
+    let result = copy_mapped_bgra(&mapped, width, height, buffer_pool);
     unsafe { d3d_context.Unmap(Some(&resource), 0) };
     result
 }
@@ -480,6 +494,7 @@ fn copy_mapped_bgra(
     mapped: &D3D11_MAPPED_SUBRESOURCE,
     width: u32,
     height: u32,
+    buffer_pool: &CaptureFrameBufferPool,
 ) -> Result<Vec<u8>, String> {
     if mapped.pData.is_null() || mapped.RowPitch < width.saturating_mul(4) {
         return Err("WGC returned invalid mapped texture data".to_owned());
@@ -491,7 +506,7 @@ fn copy_mapped_bgra(
     let output_length = row_length
         .checked_mul(height as usize)
         .ok_or_else(|| "WGC frame size overflowed".to_owned())?;
-    let mut rgba = vec![0; output_length];
+    let mut rgba = buffer_pool.take(output_length);
     let source = mapped.pData.cast::<u8>();
     for row in 0..height as usize {
         let source = unsafe {

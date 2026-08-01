@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc::{
             Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError, TrySendError,
@@ -63,6 +63,7 @@ const STREAM_RECORDER_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const STREAM_CAPTURE_PREPARATION_TIMEOUT: Duration = Duration::from_secs(60);
 const STREAM_CAPTURE_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const STREAM_CAPTURE_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const CAPTURE_FRAME_BUFFER_POOL_CAPACITY: usize = 4;
 
 #[derive(Debug)]
 pub(super) struct EncodedStreamFrame {
@@ -93,6 +94,7 @@ pub(super) struct CaptureFrame {
     pub(super) width: u32,
     pub(super) height: u32,
     pub(super) rgba: Vec<u8>,
+    buffer_pool: CaptureFrameBufferPool,
 }
 
 pub(super) struct CaptureOutput {
@@ -104,6 +106,16 @@ struct CaptureSource {
     session: platform::CaptureSession,
     frames: Receiver<CaptureFrame>,
     errors: Receiver<String>,
+}
+
+#[derive(Clone, Default)]
+pub(super) struct CaptureFrameBufferPool {
+    buffers: Arc<Mutex<Vec<Vec<u8>>>>,
+}
+
+struct CapturedImage {
+    image: RgbaImage,
+    buffer_pool: CaptureFrameBufferPool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -258,8 +270,92 @@ impl CapturePerformanceStats {
     }
 }
 
+impl CaptureFrameBufferPool {
+    pub(super) fn take(&self, length: usize) -> Vec<u8> {
+        let mut buffers = self
+            .buffers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut buffer = buffers.pop().unwrap_or_default();
+        buffer.resize(length, 0);
+        buffer
+    }
+
+    fn recycle(&self, buffer: Vec<u8>) {
+        let mut buffers = self
+            .buffers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if buffers.len() < CAPTURE_FRAME_BUFFER_POOL_CAPACITY {
+            buffers.push(buffer);
+        }
+    }
+}
+
+impl CaptureFrame {
+    pub(super) fn new(
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+        buffer_pool: CaptureFrameBufferPool,
+    ) -> Self {
+        Self {
+            width,
+            height,
+            rgba,
+            buffer_pool,
+        }
+    }
+
+    fn into_image(mut self) -> Result<CapturedImage, String> {
+        let expected_length = usize::try_from(self.width)
+            .ok()
+            .and_then(|width| width.checked_mul(self.height as usize))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| "capture backend returned overflowing RGBA dimensions".to_owned())?;
+        if self.rgba.len() != expected_length {
+            return Err("capture backend returned an invalid RGBA frame".to_owned());
+        }
+
+        let rgba = std::mem::take(&mut self.rgba);
+        let image = RgbaImage::from_raw(self.width, self.height, rgba)
+            .expect("validated RGBA frame dimensions");
+        Ok(CapturedImage {
+            image,
+            buffer_pool: self.buffer_pool.clone(),
+        })
+    }
+}
+
+impl Drop for CaptureFrame {
+    fn drop(&mut self) {
+        if !self.rgba.is_empty() {
+            self.buffer_pool.recycle(std::mem::take(&mut self.rgba));
+        }
+    }
+}
+
+impl CapturedImage {
+    fn image(&self) -> &RgbaImage {
+        &self.image
+    }
+
+    fn replace(&mut self, frame: CaptureFrame) -> Result<(), String> {
+        let mut replacement = frame.into_image()?;
+        std::mem::swap(self, &mut replacement);
+        Ok(())
+    }
+}
+
+impl Drop for CapturedImage {
+    fn drop(&mut self) {
+        let image = std::mem::replace(&mut self.image, RgbaImage::new(0, 0));
+        self.buffer_pool.recycle(image.into_raw());
+    }
+}
+
 impl CaptureSource {
-    fn wait_for_initial_image(&self, stop: &AtomicBool) -> Result<Option<RgbaImage>, String> {
+    fn wait_for_initial_image(&self, stop: &AtomicBool) -> Result<Option<CapturedImage>, String> {
         loop {
             self.check_backend_error()?;
             match self.frames.recv_timeout(STREAM_RECORDER_POLL_INTERVAL) {
@@ -270,7 +366,7 @@ impl CaptureSource {
                         frame = newer_frame;
                     }
                     self.check_backend_error()?;
-                    return capture_frame_image(frame).map(Some);
+                    return frame.into_image().map(Some);
                 }
                 Err(RecvTimeoutError::Timeout) if stop.load(Ordering::Acquire) => return Ok(None),
                 Err(RecvTimeoutError::Timeout) => {}
@@ -281,7 +377,7 @@ impl CaptureSource {
         }
     }
 
-    fn refresh_image(&self, image: &mut RgbaImage) -> Result<bool, String> {
+    fn refresh_image(&self, image: &mut CapturedImage) -> Result<bool, String> {
         self.check_backend_error()?;
         let refreshed = refresh_capture_image(&self.frames, image)?;
         self.check_backend_error()?;
@@ -311,14 +407,9 @@ fn send_capture_result(
     }
 }
 
-fn capture_frame_image(frame: CaptureFrame) -> Result<RgbaImage, String> {
-    RgbaImage::from_raw(frame.width, frame.height, frame.rgba)
-        .ok_or_else(|| "capture backend returned an invalid RGBA frame".to_owned())
-}
-
 fn refresh_capture_image(
     frames: &Receiver<CaptureFrame>,
-    image: &mut RgbaImage,
+    image: &mut CapturedImage,
 ) -> Result<bool, String> {
     let mut newest = None;
     loop {
@@ -334,7 +425,7 @@ fn refresh_capture_image(
     let Some(frame) = newest else {
         return Ok(false);
     };
-    *image = capture_frame_image(frame)?;
+    image.replace(frame)?;
     Ok(true)
 }
 
@@ -732,7 +823,7 @@ fn run_capture_loop(
             .then(|| preview_frames_tx.try_reserve().ok())
             .flatten();
         let prepare_started_at = Instant::now();
-        let prepared = frame_processor.prepare(&image, preview_permit.is_some())?;
+        let prepared = frame_processor.prepare(image.image(), preview_permit.is_some())?;
         let prepare_time = prepare_started_at.elapsed();
         if let (Some(permit), Some(preview)) = (preview_permit, prepared.preview) {
             permit.send(preview);
@@ -869,6 +960,11 @@ mod tests {
 
     use super::*;
 
+    fn test_capture_frame(image: RgbaImage, buffer_pool: &CaptureFrameBufferPool) -> CaptureFrame {
+        let (width, height) = image.dimensions();
+        CaptureFrame::new(width, height, image.into_raw(), buffer_pool.clone())
+    }
+
     #[test]
     fn screen_content_encoder_configuration_initializes_cleanly() {
         let _encoder =
@@ -968,13 +1064,13 @@ mod tests {
 
     #[test]
     fn native_capture_error_does_not_depend_on_frame_queue_capacity() {
+        let buffer_pool = CaptureFrameBufferPool::default();
         let (frames_tx, frames_rx) = sync_channel(1);
         frames_tx
-            .try_send(CaptureFrame {
-                width: 1,
-                height: 1,
-                rgba: vec![0, 0, 0, 255],
-            })
+            .try_send(test_capture_frame(
+                RgbaImage::from_pixel(1, 1, Rgba([0, 0, 0, 255])),
+                &buffer_pool,
+            ))
             .expect("test frame should fill the native queue");
         let (errors_tx, errors_rx) = std::sync::mpsc::channel();
 
@@ -991,6 +1087,18 @@ mod tests {
                 .expect("native error should remain available"),
             "native capture failed"
         );
+    }
+
+    #[test]
+    fn capture_frame_buffers_return_to_the_pool_when_dropped() {
+        let buffer_pool = CaptureFrameBufferPool::default();
+        let buffer = buffer_pool.take(16);
+        let address = buffer.as_ptr();
+
+        drop(CaptureFrame::new(2, 2, buffer, buffer_pool.clone()));
+
+        let reused = buffer_pool.take(16);
+        assert_eq!(reused.as_ptr(), address);
     }
 
     #[test]
@@ -1156,33 +1264,41 @@ mod tests {
 
     #[test]
     fn damage_driven_capture_keeps_the_latest_frame_between_updates() {
+        let buffer_pool = CaptureFrameBufferPool::default();
         let (frames_tx, frames_rx) = std::sync::mpsc::sync_channel(1);
-        let mut image = RgbaImage::from_pixel(2, 2, Rgba([1, 2, 3, 255]));
+        let mut image = test_capture_frame(
+            RgbaImage::from_pixel(2, 2, Rgba([1, 2, 3, 255])),
+            &buffer_pool,
+        )
+        .into_image()
+        .expect("initial test frame should be valid");
+        let initial_buffer_address = image.image().as_raw().as_ptr();
 
         assert!(
             !refresh_capture_image(&frames_rx, &mut image)
                 .expect("an idle capture source should remain usable")
         );
-        assert_eq!(image.get_pixel(0, 0), &Rgba([1, 2, 3, 255]));
+        assert_eq!(image.image().get_pixel(0, 0), &Rgba([1, 2, 3, 255]));
 
         frames_tx
-            .send(CaptureFrame {
-                width: 2,
-                height: 2,
-                rgba: RgbaImage::from_pixel(2, 2, Rgba([4, 5, 6, 255])).into_raw(),
-            })
+            .send(test_capture_frame(
+                RgbaImage::from_pixel(2, 2, Rgba([4, 5, 6, 255])),
+                &buffer_pool,
+            ))
             .expect("updated capture frame should be queued");
         assert!(
             refresh_capture_image(&frames_rx, &mut image)
                 .expect("an updated capture frame should be accepted")
         );
-        assert_eq!(image.get_pixel(0, 0), &Rgba([4, 5, 6, 255]));
+        assert_eq!(image.image().get_pixel(0, 0), &Rgba([4, 5, 6, 255]));
 
         assert!(
             !refresh_capture_image(&frames_rx, &mut image)
                 .expect("the latest frame should remain usable without another update")
         );
-        assert_eq!(image.get_pixel(0, 0), &Rgba([4, 5, 6, 255]));
+        assert_eq!(image.image().get_pixel(0, 0), &Rgba([4, 5, 6, 255]));
+        let recycled = buffer_pool.take(16);
+        assert_eq!(recycled.as_ptr(), initial_buffer_address);
     }
 
     #[test]
