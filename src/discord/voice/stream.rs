@@ -25,6 +25,9 @@ use super::*;
 const STREAM_RTP_PACKET_BYTES: usize = 4096;
 const LOCAL_H264_MAX_PAYLOAD_BYTES: usize = 1200;
 const STREAM_STARTUP_BUFFER_MAX_FRAMES: usize = 180;
+const STREAM_STARTUP_BUFFER_MAX_BYTES: usize = 32 * 1024 * 1024;
+const STREAM_H264_ACCESS_UNIT_MAX_BYTES: usize = 8 * 1024 * 1024;
+const STREAM_H264_ACCESS_UNIT_MAX_PACKETS: usize = 4096;
 const STREAM_STARTUP_REPLAY_FRAME_TICKS: u32 = 90;
 const STREAM_PLAYER_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const OPUS_RTP_CLOCK_RATE: u32 = 48_000;
@@ -1062,7 +1065,7 @@ async fn run_stream_media(
     let mut packet = [0u8; STREAM_RTP_PACKET_BYTES];
     let mut h264 = H264Depacketizer::default();
     let mut h264_startup = H264StartupGate::default();
-    let mut h264_startup_buffer: VecDeque<BufferedH264Frame> = VecDeque::new();
+    let mut h264_startup_buffer = H264StartupBuffer::default();
     let mut video_recovery = StreamVideoRecovery::default();
     let mut active_video_source = (0u32, None);
     let mut local_audio_sequence = 0u16;
@@ -1362,8 +1365,30 @@ async fn run_stream_media(
                     }
                     for video_packet in recovery.ready {
                         let header = video_packet.header;
-                        let Some(frame) = h264.push(&header, &video_packet.payload) else {
-                            continue;
+                        let frame = match h264.push(&header, &video_packet.payload) {
+                            H264DepacketizerOutput::Pending => continue,
+                            H264DepacketizerOutput::Frame(frame) => frame,
+                            H264DepacketizerOutput::BudgetExceeded => {
+                                reset_stream_h264_pipeline(
+                                    &mut h264,
+                                    &mut h264_startup,
+                                    &mut h264_startup_buffer,
+                                );
+                                let feedback = build_rtcp_pli(local_ssrc, source.video_ssrc);
+                                send_stream_rtcp_feedback(
+                                    &discord_socket,
+                                    &encryptor,
+                                    &mut rtcp_feedback_nonce,
+                                    &feedback,
+                                    "PLI",
+                                )
+                                .await?;
+                                logging::debug(
+                                    "stream",
+                                    "stream H264 access unit exceeded its safety budget; requested a new keyframe",
+                                );
+                                continue;
+                            }
                         };
                         let frame = match dave_state
                             .lock()
@@ -1396,7 +1421,9 @@ async fn run_stream_media(
                                 VIDEO_RTP_CLOCK_RATE,
                             );
                             let mut replay_anchor = None;
-                            for (index, buffered) in h264_startup_buffer.drain(..).enumerate() {
+                            for (index, buffered) in
+                                h264_startup_buffer.take().into_iter().enumerate()
+                            {
                                 let local_timestamp = replay_origin.wrapping_add(
                                     u32::try_from(index)
                                         .expect("startup buffer length is bounded")
@@ -1651,7 +1678,7 @@ async fn send_stream_rtcp_feedback(
 fn reset_stream_h264_pipeline(
     h264: &mut H264Depacketizer,
     startup: &mut H264StartupGate,
-    startup_buffer: &mut VecDeque<BufferedH264Frame>,
+    startup_buffer: &mut H264StartupBuffer,
 ) {
     *h264 = H264Depacketizer::default();
     *startup = H264StartupGate::default();
@@ -1782,7 +1809,19 @@ struct H264Depacketizer {
     timestamp: Option<u32>,
     expected_sequence: Option<u16>,
     frame: Vec<u8>,
+    packet_count: usize,
     fragment_open: bool,
+}
+
+enum H264DepacketizerOutput {
+    Pending,
+    Frame(Vec<u8>),
+    BudgetExceeded,
+}
+
+enum H264AppendError {
+    Invalid,
+    BudgetExceeded,
 }
 
 #[derive(Default)]
@@ -1795,6 +1834,12 @@ struct H264StartupGate {
 struct BufferedH264Frame {
     encoded: Vec<u8>,
     source_timestamp: u32,
+}
+
+#[derive(Default)]
+struct H264StartupBuffer {
+    frames: VecDeque<BufferedH264Frame>,
+    bytes: usize,
 }
 
 impl H264StartupGate {
@@ -1848,10 +1893,46 @@ impl H264StartupGate {
     }
 }
 
+impl H264StartupBuffer {
+    fn is_empty(&self) -> bool {
+        self.frames.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    fn push(&mut self, frame: BufferedH264Frame) -> bool {
+        let Some(next_bytes) = self.bytes.checked_add(frame.encoded.len()) else {
+            self.clear();
+            return false;
+        };
+        if self.frames.len() >= STREAM_STARTUP_BUFFER_MAX_FRAMES
+            || next_bytes > STREAM_STARTUP_BUFFER_MAX_BYTES
+        {
+            self.clear();
+            return false;
+        }
+        self.bytes = next_bytes;
+        self.frames.push_back(frame);
+        true
+    }
+
+    fn take(&mut self) -> VecDeque<BufferedH264Frame> {
+        self.bytes = 0;
+        std::mem::take(&mut self.frames)
+    }
+
+    fn clear(&mut self) {
+        self.frames.clear();
+        self.bytes = 0;
+    }
+}
+
 fn accept_or_buffer_h264(
     player_ready: bool,
     startup: &mut H264StartupGate,
-    startup_buffer: &mut VecDeque<BufferedH264Frame>,
+    startup_buffer: &mut H264StartupBuffer,
     frame: Vec<u8>,
     source_timestamp: u32,
 ) -> Option<BufferedH264Frame> {
@@ -1862,12 +1943,9 @@ fn accept_or_buffer_h264(
     if player_ready {
         return Some(frame);
     }
-    if startup_buffer.len() >= STREAM_STARTUP_BUFFER_MAX_FRAMES {
-        startup_buffer.clear();
+    if !startup_buffer.push(frame) {
         *startup = H264StartupGate::default();
-        return None;
     }
-    startup_buffer.push_back(frame);
     None
 }
 
@@ -1884,7 +1962,7 @@ fn h264_nal_types(frame: &[u8]) -> Vec<u8> {
 }
 
 impl H264Depacketizer {
-    fn push(&mut self, header: &RtpHeader, payload: &[u8]) -> Option<Vec<u8>> {
+    fn push(&mut self, header: &RtpHeader, payload: &[u8]) -> H264DepacketizerOutput {
         if self.timestamp != Some(header.timestamp)
             || self
                 .expected_sequence
@@ -1892,84 +1970,134 @@ impl H264Depacketizer {
         {
             self.reset(header.timestamp);
         }
+        if self.packet_count >= STREAM_H264_ACCESS_UNIT_MAX_PACKETS {
+            self.reset(header.timestamp);
+            return H264DepacketizerOutput::BudgetExceeded;
+        }
+        self.packet_count += 1;
         self.expected_sequence = Some(header.sequence.wrapping_add(1));
-        let nal_type = payload.first().map(|byte| byte & 0x1f)?;
+        let Some(nal_type) = payload.first().map(|byte| byte & 0x1f) else {
+            self.reset(header.timestamp);
+            return H264DepacketizerOutput::Pending;
+        };
         let accepted = match nal_type {
-            1..=23 => {
-                self.append_nal(payload);
-                true
-            }
+            1..=23 => self.append_nal(payload),
             24 => self.append_stap_a(payload),
             28 => self.append_fu_a(payload),
-            _ => false,
+            _ => Err(H264AppendError::Invalid),
         };
-        if !accepted {
-            self.reset(header.timestamp);
-            return None;
+        match accepted {
+            Ok(()) => {}
+            Err(H264AppendError::Invalid) => {
+                self.reset(header.timestamp);
+                return H264DepacketizerOutput::Pending;
+            }
+            Err(H264AppendError::BudgetExceeded) => {
+                self.reset(header.timestamp);
+                return H264DepacketizerOutput::BudgetExceeded;
+            }
         }
         if header.marker {
             if self.fragment_open || self.frame.is_empty() {
                 self.reset(header.timestamp);
-                return None;
+                return H264DepacketizerOutput::Pending;
             }
             self.timestamp = None;
             self.expected_sequence = None;
-            return Some(std::mem::take(&mut self.frame));
+            self.packet_count = 0;
+            return H264DepacketizerOutput::Frame(std::mem::take(&mut self.frame));
         }
-        None
+        H264DepacketizerOutput::Pending
     }
 
     fn reset(&mut self, timestamp: u32) {
         self.timestamp = Some(timestamp);
         self.expected_sequence = None;
         self.frame.clear();
+        self.packet_count = 0;
         self.fragment_open = false;
     }
 
-    fn append_nal(&mut self, nal: &[u8]) {
+    fn append_nal(&mut self, nal: &[u8]) -> Result<(), H264AppendError> {
+        self.ensure_capacity(4usize.saturating_add(nal.len()))?;
         self.frame.extend_from_slice(&[0, 0, 0, 1]);
         self.frame.extend_from_slice(nal);
         self.fragment_open = false;
+        Ok(())
     }
 
-    fn append_stap_a(&mut self, payload: &[u8]) -> bool {
+    fn append_stap_a(&mut self, payload: &[u8]) -> Result<(), H264AppendError> {
         let mut cursor = 1usize;
-        let mut found = false;
+        let mut required_bytes = 0usize;
+        let mut nal_count = 0usize;
         while cursor + 2 <= payload.len() {
             let size = usize::from(u16::from_be_bytes([payload[cursor], payload[cursor + 1]]));
             cursor += 2;
             let Some(nal) = payload.get(cursor..cursor.saturating_add(size)) else {
-                return false;
+                return Err(H264AppendError::Invalid);
             };
             if nal.is_empty() {
-                return false;
+                return Err(H264AppendError::Invalid);
             }
-            self.append_nal(nal);
+            required_bytes = required_bytes
+                .checked_add(4)
+                .and_then(|bytes| bytes.checked_add(nal.len()))
+                .ok_or(H264AppendError::BudgetExceeded)?;
             cursor += size;
-            found = true;
+            nal_count += 1;
         }
-        found && cursor == payload.len()
+        if nal_count == 0 || cursor != payload.len() {
+            return Err(H264AppendError::Invalid);
+        }
+        self.ensure_capacity(required_bytes)?;
+
+        cursor = 1;
+        while cursor + 2 <= payload.len() {
+            let size = usize::from(u16::from_be_bytes([payload[cursor], payload[cursor + 1]]));
+            cursor += 2;
+            let nal = &payload[cursor..cursor + size];
+            self.frame.extend_from_slice(&[0, 0, 0, 1]);
+            self.frame.extend_from_slice(nal);
+            cursor += size;
+        }
+        self.fragment_open = false;
+        Ok(())
     }
 
-    fn append_fu_a(&mut self, payload: &[u8]) -> bool {
+    fn append_fu_a(&mut self, payload: &[u8]) -> Result<(), H264AppendError> {
         if payload.len() < 3 {
-            return false;
+            return Err(H264AppendError::Invalid);
         }
         let indicator = payload[0];
         let fu_header = payload[1];
         let start = fu_header & 0x80 != 0;
         let end = fu_header & 0x40 != 0;
+        let header_bytes = if start { 5 } else { 0 };
+        self.ensure_capacity(header_bytes + payload.len() - 2)?;
         if start {
             self.frame.extend_from_slice(&[0, 0, 0, 1]);
             self.frame.push((indicator & 0xe0) | (fu_header & 0x1f));
             self.fragment_open = !end;
         } else if !self.fragment_open {
-            return false;
+            return Err(H264AppendError::Invalid);
         } else if end {
             self.fragment_open = false;
         }
         self.frame.extend_from_slice(&payload[2..]);
-        true
+        Ok(())
+    }
+
+    fn ensure_capacity(&self, additional_bytes: usize) -> Result<(), H264AppendError> {
+        if self
+            .frame
+            .len()
+            .checked_add(additional_bytes)
+            .is_some_and(|bytes| bytes <= STREAM_H264_ACCESS_UNIT_MAX_BYTES)
+        {
+            Ok(())
+        } else {
+            Err(H264AppendError::BudgetExceeded)
+        }
     }
 }
 
@@ -2172,9 +2300,64 @@ mod tests {
         let mut decoded = None;
         for packet in packets {
             let header = parse_rtp_header(&packet).expect("local RTP packet is valid");
-            decoded = depacketizer.push(&header, &packet[header.payload_offset..]);
+            if let H264DepacketizerOutput::Frame(frame) =
+                depacketizer.push(&header, &packet[header.payload_offset..])
+            {
+                decoded = Some(frame);
+            }
         }
         assert_eq!(decoded, Some(frame));
+    }
+
+    #[test]
+    fn h264_assembly_enforces_packet_and_memory_budgets() {
+        let mut oversized = H264Depacketizer::default();
+        let mut oversized_header =
+            stream_video_header(DISCORD_STREAM_VIDEO_PAYLOAD_TYPE, 1, 90_000, 42);
+        oversized_header.marker = false;
+        let mut oversized_payload = vec![0xaa; STREAM_H264_ACCESS_UNIT_MAX_BYTES + 1];
+        oversized_payload[0] = 0x7c;
+        oversized_payload[1] = 0x85;
+        assert!(matches!(
+            oversized.push(&oversized_header, &oversized_payload),
+            H264DepacketizerOutput::BudgetExceeded
+        ));
+
+        let mut fragmented = H264Depacketizer::default();
+        let mut fragment_header =
+            stream_video_header(DISCORD_STREAM_VIDEO_PAYLOAD_TYPE, 1, 93_000, 42);
+        fragment_header.marker = false;
+        assert!(matches!(
+            fragmented.push(&fragment_header, &[0x7c, 0x85, 0xaa]),
+            H264DepacketizerOutput::Pending
+        ));
+        for sequence in 2..=STREAM_H264_ACCESS_UNIT_MAX_PACKETS {
+            fragment_header.sequence = u16::try_from(sequence).expect("packet budget fits u16");
+            assert!(matches!(
+                fragmented.push(&fragment_header, &[0x7c, 0x05, 0xaa]),
+                H264DepacketizerOutput::Pending
+            ));
+        }
+        fragment_header.sequence =
+            u16::try_from(STREAM_H264_ACCESS_UNIT_MAX_PACKETS + 1).expect("packet budget fits u16");
+        assert!(matches!(
+            fragmented.push(&fragment_header, &[0x7c, 0x45, 0xaa]),
+            H264DepacketizerOutput::BudgetExceeded
+        ));
+
+        let mut startup = H264StartupBuffer::default();
+        for timestamp in 0..32 {
+            assert!(startup.push(BufferedH264Frame {
+                encoded: vec![0; 1024 * 1024],
+                source_timestamp: timestamp,
+            }));
+        }
+        assert!(!startup.push(BufferedH264Frame {
+            encoded: vec![0],
+            source_timestamp: 32,
+        }));
+        assert!(startup.is_empty());
+        assert_eq!(startup.bytes, 0);
     }
 
     fn stream_video_header(
@@ -2310,7 +2493,7 @@ mod tests {
         ];
         let predicted = vec![0, 0, 0, 1, 0x41, 0x44];
         let mut gate = H264StartupGate::default();
-        let mut buffer = VecDeque::new();
+        let mut buffer = H264StartupBuffer::default();
 
         assert_eq!(
             accept_or_buffer_h264(false, &mut gate, &mut buffer, startup_frame.clone(), 90_000,)
@@ -2327,12 +2510,14 @@ mod tests {
         assert_eq!(buffer.len(), 2);
         assert_eq!(
             buffer
+                .frames
                 .pop_front()
                 .map(|frame| (frame.encoded, frame.source_timestamp)),
             Some((startup_frame, 90_000))
         );
         assert_eq!(
             buffer
+                .frames
                 .pop_front()
                 .map(|frame| (frame.encoded, frame.source_timestamp)),
             Some((predicted.clone(), 93_000))
