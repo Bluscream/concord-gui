@@ -210,7 +210,7 @@ choose `[o] sign out`.
 
 - Full voice support with push-to-talk
 - Supports noise suppression
-- Watch & Broadcast live stream in voice channels
+- Screen share (Both watch and stream)
 
 ### Guilds & Channels
 
@@ -347,6 +347,15 @@ Press `Space` to open the leader shortcut window.
 | `Space`, `n`     | Open the notification inbox       |
 | `Space`, `v`     | Voice command prefix              |
 | `Space`, `Space` | Open the fuzzy channel switcher   |
+
+Voice commands:
+
+| Key sequence         | Action                      |
+| -------------------- | --------------------------- |
+| `Space`, `v`, `d`    | Toggle voice deafen         |
+| `Space`, `v`, `m`    | Toggle microphone mute      |
+| `Space`, `v`, `s`    | Toggle screen share         |
+| `Space`, `v`, `l`    | Leave the current voice call |
 
 #### Action menus
 
@@ -681,6 +690,7 @@ FolderSettings = "r"
 JoinVoice = "e"
 LeaveVoice = "l"
 ToggleStream = "s"
+WatchStream = "w"
 VoiceParticipantAudio = "a"
 ShowPinnedMessages = "p"
 ShowThreads = "t"
