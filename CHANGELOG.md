@@ -2,7 +2,59 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.4.8] - 2026-07-27
+## [2.5.0] - 2026-08-02
+
+### Bug Fixes
+
+- _(stream)_ Require exact Linux audio monitor by @chojs23
+- _(ci)_ Install Linux capture dependencies by @chojs23
+- _(stream)_ Cancel watch session child tasks by @chojs23
+- _(voice)_ Await runtime cleanup before gateway stop by @chojs23
+- _(stream)_ Rotate active RTC servers by @chojs23
+- _(stream)_ Bound broadcast reconnect attempts by @chojs23
+- _(stream)_ Centralize lifecycle completion events by @chojs23
+- _(stream)_ Redact RTC tokens from debug output by @chojs23
+- _(stream)_ Allow restarting fullscreen broadcasts on Windows by @chojs23
+- Add cross-platform application audio capture for stream broadcasts by @chojs23
+- _(stream)_ Keep stalled capture joins outside Tokio by @chojs23
+- _(stream)_ Back off stream watch reconnects by @chojs23
+- _(broadcast)_ Remove screencapturekit by @chojs23
+- _(broadcast)_ Replace xcap with native cross-platform screen capture backends by @chojs23
+- _(stream)_ Prepare portal capture before creating Discord stream by @chojs23
+- _(broadcast)_ Fix Linux broadcast restart and system audio latency by @chojs23
+- _(broadcast)_ Fix Linux broadcast self-audio exclusion by @chojs23
+- _(broadcast)_ Cancel stale capture preparation by @chojs23
+- _(build)_ Require macOS 13 by @chojs23
+- _(stream)_ Bound H264 assembly memory by @chojs23
+- _(stream)_ Slow preview upload cadence by @chojs23
+- _(broadcast)_ Derive audio clock from samples by @chojs23
+- Fix stream startup and capture lifecycle issues by @chojs23
+- _(voice)_ Reduce Linux PulseAudio voice playback latency by @chojs23
+- Harden stream capture preparation lifecycle by @chojs23
+
+### Documentation
+
+- Update readme by @chojs23
+
+### Features
+
+- Watch and broadcast streaming by @chojs23
+- Add live stream presence sounds and participant panel by @chojs23
+- _(stream)_ Make stream feature optional by @chojs23
+- _(broadcast)_ Broacasting ui by @chojs23
+- Add broadcast preview by @chojs23
+
+### Miscellaneous Tasks
+
+- _(ci)_ Update Linux CI and release runners to Ubuntu 24.04 by @chojs23
+
+### Refactor
+
+- _(stream)_ Simplify live presence state by @chojs23
+- _(stream)_ Share voice gateway control handling by @chojs23
+- Refactor stream forwarding and reuse capture frame buffers by @chojs23
+
+## [2.4.8] - 2026-07-28
 
 ### Bug Fixes
 

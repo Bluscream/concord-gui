@@ -1,6 +1,6 @@
 [package]
 name = "concord"
-version = "2.4.8"
+version = "2.5.0"
 edition = "2024"
 rust-version = "1.90"
 description = "A terminal user interface client for Discord"
@@ -168,14 +168,23 @@ windows-sys = { version = "0.61.2", features = [
 ], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-block2 = { version = "0.6.2", default-features = false, features = ["std"], optional = true }
-dispatch2 = { version = "0.3.1", default-features = false, features = ["std", "objc2"], optional = true }
-objc2 = { version = "0.6.4", default-features = false, features = ["std"], optional = true }
+block2 = { version = "0.6.2", default-features = false, features = [
+  "std",
+], optional = true }
+dispatch2 = { version = "0.3.1", default-features = false, features = [
+  "std",
+  "objc2",
+], optional = true }
+objc2 = { version = "0.6.4", default-features = false, features = [
+  "std",
+], optional = true }
 objc2-core-audio-types = { version = "0.3.2", default-features = false, features = [
   "std",
   "CoreAudioBaseTypes",
 ], optional = true }
-objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std"], optional = true }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = [
+  "std",
+], optional = true }
 objc2-core-media = { version = "0.3.2", default-features = false, features = [
   "std",
   "CMBlockBuffer",
