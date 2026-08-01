@@ -16,6 +16,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 #[cfg(feature = "voice-playback")]
 use super::VOICE_AUDIO_OUTPUT_QUEUE;
 #[cfg(feature = "voice-playback")]
+use super::VOICE_PULSE_OUTPUT_BUFFER_FRAMES;
+#[cfg(feature = "voice-playback")]
 use super::audio_buffer::{VoiceAudioBuffer, VoiceAudioOutputStats};
 #[cfg(all(feature = "voice-playback", target_os = "linux"))]
 use super::log_captured_alsa_errors;
@@ -476,7 +478,6 @@ impl VoiceAudioOutput {
         playback_enabled: Arc<AtomicBool>,
         playback_volume: Arc<AtomicU8>,
     ) -> Result<Self, String> {
-        let (samples_tx, samples_rx) = sync_channel(VOICE_AUDIO_OUTPUT_QUEUE);
         let host = cpal::default_host();
         let device = host
             .default_output_device()
@@ -485,18 +486,51 @@ impl VoiceAudioOutput {
             .default_output_config()
             .map_err(|error| format!("voice default audio output config failed: {error}"))?;
         let sample_format = supported_config.sample_format();
-        let stream_config = supported_config.config();
-        let stats = Arc::new(VoiceAudioOutputStats::default());
-        let stream = build_voice_output_stream(
+        let mut stream_config = supported_config.config();
+
+        #[cfg(target_os = "linux")]
+        let use_low_latency_pulse_audio = host.id() == cpal::HostId::PulseAudio;
+        #[cfg(not(target_os = "linux"))]
+        let use_low_latency_pulse_audio = false;
+        // PulseAudio otherwise accepts a server-selected playback buffer that can be about two
+        // seconds, which is unsuitable for interactive voice.
+        stream_config.buffer_size =
+            voice_output_buffer_size(use_low_latency_pulse_audio, supported_config.buffer_size());
+
+        let preferred = build_voice_output_stream_attempt(
             &device,
             &stream_config,
             sample_format,
-            samples_rx,
-            playback_enabled,
-            playback_volume,
-            Arc::clone(&stats),
-        )?;
-        stream
+            Arc::clone(&playback_enabled),
+            Arc::clone(&playback_volume),
+        );
+        let output = match preferred {
+            Ok(output) => output,
+            Err(preferred_error) if stream_config.buffer_size != cpal::BufferSize::Default => {
+                logging::debug(
+                    "voice",
+                    format!(
+                        "voice fixed output buffer failed, retrying default buffer: {preferred_error}"
+                    ),
+                );
+                stream_config.buffer_size = cpal::BufferSize::Default;
+                build_voice_output_stream_attempt(
+                    &device,
+                    &stream_config,
+                    sample_format,
+                    playback_enabled,
+                    playback_volume,
+                )
+                .map_err(|fallback_error| {
+                    format!(
+                        "voice fixed output buffer failed: {preferred_error}; default output buffer retry failed: {fallback_error}"
+                    )
+                })?
+            }
+            Err(error) => return Err(error),
+        };
+        output
+            ._stream
             .play()
             .map_err(|error| format!("voice audio output stream start failed: {error}"))?;
         logging::debug(
@@ -510,11 +544,49 @@ impl VoiceAudioOutput {
                 stream_config.buffer_size,
             ),
         );
-        Ok(Self {
-            samples_tx,
-            stats,
-            _stream: stream,
-        })
+        Ok(output)
+    }
+}
+
+#[cfg(feature = "voice-playback")]
+fn build_voice_output_stream_attempt(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    sample_format: cpal::SampleFormat,
+    playback_enabled: Arc<AtomicBool>,
+    playback_volume: Arc<AtomicU8>,
+) -> Result<VoiceAudioOutput, String> {
+    let (samples_tx, samples_rx) = sync_channel(VOICE_AUDIO_OUTPUT_QUEUE);
+    let stats = Arc::new(VoiceAudioOutputStats::default());
+    let stream = build_voice_output_stream(
+        device,
+        config,
+        sample_format,
+        samples_rx,
+        playback_enabled,
+        playback_volume,
+        Arc::clone(&stats),
+    )?;
+    Ok(VoiceAudioOutput {
+        samples_tx,
+        stats,
+        _stream: stream,
+    })
+}
+
+#[cfg(feature = "voice-playback")]
+pub(super) fn voice_output_buffer_size(
+    use_low_latency_pulse_audio: bool,
+    supported: &cpal::SupportedBufferSize,
+) -> cpal::BufferSize {
+    if !use_low_latency_pulse_audio {
+        return cpal::BufferSize::Default;
+    }
+    match supported {
+        cpal::SupportedBufferSize::Range { min, max } => {
+            cpal::BufferSize::Fixed(VOICE_PULSE_OUTPUT_BUFFER_FRAMES.clamp(*min, *max))
+        }
+        cpal::SupportedBufferSize::Unknown => cpal::BufferSize::Default,
     }
 }
 

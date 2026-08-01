@@ -2,6 +2,8 @@
 use super::audio_buffer::voice_output_prebuffer_frames;
 use super::dave::VoiceDaveOutboundPayload;
 use super::opus::VoicePlaybackDecodeState;
+#[cfg(feature = "voice-playback")]
+use super::playback::voice_output_buffer_size;
 use super::rtp::build_voice_rtp_packet;
 use super::runtime::stop_voice_connection_task;
 use super::*;
@@ -2226,6 +2228,54 @@ fn voice_input_buffer_size_requests_small_supported_fixed_buffer() {
         voice_input_buffer_size(&cpal::SupportedBufferSize::Unknown),
         cpal::BufferSize::Default
     );
+}
+
+#[cfg(feature = "voice-playback")]
+#[test]
+fn voice_output_buffer_size_requests_bounded_low_latency_buffer() {
+    let cases = [
+        (
+            true,
+            cpal::SupportedBufferSize::Range {
+                min: 128,
+                max: 8_192,
+            },
+            cpal::BufferSize::Fixed(VOICE_PULSE_OUTPUT_BUFFER_FRAMES),
+        ),
+        (
+            true,
+            cpal::SupportedBufferSize::Range {
+                min: 4_096,
+                max: 8_192,
+            },
+            cpal::BufferSize::Fixed(4_096),
+        ),
+        (
+            true,
+            cpal::SupportedBufferSize::Range { min: 128, max: 960 },
+            cpal::BufferSize::Fixed(960),
+        ),
+        (
+            true,
+            cpal::SupportedBufferSize::Unknown,
+            cpal::BufferSize::Default,
+        ),
+        (
+            false,
+            cpal::SupportedBufferSize::Range {
+                min: 128,
+                max: 8_192,
+            },
+            cpal::BufferSize::Default,
+        ),
+    ];
+
+    for (use_low_latency_pulse_audio, supported, expected) in cases {
+        assert_eq!(
+            voice_output_buffer_size(use_low_latency_pulse_audio, &supported),
+            expected
+        );
+    }
 }
 
 #[cfg(feature = "voice-playback")]
