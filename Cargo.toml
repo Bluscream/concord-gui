@@ -122,7 +122,14 @@ stream-broadcast = [
   "dep:flexaudio-core",
   "dep:flexaudio-os-linux",
   "dep:flexaudio-os-windows",
-  "dep:screencapturekit",
+  "dep:block2",
+  "dep:dispatch2",
+  "dep:objc2",
+  "dep:objc2-core-audio-types",
+  "dep:objc2-core-foundation",
+  "dep:objc2-core-media",
+  "dep:objc2-foundation",
+  "dep:objc2-screen-capture-kit",
 ]
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -146,7 +153,14 @@ windows-sys = { version = "0.61.2", features = [
 ], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-screencapturekit = { version = "8.0.1", optional = true }
+block2 = { version = "0.6.2", default-features = false, features = ["std"], optional = true }
+dispatch2 = { version = "0.3.1", default-features = false, features = ["std", "objc2"], optional = true }
+objc2 = { version = "0.6.4", default-features = false, features = ["std"], optional = true }
+objc2-core-audio-types = { version = "0.3.2", default-features = false, features = ["std", "CoreAudioBaseTypes"], optional = true }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std"], optional = true }
+objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "CMBlockBuffer", "CMSampleBuffer", "objc2", "objc2-core-audio-types"], optional = true }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSError", "NSString", "NSObject"], optional = true }
+objc2-screen-capture-kit = { version = "0.3.2", default-features = false, features = ["std", "SCError", "SCShareableContent", "SCStream", "block2", "dispatch2", "objc2-core-graphics", "objc2-core-media"], optional = true }
 
 [profile.dist]
 inherits = "release"

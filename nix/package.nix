@@ -23,11 +23,7 @@ let
   commonArgs = {
     inherit pname version src;
 
-    cargoExtraArgs =
-      if stdenv.isDarwin then
-        "--locked --no-default-features --features voice-playback"
-      else
-        "--locked";
+    cargoExtraArgs = "--locked";
 
     # PipeWire generates bindings at build time. The bindgen hook supplies
     # libclang and its search path without hard-coding a Nix store location.
