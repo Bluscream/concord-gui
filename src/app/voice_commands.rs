@@ -146,6 +146,7 @@ pub(super) async fn watch_stream(
 
 pub(super) async fn load_stream_capture_targets(
     client: DiscordClient,
+    request_id: crate::discord::StreamCaptureTargetsRequestId,
     scope: VoiceScope,
     channel_id: Id<ChannelMarker>,
 ) {
@@ -162,6 +163,7 @@ pub(super) async fn load_stream_capture_targets(
     };
     client
         .publish_event(AppEvent::StreamCaptureTargetsLoaded {
+            request_id,
             scope,
             channel_id,
             targets,

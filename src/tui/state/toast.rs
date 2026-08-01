@@ -49,12 +49,6 @@ impl DashboardState {
         now: Instant,
     ) {
         self.runtime.media_playback_preparing = None;
-        // Short status updates may cover a slow stream startup. Keep tracking
-        // it so the preparing toast returns when that update expires.
-        if kind == ToastKind::Error {
-            self.runtime.stream_playback_preparing = None;
-            self.runtime.stream_broadcast_preparing = None;
-        }
         self.runtime.toast_message = Some(ToastMessage {
             text: text.into(),
             kind,
@@ -399,6 +393,38 @@ mod tests {
         assert_eq!(
             state.next_toast_deadline(),
             Some(now + Duration::from_secs(1) + TOAST_DURATION)
+        );
+    }
+
+    #[test]
+    fn unrelated_error_does_not_cancel_stream_preparation() {
+        let now = Instant::now();
+        let scope = VoiceScope::Guild(Id::new(1));
+        let channel_id = Id::new(2);
+        let user_id = Id::new(3);
+
+        let mut playback_state = DashboardState::new();
+        assert!(playback_state.show_stream_playback_preparing_toast(scope, channel_id, user_id));
+        playback_state.show_error_toast("Failed to copy message", now);
+        assert!(playback_state.clear_expired_toast(now + TOAST_DURATION));
+        assert_eq!(
+            playback_state
+                .toast_message()
+                .expect("playback preparation remains tracked")
+                .text,
+            STREAM_PLAYBACK_PREPARING_TEXT
+        );
+
+        let mut broadcast_state = DashboardState::new();
+        assert!(broadcast_state.show_stream_broadcast_preparing_toast(scope, channel_id));
+        broadcast_state.show_error_toast("Failed to copy message", now);
+        assert!(broadcast_state.clear_expired_toast(now + TOAST_DURATION));
+        assert_eq!(
+            broadcast_state
+                .toast_message()
+                .expect("broadcast preparation remains tracked")
+                .text,
+            STREAM_BROADCAST_PREPARING_TEXT
         );
     }
 

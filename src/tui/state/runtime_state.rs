@@ -6,7 +6,7 @@ use crate::discord::ids::{
 };
 use crate::discord::{
     ActivityInfo, AttachmentDownloadId, DownloadAttachmentSource, MediaPlaybackRequestId,
-    VoiceScope,
+    StreamCaptureTargetsRequestId, VoiceScope,
 };
 
 use super::{AttachmentDownloadProgressView, DashboardState, ToastKind};
@@ -52,6 +52,12 @@ pub(super) struct StreamBroadcastUiTarget {
     pub(super) channel_id: Id<ChannelMarker>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct StreamCaptureTargetsRequest {
+    pub(super) request_id: StreamCaptureTargetsRequestId,
+    pub(super) target: StreamBroadcastUiTarget,
+}
+
 impl StreamBroadcastUiTarget {
     pub(super) fn matches(&self, scope: VoiceScope, channel_id: Id<ChannelMarker>) -> bool {
         self.scope == scope && self.channel_id == channel_id
@@ -66,6 +72,7 @@ pub(super) struct RuntimeUiState {
     pub(super) active_stream_playback: Option<StreamPlaybackUiTarget>,
     pub(super) stream_broadcast_preparing: Option<StreamBroadcastUiTarget>,
     pub(super) active_stream_broadcast: Option<StreamBroadcastUiTarget>,
+    pub(super) stream_capture_targets_request: Option<StreamCaptureTargetsRequest>,
     pub(super) gateway_error: Option<String>,
     pub(super) voice_connection: Option<VoiceConnectionUiState>,
     pub(super) open_composer_in_editor_requested: bool,
@@ -78,6 +85,7 @@ pub(super) struct RuntimeUiState {
     pub(super) attachment_downloads: Vec<AttachmentDownloadUiState>,
     pub(super) next_attachment_download_id: u64,
     pub(super) next_media_playback_request_id: u64,
+    pub(super) next_stream_capture_targets_request_id: u64,
     /// Shared clock used by deterministic animated TUI components.
     pub(super) animation_frame: usize,
     pub(super) should_quit: bool,
@@ -150,6 +158,24 @@ impl DashboardState {
             .next_media_playback_request_id
             .saturating_add(1);
         id
+    }
+
+    pub(in crate::tui) fn begin_stream_capture_targets_request(
+        &mut self,
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+    ) -> StreamCaptureTargetsRequestId {
+        let request_id =
+            StreamCaptureTargetsRequestId::new(self.runtime.next_stream_capture_targets_request_id);
+        self.runtime.next_stream_capture_targets_request_id = self
+            .runtime
+            .next_stream_capture_targets_request_id
+            .saturating_add(1);
+        self.runtime.stream_capture_targets_request = Some(StreamCaptureTargetsRequest {
+            request_id,
+            target: StreamBroadcastUiTarget { scope, channel_id },
+        });
+        request_id
     }
 
     pub(in crate::tui) fn record_attachment_download_started(

@@ -179,7 +179,7 @@ const DISCORD_OPUS_FRAME_SAMPLES_PER_CHANNEL: usize = 960;
 #[allow(dead_code)]
 const DISCORD_OPUS_20MS_STEREO_SAMPLES: usize =
     DISCORD_OPUS_FRAME_SAMPLES_PER_CHANNEL * DISCORD_VOICE_CHANNELS as usize;
-#[cfg(feature = "voice-playback")]
+#[cfg(any(test, feature = "voice-playback"))]
 const DISCORD_OPUS_FRAME_DURATION: Duration = Duration::from_millis(20);
 #[allow(dead_code)]
 const DISCORD_OPUS_TIMESTAMP_INCREMENT: u32 = DISCORD_OPUS_FRAME_SAMPLES_PER_CHANNEL as u32;

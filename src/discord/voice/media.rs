@@ -74,19 +74,25 @@ impl GatewayChildTasks {
         .await;
     }
 
-    pub(super) async fn replace_media_gracefully(
+    pub(super) async fn shutdown_media(&mut self) {
+        if let Some(media) = self.media.take() {
+            media.shutdown().await;
+        }
+    }
+
+    pub(super) fn install_media_gracefully(
         &mut self,
         task: JoinHandle<()>,
         stop_tx: oneshot::Sender<()>,
     ) {
-        Self::replace(
-            &mut self.media,
-            GatewayChildTask {
-                task,
-                graceful_stop: Some(stop_tx),
-            },
-        )
-        .await;
+        assert!(
+            self.media.is_none(),
+            "media task must be stopped before install"
+        );
+        self.media = Some(GatewayChildTask {
+            task,
+            graceful_stop: Some(stop_tx),
+        });
     }
 
     async fn replace(slot: &mut Option<GatewayChildTask>, task: GatewayChildTask) {

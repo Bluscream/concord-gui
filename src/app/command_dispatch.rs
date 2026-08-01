@@ -277,9 +277,18 @@ impl CommandDispatcher {
                 )
                 .await;
             }
-            AppCommand::LoadStreamCaptureTargets { scope, channel_id } => {
-                voice_commands::load_stream_capture_targets(self.client.clone(), scope, channel_id)
-                    .await;
+            AppCommand::LoadStreamCaptureTargets {
+                request_id,
+                scope,
+                channel_id,
+            } => {
+                voice_commands::load_stream_capture_targets(
+                    self.client.clone(),
+                    request_id,
+                    scope,
+                    channel_id,
+                )
+                .await;
             }
             AppCommand::StartVoiceStream {
                 scope,

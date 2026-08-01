@@ -218,11 +218,24 @@ impl DashboardState {
                 self.record_stream_playback_ended(*scope, *channel_id, *user_id, *reconnecting);
             }
             AppEvent::StreamCaptureTargetsLoaded {
+                request_id,
                 scope,
                 channel_id,
                 targets,
                 error,
             } => {
+                let matches_request = self
+                    .runtime
+                    .stream_capture_targets_request
+                    .as_ref()
+                    .is_some_and(|request| {
+                        request.request_id == *request_id
+                            && request.target.matches(*scope, *channel_id)
+                    });
+                if !matches_request {
+                    return;
+                }
+                self.runtime.stream_capture_targets_request = None;
                 if let Some(error) = error {
                     self.show_error_toast(error, Instant::now());
                 } else if targets.is_empty() {
@@ -230,9 +243,11 @@ impl DashboardState {
                         "No displays or shareable windows were found.",
                         Instant::now(),
                     );
-                } else if self.runtime.voice_connection.is_some_and(|voice| {
-                    voice.scope == *scope && voice.channel_id == Some(*channel_id)
-                }) {
+                } else if self.popups.modal.is_none()
+                    && self.runtime.voice_connection.is_some_and(|voice| {
+                        voice.scope == *scope && voice.channel_id == Some(*channel_id)
+                    })
+                {
                     self.popups.modal = Some(ModalPopup::ChannelActionMenu(
                         ChannelActionMenuState::StreamTargets {
                             scope: *scope,
@@ -562,6 +577,7 @@ impl DashboardState {
                 );
             }
             VoiceConnectionStatus::Disconnected => {
+                self.runtime.stream_capture_targets_request = None;
                 self.runtime.stream_playback_preparing = None;
                 self.runtime.active_stream_playback = None;
                 self.runtime.stream_broadcast_preparing = None;
@@ -579,6 +595,7 @@ impl DashboardState {
                 );
             }
             VoiceConnectionStatus::Failed => {
+                self.runtime.stream_capture_targets_request = None;
                 self.runtime.stream_playback_preparing = None;
                 self.runtime.active_stream_playback = None;
                 self.runtime.stream_broadcast_preparing = None;

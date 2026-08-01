@@ -2,6 +2,7 @@ use std::ffi::c_void;
 use std::ptr::{self, NonNull};
 use std::slice;
 use std::sync::{Mutex, PoisonError, mpsc};
+use std::time::Duration;
 
 use block2::{DynBlock, RcBlock};
 use dispatch2::{DispatchQueue, DispatchQueueAttr, DispatchRetained};
@@ -25,6 +26,7 @@ use super::{
 pub(super) const BACKEND_NAME: &str = "screencapturekit-audio";
 
 const AUDIO_SCRATCH_SAMPLES: usize = 8_192;
+const CALLBACK_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(super) fn start_capture(
     target: &StreamCaptureTarget,
@@ -69,7 +71,7 @@ pub(super) fn start_capture(
         _output: output,
         _queue: queue,
     };
-    wait_for_completion(|completion| unsafe {
+    wait_for_completion("capture start", |completion| unsafe {
         active_stream
             .stream
             .startCaptureWithCompletionHandler(Some(completion));
@@ -106,7 +108,7 @@ impl CaptureSession {
         let Some(active_stream) = self.active_stream.take() else {
             return Ok(());
         };
-        wait_for_completion(|completion| unsafe {
+        wait_for_completion("capture stop", |completion| unsafe {
             active_stream
                 .stream
                 .stopCaptureWithCompletionHandler(Some(completion));
@@ -118,23 +120,23 @@ fn shareable_content() -> Result<Retained<SCShareableContent>, String> {
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     let completion: RcBlock<dyn Fn(*mut SCShareableContent, *mut NSError)> = RcBlock::new(
         move |content: *mut SCShareableContent, error: *mut NSError| {
-            let result = if let Some(error) = unsafe { error.as_ref() } {
+            let result: Result<usize, String> = if let Some(error) = unsafe { error.as_ref() } {
                 Err(map_screen_capture_error(error))
             } else {
                 unsafe { Retained::retain(content) }
                     .map(|content| Retained::into_raw(content) as usize)
                     .ok_or_else(|| "ScreenCaptureKit returned no shareable content".to_owned())
             };
-            let _ = result_tx.send(result);
+            if let Err(mpsc::SendError(Ok(content_address))) = result_tx.send(result) {
+                drop(unsafe { Retained::from_raw(content_address as *mut SCShareableContent) });
+            }
         },
     );
     unsafe {
         SCShareableContent::getShareableContentWithCompletionHandler(&completion);
     }
 
-    let content_address = result_rx
-        .recv()
-        .map_err(|_| "ScreenCaptureKit shareable content request was cancelled".to_owned())??;
+    let content_address = receive_callback(&result_rx, "shareable content request")??;
     let content = unsafe { Retained::from_raw(content_address as *mut SCShareableContent) }
         .ok_or_else(|| "ScreenCaptureKit returned invalid content".to_owned())?;
     Ok(content)
@@ -179,6 +181,7 @@ fn content_filter(
 }
 
 fn wait_for_completion(
+    operation_name: &str,
     operation: impl FnOnce(&DynBlock<dyn Fn(*mut NSError)>),
 ) -> Result<(), String> {
     let (result_tx, result_rx) = mpsc::sync_channel(1);
@@ -188,9 +191,20 @@ fn wait_for_completion(
         let _ = result_tx.send(result);
     });
     operation(&completion);
+    receive_callback(&result_rx, operation_name)?
+}
+
+fn receive_callback<T>(result_rx: &mpsc::Receiver<T>, operation_name: &str) -> Result<T, String> {
     result_rx
-        .recv()
-        .map_err(|_| "ScreenCaptureKit operation completion was cancelled".to_owned())?
+        .recv_timeout(CALLBACK_WAIT_TIMEOUT)
+        .map_err(|error| match error {
+            mpsc::RecvTimeoutError::Timeout => {
+                format!("ScreenCaptureKit {operation_name} did not complete in time")
+            }
+            mpsc::RecvTimeoutError::Disconnected => {
+                format!("ScreenCaptureKit {operation_name} completion was cancelled")
+            }
+        })
 }
 
 struct MacAudioOutputIvars {

@@ -100,7 +100,9 @@ impl DashboardState {
         {
             return None;
         }
+        let request_id = self.begin_stream_capture_targets_request(voice.scope, channel_id);
         Some(AppCommand::LoadStreamCaptureTargets {
+            request_id,
             scope: voice.scope,
             channel_id,
         })

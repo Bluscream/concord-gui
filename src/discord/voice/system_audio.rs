@@ -1,11 +1,15 @@
 use std::fmt;
 use std::time::Instant;
 
-#[cfg(feature = "stream-broadcast")]
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
 };
+#[cfg(all(
+    feature = "stream-broadcast",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+use std::{thread, time::Duration};
 
 use tokio::sync::mpsc;
 
@@ -30,6 +34,12 @@ mod platform;
 
 pub(super) const SYSTEM_AUDIO_FRAME_QUEUE: usize = 8;
 
+#[cfg(all(
+    feature = "stream-broadcast",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+const SYSTEM_AUDIO_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+
 #[cfg(feature = "stream-broadcast")]
 pub(super) const SYSTEM_AUDIO_SAMPLE_RATE: u32 = 48_000;
 #[cfg(feature = "stream-broadcast")]
@@ -47,8 +57,7 @@ pub(super) struct SystemAudioCapture {
         feature = "stream-broadcast",
         any(target_os = "linux", target_os = "macos", target_os = "windows")
     ))]
-    session: platform::CaptureSession,
-    #[cfg(feature = "stream-broadcast")]
+    session: Option<platform::CaptureSession>,
     stats: Arc<SystemAudioCaptureStats>,
 }
 
@@ -71,10 +80,11 @@ impl fmt::Display for SystemAudioCaptureError {
     }
 }
 
-#[cfg(feature = "stream-broadcast")]
 #[derive(Default)]
 pub(super) struct SystemAudioCaptureStats {
+    #[cfg(feature = "stream-broadcast")]
     source_samples: AtomicU64,
+    #[cfg(feature = "stream-broadcast")]
     queued_frames: AtomicU64,
     queue_dropped_frames: AtomicU64,
 }
@@ -153,17 +163,15 @@ impl AudioFrameAssembler {
     }
 }
 
-#[cfg(feature = "stream-broadcast")]
 impl SystemAudioCapture {
-    pub(super) fn dropped_frames(&self) -> u64 {
-        self.stats.queue_dropped_frames.load(Ordering::Relaxed)
+    pub(super) fn stats(&self) -> Arc<SystemAudioCaptureStats> {
+        Arc::clone(&self.stats)
     }
 }
 
-#[cfg(not(feature = "stream-broadcast"))]
-impl SystemAudioCapture {
+impl SystemAudioCaptureStats {
     pub(super) fn dropped_frames(&self) -> u64 {
-        0
+        self.queue_dropped_frames.load(Ordering::Relaxed)
     }
 }
 
@@ -191,7 +199,20 @@ pub(super) fn start_system_audio_capture(
             SYSTEM_AUDIO_CHANNELS,
         ),
     );
-    Ok(SystemAudioCapture { session, stats })
+    Ok(SystemAudioCapture {
+        session: Some(session),
+        stats,
+    })
+}
+
+#[cfg(not(all(
+    feature = "stream-broadcast",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+)))]
+impl SystemAudioCapture {
+    pub(super) async fn shutdown(self) {}
+
+    pub(super) fn shutdown_in_background(self) {}
 }
 
 #[cfg(all(
@@ -266,23 +287,88 @@ fn resolve_audio_scope(
     feature = "stream-broadcast",
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
-impl Drop for SystemAudioCapture {
-    fn drop(&mut self) {
-        if let Err(error) = self.session.stop() {
+impl SystemAudioCapture {
+    pub(super) async fn shutdown(mut self) {
+        let Some(session) = self.session.take() else {
+            return;
+        };
+        let stats = Arc::clone(&self.stats);
+        let mut stop_task =
+            tokio::task::spawn_blocking(move || stop_capture_session(session, stats));
+        if tokio::time::timeout(SYSTEM_AUDIO_SHUTDOWN_TIMEOUT, &mut stop_task)
+            .await
+            .is_err()
+        {
+            // The blocking task keeps ownership and finishes cleanup later.
             logging::debug(
                 "stream",
-                format!("system audio capture stop failed: {error}"),
+                "system audio capture did not stop before the shutdown timeout",
             );
         }
+    }
+
+    pub(super) fn shutdown_in_background(mut self) {
+        let Some(session) = self.session.take() else {
+            return;
+        };
+        spawn_capture_session_reaper(session, Arc::clone(&self.stats));
+    }
+}
+
+#[cfg(all(
+    feature = "stream-broadcast",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+fn stop_capture_session(
+    mut session: platform::CaptureSession,
+    stats: Arc<SystemAudioCaptureStats>,
+) {
+    if let Err(error) = session.stop() {
         logging::debug(
             "stream",
-            format!(
-                "system audio capture stopped: source_samples={} queued_20ms_frames={} dropped_20ms_frames={}",
-                self.stats.source_samples.load(Ordering::Relaxed),
-                self.stats.queued_frames.load(Ordering::Relaxed),
-                self.stats.queue_dropped_frames.load(Ordering::Relaxed),
-            ),
+            format!("system audio capture stop failed: {error}"),
         );
+    }
+    logging::debug(
+        "stream",
+        format!(
+            "system audio capture stopped: source_samples={} queued_20ms_frames={} dropped_20ms_frames={}",
+            stats.source_samples.load(Ordering::Relaxed),
+            stats.queued_frames.load(Ordering::Relaxed),
+            stats.queue_dropped_frames.load(Ordering::Relaxed),
+        ),
+    );
+}
+
+#[cfg(all(
+    feature = "stream-broadcast",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+fn spawn_capture_session_reaper(
+    session: platform::CaptureSession,
+    stats: Arc<SystemAudioCaptureStats>,
+) {
+    if let Err(error) = thread::Builder::new()
+        .name("stream-system-audio-reaper".to_owned())
+        .spawn(move || stop_capture_session(session, stats))
+    {
+        logging::debug(
+            "stream",
+            format!("system audio capture reaper spawn failed: {error}"),
+        );
+    }
+}
+
+#[cfg(all(
+    feature = "stream-broadcast",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+impl Drop for SystemAudioCapture {
+    fn drop(&mut self) {
+        let Some(session) = self.session.take() else {
+            return;
+        };
+        spawn_capture_session_reaper(session, Arc::clone(&self.stats));
     }
 }
 

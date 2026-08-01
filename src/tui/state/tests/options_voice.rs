@@ -438,6 +438,7 @@ fn joined_voice_channel_can_select_a_stream_target_and_stop_sharing() {
     assert_eq!(
         state.toggle_current_voice_stream_command(),
         Some(AppCommand::LoadStreamCaptureTargets {
+            request_id: crate::discord::StreamCaptureTargetsRequestId::new(0),
             scope: VoiceScope::Guild(guild_id),
             channel_id,
         })
@@ -452,12 +453,23 @@ fn joined_voice_channel_can_select_a_stream_target_and_stop_sharing() {
     assert_eq!(
         state.activate_selected_channel_action(),
         Some(AppCommand::LoadStreamCaptureTargets {
+            request_id: crate::discord::StreamCaptureTargetsRequestId::new(1),
             scope: VoiceScope::Guild(guild_id),
             channel_id,
         })
     );
 
     state.push_effect(AppEvent::StreamCaptureTargetsLoaded {
+        request_id: crate::discord::StreamCaptureTargetsRequestId::new(0),
+        scope: VoiceScope::Guild(guild_id),
+        channel_id,
+        targets: vec![target.clone()],
+        error: None,
+    });
+    assert!(!state.is_channel_action_stream_target_phase());
+
+    state.push_effect(AppEvent::StreamCaptureTargetsLoaded {
+        request_id: crate::discord::StreamCaptureTargetsRequestId::new(1),
         scope: VoiceScope::Guild(guild_id),
         channel_id,
         targets: vec![target.clone()],

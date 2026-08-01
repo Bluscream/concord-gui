@@ -152,6 +152,7 @@ pub(super) struct StreamBroadcastRuntimeState {
 pub(super) struct StreamBroadcastRuntimeUpdate {
     pub(super) close_stream_key: Option<String>,
     pub(super) send_delete: bool,
+    pub(super) retain_capture: bool,
     pub(super) connect: Option<StreamBroadcastGatewaySession>,
     pub(super) broadcast_ended: Option<StreamBroadcastRequest>,
     pub(super) error: Option<String>,
@@ -319,6 +320,7 @@ impl StreamBroadcastRuntimeState {
                     }) {
                         update.close_stream_key =
                             self.active.take().map(|active| active.request.stream_key);
+                        update.retain_capture = true;
                     }
                     self.server = Some(server.clone());
                 }
@@ -765,6 +767,9 @@ async fn connect_stream_broadcast(
                         let captures = broadcast_captures.clone();
                         media_generation = media_generation.wrapping_add(1).max(1);
                         let generation = media_generation;
+                        // The previous media task owns the prepared capture until
+                        // its cleanup restores it to the registry.
+                        child_tasks.shutdown_media().await;
                         let (media_stop_tx, media_stop_rx) = oneshot::channel();
                         let media_task = tokio::spawn(async move {
                             let result = run_stream_broadcast_media(
@@ -785,9 +790,7 @@ async fn connect_stream_broadcast(
                             .await;
                             let _ = finished.send((generation, result));
                         });
-                        child_tasks
-                            .replace_media_gracefully(media_task, media_stop_tx)
-                            .await;
+                        child_tasks.install_media_gracefully(media_task, media_stop_tx);
                         child_tasks
                             .replace_keepalive(tokio::spawn(gateway::run_voice_udp_keepalive(
                                 Arc::clone(
@@ -1520,11 +1523,15 @@ impl BroadcastVideoTransport {
 
 struct BroadcastAudioTask {
     task: Option<JoinHandle<()>>,
+    capture: Option<system_audio::SystemAudioCapture>,
 }
 
 impl BroadcastAudioTask {
     fn disabled() -> Self {
-        Self { task: None }
+        Self {
+            task: None,
+            capture: None,
+        }
     }
 
     fn start(
@@ -1535,17 +1542,18 @@ impl BroadcastAudioTask {
         packet_encryptor: Arc<BroadcastPacketEncryptor>,
         stats: SharedBroadcastSendStats,
     ) -> Result<Self, String> {
+        let encoder = VoiceOpusEncode::new_system_audio()
+            .map_err(|error| format!("system audio encoder failed: {error}"))?;
         let (frames_tx, frames_rx) = mpsc::channel(SYSTEM_AUDIO_FRAME_QUEUE);
         let capture = system_audio::start_system_audio_capture(target, frames_tx)
             .map_err(|error| format!("system audio capture failed: {error}"))?;
-        let encoder = VoiceOpusEncode::new_system_audio()
-            .map_err(|error| format!("system audio encoder failed: {error}"))?;
+        let capture_stats = capture.stats();
         let transport = BroadcastAudioTransport::new(audio_ssrc, packet_encryptor, stats);
         let task = tokio::spawn(async move {
             if let Err(error) = run_stream_broadcast_audio(
                 socket,
                 dave_state,
-                Some(capture),
+                capture_stats,
                 frames_rx,
                 encoder,
                 transport,
@@ -1555,15 +1563,24 @@ impl BroadcastAudioTask {
                 logging::error("stream", format!("system audio sender stopped: {error}"));
             }
         });
-        Ok(Self { task: Some(task) })
+        Ok(Self {
+            task: Some(task),
+            capture: Some(capture),
+        })
     }
 
     async fn shutdown(&mut self) {
         let Some(task) = self.task.take() else {
+            if let Some(capture) = self.capture.take() {
+                capture.shutdown().await;
+            }
             return;
         };
         task.abort();
         let _ = task.await;
+        if let Some(capture) = self.capture.take() {
+            capture.shutdown().await;
+        }
     }
 
     async fn completion(&mut self) -> Result<(), String> {
@@ -1572,6 +1589,9 @@ impl BroadcastAudioTask {
         };
         let result = task.await;
         self.task.take();
+        if let Some(capture) = self.capture.take() {
+            capture.shutdown().await;
+        }
         match result {
             Ok(()) => Err("system audio sender stopped unexpectedly".to_owned()),
             Err(error) => Err(format!("system audio sender task failed: {error}")),
@@ -1581,6 +1601,9 @@ impl BroadcastAudioTask {
     fn abort(&mut self) {
         if let Some(task) = self.task.take() {
             task.abort();
+        }
+        if let Some(capture) = self.capture.take() {
+            capture.shutdown_in_background();
         }
     }
 }
@@ -1608,7 +1631,7 @@ async fn report_system_audio_fallback(
 async fn run_stream_broadcast_audio(
     socket: Arc<UdpSocket>,
     dave_state: Arc<Mutex<VoiceDaveState>>,
-    capture: Option<system_audio::SystemAudioCapture>,
+    capture_stats: Arc<system_audio::SystemAudioCaptureStats>,
     mut frames_rx: mpsc::Receiver<system_audio::SystemAudioFrame>,
     mut encoder: VoiceOpusEncode,
     mut transport: BroadcastAudioTransport,
@@ -1618,9 +1641,7 @@ async fn run_stream_broadcast_audio(
     while let Some(frame) = frames_rx.recv().await {
         let queue_depth = frames_rx.len();
         let queue_delay = Instant::now().saturating_duration_since(frame.captured_at);
-        let capture_drops = capture
-            .as_ref()
-            .map_or(0, system_audio::SystemAudioCapture::dropped_frames);
+        let capture_drops = capture_stats.dropped_frames();
         update_broadcast_send_stats(&transport.stats, |stats| {
             stats.observe_audio_queue(queue_depth, queue_delay, capture_drops);
         });
@@ -2286,7 +2307,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn broadcast_child_tasks_await_graceful_media_cleanup() {
+    async fn broadcast_child_tasks_stop_media_before_replacement() {
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
         let (cleaned_tx, cleaned_rx) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
@@ -2294,13 +2315,14 @@ mod tests {
             let _ = cleaned_tx.send(());
         });
         let mut tasks = GatewayChildTasks::default();
-        tasks.replace_media_gracefully(task, stop_tx).await;
+        tasks.install_media_gracefully(task, stop_tx);
 
-        tasks.shutdown().await;
+        tasks.shutdown_media().await;
 
         cleaned_rx
             .await
-            .expect("graceful media task should finish cleanup");
+            .expect("old media should finish cleanup before replacement starts");
+        assert!(!tasks.has_media());
     }
 
     #[test]
@@ -2327,7 +2349,10 @@ mod tests {
         started_rx
             .await
             .expect("test broadcast audio task should start");
-        let audio_task = BroadcastAudioTask { task: Some(task) };
+        let audio_task = BroadcastAudioTask {
+            task: Some(task),
+            capture: None,
+        };
 
         drop(audio_task);
 
@@ -2440,6 +2465,7 @@ mod tests {
             Some(initial.request.stream_key.as_str())
         );
         assert!(!rotated.send_delete);
+        assert!(rotated.retain_capture);
         assert!(rotated.broadcast_ended.is_none());
         let replacement = rotated
             .connect
@@ -2457,6 +2483,7 @@ mod tests {
             Some(initial.request.stream_key.as_str())
         );
         assert!(!unavailable.send_delete);
+        assert!(unavailable.retain_capture);
         assert!(unavailable.connect.is_none());
 
         let reallocated = state.apply(&VoiceRuntimeEvent::StreamServer(StreamServerInfo {
@@ -2781,7 +2808,7 @@ mod tests {
         let sender_task = tokio::spawn(run_stream_broadcast_audio(
             Arc::clone(&sender),
             dave_state,
-            None,
+            Arc::new(system_audio::SystemAudioCaptureStats::default()),
             frames_rx,
             encoder,
             transport,

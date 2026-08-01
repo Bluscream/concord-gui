@@ -1,9 +1,10 @@
 use std::{
     slice,
     sync::{
-        atomic::AtomicBool,
-        mpsc::{self, Receiver, SyncSender, TrySendError},
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError},
     },
+    time::{Duration, Instant},
 };
 
 use block2::{DynBlock, RcBlock};
@@ -28,6 +29,8 @@ use super::{CaptureFrame, STREAM_CAPTURE_FPS};
 use crate::discord::voice::{StreamCaptureTarget, StreamCaptureTargetKind};
 
 const FRAME_QUEUE_CAPACITY: usize = 2;
+const CALLBACK_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const CALLBACK_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(super) struct CaptureSession {
     active: Option<ActiveStream>,
@@ -40,7 +43,7 @@ struct ActiveStream {
 }
 
 pub(super) fn list_targets() -> Result<Vec<StreamCaptureTarget>, String> {
-    let content = shareable_content()?;
+    let content = shareable_content(None)?;
     let mut targets = Vec::new();
 
     let displays = unsafe { content.displays() };
@@ -93,9 +96,9 @@ pub(super) fn list_targets() -> Result<Vec<StreamCaptureTarget>, String> {
 
 pub(super) fn start_capture(
     target: &StreamCaptureTarget,
-    _stop: &AtomicBool,
+    stop: &AtomicBool,
 ) -> Result<(CaptureSession, Receiver<Result<CaptureFrame, String>>), String> {
-    let content = shareable_content()?;
+    let content = shareable_content(Some(stop))?;
     let (filter, width, height) = capture_filter(&content, target)?;
 
     let configuration = unsafe { SCStreamConfiguration::new() };
@@ -135,7 +138,7 @@ pub(super) fn start_capture(
         _output: output,
         _queue: queue,
     };
-    wait_for_completion(|completion| unsafe {
+    wait_for_completion(Some(stop), "capture start", |completion| unsafe {
         active
             .stream
             .startCaptureWithCompletionHandler(Some(completion));
@@ -154,7 +157,7 @@ impl CaptureSession {
         let Some(active) = self.active.take() else {
             return Ok(());
         };
-        wait_for_completion(|completion| unsafe {
+        wait_for_completion(None, "capture stop", |completion| unsafe {
             active
                 .stream
                 .stopCaptureWithCompletionHandler(Some(completion));
@@ -162,11 +165,12 @@ impl CaptureSession {
     }
 }
 
-fn shareable_content() -> Result<Retained<SCShareableContent>, String> {
+fn shareable_content(stop: Option<&AtomicBool>) -> Result<Retained<SCShareableContent>, String> {
+    ensure_not_cancelled(stop, "shareable content request")?;
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     let completion: RcBlock<dyn Fn(*mut SCShareableContent, *mut NSError)> = RcBlock::new(
         move |content: *mut SCShareableContent, error: *mut NSError| {
-            let result = if let Some(error) = unsafe { error.as_ref() } {
+            let result: Result<usize, String> = if let Some(error) = unsafe { error.as_ref() } {
                 Err(format!(
                     "ScreenCaptureKit shareable content request failed: {error}"
                 ))
@@ -175,16 +179,16 @@ fn shareable_content() -> Result<Retained<SCShareableContent>, String> {
                     .map(|content| Retained::into_raw(content) as usize)
                     .ok_or_else(|| "ScreenCaptureKit returned no shareable content".to_owned())
             };
-            let _ = result_tx.send(result);
+            if let Err(mpsc::SendError(Ok(content_address))) = result_tx.send(result) {
+                drop(unsafe { Retained::from_raw(content_address as *mut SCShareableContent) });
+            }
         },
     );
     unsafe {
         SCShareableContent::getShareableContentWithCompletionHandler(&completion);
     }
 
-    let content_address = result_rx
-        .recv()
-        .map_err(|_| "ScreenCaptureKit shareable content request was cancelled".to_owned())??;
+    let content_address = receive_callback(&result_rx, stop, "shareable content request")??;
     unsafe { Retained::from_raw(content_address as *mut SCShareableContent) }
         .ok_or_else(|| "ScreenCaptureKit returned invalid shareable content".to_owned())
 }
@@ -262,8 +266,11 @@ fn validate_dimensions(
 }
 
 fn wait_for_completion(
+    stop: Option<&AtomicBool>,
+    operation_name: &str,
     operation: impl FnOnce(&DynBlock<dyn Fn(*mut NSError)>),
 ) -> Result<(), String> {
+    ensure_not_cancelled(stop, operation_name)?;
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     let completion: RcBlock<dyn Fn(*mut NSError)> = RcBlock::new(move |error: *mut NSError| {
         let result = unsafe { error.as_ref() }.map_or(Ok(()), |error| {
@@ -272,9 +279,43 @@ fn wait_for_completion(
         let _ = result_tx.send(result);
     });
     operation(&completion);
-    result_rx
-        .recv()
-        .map_err(|_| "ScreenCaptureKit operation completion was cancelled".to_owned())?
+    receive_callback(&result_rx, stop, operation_name)?
+}
+
+fn ensure_not_cancelled(stop: Option<&AtomicBool>, operation_name: &str) -> Result<(), String> {
+    if stop.is_some_and(|stop| stop.load(Ordering::Acquire)) {
+        Err(format!("ScreenCaptureKit {operation_name} was cancelled"))
+    } else {
+        Ok(())
+    }
+}
+
+fn receive_callback<T>(
+    result_rx: &Receiver<T>,
+    stop: Option<&AtomicBool>,
+    operation_name: &str,
+) -> Result<T, String> {
+    let deadline = Instant::now() + CALLBACK_WAIT_TIMEOUT;
+    loop {
+        if stop.is_some_and(|stop| stop.load(Ordering::Acquire)) {
+            return Err(format!("ScreenCaptureKit {operation_name} was cancelled"));
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(format!(
+                "ScreenCaptureKit {operation_name} did not complete in time"
+            ));
+        }
+        match result_rx.recv_timeout(remaining.min(CALLBACK_WAIT_POLL_INTERVAL)) {
+            Ok(result) => return Ok(result),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(format!(
+                    "ScreenCaptureKit {operation_name} completion was cancelled"
+                ));
+            }
+        }
+    }
 }
 
 struct MacCaptureOutputIvars {

@@ -557,6 +557,7 @@ pub enum AppCommand {
         display_name: String,
     },
     LoadStreamCaptureTargets {
+        request_id: StreamCaptureTargetsRequestId,
         scope: VoiceScope,
         channel_id: Id<ChannelMarker>,
     },
@@ -800,6 +801,15 @@ pub enum MediaPlaybackSource {
 pub struct MediaPlaybackRequestId(u64);
 
 impl MediaPlaybackRequestId {
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StreamCaptureTargetsRequestId(u64);
+
+impl StreamCaptureTargetsRequestId {
     pub const fn new(value: u64) -> Self {
         Self(value)
     }

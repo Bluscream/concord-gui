@@ -10,6 +10,7 @@ use crate::discord::ids::{
 use super::commands::{
     AttachmentDownloadId, DownloadAttachmentSource, ForumPostArchiveState, MediaPlaybackRequestId,
     MessageHistoryAfterMode, MessageSearchPage, MessageSearchQuery, ReactionEmoji,
+    StreamCaptureTargetsRequestId,
 };
 use super::{
     ActivityInfo, AttachmentUpdate, ChannelInfo, ChannelRecipientInfo, CustomEmojiInfo, EmbedInfo,
@@ -571,6 +572,7 @@ pub enum AppEvent {
         reconnecting: bool,
     },
     StreamCaptureTargetsLoaded {
+        request_id: StreamCaptureTargetsRequestId,
         scope: VoiceScope,
         channel_id: Id<ChannelMarker>,
         targets: Vec<StreamCaptureTarget>,

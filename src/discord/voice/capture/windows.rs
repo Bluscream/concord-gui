@@ -52,11 +52,15 @@ use crate::discord::voice::{StreamCaptureTarget, StreamCaptureTargetKind};
 const FRAME_QUEUE_CAPACITY: usize = 2;
 
 static D3D_DEVICE: LazyLock<Result<ID3D11Device, String>> = LazyLock::new(create_d3d_device);
-static D3D_CONTEXT: LazyLock<Result<ID3D11DeviceContext, String>> = LazyLock::new(|| unsafe {
-    d3d_device()?
-        .GetImmediateContext()
-        .map_err(|error| format!("D3D11 context creation failed: {error}"))
-});
+// WGC callbacks can run on different worker threads, but the D3D11 immediate
+// context permits only one caller at a time.
+static D3D_CONTEXT: LazyLock<Result<Mutex<ID3D11DeviceContext>, String>> =
+    LazyLock::new(|| unsafe {
+        d3d_device()?
+            .GetImmediateContext()
+            .map(Mutex::new)
+            .map_err(|error| format!("D3D11 context creation failed: {error}"))
+    });
 
 pub(super) struct CaptureSession {
     runtime: Option<WgcRuntime>,
@@ -66,9 +70,11 @@ pub(super) struct CaptureSession {
 struct WinRtApartment;
 
 struct WgcRuntime {
+    item: GraphicsCaptureItem,
     frame_pool: Direct3D11CaptureFramePool,
     session: GraphicsCaptureSession,
-    frame_arrived_token: i64,
+    frame_arrived_token: Option<i64>,
+    item_closed_token: Option<i64>,
     closed: bool,
 }
 
@@ -173,6 +179,7 @@ impl WgcRuntime {
 
         let current_size = Arc::new(Mutex::new(size));
         let callback_size = Arc::clone(&current_size);
+        let closed_frames_tx = frames_tx.clone();
         let frame_arrived_token = frame_pool
             .FrameArrived(
                 &TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new(
@@ -221,16 +228,35 @@ impl WgcRuntime {
             .map_err(|error| format!("WGC capture session creation failed: {error}"))?;
         let _ = session.SetIsBorderRequired(false);
         let _ = session.SetIsCursorCaptureEnabled(true);
-        session
+
+        let mut runtime = Self {
+            item,
+            frame_pool,
+            session,
+            frame_arrived_token: Some(frame_arrived_token),
+            item_closed_token: None,
+            closed: false,
+        };
+        runtime.item_closed_token = Some(
+            runtime
+                .item
+                .Closed(
+                    &TypedEventHandler::<GraphicsCaptureItem, IInspectable>::new(move |_, _| {
+                        send_latest(
+                            &closed_frames_tx,
+                            Err("WGC capture source closed".to_owned()),
+                        );
+                        Ok(())
+                    }),
+                )
+                .map_err(|error| format!("WGC source close callback setup failed: {error}"))?,
+        );
+        runtime
+            .session
             .StartCapture()
             .map_err(|error| format!("WGC capture start failed: {error}"))?;
 
-        Ok(Self {
-            frame_pool,
-            session,
-            frame_arrived_token,
-            closed: false,
-        })
+        Ok(runtime)
     }
 
     fn close(&mut self) -> Result<(), String> {
@@ -239,7 +265,14 @@ impl WgcRuntime {
         }
         self.closed = true;
         let mut errors = Vec::new();
-        if let Err(error) = self.frame_pool.RemoveFrameArrived(self.frame_arrived_token) {
+        if let Some(token) = self.item_closed_token.take()
+            && let Err(error) = self.item.RemoveClosed(token)
+        {
+            errors.push(format!("remove source close callback: {error}"));
+        }
+        if let Some(token) = self.frame_arrived_token.take()
+            && let Err(error) = self.frame_pool.RemoveFrameArrived(token)
+        {
             errors.push(format!("remove frame callback: {error}"));
         }
         if let Err(error) = self.session.Close() {
@@ -317,13 +350,10 @@ fn copy_wgc_frame(frame: &Direct3D11CaptureFrame) -> Result<(CaptureFrame, SizeI
         .map_err(|error| format!("WGC DXGI surface conversion failed: {error}"))?;
     let source_texture = unsafe { access.GetInterface::<ID3D11Texture2D>() }
         .map_err(|error| format!("WGC D3D11 texture lookup failed: {error}"))?;
-    let rgba = texture_to_rgba(
-        d3d_device()?,
-        d3d_context()?,
-        &source_texture,
-        width,
-        height,
-    )?;
+    let context = d3d_context()?
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let rgba = texture_to_rgba(d3d_device()?, &context, &source_texture, width, height)?;
     Ok((
         CaptureFrame {
             width,
@@ -357,7 +387,7 @@ fn d3d_device() -> Result<&'static ID3D11Device, String> {
     D3D_DEVICE.as_ref().map_err(Clone::clone)
 }
 
-fn d3d_context() -> Result<&'static ID3D11DeviceContext, String> {
+fn d3d_context() -> Result<&'static Mutex<ID3D11DeviceContext>, String> {
     D3D_CONTEXT.as_ref().map_err(Clone::clone)
 }
 

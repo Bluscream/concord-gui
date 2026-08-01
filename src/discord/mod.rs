@@ -65,7 +65,7 @@ pub use commands::{
     ForumPostCreate, GlobalUserProfileUpdate, GuildUserProfileUpdate, MediaPlaybackRequestId,
     MediaPlaybackSource, MediaPlaybackTarget, MessageHistoryAfterMode, MessageSearchAuthorType,
     MessageSearchHas, MessageSearchPage, MessageSearchQuery, MuteDuration, ProfileAvatarUpload,
-    ReplyReference, UserProfileUpdate,
+    ReplyReference, StreamCaptureTargetsRequestId, UserProfileUpdate,
 };
 pub use commands::{
     MAX_PROFILE_AVATAR_BYTES, MAX_UPLOAD_ATTACHMENT_COUNT, MAX_UPLOAD_PREVIEW_BYTES,

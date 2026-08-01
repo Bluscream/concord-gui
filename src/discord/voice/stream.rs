@@ -1848,47 +1848,45 @@ impl H264StartupGate {
     }
 
     fn accept(&mut self, frame: Vec<u8>) -> Option<Vec<u8>> {
-        let (has_idr, has_sps, has_pps) = {
+        let has_idr = {
             let mut has_idr = false;
-            let mut has_sps = false;
-            let mut has_pps = false;
             for nal in annex_b_nals(&frame) {
                 match nal.first().map(|byte| byte & 0x1f) {
                     Some(5) => has_idr = true,
                     Some(7) => {
-                        has_sps = true;
                         self.sps = Some(nal.to_vec());
                     }
                     Some(8) => {
-                        has_pps = true;
                         self.pps = Some(nal.to_vec());
                     }
                     _ => {}
                 }
             }
-            (has_idr, has_sps, has_pps)
+            has_idr
         };
 
         if self.started {
             return Some(frame);
         }
-        if !has_idr {
+        if !has_idr || self.sps.is_none() || self.pps.is_none() {
             return None;
         }
 
         self.started = true;
-        if (has_sps || self.sps.is_none()) && (has_pps || self.pps.is_none()) {
-            return Some(frame);
-        }
-
         let mut startup_frame = Vec::new();
-        if !has_sps && let Some(sps) = self.sps.as_deref() {
-            append_annex_b_nal(&mut startup_frame, sps);
+        append_annex_b_nal(
+            &mut startup_frame,
+            self.sps.as_deref().expect("startup requires an SPS"),
+        );
+        append_annex_b_nal(
+            &mut startup_frame,
+            self.pps.as_deref().expect("startup requires a PPS"),
+        );
+        for nal in annex_b_nals(&frame) {
+            if !matches!(nal.first().map(|byte| byte & 0x1f), Some(7 | 8)) {
+                append_annex_b_nal(&mut startup_frame, nal);
+            }
         }
-        if !has_pps && let Some(pps) = self.pps.as_deref() {
-            append_annex_b_nal(&mut startup_frame, pps);
-        }
-        startup_frame.extend_from_slice(&frame);
         Some(startup_frame)
     }
 }
@@ -2484,6 +2482,23 @@ mod tests {
         assert_eq!(h264_nal_types(&startup), vec![7, 8, 5]);
         assert!(gate.is_started());
         assert_eq!(gate.accept(predicted.clone()), Some(predicted));
+    }
+
+    #[test]
+    fn stream_video_waits_for_parameter_sets_before_accepting_idr() {
+        let idr = vec![0, 0, 0, 1, 0x65, 0x44];
+        let parameter_sets = vec![0, 0, 0, 1, 0x67, 0x11, 0, 0, 0, 1, 0x68, 0x22];
+        let mut gate = H264StartupGate::default();
+
+        assert_eq!(gate.accept(idr.clone()), None);
+        assert!(!gate.is_started());
+        assert_eq!(gate.accept(parameter_sets), None);
+
+        let startup = gate
+            .accept(idr)
+            .expect("IDR should start after parameter sets arrive");
+        assert_eq!(h264_nal_types(&startup), vec![7, 8, 5]);
+        assert!(gate.is_started());
     }
 
     #[test]

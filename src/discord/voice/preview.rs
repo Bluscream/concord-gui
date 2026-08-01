@@ -1,7 +1,7 @@
-use std::time::Duration;
-
-#[cfg(feature = "stream-broadcast")]
-use std::time::Instant;
+use std::{
+    sync::{Arc, Mutex as StdMutex},
+    time::{Duration, Instant},
+};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use image::{
@@ -11,9 +11,8 @@ use image::{
 };
 use tokio::{sync::mpsc, task::JoinHandle, time::timeout};
 
-use crate::{discord::rest::DiscordRest, logging};
+use crate::{AppError, discord::rest::DiscordRest, logging};
 
-#[cfg(feature = "stream-broadcast")]
 const STREAM_PREVIEW_INTERVAL: Duration = Duration::from_secs(60);
 const STREAM_PREVIEW_UPLOAD_TIMEOUT: Duration = Duration::from_secs(10);
 const STREAM_PREVIEW_WIDTH: u32 = 640;
@@ -90,6 +89,12 @@ pub(super) fn encode_stream_preview_data_uri(frame: StreamPreviewFrame) -> Resul
 #[derive(Clone)]
 pub(crate) struct StreamPreviewUploader {
     rest: DiscordRest,
+    cadence: Arc<StdMutex<StreamPreviewUploadCadence>>,
+}
+
+#[derive(Default)]
+struct StreamPreviewUploadCadence {
+    next_attempt_at: Option<Instant>,
 }
 
 pub(super) struct StreamPreviewUploadTask {
@@ -98,7 +103,10 @@ pub(super) struct StreamPreviewUploadTask {
 
 impl StreamPreviewUploader {
     pub(crate) fn new(rest: DiscordRest) -> Self {
-        Self { rest }
+        Self {
+            rest,
+            cadence: Arc::new(StdMutex::new(StreamPreviewUploadCadence::default())),
+        }
     }
 
     pub(super) fn start(
@@ -133,6 +141,8 @@ impl StreamPreviewUploader {
                     }
                 };
 
+            self.wait_for_upload_slot().await;
+
             match timeout(
                 STREAM_PREVIEW_UPLOAD_TIMEOUT,
                 self.rest.upload_stream_preview(&stream_key, &thumbnail),
@@ -143,6 +153,12 @@ impl StreamPreviewUploader {
                     logging::debug("stream", "stream preview uploaded");
                 }
                 Ok(Err(error)) => {
+                    if let AppError::DiscordRateLimited {
+                        retry_after_millis, ..
+                    } = &error
+                    {
+                        self.defer_uploads(Duration::from_millis(*retry_after_millis));
+                    }
                     logging::debug("stream", format!("stream preview upload failed: {error}"));
                 }
                 Err(_) => {
@@ -150,6 +166,54 @@ impl StreamPreviewUploader {
                 }
             }
         }
+    }
+
+    async fn wait_for_upload_slot(&self) {
+        loop {
+            let delay = {
+                let mut cadence = self
+                    .cadence
+                    .lock()
+                    .expect("stream preview upload cadence lock is not poisoned");
+                let now = Instant::now();
+                let delay = cadence.delay(now);
+                if delay.is_zero() {
+                    cadence.record_attempt(now);
+                }
+                delay
+            };
+            if delay.is_zero() {
+                return;
+            }
+            tokio::time::sleep(delay).await;
+        }
+    }
+
+    fn defer_uploads(&self, delay: Duration) {
+        self.cadence
+            .lock()
+            .expect("stream preview upload cadence lock is not poisoned")
+            .defer(Instant::now(), delay);
+    }
+}
+
+impl StreamPreviewUploadCadence {
+    fn delay(&self, now: Instant) -> Duration {
+        self.next_attempt_at.map_or(Duration::ZERO, |deadline| {
+            deadline.saturating_duration_since(now)
+        })
+    }
+
+    fn record_attempt(&mut self, now: Instant) {
+        self.next_attempt_at = Some(now + STREAM_PREVIEW_INTERVAL);
+    }
+
+    fn defer(&mut self, now: Instant, delay: Duration) {
+        let deadline = now + delay;
+        self.next_attempt_at = Some(
+            self.next_attempt_at
+                .map_or(deadline, |current| current.max(deadline)),
+        );
     }
 }
 
@@ -186,6 +250,28 @@ mod tests {
         cadence.record_queued(started_at);
         assert!(!cadence.is_due(started_at + STREAM_PREVIEW_INTERVAL - Duration::from_millis(1)));
         assert!(cadence.is_due(started_at + STREAM_PREVIEW_INTERVAL));
+    }
+
+    #[test]
+    fn stream_preview_upload_cadence_uses_attempt_time_and_honors_retry_after() {
+        let started_at = Instant::now();
+        let mut cadence = StreamPreviewUploadCadence::default();
+
+        assert_eq!(cadence.delay(started_at), Duration::ZERO);
+        cadence.record_attempt(started_at);
+        assert_eq!(
+            cadence.delay(started_at + Duration::from_secs(30)),
+            Duration::from_secs(30)
+        );
+
+        cadence.defer(
+            started_at + Duration::from_secs(30),
+            Duration::from_secs(45),
+        );
+        assert_eq!(
+            cadence.delay(started_at + Duration::from_secs(60)),
+            Duration::from_secs(15)
+        );
     }
 
     #[test]
