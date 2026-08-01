@@ -25,6 +25,8 @@ installing through npm or the GitHub Release installer also need them.
 
 #### macOS
 
+Concord requires macOS 13 or later.
+
 ```sh
 xcode-select --install
 brew install opus pkg-config
