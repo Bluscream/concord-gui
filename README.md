@@ -20,56 +20,45 @@ Concord is a feature-rich TUI (terminal user interface) client for Discord, writ
 
 ### Prerequisites
 
-Cargo and source builds require the native dependencies below. Linux users
-installing through npm or the GitHub Release installer also need them.
+#### Linux runtime
+
+```sh
+# Fedora
+sudo dnf install alsa-lib opus pipewire-libs xdg-desktop-portal
+
+# Debian or Ubuntu
+sudo apt install libasound2 libopus0 libpipewire-0.3-0 xdg-desktop-portal
+
+# Arch Linux
+sudo pacman -S alsa-lib opus pipewire xdg-desktop-portal
+```
+
+Screen sharing requires the portal backend for your desktop environment.
 
 #### macOS
 
-Concord requires macOS 13 or later.
+macOS 13 or later is required.
+
+#### Source builds
 
 ```sh
+# macOS
 xcode-select --install
 brew install opus pkg-config
+brew install nasm # Intel only
+
+# Fedora
+sudo dnf install alsa-lib-devel clang-devel gcc gcc-c++ nasm opus-devel pipewire-devel pkgconf-pkg-config
+
+# Debian or Ubuntu
+sudo apt install build-essential libasound2-dev libclang-dev libopus-dev libpipewire-0.3-dev nasm pkg-config
+
+# Arch Linux
+sudo pacman -S alsa-lib base-devel clang nasm opus pipewire pkgconf
 ```
 
-Intel only:
-
-```sh
-brew install nasm
-```
-
-#### Fedora
-
-```sh
-sudo dnf install \
-  alsa-lib-devel \
-  clang-devel \
-  nasm \
-  opus-devel \
-  pipewire-devel \
-  pkgconf-pkg-config
-```
-
-#### Debian or Ubuntu
-
-```sh
-sudo apt install \
-  libasound2-dev \
-  libclang-dev \
-  libopus-dev \
-  libpipewire-0.3-dev \
-  nasm \
-  pkg-config
-```
-
-Linux screen sharing also requires the PipeWire client runtime configuration,
-XDG Desktop Portal, and the portal backend provided by your desktop environment.
-
-#### x86_64 Windows
-
-```powershell
-choco install nasm
-```
+Windows source builds require the MSVC Rust toolchain, Visual Studio 2022 Build
+Tools with Desktop development with C++, CMake, and NASM.
 
 ### Homebrew
 
@@ -103,9 +92,8 @@ To keep voice support while omitting stream broadcasting:
 cargo install concord --locked --no-default-features --features voice-playback
 ```
 
-This voice-only build needs only `opus-devel`, `alsa-lib-devel`, and
-`pkgconf-pkg-config` on Fedora, or `libopus-dev`, `libasound2-dev`, and
-`pkg-config` on Debian or Ubuntu.
+This voice-only build needs only `libopus-dev`, `libasound2-dev`, and
+`pkg-config`.
 
 To install without local voice playback, microphone, or stream broadcasting:
 
@@ -198,16 +186,6 @@ disable default features:
 
 ```sh
 cargo build --release --no-default-features
-```
-
-On WSLg, audio is usually exposed through PulseAudio instead of a real ALSA
-sound card. If playback does not start, check that PulseAudio and ALSA routing
-work before debugging Discord voice itself:
-
-```sh
-pactl info
-paplay /usr/share/sounds/alsa/Front_Center.wav
-aplay -D pulse /usr/share/sounds/alsa/Front_Center.wav
 ```
 
 ## Features
