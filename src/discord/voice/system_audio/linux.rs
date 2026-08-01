@@ -27,6 +27,7 @@ pub(super) const BACKEND_NAME: &str = "pipewire-process";
 
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PROCESS_ANCESTORS: usize = 32;
+const CPAL_PULSEAUDIO_APPLICATION_PREFIX: &str = "cpal-pulseaudio-";
 const PIPEWIRE_AUDIO_REQUESTED_LATENCY: &str = "960/48000";
 const PIPEWIRE_AUDIO_MAX_LATENCY: &str = "8192/48000";
 const PIPEWIRE_AUDIO_MAX_QUANTUM_FRAMES: usize = 8192;
@@ -68,6 +69,7 @@ struct AudioAssemblerWorker {
 struct OutputNode {
     client_id: Option<u32>,
     application_pid: Option<u32>,
+    security_pid: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -80,6 +82,11 @@ struct AudioPort {
 struct LinkedOutput {
     pairs: Vec<(u32, u32)>,
     _links: Vec<pw::link::Link>,
+}
+
+struct OutputNodePartition {
+    captured: Vec<(u32, u32)>,
+    excluded: Vec<(u32, u32)>,
 }
 
 #[derive(Default)]
@@ -402,9 +409,7 @@ fn run_capture(
             };
             match global.type_ {
                 pw::types::ObjectType::Client => {
-                    if let Some(pid) = property_pid(props, *pw::keys::APP_PROCESS_ID)
-                        .or_else(|| property_pid(props, *pw::keys::SEC_PID))
-                    {
+                    if let Some(pid) = client_process_id_from_properties(props) {
                         global_state.borrow_mut().clients.insert(global.id, pid);
                     }
                 }
@@ -415,13 +420,14 @@ fn run_capture(
                     let client_id = props
                         .get(*pw::keys::CLIENT_ID)
                         .and_then(|value| value.parse().ok());
-                    let application_pid = property_pid(props, *pw::keys::APP_PROCESS_ID)
-                        .or_else(|| property_pid(props, *pw::keys::SEC_PID));
+                    let application_pid = application_process_id_from_properties(props);
+                    let security_pid = property_pid(props, *pw::keys::SEC_PID);
                     global_state.borrow_mut().nodes.insert(
                         global.id,
                         OutputNode {
                             client_id,
                             application_pid,
+                            security_pid,
                         },
                     );
                 }
@@ -536,9 +542,30 @@ fn property_pid(props: &spa::utils::dict::DictRef, key: &str) -> Option<u32> {
     props.get(key)?.parse().ok()
 }
 
+fn application_process_id_from_properties(props: &spa::utils::dict::DictRef) -> Option<u32> {
+    property_pid(props, *pw::keys::APP_PROCESS_ID).or_else(|| {
+        props
+            .get(*pw::keys::APP_NAME)
+            .and_then(cpal_pulseaudio_process_id)
+    })
+}
+
+fn client_process_id_from_properties(props: &spa::utils::dict::DictRef) -> Option<u32> {
+    application_process_id_from_properties(props)
+        .or_else(|| property_pid(props, *pw::keys::SEC_PID))
+}
+
+fn cpal_pulseaudio_process_id(application_name: &str) -> Option<u32> {
+    application_name
+        .strip_prefix(CPAL_PULSEAUDIO_APPLICATION_PREFIX)?
+        .parse()
+        .ok()
+}
+
 fn resolve_node_pid(node: OutputNode, clients: &HashMap<u32, u32>) -> Option<u32> {
     node.application_pid
         .or_else(|| node.client_id.and_then(|id| clients.get(&id).copied()))
+        .or(node.security_pid)
 }
 
 fn process_matches(candidate: u32, target: u32) -> bool {
@@ -568,6 +595,31 @@ fn process_matches(candidate: u32, target: u32) -> bool {
     false
 }
 
+fn partition_output_nodes(
+    state: &RegistryState,
+    target_pid: u32,
+    mode: AudioProcessMode,
+) -> OutputNodePartition {
+    let mut captured = Vec::new();
+    let mut excluded = Vec::new();
+    for (node_id, node) in &state.nodes {
+        let Some(pid) = resolve_node_pid(*node, &state.clients) else {
+            continue;
+        };
+        let matches = process_matches(pid, target_pid);
+        let should_capture = match mode {
+            AudioProcessMode::Include => matches,
+            AudioProcessMode::Exclude => !matches,
+        };
+        if should_capture {
+            captured.push((*node_id, pid));
+        } else {
+            excluded.push((*node_id, pid));
+        }
+    }
+    OutputNodePartition { captured, excluded }
+}
+
 fn link_matching_outputs(
     core: &pw::core::CoreRc,
     stream: &pw::stream::StreamRc,
@@ -580,7 +632,7 @@ fn link_matching_outputs(
         return;
     }
 
-    let (input_ports, targets) = {
+    let (input_ports, targets, excluded) = {
         let state = state.borrow();
         let input_ports = state
             .ports
@@ -588,26 +640,26 @@ fn link_matching_outputs(
             .filter(|(_, port)| port.node_id == self_node_id && port.direction == "in")
             .map(|(id, port)| (*id, port.channel.clone()))
             .collect::<Vec<_>>();
-        let targets = state
-            .nodes
-            .iter()
-            .filter_map(|(node_id, node)| {
-                let pid = resolve_node_pid(*node, &state.clients)?;
-                let matches = process_matches(pid, target_pid);
-                match mode {
-                    AudioProcessMode::Include if matches => Some(*node_id),
-                    AudioProcessMode::Exclude if !matches => Some(*node_id),
-                    _ => None,
-                }
-            })
-            .collect::<Vec<_>>();
-        (input_ports, targets)
+        let partition = partition_output_nodes(&state, target_pid, mode);
+        (input_ports, partition.captured, partition.excluded)
     };
+
+    // PulseAudio compatibility clients may expose their application identity
+    // after the output node. Remove a link as soon as that late identity shows
+    // the node belongs to the process that must not be captured.
+    for (node_id, pid) in excluded {
+        if state.borrow_mut().links.remove(&node_id).is_some() {
+            logging::debug(
+                "stream",
+                format!("PipeWire system audio excluded output node: node_id={node_id} pid={pid}"),
+            );
+        }
+    }
     if input_ports.is_empty() {
         return;
     }
 
-    for node_id in targets {
+    for (node_id, pid) in targets {
         let output_ports = {
             let state = state.borrow();
             state
@@ -659,7 +711,7 @@ fn link_matching_outputs(
             );
             logging::debug(
                 "stream",
-                format!("PipeWire system audio linked output node: node_id={node_id}"),
+                format!("PipeWire system audio linked output node: node_id={node_id} pid={pid}"),
             );
         }
     }
@@ -741,6 +793,45 @@ mod tests {
         assert_eq!(captured.len(), sample_count);
         assert_eq!(ring.dropped_samples(), 0);
         assert_eq!(ring.maximum_push_samples(), sample_count);
-        assert!(AUDIO_SAMPLE_RING_CAPACITY - 1 >= sample_count * 2);
+        assert!(AUDIO_SAMPLE_RING_CAPACITY > sample_count * 2);
+    }
+
+    #[test]
+    fn cpal_pulseaudio_name_recovers_the_application_process_id() {
+        assert_eq!(
+            cpal_pulseaudio_process_id("cpal-pulseaudio-79983"),
+            Some(79_983)
+        );
+        assert_eq!(cpal_pulseaudio_process_id("cpal-pulseaudio-"), None);
+        assert_eq!(cpal_pulseaudio_process_id("cpal-pulseaudio-invalid"), None);
+        assert_eq!(cpal_pulseaudio_process_id("another-client-79983"), None);
+    }
+
+    #[test]
+    fn output_partition_excludes_a_matching_process_after_identity_arrives() {
+        let target_pid = std::process::id();
+        let mut state = RegistryState::default();
+        state.clients.insert(30, target_pid);
+        state.nodes.insert(
+            10,
+            OutputNode {
+                client_id: Some(30),
+                application_pid: None,
+                security_pid: Some(1),
+            },
+        );
+        state.nodes.insert(
+            20,
+            OutputNode {
+                client_id: None,
+                application_pid: None,
+                security_pid: None,
+            },
+        );
+
+        let partition = partition_output_nodes(&state, target_pid, AudioProcessMode::Exclude);
+
+        assert!(partition.captured.is_empty());
+        assert_eq!(partition.excluded, vec![(10, target_pid)]);
     }
 }
