@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     sync::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicU32, Ordering},
@@ -159,13 +159,14 @@ pub(super) struct StreamBroadcastRuntimeUpdate {
 }
 
 struct PreparedBroadcastCapture {
+    request_id: u64,
     capture: capture::PreparedStreamCapture,
     preview_task: Option<StreamPreviewUploadTask>,
 }
 
 #[derive(Default)]
 struct StreamBroadcastCaptureRegistryState {
-    active_streams: HashSet<String>,
+    active_requests: HashMap<String, u64>,
     captures: HashMap<String, PreparedBroadcastCapture>,
 }
 
@@ -175,21 +176,24 @@ pub(super) struct StreamBroadcastCaptureRegistry {
 }
 
 impl StreamBroadcastCaptureRegistry {
-    pub(super) fn activate(&self, stream_key: String) {
+    pub(super) fn activate(&self, stream_key: String, request_id: u64) {
         let mut state = self
             .state
             .lock()
             .expect("stream capture registry lock is not poisoned");
-        state.active_streams.insert(stream_key);
+        state.active_requests.insert(stream_key, request_id);
     }
 
     pub(super) fn prepare(
         &self,
         stream_key: String,
+        request_id: u64,
         target: super::StreamCaptureTarget,
+        cancellation: capture::StreamCaptureCancellation,
     ) -> Result<bool, String> {
-        let capture = capture::prepare_stream_capture(target)?;
+        let capture = capture::prepare_stream_capture(target, cancellation)?;
         let prepared = PreparedBroadcastCapture {
+            request_id,
             capture,
             preview_task: None,
         };
@@ -197,7 +201,7 @@ impl StreamBroadcastCaptureRegistry {
             .state
             .lock()
             .expect("stream capture registry lock is not poisoned");
-        if !state.active_streams.contains(&stream_key) {
+        if state.active_requests.get(&stream_key) != Some(&request_id) {
             return Ok(false);
         }
         state.captures.insert(stream_key, prepared);
@@ -205,11 +209,13 @@ impl StreamBroadcastCaptureRegistry {
     }
 
     fn take(&self, stream_key: &str) -> Option<PreparedBroadcastCapture> {
-        self.state
+        let mut state = self
+            .state
             .lock()
-            .expect("stream capture registry lock is not poisoned")
-            .captures
-            .remove(stream_key)
+            .expect("stream capture registry lock is not poisoned");
+        let active_request_id = *state.active_requests.get(stream_key)?;
+        let prepared = state.captures.remove(stream_key)?;
+        (prepared.request_id == active_request_id).then_some(prepared)
     }
 
     fn restore(
@@ -221,7 +227,7 @@ impl StreamBroadcastCaptureRegistry {
             .state
             .lock()
             .expect("stream capture registry lock is not poisoned");
-        if !state.active_streams.contains(&stream_key) {
+        if state.active_requests.get(&stream_key) != Some(&prepared.request_id) {
             return Err(prepared);
         }
         state.captures.insert(stream_key, prepared);
@@ -233,8 +239,18 @@ impl StreamBroadcastCaptureRegistry {
             .state
             .lock()
             .expect("stream capture registry lock is not poisoned");
-        state.active_streams.remove(stream_key);
+        state.active_requests.remove(stream_key);
         state.captures.remove(stream_key);
+    }
+
+    #[cfg(test)]
+    fn is_active(&self, stream_key: &str, request_id: u64) -> bool {
+        self.state
+            .lock()
+            .expect("stream capture registry lock is not poisoned")
+            .active_requests
+            .get(stream_key)
+            .is_some_and(|active| *active == request_id)
     }
 }
 
@@ -261,7 +277,9 @@ impl StreamBroadcastRuntimeState {
                 self.server = None;
             }
             VoiceRuntimeEvent::BroadcastStreamCaptureReady { .. } => {}
-            VoiceRuntimeEvent::BroadcastStreamCaptureFailed { stream_key, error } => {
+            VoiceRuntimeEvent::BroadcastStreamCaptureFailed {
+                stream_key, error, ..
+            } => {
                 if self
                     .requested
                     .as_ref()
@@ -2116,6 +2134,19 @@ mod tests {
                 title: "Screen: Display".to_owned(),
             },
         }
+    }
+
+    #[test]
+    fn newer_capture_request_invalidates_the_previous_generation() {
+        let registry = StreamBroadcastCaptureRegistry::default();
+        let stream_key = "guild:10:20:30";
+
+        registry.activate(stream_key.to_owned(), 1);
+        assert!(registry.is_active(stream_key, 1));
+
+        registry.activate(stream_key.to_owned(), 2);
+        assert!(!registry.is_active(stream_key, 1));
+        assert!(registry.is_active(stream_key, 2));
     }
 
     fn session() -> StreamBroadcastGatewaySession {

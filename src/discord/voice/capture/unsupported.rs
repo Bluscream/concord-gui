@@ -1,4 +1,4 @@
-use std::sync::mpsc::Receiver;
+use std::sync::{atomic::AtomicBool, mpsc::Receiver};
 
 use super::CaptureFrame;
 use crate::discord::voice::StreamCaptureTarget;
@@ -11,6 +11,7 @@ pub(super) fn list_targets() -> Result<Vec<StreamCaptureTarget>, String> {
 
 pub(super) fn start_capture(
     _target: &StreamCaptureTarget,
+    _stop: &AtomicBool,
 ) -> Result<(CaptureSession, Receiver<Result<CaptureFrame, String>>), String> {
     Err("screen capture is unsupported on this operating system".to_owned())
 }

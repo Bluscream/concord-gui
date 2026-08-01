@@ -339,9 +339,11 @@ pub(crate) enum VoiceRuntimeEvent {
     },
     BroadcastStreamRequested(StreamBroadcastRequest),
     BroadcastStreamCaptureReady {
+        request_id: u64,
         stream_key: String,
     },
     BroadcastStreamCaptureFailed {
+        request_id: u64,
         stream_key: String,
         error: String,
     },

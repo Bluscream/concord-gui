@@ -6,7 +6,7 @@ use std::{
         mpsc::{self, Receiver, SyncSender, TrySendError},
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use ashpd::desktop::{
@@ -27,6 +27,7 @@ use crate::{
 
 const FRAME_QUEUE_CAPACITY: usize = 2;
 const START_TIMEOUT: Duration = Duration::from_secs(5);
+const CANCEL_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub(super) struct CaptureSession {
     stop_tx: pw::channel::Sender<()>,
@@ -62,6 +63,7 @@ pub(super) fn list_targets() -> Result<Vec<StreamCaptureTarget>, String> {
 
 pub(super) fn start_capture(
     target: &StreamCaptureTarget,
+    stop: &AtomicBool,
 ) -> Result<(CaptureSession, Receiver<Result<CaptureFrame, String>>), String> {
     if target.kind != StreamCaptureTargetKind::Portal {
         return Err("Linux screen sharing requires a portal capture target".to_owned());
@@ -71,7 +73,7 @@ pub(super) fn start_capture(
         .enable_all()
         .build()
         .map_err(|error| format!("screen cast portal runtime creation failed: {error}"))?;
-    let portal = runtime.block_on(open_portal())?;
+    let portal = runtime.block_on(open_portal(stop))?;
     let PortalCapture {
         session: portal_session,
         stream,
@@ -109,8 +111,8 @@ pub(super) fn start_capture(
         }
     };
 
-    match ready_rx.recv_timeout(START_TIMEOUT) {
-        Ok(Ok(())) => Ok((
+    match wait_for_pipewire_start(&ready_rx, stop) {
+        Ok(()) => Ok((
             CaptureSession {
                 stop_tx,
                 stopping,
@@ -120,17 +122,36 @@ pub(super) fn start_capture(
             },
             frames_rx,
         )),
-        Ok(Err(error)) => {
-            let _ = worker.join();
-            let _ = runtime.block_on(portal_session.close());
-            Err(error)
-        }
-        Err(_) => {
+        Err(error) => {
             stopping.store(true, Ordering::Release);
             let _ = stop_tx.send(());
             let _ = worker.join();
             let _ = runtime.block_on(portal_session.close());
-            Err("PipeWire video capture did not start in time".to_owned())
+            Err(error)
+        }
+    }
+}
+
+fn wait_for_pipewire_start(
+    ready_rx: &Receiver<Result<(), String>>,
+    stop: &AtomicBool,
+) -> Result<(), String> {
+    let deadline = Instant::now() + START_TIMEOUT;
+    loop {
+        if stop.load(Ordering::Acquire) {
+            return Err("screen cast portal selection was cancelled".to_owned());
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Err("PipeWire video capture did not start in time".to_owned());
+        }
+        let wait = (deadline - now).min(Duration::from_millis(20));
+        match ready_rx.recv_timeout(wait) {
+            Ok(result) => return result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("PipeWire video capture stopped during startup".to_owned());
+            }
         }
     }
 }
@@ -159,53 +180,74 @@ impl CaptureSession {
     }
 }
 
-async fn open_portal() -> Result<PortalCapture, String> {
+async fn open_portal(stop: &AtomicBool) -> Result<PortalCapture, String> {
+    let cancellation = wait_for_capture_cancellation(stop);
+    tokio::pin!(cancellation);
     logging::debug("stream", "connecting to screen cast portal");
     // The default ashpd proxy caches its D-Bus connection process-wide. Our
     // capture runtime is per session, so that cached connection stops being
     // driven after the first runtime is dropped. Bind a fresh connection to
     // each capture runtime so later broadcasts can open another portal.
-    let connection = ashpd::zbus::Connection::session()
-        .await
-        .map_err(|error| format!("screen cast portal connection failed: {error}"))?;
-    let proxy = Screencast::with_connection(connection)
-        .await
-        .map_err(|error| format!("screen cast portal proxy creation failed: {error}"))?;
+    let connection = tokio::select! {
+        _ = &mut cancellation => return Err("screen cast portal selection was cancelled".to_owned()),
+        result = ashpd::zbus::Connection::session() => result
+            .map_err(|error| format!("screen cast portal connection failed: {error}"))?,
+    };
+    let proxy = tokio::select! {
+        _ = &mut cancellation => return Err("screen cast portal selection was cancelled".to_owned()),
+        result = Screencast::with_connection(connection) => result
+            .map_err(|error| format!("screen cast portal proxy creation failed: {error}"))?,
+    };
     logging::debug("stream", "screen cast portal connected");
-    let session = proxy
-        .create_session(Default::default())
-        .await
-        .map_err(|error| format!("screen cast portal session creation failed: {error}"))?;
+    let session = tokio::select! {
+        _ = &mut cancellation => return Err("screen cast portal selection was cancelled".to_owned()),
+        result = proxy.create_session(Default::default()) => result
+            .map_err(|error| format!("screen cast portal session creation failed: {error}"))?,
+    };
     logging::debug("stream", "screen cast portal session created");
-    proxy
-        .select_sources(
-            &session,
-            SelectSourcesOptions::default()
-                .set_cursor_mode(CursorMode::Embedded)
-                .set_sources(SourceType::Monitor | SourceType::Window)
-                .set_multiple(false)
-                .set_persist_mode(PersistMode::DoNot),
-        )
-        .await
-        .map_err(|error| format!("screen cast source selection failed: {error}"))?;
+    let select_sources = proxy.select_sources(
+        &session,
+        SelectSourcesOptions::default()
+            .set_cursor_mode(CursorMode::Embedded)
+            .set_sources(SourceType::Monitor | SourceType::Window)
+            .set_multiple(false)
+            .set_persist_mode(PersistMode::DoNot),
+    );
+    tokio::select! {
+        _ = &mut cancellation => {
+            close_cancelled_portal_session(&session).await;
+            return Err("screen cast portal selection was cancelled".to_owned());
+        }
+        result = select_sources => result
+            .map_err(|error| format!("screen cast source selection failed: {error}"))?,
+    };
     logging::debug("stream", "waiting for screen cast portal source selection");
 
-    let response = proxy
-        .start(&session, None, Default::default())
-        .await
-        .map_err(|error| format!("screen cast portal start request failed: {error}"))?
-        .response()
-        .map_err(|error| format!("screen cast portal start failed: {error}"))?;
+    let start = proxy.start(&session, None, Default::default());
+    let response = tokio::select! {
+        _ = &mut cancellation => {
+            close_cancelled_portal_session(&session).await;
+            return Err("screen cast portal selection was cancelled".to_owned());
+        }
+        result = start => result
+            .map_err(|error| format!("screen cast portal start request failed: {error}"))?
+            .response()
+            .map_err(|error| format!("screen cast portal start failed: {error}"))?,
+    };
     logging::debug("stream", "screen cast portal source selected");
     let stream = response
         .streams()
         .first()
         .cloned()
         .ok_or_else(|| "screen cast portal returned no selected source".to_owned())?;
-    let remote_fd = proxy
-        .open_pipe_wire_remote(&session, Default::default())
-        .await
-        .map_err(|error| format!("screen cast PipeWire remote open failed: {error}"))?;
+    let remote_fd = tokio::select! {
+        _ = &mut cancellation => {
+            close_cancelled_portal_session(&session).await;
+            return Err("screen cast portal selection was cancelled".to_owned());
+        }
+        result = proxy.open_pipe_wire_remote(&session, Default::default()) => result
+            .map_err(|error| format!("screen cast PipeWire remote open failed: {error}"))?,
+    };
     logging::debug("stream", "screen cast PipeWire remote opened");
 
     Ok(PortalCapture {
@@ -213,6 +255,26 @@ async fn open_portal() -> Result<PortalCapture, String> {
         stream,
         remote_fd,
     })
+}
+
+async fn wait_for_capture_cancellation(stop: &AtomicBool) {
+    while !stop.load(Ordering::Acquire) {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+async fn close_cancelled_portal_session(session: &Session<Screencast>) {
+    match tokio::time::timeout(CANCEL_CLOSE_TIMEOUT, session.close()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => logging::debug(
+            "stream",
+            format!("cancelled screen cast portal session close failed: {error}"),
+        ),
+        Err(_) => logging::debug(
+            "stream",
+            "cancelled screen cast portal session close timed out",
+        ),
+    }
 }
 
 fn run_pipewire_capture(
@@ -489,5 +551,22 @@ fn send_latest(
     }
     match frames_tx.try_send(frame) {
         Ok(()) | Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn pending_portal_wait_observes_capture_cancellation() {
+        let stop = AtomicBool::new(true);
+
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            wait_for_capture_cancellation(&stop),
+        )
+        .await
+        .expect("capture cancellation should wake the portal wait");
     }
 }

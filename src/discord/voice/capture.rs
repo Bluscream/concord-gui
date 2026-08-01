@@ -73,6 +73,11 @@ pub(super) struct StreamCaptureHandle {
     worker: Option<JoinHandle<()>>,
 }
 
+#[derive(Clone, Default)]
+pub(super) struct StreamCaptureCancellation {
+    cancelled: Arc<AtomicBool>,
+}
+
 pub(super) struct PreparedStreamCapture {
     pub(super) handle: StreamCaptureHandle,
     pub(super) frames: mpsc::Receiver<Result<EncodedStreamFrame, String>>,
@@ -535,6 +540,21 @@ impl StreamCaptureHandle {
     }
 }
 
+impl StreamCaptureCancellation {
+    pub(super) fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+
+    fn flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.cancelled)
+    }
+}
+
 pub(crate) fn list_stream_capture_targets() -> Result<Vec<StreamCaptureTarget>, String> {
     let mut targets = platform::list_targets()?;
 
@@ -553,12 +573,13 @@ pub(crate) fn list_stream_capture_targets() -> Result<Vec<StreamCaptureTarget>, 
 
 pub(super) fn prepare_stream_capture(
     target: StreamCaptureTarget,
+    cancellation: StreamCaptureCancellation,
 ) -> Result<PreparedStreamCapture, String> {
     let (frames_tx, frames) = mpsc::channel(2);
     let (preview_frames_tx, preview_frames) = mpsc::channel(1);
     let (errors_tx, errors) = mpsc::unbounded_channel();
     let (ready_tx, ready_rx) = sync_channel(1);
-    let stop = Arc::new(AtomicBool::new(false));
+    let stop = cancellation.flag();
     let force_keyframe = Arc::new(AtomicBool::new(false));
     let worker_stop = Arc::clone(&stop);
     let worker_force_keyframe = Arc::clone(&force_keyframe);
@@ -624,7 +645,7 @@ fn run_capture_loop(
     force_keyframe: &AtomicBool,
     ready_tx: SyncSender<Result<(), String>>,
 ) -> Result<(), String> {
-    let source = resolve_capture_source(target)?;
+    let source = resolve_capture_source(target, stop)?;
     let Some(mut image) = source.wait_for_initial_image(stop)? else {
         return Ok(());
     };
@@ -754,8 +775,11 @@ fn stream_encoder_config() -> EncoderConfig {
         .vui(VuiConfig::bt709())
 }
 
-fn resolve_capture_source(target: &StreamCaptureTarget) -> Result<CaptureSource, String> {
-    let (session, frames) = platform::start_capture(target)?;
+fn resolve_capture_source(
+    target: &StreamCaptureTarget,
+    stop: &AtomicBool,
+) -> Result<CaptureSource, String> {
+    let (session, frames) = platform::start_capture(target, stop)?;
     logging::debug("stream", "native continuous capture started");
     Ok(CaptureSource { session, frames })
 }

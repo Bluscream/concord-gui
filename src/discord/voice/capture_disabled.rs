@@ -18,6 +18,9 @@ pub(super) struct EncodedStreamFrame {
 
 pub(super) struct StreamCaptureHandle;
 
+#[derive(Clone, Default)]
+pub(super) struct StreamCaptureCancellation;
+
 pub(super) struct PreparedStreamCapture {
     pub(super) handle: StreamCaptureHandle,
     pub(super) frames: mpsc::Receiver<Result<EncodedStreamFrame, String>>,
@@ -35,12 +38,24 @@ impl StreamCaptureHandle {
     }
 }
 
+impl StreamCaptureCancellation {
+    pub(super) fn cancel(&self) {
+        // Disabled builds never start a capture preparation task.
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_cancelled(&self) -> bool {
+        true
+    }
+}
+
 pub(crate) fn list_stream_capture_targets() -> Result<Vec<StreamCaptureTarget>, String> {
     Err(STREAM_BROADCAST_FEATURE_DISABLED.to_owned())
 }
 
 pub(super) fn prepare_stream_capture(
     _target: StreamCaptureTarget,
+    _cancellation: StreamCaptureCancellation,
 ) -> Result<PreparedStreamCapture, String> {
     Err(STREAM_BROADCAST_FEATURE_DISABLED.to_owned())
 }

@@ -3,6 +3,7 @@ use std::{
     mem, slice,
     sync::{
         Arc, LazyLock, Mutex,
+        atomic::AtomicBool,
         mpsc::{self, Receiver, SyncSender, TrySendError},
     },
 };
@@ -111,6 +112,7 @@ pub(super) fn list_targets() -> Result<Vec<StreamCaptureTarget>, String> {
 
 pub(super) fn start_capture(
     target: &StreamCaptureTarget,
+    _stop: &AtomicBool,
 ) -> Result<(CaptureSession, Receiver<Result<CaptureFrame, String>>), String> {
     let apartment = WinRtApartment::initialize()?;
     let item = capture_item(target)?;

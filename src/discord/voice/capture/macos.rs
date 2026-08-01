@@ -1,6 +1,9 @@
 use std::{
     slice,
-    sync::mpsc::{self, Receiver, SyncSender, TrySendError},
+    sync::{
+        atomic::AtomicBool,
+        mpsc::{self, Receiver, SyncSender, TrySendError},
+    },
 };
 
 use block2::{DynBlock, RcBlock};
@@ -90,6 +93,7 @@ pub(super) fn list_targets() -> Result<Vec<StreamCaptureTarget>, String> {
 
 pub(super) fn start_capture(
     target: &StreamCaptureTarget,
+    _stop: &AtomicBool,
 ) -> Result<(CaptureSession, Receiver<Result<CaptureFrame, String>>), String> {
     let content = shareable_content()?;
     let (filter, width, height) = capture_filter(&content, target)?;
