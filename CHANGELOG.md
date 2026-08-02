@@ -2,7 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.5.0] - 2026-08-02
+## [2.5.1] - 2026-08-02
+
+### Bug Fixes
+
+- _(stream)_ Fix Windows broadcasts stopping when captured content outgrows the D3D11 frame pool by @chojs23
+- Unify stream toggle command naming by @chojs23
+- _(test)_ Fix no-default-features build by @chojs23
+- _(stream)_ Fix stream freezes caused by backward audio RTP timestamps (#289) in [#289](https://github.com/chojs23/concord/pull/289) by @chojs23
+- _(nix)_ Patch PipeWire bindgen fallbacks for immutable vendor sources (#292) in [#292](https://github.com/chojs23/concord/pull/292) by @chojs23
+- Filter muted channel in inbox (#293) in [#293](https://github.com/chojs23/concord/pull/293) by @chojs23
+
+### Documentation
+
+- Update readme by @chojs23
+- Add gentoo installation instructions to README (#286) in [#286](https://github.com/chojs23/concord/pull/286) by @darwincereska
+- Update README by @chojs23
+
+### Features
+
+- _(voice)_ Add selectable input and output audio sources (#287) in [#287](https://github.com/chojs23/concord/pull/287) by @chojs23
+
+### Miscellaneous Tasks
+
+- Update descriptions and docs by @chojs23
+
+### New Contributors
+
+- @darwincereska made their first contribution in [#286](https://github.com/chojs23/concord/pull/286)
+
+## [2.5.0] - 2026-08-01
 
 ### Bug Fixes
 
