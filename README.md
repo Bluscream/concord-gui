@@ -113,32 +113,9 @@ Install the packaged release from nixpkgs:
 
 ```sh
 nix profile install nixpkgs#concord-tui
-```
 
-Run the packaged release without installing:
-
-```sh
-nix run nixpkgs#concord-tui
-```
-
-Run the latest release without installing (requires flakes enabled):
-
-```sh
-nix run github:chojs23/concord
-```
-
-Install into your profile:
-
-```sh
+# Or install the latest release from the GitHub flake (requires flakes enabled):
 nix profile install github:chojs23/concord
-```
-
-Or add the flake as an input in your own `flake.nix`:
-
-```nix
-{
-  inputs.concord.url = "github:chojs23/concord";
-}
 ```
 
 ### GitHub Release installer
@@ -161,6 +138,7 @@ The installer places `concord` under `$CARGO_HOME/bin`, which is usually
 ### Gentoo (community overlay)
 
 This package is maintained by a community contributor and is not yet available in Gentoo GURU.
+
 Install the `darwincereska` overlay:
 
 ```sh
@@ -188,12 +166,6 @@ the Prerequisites section.
 git clone https://github.com/chojs23/concord.git
 cd concord
 cargo build --release
-```
-
-The release binary is produced at:
-
-```sh
-target/release/concord
 ```
 
 To keep voice support while omitting stream broadcasting:
@@ -283,18 +255,13 @@ Checkout [compatibility-matrix](https://github.com/ratatui/ratatui-image#compati
 
 You can toggle image viewing on or off in the configuration file. When image viewing is off, attachments and emojis will be shown as text placeholders.
 
-Video and audio playback uses [mpv](https://mpv.io/). Make sure `mpv` is installed and in your PATH.
+External media playback is off by default. You can enable it with Display options menu.
+Video & audio playback and watch live stream uses [mpv](https://mpv.io/). Make sure `mpv` is installed and in your PATH.
 YouTube playback depends on your local `mpv` setup, such as `yt-dlp` support.
-External media playback is off by default. You can enable it with
-`media_playback = true` under `[display]`, or toggle it from the in-app Display
-options menu.
-
-Watch live streaming also uses mpv. Join the streamer's voice channel, focus the
-streaming participant, and choose `Watch stream`.
 
 To broadcast, join a voice channel, open its channel actions, choose
-`Share screen`, then select a whole display or one window. The default `<leader>vs` voice
-shortcut performs the same toggle. Linux screen capture depends on the active X11 or Wayland support.
+`Share screen` or use `<leader>vs` voice shortcut.
+Linux screen capture depends on the active X11 or Wayland support.
 
 ### Members & Profiles
 
@@ -371,12 +338,12 @@ Press `Space` to open the leader shortcut window.
 
 Voice commands:
 
-| Key sequence         | Action                      |
-| -------------------- | --------------------------- |
-| `Space`, `v`, `d`    | Toggle voice deafen         |
-| `Space`, `v`, `m`    | Toggle microphone mute      |
-| `Space`, `v`, `s`    | Toggle screen share         |
-| `Space`, `v`, `l`    | Leave the current voice call |
+| Key sequence      | Action                       |
+| ----------------- | ---------------------------- |
+| `Space`, `v`, `d` | Toggle voice deafen          |
+| `Space`, `v`, `m` | Toggle microphone mute       |
+| `Space`, `v`, `s` | Toggle screen share          |
+| `Space`, `v`, `l` | Leave the current voice call |
 
 #### Action menus
 
@@ -520,8 +487,7 @@ state directory instead. If `XDG_STATE_HOME` is set, Concord uses
 `~/.local/state/concord/state.toml` and
 `~/.local/state/concord/credentials.toml`.
 
-You can change some configuration from the in-app Options menu, and Concord saves them back
-to `config.toml`. Key settings are read from `keymap.toml`, and colors are read from `theme.toml`.
+Key settings are read from `keymap.toml`, and colors are read from `theme.toml`.
 
 <details>
 <summary>Default config</summary>
