@@ -657,7 +657,7 @@ OpenNotificationInbox = "<leader>n"
 ChannelSwitcher = "<leader><leader>"
 VoiceDeafen = "<leader>vd"
 VoiceMute = "<leader>vm"
-VoiceStream = "<leader>vs"
+ToggleStream = "<leader>vs"
 VoiceLeave = "<leader>vl"
 
 [keymap.groups]

@@ -13,7 +13,7 @@ ClosePopup = "q"
 ReplyMessage = "<leader>mr"
 VoiceDeafen = "<leader>vd"
 VoiceMute = "<leader>vm"
-VoiceStream = "<leader>vs"
+ToggleStream = "<leader>vs"
 VoiceLeave = "<leader>vl"
 
 [keymap.groups]
@@ -182,7 +182,7 @@ Pane, options, and voice actions:
 | `OpenVoiceOptions`        | Contextual `v` after `OpenOptions` | Open Voice options.                          |
 | `VoiceDeafen`             | `"<leader>vd"`                     | Toggle voice deafen.                         |
 | `VoiceMute`               | `"<leader>vm"`                     | Toggle voice mute.                           |
-| `VoiceStream`             | `"<leader>vs"`                     | Start or stop screen sharing.                |
+| `ToggleStream`            | `"<leader>vs"`                     | Start or stop screen sharing.                |
 | `VoiceLeave`              | `"<leader>vl"`                     | Leave the current Concord voice channel.     |
 
 Profile popup shortcuts are fixed once `OpenCurrentUserProfile` opens your

@@ -152,7 +152,7 @@ fn default_keymap_uses_leader_v_voice_group() {
             &prefix,
             KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE)
         ),
-        Some(KeyMapLookup::Action(UiAction::VoiceStream))
+        Some(KeyMapLookup::Action(UiAction::ToggleStream))
     );
     assert!(
         key_bindings

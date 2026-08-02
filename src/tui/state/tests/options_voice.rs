@@ -36,7 +36,7 @@ fn current_voice_stream_leader_label(state: &mut DashboardState) -> String {
     state
         .leader_keymap_shortcuts()
         .into_iter()
-        .find(|item| item.action == Some(UiAction::VoiceStream))
+        .find(|item| item.action == Some(UiAction::ToggleStream))
         .expect("voice stream shortcut is present")
         .label
 }

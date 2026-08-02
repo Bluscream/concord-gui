@@ -1418,8 +1418,8 @@ impl DashboardState {
             .key_bindings
             .leader_keymap_children(self.leader_keymap_prefix());
         for shortcut in &mut shortcuts {
-            if shortcut.action == Some(UiAction::VoiceStream)
-                && shortcut.label == UiAction::VoiceStream.label()
+            if shortcut.action == Some(UiAction::ToggleStream)
+                && shortcut.label == UiAction::ToggleStream.label()
             {
                 shortcut.label = self.current_voice_stream_action_label().to_owned();
             }

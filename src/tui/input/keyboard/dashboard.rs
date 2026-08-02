@@ -155,7 +155,7 @@ pub(super) fn execute_ui_action(
         }
         UiAction::VoiceDeafen => state.toggle_voice_deafen(),
         UiAction::VoiceMute => state.toggle_voice_mute(),
-        UiAction::VoiceStream => return state.toggle_current_voice_stream_command(),
+        UiAction::ToggleStream => return state.toggle_current_voice_stream_command(),
         UiAction::VoiceLeave => return state.leave_current_voice_channel_command(),
         _ => {}
     }
