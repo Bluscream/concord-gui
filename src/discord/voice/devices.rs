@@ -16,6 +16,12 @@ pub(crate) type VoiceAudioSourceList = Vec<(String, String)>;
 /// `None` keeps the system default. CPAL 0.18 device ids are preferred over
 /// display names because names may be duplicated while ids are intended to
 /// remain stable across application restarts.
+///
+/// A selected id is kept even when the device is not currently enumerated, so
+/// that a headset which is merely powered off keeps its slot. Everything that
+/// consumes a selection treats an unknown id as the system default:
+/// `source_label` shows it as such, `adjust_source` cycles from that position,
+/// and `resolve_device` opens the default device.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct VoiceAudioSources {
     pub input: Option<String>,
@@ -49,12 +55,6 @@ impl VoiceAudioSourceOptions {
 
     pub(crate) fn adjust_output(&self, selected: &mut Option<String>, delta: i8) -> bool {
         adjust_source(selected, &self.outputs, delta)
-    }
-
-    pub(crate) fn normalize(&self, selected: &mut VoiceAudioSources) -> bool {
-        let input_changed = normalize_source(&mut selected.input, &self.inputs);
-        let output_changed = normalize_source(&mut selected.output, &self.outputs);
-        input_changed || output_changed
     }
 
     pub(crate) fn into_parts(self) -> (VoiceAudioSourceList, VoiceAudioSourceList) {
@@ -146,24 +146,16 @@ fn source_label(selected: Option<&str>, sources: &[VoiceAudioSource]) -> String 
         .unwrap_or_else(|| SYSTEM_DEFAULT_AUDIO_SOURCE.to_owned())
 }
 
-fn normalize_source(selected: &mut Option<String>, sources: &[VoiceAudioSource]) -> bool {
-    if selected
-        .as_ref()
-        .is_some_and(|selected| !sources.iter().any(|source| source.id == *selected))
-    {
-        *selected = None;
-        true
-    } else {
-        false
-    }
-}
-
 fn adjust_source(selected: &mut Option<String>, sources: &[VoiceAudioSource], delta: i8) -> bool {
     if delta == 0 {
         return false;
     }
+    // An empty list means enumeration saw nothing at all, which happens on
+    // builds without the `voice-playback` feature and while an audio server is
+    // restarting. There is nothing to cycle through, and clearing the saved id
+    // would throw away a choice that works again once devices come back.
     if sources.is_empty() {
-        return selected.take().is_some();
+        return false;
     }
     let choice_count = sources.len() + 1;
     let current = selected
@@ -314,12 +306,12 @@ mod tests {
 
         let no_sources = VoiceAudioSourceOptions::default();
         input = Some("disconnected".to_owned());
-        assert!(no_sources.adjust_input(&mut input, 1));
-        assert_eq!(input, None);
+        assert!(!no_sources.adjust_input(&mut input, 1));
+        assert_eq!(input.as_deref(), Some("disconnected"));
     }
 
     #[test]
-    fn audio_source_options_normalize_missing_ids_and_sanitize_labels() {
+    fn unknown_source_ids_read_as_the_system_default_and_labels_are_sanitized() {
         let options = VoiceAudioSourceOptions::from_parts(
             vec![(
                 "mic-1".to_owned(),
@@ -327,17 +319,16 @@ mod tests {
             )],
             Vec::new(),
         );
-        let mut selected = VoiceAudioSources {
-            input: Some("missing-mic".to_owned()),
-            output: Some("missing-output".to_owned()),
-        };
 
-        assert!(options.normalize(&mut selected));
-        assert_eq!(selected, VoiceAudioSources::default());
         assert_eq!(
-            sanitize_audio_source_label(" Desk\n\u{1b}[31m microphone "),
-            "Desk [31m microphone"
+            options.input_label(Some("missing-mic")),
+            SYSTEM_DEFAULT_AUDIO_SOURCE
         );
+        assert_eq!(
+            options.output_label(Some("missing-output")),
+            SYSTEM_DEFAULT_AUDIO_SOURCE
+        );
+        assert_eq!(options.input_label(Some("mic-1")), "Desk [31m microphone");
         assert_eq!(sanitize_audio_source_label("\n\t"), UNKNOWN_AUDIO_SOURCE);
         let bounded = sanitize_audio_source_label(&"a".repeat(200));
         assert_eq!(bounded.chars().count(), MAX_AUDIO_SOURCE_LABEL_CHARS);

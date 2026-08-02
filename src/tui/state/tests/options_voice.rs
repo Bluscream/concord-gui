@@ -278,7 +278,7 @@ fn voice_option_toggles_queue_current_voice_state_update_when_joined() {
 }
 
 #[test]
-fn unavailable_saved_voice_sources_fall_back_to_system_default_while_disconnected() {
+fn unavailable_saved_voice_sources_are_kept_and_read_as_system_default() {
     let mut state = DashboardState::new_with_voice_options(VoiceOptions {
         input_source: Some("missing-mic".to_owned()),
         output_source: Some("missing-speaker".to_owned()),
@@ -301,23 +301,59 @@ fn unavailable_saved_voice_sources_fall_back_to_system_default_while_disconnecte
         &[("speaker-1", "Headphones")],
     );
 
-    assert_eq!(state.voice_options().input_source, None);
-    assert_eq!(state.voice_options().output_source, None);
     assert_eq!(
-        state.drain_pending_commands(),
-        vec![AppCommand::UpdateVoiceAudioSources {
-            input_source: None,
-            output_source: None,
-        }]
+        state.voice_options().input_source.as_deref(),
+        Some("missing-mic")
     );
-    let saved = state
-        .take_options_save_request()
-        .expect("normalized voice sources should be saved");
-    assert_eq!(saved.voice.input_source, None);
-    assert_eq!(saved.voice.output_source, None);
+    assert_eq!(
+        state.voice_options().output_source.as_deref(),
+        Some("missing-speaker")
+    );
+    assert!(state.drain_pending_commands().is_empty());
+    assert!(state.take_options_save_request().is_none());
     let items = state.display_option_items();
     assert_eq!(items[2].value.as_deref(), Some("System default"));
     assert_eq!(items[3].value.as_deref(), Some("System default"));
+}
+
+#[test]
+fn failed_voice_source_enumeration_clears_the_previous_device_list() {
+    let mut state = DashboardState::new();
+    state.open_options_category(OptionsCategory::Voice);
+    complete_voice_audio_source_load(
+        &mut state,
+        &[("mic-1", "Desk microphone")],
+        &[("speaker-1", "Headphones")],
+    );
+    state.move_option_down();
+    state.move_option_down();
+    state.adjust_selected_display_option(1);
+    assert_eq!(
+        state.display_option_items()[2].value.as_deref(),
+        Some("Desk microphone")
+    );
+    let _ = state.drain_pending_commands();
+    let _ = state.take_options_save_request();
+
+    state.close_options_popup();
+    state.open_options_category(OptionsCategory::Voice);
+    let commands = state.drain_pending_commands();
+    let [AppCommand::LoadVoiceAudioSources { request_id }] = commands.as_slice() else {
+        panic!("reopening voice options should request audio sources");
+    };
+    state.push_effect(AppEvent::VoiceAudioSourcesLoaded {
+        request_id: *request_id,
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+        error: Some("voice input source enumeration failed".to_owned()),
+    });
+
+    assert_eq!(state.voice_options().input_source.as_deref(), Some("mic-1"));
+    assert_eq!(
+        state.display_option_items()[2].value.as_deref(),
+        Some("System default")
+    );
+    assert!(state.take_options_save_request().is_none());
 }
 
 #[test]

@@ -5,7 +5,7 @@ use crate::discord::ids::{
     marker::{ChannelMarker, MessageMarker},
 };
 use crate::discord::{
-    AppEvent, MessageHistoryLoadTarget, MessageInfo, VoiceAudioSourceOptions, VoiceAudioSources,
+    AppEvent, MessageHistoryLoadTarget, MessageInfo, VoiceAudioSourceOptions,
     VoiceConnectionStatus, VoiceScope,
 };
 use crate::logging;
@@ -270,22 +270,13 @@ impl DashboardState {
                 }
                 self.options.voice_audio_sources_request_id = None;
                 if let Some(error) = error {
+                    // Keep no list rather than the previous one, so rows cannot
+                    // show device names from an enumeration that just failed.
+                    self.options.voice_audio_source_options = VoiceAudioSourceOptions::default();
                     self.show_error_toast(error, Instant::now());
                 } else {
-                    let options =
+                    self.options.voice_audio_source_options =
                         VoiceAudioSourceOptions::from_parts(inputs.clone(), outputs.clone());
-                    let mut selected = VoiceAudioSources {
-                        input: self.options.voice_options.input_source.clone(),
-                        output: self.options.voice_options.output_source.clone(),
-                    };
-                    let normalized = options.normalize(&mut selected);
-                    self.options.voice_audio_source_options = options;
-                    if normalized {
-                        self.options.voice_options.input_source = selected.input;
-                        self.options.voice_options.output_source = selected.output;
-                        self.options.config_save_pending = true;
-                        self.queue_current_voice_audio_sources_update();
-                    }
                 }
             }
             AppEvent::VoiceAudioSourcesApplyFailed {

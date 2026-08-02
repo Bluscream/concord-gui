@@ -78,22 +78,17 @@ pub(in crate::tui::ui) fn options_popup_lines(
                 |value| format!("[{value}]"),
             );
             let style = selectable_popup_label_style(selected, item.effective || index == 0);
-            let row = selected_row_line(
-                Line::from(vec![
-                    selectable_popup_marker(selected),
-                    Span::styled(format!("{control} "), style),
-                    Span::styled(item.label, style),
-                    Span::styled(
-                        " - ",
-                        theme::current().style(theme::HighlightGroup::Description),
-                    ),
-                    Span::styled(
-                        item.description,
-                        theme::current().style(theme::HighlightGroup::Description),
-                    ),
-                ]),
-                selected,
-            );
+            let mut spans = vec![
+                selectable_popup_marker(selected),
+                Span::styled(format!("{control} "), style),
+                Span::styled(item.label, style),
+            ];
+            if !item.description.is_empty() {
+                let description_style = theme::current().style(theme::HighlightGroup::Description);
+                spans.push(Span::styled(" - ", description_style));
+                spans.push(Span::styled(item.description, description_style));
+            }
+            let row = selected_row_line(Line::from(spans), selected);
             let gauge_line = item.gauge.map(|gauge| {
                 let (min_label, max_label) = if item
                     .value

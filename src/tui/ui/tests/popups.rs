@@ -113,7 +113,6 @@ fn stream_info_panel_separates_owned_and_watched_streams() {
 fn options_popup_lines_show_selected_toggle_state() {
     let items = vec![
         DisplayOptionItem {
-            description: "Master switch.",
             ..DisplayOptionItem::test("Disable all image previews")
         },
         DisplayOptionItem {
@@ -157,7 +156,10 @@ fn options_popup_lines_show_selected_toggle_state() {
         };
 
         assert_eq!(lines[0].spans[1].content, "[ ] ");
-        assert_eq!(lines[0].spans[4].style.bg, Some(description_background));
+        assert_eq!(
+            text(&lines[0]).trim_end(),
+            "  [ ] Disable all image previews"
+        );
         assert_eq!(lines[1].spans[0].content, "› ");
         assert_eq!(lines[1].spans[1].content, "[x] ");
         assert_eq!(lines[1].spans[4].style.bg, Some(description_background));

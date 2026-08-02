@@ -3,7 +3,7 @@
 <img width="1613" height="848" alt="concord - a feature-rich TUI client for
   Discord" src="./docs/example.png" />
 
-Concord is a feature-rich TUI (terminal user interface) client for Discord, written in Rust with ratatui. Full Discord experience, right in your terminal.
+Concord is a feature-rich TUI client for Discord, written in Rust with ratatui.
 
 ## Table of contents
 
@@ -18,9 +18,73 @@ Concord is a feature-rich TUI (terminal user interface) client for Discord, writ
 
 ## Installation
 
-### Prerequisites
+Release builds include voice playback and stream broadcasting.
 
-#### Linux runtime
+### **Cargo**
+
+```sh
+cargo install concord --locked
+```
+
+Cargo installations compile Concord locally and require the build dependencies
+listed below.
+
+### **Homebrew**
+
+```sh
+brew install concord
+
+# or install the latest release from tap
+brew install chojs23/tap/concord
+```
+
+### **npm**
+
+```sh
+npm install -g @chojs23/concord
+```
+
+### **Nix**
+
+```sh
+# nixpkgs
+nix profile install nixpkgs#concord-tui
+
+# Latest GitHub release
+nix profile install github:chojs23/concord
+```
+
+### **Gentoo**
+
+This package is maintained by a community contributor and is not yet available in Gentoo GURU.
+
+Install the `darwincereska` overlay:
+
+```sh
+eselect repository add darwincereska git https://codeberg.org/darwincereska/gentoo-overlay.git
+emaint sync -r darwincereska
+emerge -av net-im/concord
+```
+
+### Prebuilt releases
+
+Download an archive for Linux, macOS, or Windows from the
+[latest GitHub release](https://github.com/chojs23/concord/releases/latest), or
+run the release installer:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/chojs23/concord/releases/latest/download/concord-installer.sh | sh
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/chojs23/concord/releases/latest/download/concord-installer.ps1 | iex"
+```
+
+The installer places `concord` under `$CARGO_HOME/bin`.
+
+### Runtime requirements
+
+macOS 13 or later is required. Linux release builds need these packages:
 
 ```sh
 # Fedora
@@ -35,11 +99,12 @@ sudo pacman -S alsa-lib opus pipewire xdg-desktop-portal
 
 Screen sharing requires the portal backend for your desktop environment.
 
-#### macOS
+### Build from source
 
-macOS 13 or later is required.
+<details>
+<summary>Build dependencies and commands</summary>
 
-#### Source builds
+Install the Rust stable toolchain and the native dependencies for your platform:
 
 ```sh
 # macOS
@@ -60,126 +125,27 @@ sudo pacman -S alsa-lib base-devel clang nasm opus pipewire pkgconf
 Windows source builds require the MSVC Rust toolchain, Visual Studio 2022 Build
 Tools with Desktop development with C++, CMake, and NASM.
 
-### Homebrew
-
-```sh
-brew install concord
-```
-
-Or with the tap for the latest version:
-
-```sh
-brew install chojs23/tap/concord
-```
-
-### npm
-
-```sh
-npm install -g @chojs23/concord
-```
-
-### Cargo
-
-The default build includes voice playback and stream broadcasting.
-
-```sh
-cargo install concord --locked
-```
-
-To keep voice support while omitting stream broadcasting:
-
-```sh
-cargo install concord --locked --no-default-features --features voice-playback
-```
-
-This voice-only build needs only `libopus-dev`, `libasound2-dev`, and
-`pkg-config`.
-
-To install without local voice playback, microphone, or stream broadcasting:
-
-```sh
-cargo install concord --locked --no-default-features
-```
-
-To install the latest unreleased version directly from the Git repository:
-
-```sh
-cargo install --locked --git https://github.com/chojs23/concord
-```
-
-### Nix
-
-Install the packaged release from nixpkgs:
-
-```sh
-nix profile install nixpkgs#concord-tui
-
-# Or install the latest release from the GitHub flake (requires flakes enabled):
-nix profile install github:chojs23/concord
-```
-
-### GitHub Release installer
-
-Install the latest release with the cargo-dist shell installer:
-
-```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/chojs23/concord/releases/latest/download/concord-installer.sh | sh
-```
-
-On Windows, use the PowerShell installer instead:
-
-```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/chojs23/concord/releases/latest/download/concord-installer.ps1 | iex"
-```
-
-The installer places `concord` under `$CARGO_HOME/bin`, which is usually
-`~/.cargo/bin` on Unix and `%USERPROFILE%\.cargo\bin` on Windows.
-
-### Gentoo (community overlay)
-
-This package is maintained by a community contributor and is not yet available in Gentoo GURU.
-
-Install the `darwincereska` overlay:
-
-```sh
-eselect repository add darwincereska git https://codeberg.org/darwincereska/gentoo-overlay.git
-```
-
-Sync the overlay:
-
-```sh
-emaint sync -r darwincereska
-```
-
-Install the package:
-
-```sh
-emerge -av net-im/concord
-```
-
-### Build from source
-
-You need the Rust stable toolchain, Cargo, and the native dependencies listed in
-the Prerequisites section.
-
 ```sh
 git clone https://github.com/chojs23/concord.git
 cd concord
 cargo build --release
 ```
 
-To keep voice support while omitting stream broadcasting:
+To keep voice support without stream broadcasting:
 
 ```sh
 cargo build --release --no-default-features --features voice-playback
 ```
 
-To build without local voice playback, microphone, or stream broadcasting,
-disable default features:
+To build without local voice playback, microphone, or stream broadcasting:
 
 ```sh
 cargo build --release --no-default-features
 ```
+
+The same feature flags can be passed to `cargo install concord --locked`.
+
+</details>
 
 ## Features
 
@@ -196,29 +162,21 @@ By default, tokens are saved in the system keychain when available. In the
 default `auto` mode, Concord falls back to its state directory when keychain
 storage is unavailable. See the Security section below for details.
 
-To sign out with the default keys, open your profile with `Space`, `p`, then
-choose `[o] sign out`.
-
 ### Voice calls
 
-- Full voice support with push-to-talk
-- Supports noise suppression
-- Screen share (Both watch and stream)
+- Voice calls with push-to-talk
+- Noise suppression
+- Watch and broadcast screen shares
 
 ### Guilds & Channels
 
-- Navigate text channels, threads, and forum channels
 - View, filter, and create forum/media posts (active / archived)
 - Switch channels, threads, and posts with the fuzzy channel switcher (`Space`, `Space`)
-- Track unread messages and mention counts per channel
-- Mute and unmute channels and servers
 
 ### Messaging
 
-- Send, edit, and delete messages
-- Upload / Download attachments
-- Search messages with filters with `/`
-- @mention autocomplete
+- Search messages with filters using `/`
+- `@mention` autocomplete
 - Send custom emoji your account cannot use directly as image links when enabled
 - Rich content display (embeds, attachments, stickers, and mentions)
 - Detect URLs in message bodies and markdown links, then open them in your default browser
@@ -236,12 +194,6 @@ Concord renders a practical subset of Discord-style Markdown in message bodies:
 - Fenced code blocks with optional language labels, rendered as compact boxes with syntax highlighting
 - Raw URLs and markdown link destinations are underlined and can be opened from message actions
 
-### Reactions & Polls
-
-- View, add, and remove emoji reactions (Unicode and custom server emoji)
-- Use custom emoji from other servers as reactions when your account supports it
-- View and vote on polls
-
 ### Media Support
 
 Image rendering is powered by [ratatui-image](https://github.com/benjajaja/ratatui-image). On startup, Concord queries the terminal to detect the best available graphics protocol. Supported protocols:
@@ -251,39 +203,27 @@ Image rendering is powered by [ratatui-image](https://github.com/benjajaja/ratat
 - **Sixel** - foot, mlterm, xterm (if compiled with Sixel support), etc.
 - **Halfblocks** (fallback) - works on any terminal, but uses block characters instead of true pixels.
 
-Checkout [compatibility-matrix](https://github.com/ratatui/ratatui-image#compatibility-matrix) for a list of terminals that support each protocol.
-
-You can toggle image viewing on or off in the configuration file. When image viewing is off, attachments and emojis will be shown as text placeholders.
+Check the [compatibility matrix](https://github.com/ratatui/ratatui-image#compatibility-matrix) for terminals that support each protocol.
 
 External media playback is off by default. You can enable it with Display options menu.
-Video & audio playback and watch live stream uses [mpv](https://mpv.io/). Make sure `mpv` is installed and in your PATH.
+Video and audio playback, including live streams, uses [mpv](https://mpv.io/). Make sure `mpv` is installed and in your PATH.
 YouTube playback depends on your local `mpv` setup, such as `yt-dlp` support.
 
 To broadcast, join a voice channel, open its channel actions, choose
 `Share screen` or use `<leader>vs` voice shortcut.
 Linux screen capture depends on the active X11 or Wayland support.
 
-### Members & Profiles
-
-- View Member list and search members
-- Presence indicators (Online, Idle, DND, Offline)
-- Configure user profile and rich presence activity
-
-#### Rich Presence
+### Rich Presence
 
 - Concord serves the local `discord-ipc` socket, detects connected apps, and
   lets you pick which one to share from your profile's activity picker
 - Only apps that speak Discord's Rich Presence (RPC/IPC) protocol are detected.
-- Detection needs the official Discord client closed, since only one program can
-  own the socket and the official client claims it first
 - Toggle with `share_rich_presence` under `[presence]` in `config.toml`
 
 ### Notifications
 
 - Notification inbox (`<leader>n`) with Unreads and Mentions tabs.
-- You can configure notification sounds with custom WAV files
-- Desktop notifications for messages that pass your Discord
-  notification settings
+- Custom notification sounds using WAV files
 - Voice join and leave notification sounds while you are connected to voice
 
 ### Navigation & Keyboard shortcuts
@@ -291,11 +231,7 @@ Linux screen capture depends on the active X11 or Wayland support.
 > ⚠️ Keymap action names and default bindings may have breaking changes between releases.
 
 All default key settings in this section can be customized. See
-[Keymap options](./docs/keymap-options.md) for the config format and supported
-actions.
-
-Concord has a four-pane.
-**Guilds (1)**, **Channels (2)**, **Messages (3)**, **Members (4)**
+[Keymap options](./docs/keymap-options.md) for the config and supported actions.
 
 With default vim-style navigation:
 
@@ -333,161 +269,59 @@ Press `Space` to open the leader shortcut window.
 | `Space`, `p`     | Open my profile settings          |
 | `Space`, `o`     | Choose concord option category    |
 | `Space`, `n`     | Open the notification inbox       |
-| `Space`, `v`     | Voice command prefix              |
+| `Space`, `v`     | Open voice shortcuts              |
 | `Space`, `Space` | Open the fuzzy channel switcher   |
 
-Voice commands:
+#### Message shortcuts
 
-| Key sequence      | Action                       |
-| ----------------- | ---------------------------- |
-| `Space`, `v`, `d` | Toggle voice deafen          |
-| `Space`, `v`, `m` | Toggle microphone mute       |
-| `Space`, `v`, `s` | Toggle screen share          |
-| `Space`, `v`, `l` | Leave the current voice call |
+These shortcuts act on the selected message when the Messages pane is focused.
+
+| Key | Action                     |
+| --- | -------------------------- |
+| `y` | Copy message text          |
+| `r` | Add or remove a reaction   |
+| `R` | Reply                      |
+| `d` | Delete                     |
+| `e` | Edit                       |
+| `o` | Open URL                   |
+| `x` | Play video or audio        |
+| `v` | Open the attachment viewer |
 
 #### Action menus
 
-Focus a pane, then press `Space`, `a` to open actions for that pane. Actions
-that do not apply to the current selection are shown dimmed and disabled. In
-the Messages pane, the selected message also supports these direct shortcuts:
-
-Message shortcuts:
-
-| Shortcut | Action              | Description                                                 |
-| -------- | ------------------- | ----------------------------------------------------------- |
-| `y`      | Copy                | Copy the selected message text and show a short toast       |
-| `r`      | Add/remove reaction | Open the reaction picker for the selected message           |
-| `R`      | Reply               | Start a reply to the selected message                       |
-| `d`      | Delete              | Open a delete confirmation before deleting the message      |
-| `e`      | Edit                | Start editing the selected message when editing is allowed  |
-| `o`      | Open URL            | Open the selected message URL, or choose from multiple URLs |
-| `x`      | Play media          | Play selected video or audio media in an external player    |
-| `v`      | View attachment     | Open the selected message's attachment viewer               |
-
-Message action menu shortcuts:
-
-| Shortcut | Action                      | Description                                                 |
-| -------- | --------------------------- | ----------------------------------------------------------- |
-| `y`      | Copy                        | Copy the selected message text and show a short toast       |
-| `r`      | Add/remove reaction         | Open the reaction picker for the selected message           |
-| `R`      | Reply                       | Start a reply to the selected message                       |
-| `d`      | Delete                      | Open a delete confirmation before deleting the message      |
-| `e`      | Edit                        | Start editing the selected message when editing is allowed  |
-| `o`      | Open URL                    | Open the selected message URL, or choose from multiple URLs |
-| `D`      | Remove embeds               | Remove embeds from the selected message                     |
-| `x`      | Play media                  | Play selected video or audio media in an external player    |
-| `v`      | View attachment             | Open the selected message's attachment viewer               |
-| `g`      | Go to referenced message    | Go to the replied or forwarded message                      |
-| `p`      | show message sender profile | Open the selected message author's profile                  |
-| `P`      | Pin / unpin                 | Open a pin or unpin confirmation for the selected message   |
-| `t`      | Open thread                 | Open the selected message's thread                          |
-| `u`      | Show reacted users          | Show users who reacted to the selected message              |
-| `c`      | Choose poll votes           | Choose poll votes for the selected message                  |
-
-When the attachment viewer is open, press `x` to play the current video or audio attachment
-in an external player, or `d` to download the current attachment directly.
-
-Server actions:
-
-| Shortcut | Action              | Description                                           |
-| -------- | ------------------- | ----------------------------------------------------- |
-| `m`      | Mark server as read | Mark all unread viewable channels in this server read |
-| `u`      | Mute / unmute       | Toggle server notification mute                       |
-| `l`      | Leave server        | Open a confirmation before leaving this server        |
-| `r`      | Folder settings     | Edit the selected server folder name and color        |
-
-Channel actions:
-
-| Shortcut | Action               | Description                                  |
-| -------- | -------------------- | -------------------------------------------- |
-| `e`      | Join voice           | Join the selected voice channel or DM call   |
-| `l`      | Leave voice          | Leave the current voice channel or DM call   |
-| `s`      | Toggle screen share  | Start from a display or window, or stop it   |
-| `w`      | Watch stream         | Watch the selected participant's Go Live     |
-| `a`      | Audio settings       | Set participant volume or mute               |
-| `p`      | Show pinned messages | Open the selected channel's pinned messages  |
-| `t`      | Show threads         | List threads for the selected channel        |
-| `m`      | Mark as read         | Mark the selected channel read               |
-| `u`      | Mute / unmute        | Toggle channel or category notification mute |
-
-Thread / post actions (a focused thread in the Channels pane or a forum post in the post list):
-
-| Shortcut | Action                | Description                                                 |
-| -------- | --------------------- | ----------------------------------------------------------- |
-| `m`      | Mark as read          | Mark the thread or post read                                |
-| `f`      | Follow / unfollow     | Follow or unfollow the thread or post                       |
-| `c`      | Close / reopen        | Close or reopen the thread or post (author or moderator)    |
-| `l`      | Lock / unlock         | Lock or unlock the thread or post (moderator)               |
-| `e`      | Edit                  | Edit title, tags, slow mode, and auto-archive               |
-| `y`      | Copy link             | Copy a link to the thread or post                           |
-| `u`      | Mute / unmute         | Toggle thread or post notification mute (must follow first) |
-| `n`      | Notification settings | Choose the notification level for the thread or post        |
-| `P`      | Pin / unpin           | Pin or unpin the post (forum posts only, moderator)         |
-| `d`      | Delete                | Delete the whole thread or post (moderator)                 |
-| `i`      | Copy ID               | Copy the thread or post ID                                  |
-
-Voice commands:
-
-| Sequence          | Action       | Description                               |
-| ----------------- | ------------ | ----------------------------------------- |
-| `Space`, `v`, `d` | Deafen voice | Toggle Concord's Discord voice deaf state |
-| `Space`, `v`, `m` | Mute voice   | Toggle Concord's Discord voice mute state |
-| `Space`, `v`, `l` | Leave voice  | Leave the current Concord voice channel   |
+Press `Space`, `a` to open actions for the focused pane. The menu shows the
+available shortcuts and dims actions that do not apply to the current
+selection.
 
 #### Composer
 
-You can paste copied files into the composer to attach them. Pending uploads
-are shown above the input before sending.
-
-In a forum or media parent channel, the same composer key opens a post composer
-overlay.
-
-| Shortcut                                     | Action            | Description                                                      |
-| -------------------------------------------- | ----------------- | ---------------------------------------------------------------- |
-| `Ctrl+v`                                     | paste clipboard   | Attach copied files or images when present, otherwise paste text |
-| `Ctrl+e`                                     | open $EDITOR      | Open $EDITOR on the current draft for long editing               |
-| `Ctrl+c`                                     | clear             | Clear current draft                                              |
-| `Ctrl+Left`/ `Ctrl+Right`                    | Jump word         | Jump the cursor by word                                          |
-| `Alt+Backspace`, `Ctrl+Backspace` / `Ctrl+w` | Delete word       | Delete the word before the cursor                                |
-| `Ctrl+u` / `Ctrl+k`                          | Delete line text  | Delete from cursor to start/end of the current line              |
-| `Delete`                                     | Detach attachment | Removes the last pending attachment                              |
-| `Alt+p`                                      | Toggle reply ping | Toggle whether replying pings the original author                |
-
-#### Mention picker
-
-When the @mention picker is open, use `Up` / `Down`,
-`Ctrl+p` / `Ctrl+n`, `Tab`, or `Enter` to choose a mention.
+The composer supports copied file attachments and editing the current draft in
+`$EDITOR`. Pending uploads appear above the input before sending.
 
 #### Emoji picker
 
-Type `:` plus at least two letters, such as `:he`, to pick Unicode, server, or
-cross-server custom emoji while writing a message.
+Supports searching and selecting emoji with the picker. Press `:` to open the
+picker, then type to filter.
 
 When `emojis_as_links` is enabled, custom emoji your account cannot send
 directly are inserted as Discord image links instead.
 
-To react from the composer, select a message, enter insert mode, then type
-`+:`. The reaction picker opens for that message. Press `/` to search, Enter to
-lock the filter, then Enter again or use a shown shortcut to react.
-
 #### Bot commands
 
-When the composer input starts with a slash `/`, the command suggestion popup
+When the composer input starts with `/`, Concord shows available application
+commands.
 
 ## Configuration
 
-Concord options are stored under Concord's config directory. If
-`XDG_CONFIG_HOME` is set, Concord uses `config.toml` for app options, `keymap.toml` for key settings, and `theme.toml` for colors.
-Otherwise it uses the platform config directory.
+Concord reads `config.toml`, `keymap.toml`, and `theme.toml` from
+`$XDG_CONFIG_HOME/concord` when `XDG_CONFIG_HOME` is set, or from the platform
+config directory otherwise.
 
-Local UI state and plaintext fallback credentials are stored under Concord's
-state directory instead. If `XDG_STATE_HOME` is set, Concord uses
-`$XDG_STATE_HOME/concord/state.toml` and
-`$XDG_STATE_HOME/concord/credentials.toml`. Otherwise it uses
-`~/.local/state/concord/state.toml` and
-`~/.local/state/concord/credentials.toml`.
+Machine-local UI state and fallback credentials are stored in
+`$XDG_STATE_HOME/concord`, or in `~/.local/state/concord` when
+`XDG_STATE_HOME` is not set.
 
-Key settings are read from `keymap.toml`, and colors are read from `theme.toml`.
+### App options
 
 <details>
 <summary>Default config</summary>
@@ -591,30 +425,10 @@ application.
 
 </details><br>
 
-`image_protocol`:
+### Key bindings
 
-- `auto`: use terminal detection. In iTerm, Concord uses the iTerm2 protocol
-  because terminal capability detection can incorrectly select Kitty there.
-- `iterm2`: force the iTerm2 inline image protocol.
-- `kitty`: force the Kitty graphics protocol.
-- `sixel`: force Sixel rendering.
-- `halfblocks`: force Unicode half-block fallback rendering.
-
-`image_preview_quality` and `attachment_viewer_quality`:
-
-- `efficient`: smaller preview requests to reduce bandwidth and memory use.
-- `balanced`: default quality with bounded resource use.
-- `high`: sharper resized previews using lossless quality.
-- `original`: request the original source image for previews when possible.
-
-This setting only applies to attachment, embed, and attachment viewer previews.
-Avatars and custom emoji keep their separate small-image behavior.
-
-`credentials.store`:
-
-- `auto`: try the system keychain first, then fall back to the state-file credential store.
-- `keychain`: use only the system keychain. If keychain storage is unavailable, the token is not saved.
-- `plain`: use only the plain-text state-file credential store.
+See [Keymap options](./docs/keymap-options.md) for the config format and
+supported actions.
 
 <details>
 <summary>Default keymap config</summary>
@@ -747,12 +561,10 @@ ToggleReplyPing = "<A-p>"
 
 </details><br>
 
-You can customize key bindings. Check the [Keymap options](./docs/keymap-options.md) for the config format, supported actions.
+### Theme
 
-You can customize Concord's named UI Highlight Groups and border shapes in
-`theme.toml`. A Highlight Group may set foreground, background, bold, italic,
-dim, underline, and strikethrough, or link to another group and inherit its
-unset fields. Every group and field is optional.
+See [Theme options](./docs/theme-options.md) for available groups, values, and
+border shapes.
 
 <details>
 <summary>Default theme config</summary>
@@ -1175,9 +987,6 @@ foreground = "cyan"
 
 </details><br>
 
-Check [Theme options](./docs/theme-options.md) for the complete group list,
-accepted values, links, exact defaults, and warning behavior.
-
 ## Performance
 
 Concord is designed to stay lightweight in normal terminal use. In observed
@@ -1188,44 +997,24 @@ bytes need to be decoded before they can be rendered in the terminal. When many
 images are loaded, memory can briefly rise to around 100-200 MB while decoding
 and then drop again as work completes and caches are pruned.
 
-To keep resource usage bounded, Concord limits media work in several places:
-
-- Attachment previews are downloaded with an 8 MiB per-preview cap.
-- Up to 4 attachment previews are fetched at once.
-- Up to 2 inline image previews are decoded at once.
-- Inline image previews, avatars, and custom emoji use small LRU caches.
-- Image preview requests prefer resized Discord proxy URLs sized for the
-  terminal instead of original full-size media when possible.
-- The preview quality preset can lower preview source dimensions or opt into
-  original source images. It does not change avatar or custom emoji sizing.
-
-Message history is also cached with a per-channel limit, so long-running
-sessions do not keep every message in memory forever.
-
 ## FAQ
 
 ### Can my account be blocked?
 
-Honestly, no.
+There are some path that did trigger a temporary block:
 
-There are some path that did trigger a account block:
-
+- If your account is new or has a low reputation, some actions may trigger a block.
 - Trying to **create a new DM channel and send a message to an unknown user**(meaning there was no pre-existing DM created through the Discord client) can immediately block your account temporarily.
 - Sending a message in an existing one-to-one DM may also trigger a temporary account block if you only recently started messaging that person or have little conversation history with them.
-- Some features that requires a hCapcha challenge on Discord's side.
+- Some features that requires a hCapcha challenge.
 
 Other features have not caused blocks in my testing.
 
 That said, Concord is not an official Discord client. Using unofficial clients, automated user accounts, or self-bots can violate Discord's TOS, so there is always some risk. Use it at your own discretion.
 
-### Does Concord support CAPTCHA?
-
-No. If Discord requires a CAPTCHA during login, use token login instead.
-
 ## Security
 
 - By default, tokens are stored in the system keychain when available.
-- On Linux, keychain storage uses Secret Service when a compatible service is available.
 - The `CONCORD_TOKEN` environment variable lets you provide a token without writing it to disk. This avoids leaving plaintext on disk, but the token is visible in `/proc/<pid>/environ` and in process listings while Concord is running.
 - In `credentials.store = "auto"`, Concord falls back to **plain text** credentials under Concord's state directory when keychain storage is unavailable. In `keychain` mode, Concord does not fall back to plain storage. Keep fallback credential files secure and do not share them. You can use a token from that file to log in to the official Discord client, so treat it like a password.
 - On Unix, the fallback credential's parent directory is created with `0700` and the credential file with `0600` permissions.
