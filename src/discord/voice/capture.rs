@@ -407,6 +407,19 @@ fn send_capture_result(
     }
 }
 
+#[cfg(any(test, target_os = "windows"))]
+fn capture_copy_dimensions(
+    content_width: u32,
+    content_height: u32,
+    texture_width: u32,
+    texture_height: u32,
+) -> (u32, u32) {
+    (
+        content_width.min(texture_width),
+        content_height.min(texture_height),
+    )
+}
+
 fn refresh_capture_image(
     frames: &Receiver<CaptureFrame>,
     image: &mut CapturedImage,
@@ -1087,6 +1100,28 @@ mod tests {
                 .expect("native error should remain available"),
             "native capture failed"
         );
+    }
+
+    #[test]
+    fn capture_copy_dimensions_stay_within_the_frame_pool_texture() {
+        let cases = [
+            ((1_920, 1_080), (1_280, 720), (1_280, 720)),
+            ((640, 360), (1_280, 720), (640, 360)),
+            ((1_280, 720), (1_280, 720), (1_280, 720)),
+            ((1_920, 360), (1_280, 720), (1_280, 360)),
+        ];
+
+        for ((content_width, content_height), (texture_width, texture_height), expected) in cases {
+            assert_eq!(
+                capture_copy_dimensions(
+                    content_width,
+                    content_height,
+                    texture_width,
+                    texture_height,
+                ),
+                expected,
+            );
+        }
     }
 
     #[test]

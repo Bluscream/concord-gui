@@ -46,7 +46,10 @@ use windows::{
     core::{BOOL, IInspectable, Interface, factory},
 };
 
-use super::{CaptureFrame, CaptureFrameBufferPool, CaptureOutput, send_capture_result};
+use super::{
+    CaptureFrame, CaptureFrameBufferPool, CaptureOutput, capture_copy_dimensions,
+    send_capture_result,
+};
 use crate::discord::voice::{StreamCaptureTarget, StreamCaptureTargetKind};
 
 const FRAME_QUEUE_CAPACITY: usize = 2;
@@ -371,7 +374,7 @@ fn copy_wgc_frame(
     let context = d3d_context()?
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let rgba = texture_to_rgba(
+    let capture_frame = texture_to_capture_frame(
         d3d_device()?,
         &context,
         &source_texture,
@@ -379,10 +382,7 @@ fn copy_wgc_frame(
         height,
         buffer_pool,
     )?;
-    Ok((
-        CaptureFrame::new(width, height, rgba, buffer_pool.clone()),
-        content_size,
-    ))
+    Ok((capture_frame, content_size))
 }
 
 fn create_d3d_device() -> Result<ID3D11Device, String> {
@@ -423,19 +423,27 @@ fn direct3d_device() -> Result<IDirect3DDevice, String> {
         .map_err(|error| format!("WinRT D3D11 device conversion failed: {error}"))
 }
 
-fn texture_to_rgba(
+fn texture_to_capture_frame(
     d3d_device: &ID3D11Device,
     d3d_context: &ID3D11DeviceContext,
     source_texture: &ID3D11Texture2D,
-    width: u32,
-    height: u32,
+    content_width: u32,
+    content_height: u32,
     buffer_pool: &CaptureFrameBufferPool,
-) -> Result<Vec<u8>, String> {
+) -> Result<CaptureFrame, String> {
     let mut source_description = D3D11_TEXTURE2D_DESC::default();
     unsafe { source_texture.GetDesc(&mut source_description) };
-    if width > source_description.Width || height > source_description.Height {
-        return Err("WGC frame dimensions exceed its D3D11 texture".to_owned());
-    }
+
+    // WGC keeps surfaces at the frame-pool size while a captured window is
+    // resizing and clips larger content to that surface. Copy the available
+    // pixels now. The caller retains the full ContentSize and recreates the
+    // frame pool for later frames.
+    let (width, height) = capture_copy_dimensions(
+        content_width,
+        content_height,
+        source_description.Width,
+        source_description.Height,
+    );
 
     let mut staging_description = source_description;
     staging_description.Width = width;
@@ -487,7 +495,7 @@ fn texture_to_rgba(
         .map_err(|error| format!("WGC staging texture map failed: {error}"))?;
     let result = copy_mapped_bgra(&mapped, width, height, buffer_pool);
     unsafe { d3d_context.Unmap(Some(&resource), 0) };
-    result
+    result.map(|rgba| CaptureFrame::new(width, height, rgba, buffer_pool.clone()))
 }
 
 fn copy_mapped_bgra(
