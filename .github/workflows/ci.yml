@@ -4,15 +4,15 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'LICENSE'
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
   pull_request:
     branches: [main]
     paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'LICENSE'
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -49,6 +49,9 @@ jobs:
 
       - name: clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: clippy (no voice or screen broadcasting)
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
 
       - name: test
         run: cargo test --all-features

@@ -18,8 +18,7 @@ pub(super) struct EncodedStreamFrame {
 
 pub(super) struct StreamCaptureHandle;
 
-#[derive(Clone, Default)]
-pub(super) struct StreamCaptureCancellation;
+pub(super) use super::capture_cancellation::StreamCaptureCancellation;
 
 pub(super) struct PreparedStreamCapture {
     pub(super) handle: StreamCaptureHandle,
@@ -35,17 +34,6 @@ impl StreamCaptureHandle {
 
     pub(super) async fn shutdown(self) {
         // Disabled builds never construct a capture handle.
-    }
-}
-
-impl StreamCaptureCancellation {
-    pub(super) fn cancel(&self) {
-        // Disabled builds never start a capture preparation task.
-    }
-
-    #[cfg(test)]
-    pub(super) fn is_cancelled(&self) -> bool {
-        true
     }
 }
 

@@ -16,6 +16,7 @@ mod capture;
 #[cfg(not(feature = "stream-broadcast"))]
 #[path = "voice/capture_disabled.rs"]
 mod capture;
+mod capture_cancellation;
 mod dave;
 mod devices;
 mod gateway;

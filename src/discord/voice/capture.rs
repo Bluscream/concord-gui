@@ -78,10 +78,7 @@ pub(super) struct StreamCaptureHandle {
     worker: Option<JoinHandle<()>>,
 }
 
-#[derive(Clone, Default)]
-pub(super) struct StreamCaptureCancellation {
-    cancelled: Arc<AtomicBool>,
-}
+pub(super) use super::capture_cancellation::StreamCaptureCancellation;
 
 pub(super) struct PreparedStreamCapture {
     pub(super) handle: StreamCaptureHandle,
@@ -679,20 +676,6 @@ impl StreamCaptureHandle {
                 format!("stream capture worker panicked during shutdown: {error:?}"),
             );
         }
-    }
-}
-
-impl StreamCaptureCancellation {
-    pub(super) fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Release);
-    }
-
-    pub(super) fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
-    }
-
-    fn flag(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.cancelled)
     }
 }
 
