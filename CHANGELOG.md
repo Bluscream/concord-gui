@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.2] - 2026-08-04
+
+### Bug Fixes
+
+- _(tui)_ Align inbox, thread, and shortcut behavior by @chojs23
+- _(release)_ Scope Homebrew audio dependencies to Linux (#297) in [#297](https://github.com/chojs23/concord/pull/297) by @chojs23
+
+### Refactor
+
+- _(tui)_ Unify popup input and shortcut routing by @chojs23
+
 ## [2.5.1] - 2026-08-02
 
 ### Bug Fixes
