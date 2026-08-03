@@ -646,7 +646,6 @@ impl CommandDispatcher {
                 .await;
             }
             AppCommand::SetThreadMuted {
-                guild_id,
                 channel_id,
                 muted,
                 duration,
@@ -654,7 +653,6 @@ impl CommandDispatcher {
             } => {
                 notification_commands::set_thread_muted(
                     self.client.clone(),
-                    guild_id,
                     channel_id,
                     muted,
                     duration,

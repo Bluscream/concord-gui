@@ -1,5 +1,5 @@
 use crate::discord::ids::Id;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{
     parse_channel_info, parse_guild_create, parse_guild_emojis_update, parse_guild_update,
@@ -1451,7 +1451,7 @@ fn thread_channel_parser_keeps_counts_and_status() {
 }
 
 #[test]
-fn thread_channel_parser_marks_current_user_joined_when_member_is_present() {
+fn thread_channel_parser_uses_only_real_current_user_member_settings() {
     let channel = parse_channel_info(
         &json!({
             "id": "10",
@@ -1459,7 +1459,13 @@ fn thread_channel_parser_marks_current_user_joined_when_member_is_present() {
             "parent_id": "2",
             "type": 11,
             "name": "release notes",
-            "member": { "id": "10", "user_id": "99", "flags": 9 },
+            "member": {
+                "id": "10",
+                "user_id": "99",
+                "flags": 9,
+                "muted": true,
+                "mute_config": { "end_time": "2099-01-01T00:00:00.000Z" }
+            },
             "thread_metadata": { "archived": false, "locked": false }
         }),
         None,
@@ -1468,6 +1474,26 @@ fn thread_channel_parser_marks_current_user_joined_when_member_is_present() {
 
     assert_eq!(channel.current_user_joined_thread, Some(true));
     assert_eq!(channel.current_user_thread_notification_flags, Some(9));
+    assert_eq!(channel.current_user_thread_muted, Some(true));
+    assert_eq!(
+        channel.current_user_thread_mute_end_time.as_deref(),
+        Some("2099-01-01T00:00:00.000Z")
+    );
+
+    for (name, member) in [("null", Some(Value::Null)), ("absent", None)] {
+        let mut payload = thread_payload(10, "release notes");
+        if let Some(member) = member {
+            payload["member"] = member;
+        }
+        let channel = parse_channel_info(&payload, None).expect("thread channel should parse");
+        assert_eq!(channel.current_user_joined_thread, None, "{name}");
+        assert_eq!(
+            channel.current_user_thread_notification_flags, None,
+            "{name}"
+        );
+        assert_eq!(channel.current_user_thread_muted, None, "{name}");
+        assert_eq!(channel.current_user_thread_mute_end_time, None, "{name}");
+    }
 }
 
 #[test]
@@ -1501,7 +1527,9 @@ fn raw_thread_member_updates_keep_current_user_state() {
                 "id": "10",
                 "guild_id": "1",
                 "user_id": "99",
-                "flags": 9
+                "flags": 9,
+                "muted": true,
+                "mute_config": { "end_time": "2099-01-01T00:00:00.000Z" }
             }
         })
         .to_string(),
@@ -1512,14 +1540,15 @@ fn raw_thread_member_updates_keep_current_user_state() {
         [AppEvent::ThreadMembersUpdateDispatch { update }]
             if update.channel_id == Id::new(10)
                 && update.guild_id == Some(Id::new(1))
-                && update.added_user_ids == vec![Id::new(99)]
+                && update.added_members.iter().map(|member| member.user_id).collect::<Vec<_>>()
+                    == vec![Id::new(99)]
                 && update.removed_user_ids.is_empty()
     ));
     assert!(matches!(
         left.as_slice(),
         [AppEvent::ThreadMembersUpdateDispatch { update }]
             if update.channel_id == Id::new(10)
-                && update.added_user_ids.is_empty()
+                && update.added_members.is_empty()
                 && update.removed_user_ids == vec![Id::new(99)]
     ));
     assert!(matches!(
@@ -1528,7 +1557,11 @@ fn raw_thread_member_updates_keep_current_user_state() {
             guild_id,
             channel_id,
             flags: Some(9),
-        }] if *guild_id == Some(Id::new(1)) && *channel_id == Id::new(10)
+            muted: Some(true),
+            mute_end_time,
+        }] if *guild_id == Some(Id::new(1))
+            && *channel_id == Id::new(10)
+            && mute_end_time.as_deref() == Some("2099-01-01T00:00:00.000Z")
     ));
 
     let mut state = DiscordState::default();
@@ -1544,6 +1577,11 @@ fn raw_thread_member_updates_keep_current_user_state() {
         .expect("thread should stay cached");
     assert!(thread.current_user_joined_thread);
     assert_eq!(thread.current_user_thread_notification_flags, Some(9));
+    assert!(thread.current_user_thread_muted);
+    assert_eq!(
+        thread.current_user_thread_mute_end_time.as_deref(),
+        Some("2099-01-01T00:00:00.000Z")
+    );
 }
 
 #[test]

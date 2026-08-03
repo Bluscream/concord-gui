@@ -794,28 +794,6 @@ fn composer_keymaps_reject_unknown_actions_and_conflicts() {
 }
 
 #[test]
-fn options_category_shortcut_labels_keep_contextual_defaults() {
-    let key_bindings = KeyBindings::default();
-
-    assert_eq!(
-        key_bindings.options_category_shortcut_label(OptionsCategoryShortcut::Display),
-        "d"
-    );
-    assert_eq!(
-        key_bindings.options_category_shortcut_label(OptionsCategoryShortcut::Composer),
-        "c"
-    );
-    assert_eq!(
-        key_bindings.options_category_shortcut_label(OptionsCategoryShortcut::Notifications),
-        "n"
-    );
-    assert_eq!(
-        key_bindings.options_category_shortcut_label(OptionsCategoryShortcut::Voice),
-        "v"
-    );
-}
-
-#[test]
 fn keymap_registers_each_leader_sequence_as_a_child_and_resolves_it() {
     for (binding, action_name, child_key, child_label, event, ui_action) in [
         (

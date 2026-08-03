@@ -201,11 +201,27 @@ fn options_popup_selection_aliases_move_selection() {
 }
 
 #[test]
-fn options_popup_toggles_composer_emoji_links() {
-    let mut state = state_with_messages(1);
+fn options_popup_category_shortcuts_stay_contextual_with_custom_direct_bindings() {
+    let mut state = state_with_keymap(KeymapOptions {
+        mappings: [(
+            "OpenComposerOptions".to_owned(),
+            KeymapBinding::one("<leader>o x"),
+        )]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    });
 
-    handle_key(&mut state, char_key(' '));
-    handle_key(&mut state, char_key('o'));
+    state.open_options_category_picker();
+    assert_eq!(
+        state
+            .display_option_items()
+            .into_iter()
+            .map(|item| item.value.expect("category has a shortcut"))
+            .collect::<Vec<_>>(),
+        ["d", "c", "n", "v"]
+    );
+
     handle_key(&mut state, char_key('c'));
     handle_key(&mut state, key(KeyCode::Enter));
 

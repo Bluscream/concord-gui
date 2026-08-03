@@ -160,7 +160,7 @@ impl DashboardState {
         let follow_label = format!("{} {noun}", if followed { "Unfollow" } else { "Follow" });
         let mute_label = format!(
             "{} {noun}",
-            if self.discord.cache.channel_notification_muted(channel_id) {
+            if self.discord.cache.thread_notification_muted(channel_id) {
                 "Unmute"
             } else {
                 "Mute"
@@ -444,7 +444,7 @@ impl DashboardState {
                         self.toggle_thread_follow(channel_id)
                     }
                     ThreadActionKind::ToggleMute => {
-                        if self.discord.cache.channel_notification_muted(channel_id) {
+                        if self.discord.cache.thread_notification_muted(channel_id) {
                             self.close_thread_action_menu();
                             self.toggle_thread_mute(channel_id, None)
                         } else {
@@ -546,10 +546,9 @@ impl DashboardState {
         channel_id: Id<ChannelMarker>,
         duration: Option<MuteDuration>,
     ) -> Option<AppCommand> {
-        let channel = self.discord.cache.channel(channel_id)?;
-        let muted = !self.discord.cache.channel_notification_muted(channel_id);
+        self.discord.cache.channel(channel_id)?;
+        let muted = !self.discord.cache.thread_notification_muted(channel_id);
         Some(AppCommand::SetThreadMuted {
-            guild_id: channel.guild_id,
             channel_id,
             muted,
             duration,

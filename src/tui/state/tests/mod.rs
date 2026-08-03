@@ -166,7 +166,6 @@ fn guild_member_list_counts_event(guild_id: Id<GuildMarker>, online: u32) -> App
 
 fn thread_members_update_event(
     channel_id: Id<ChannelMarker>,
-    added_user_ids: Vec<Id<UserMarker>>,
     removed_user_ids: Vec<Id<UserMarker>>,
 ) -> AppEvent {
     AppEvent::ThreadMembersUpdateDispatch {
@@ -175,7 +174,6 @@ fn thread_members_update_event(
             channel_id,
             member_count: None,
             added_members: Vec::new(),
-            added_user_ids,
             removed_user_ids,
             extra_fields: BTreeMap::new(),
         },

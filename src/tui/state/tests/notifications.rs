@@ -147,6 +147,8 @@ fn notification_inbox_includes_only_eligible_unread_channels() {
     let hidden_channel_id = Id::new(206);
     let voice_channel_id = Id::new(207);
     let stage_channel_id = Id::new(208);
+    let unjoined_thread_id = Id::new(209);
+    let archived_thread_id = Id::new(210);
     let unread = |message_id| Some(Id::new(message_id));
     let mut state = DashboardState::new();
 
@@ -209,6 +211,27 @@ fn notification_inbox_includes_only_eligible_unread_channels() {
                 last_message_id: unread(306),
                 ..positioned_text_channel_info(guild_id, stage_channel_id, "stage", 5)
             },
+            ChannelInfo {
+                last_message_id: unread(307),
+                current_user_joined_thread: Some(false),
+                ..thread_channel_info(
+                    guild_id,
+                    visible_channel_id,
+                    unjoined_thread_id,
+                    "unjoined-thread",
+                )
+            },
+            ChannelInfo {
+                last_message_id: unread(308),
+                current_user_joined_thread: Some(true),
+                thread_metadata: Some(crate::discord::ThreadMetadataInfo::test(true, false)),
+                ..thread_channel_info(
+                    guild_id,
+                    visible_channel_id,
+                    archived_thread_id,
+                    "archived-thread",
+                )
+            },
         ],
     ));
 
@@ -260,6 +283,92 @@ fn notification_inbox_includes_only_eligible_unread_channels() {
         notification_inbox_channel_ids(&state),
         vec![visible_channel_id]
     );
+}
+
+#[test]
+fn notification_inbox_prefers_loaded_then_cached_post_content_and_title_fallback() {
+    let guild_id = Id::new(1);
+    let forum_id = Id::new(20);
+    let cached_thread_id = Id::new(31);
+    let fallback_thread_id = Id::new(32);
+    let cached_message_id = Id::new(301);
+    let mut state = DashboardState::new();
+    let thread = |thread_id, name: &str, last_message_id| ChannelInfo {
+        last_message_id: Some(Id::new(last_message_id)),
+        current_user_joined_thread: Some(true),
+        ..thread_channel_info(guild_id, forum_id, thread_id, name)
+    };
+
+    state.push_event(guild_create_event(
+        guild_id,
+        "guild",
+        vec![
+            ChannelInfo {
+                kind: "forum".to_owned(),
+                ..text_channel_info(guild_id, forum_id, "forum")
+            },
+            thread(cached_thread_id, "cached post", cached_message_id.get()),
+            thread(fallback_thread_id, "title only", 302),
+        ],
+    ));
+    state.push_event(forum_posts_loaded_event(ForumPostsLoadedFixture {
+        channel_id: forum_id,
+        first_messages: vec![MessageInfo {
+            guild_id: Some(guild_id),
+            channel_id: cached_thread_id,
+            message_id: cached_message_id,
+            author_id: Id::new(99),
+            author: "alice".to_owned(),
+            content: Some("cached starter content".to_owned()),
+            ..MessageInfo::default()
+        }],
+        ..ForumPostsLoadedFixture::new()
+    }));
+    state.open_notification_inbox();
+
+    let mut requested_channel_ids = Vec::new();
+    for _ in 0..2 {
+        let (request_id, channel_id) = state
+            .drain_pending_commands()
+            .into_iter()
+            .find_map(|command| match command {
+                AppCommand::LoadInboxChannelHistory {
+                    channel_id,
+                    request_id,
+                } => Some((request_id, channel_id)),
+                _ => None,
+            })
+            .expect("an unread history request should be pending");
+        requested_channel_ids.push(channel_id);
+        state.apply_inbox_channel_messages_loaded(request_id, channel_id, &[]);
+    }
+    requested_channel_ids.sort();
+    assert_eq!(
+        requested_channel_ids,
+        vec![cached_thread_id, fallback_thread_id]
+    );
+
+    let items = state
+        .notification_inbox_items()
+        .into_iter()
+        .filter_map(|item| match item {
+            NotificationInboxItem::Unread(item) => Some(item),
+            NotificationInboxItem::Mention(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let cached = items
+        .iter()
+        .find(|item| item.channel_id == cached_thread_id)
+        .expect("cached post should be in the inbox");
+    assert_eq!(cached.messages.len(), 1);
+    assert_eq!(cached.messages[0].content, "cached starter content");
+
+    let fallback = items
+        .iter()
+        .find(|item| item.channel_id == fallback_thread_id)
+        .expect("fallback post should be in the inbox");
+    assert!(fallback.messages.is_empty());
+    assert_eq!(fallback.fallback.as_deref(), Some("Post: title only"));
 }
 
 #[test]
@@ -337,23 +446,51 @@ fn desktop_notification_for_event_formats_eligible_guild_message() {
 }
 
 #[test]
-fn desktop_notification_for_event_suppresses_muted_channel() {
-    let mut state = state_with_hidden_and_visible_channels();
-    let channel_id = Id::new(3);
-    state.push_event(user_guild_settings_init(vec![
-        GuildNotificationSettingsInfo {
-            message_notifications: Some(NotificationLevel::AllMessages),
-            channel_overrides: vec![ChannelNotificationOverrideInfo {
+fn desktop_notification_and_sound_suppress_ineligible_channels() {
+    for (name, regular_channel_muted, joined, archived, thread_muted) in [
+        ("muted channel", true, true, false, false),
+        ("unjoined thread", false, false, false, false),
+        ("archived thread", false, true, true, false),
+        ("muted thread member", false, true, false, true),
+    ] {
+        let mut state = state_with_hidden_and_visible_channels();
+        let parent_id = Id::new(3);
+        let channel_id = if regular_channel_muted {
+            parent_id
+        } else {
+            let thread_id = Id::new(5);
+            state.push_event(AppEvent::ChannelUpsert(ChannelInfo {
+                current_user_joined_thread: Some(joined),
+                current_user_thread_notification_flags: Some(2),
+                current_user_thread_muted: Some(thread_muted),
+                thread_metadata: Some(crate::discord::ThreadMetadataInfo::test(archived, false)),
+                ..thread_channel_info(Id::new(1), parent_id, thread_id, "post")
+            }));
+            thread_id
+        };
+        let channel_overrides = regular_channel_muted
+            .then(|| ChannelNotificationOverrideInfo {
                 message_notifications: Some(NotificationLevel::AllMessages),
                 muted: true,
                 ..ChannelNotificationOverrideInfo::test(channel_id)
-            }],
-            ..GuildNotificationSettingsInfo::test(Some(Id::new(1)))
-        },
-    ]));
-    let event = notification_message_event(channel_id, "hello");
+            })
+            .into_iter()
+            .collect();
+        state.push_event(user_guild_settings_init(vec![
+            GuildNotificationSettingsInfo {
+                message_notifications: Some(NotificationLevel::AllMessages),
+                channel_overrides,
+                ..GuildNotificationSettingsInfo::test(Some(Id::new(1)))
+            },
+        ]));
+        let event = notification_message_event(channel_id, "hello");
 
-    assert!(state.desktop_notification_for_event(&event).is_none());
+        assert!(
+            state.desktop_notification_for_event(&event).is_none(),
+            "{name}"
+        );
+        assert!(!state.notification_sound_for_event(&event), "{name}");
+    }
 }
 
 #[test]

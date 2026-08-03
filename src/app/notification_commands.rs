@@ -70,7 +70,6 @@ pub(super) async fn set_channel_muted(
 
 pub(super) async fn set_thread_muted(
     client: DiscordClient,
-    guild_id: Option<Id<GuildMarker>>,
     channel_id: Id<ChannelMarker>,
     muted: bool,
     duration: Option<MuteDuration>,
@@ -82,16 +81,14 @@ pub(super) async fn set_thread_muted(
         .await
     {
         Ok(()) => {
-            // The real mute lives on the thread member, but the unread logic
-            // reads channel_overrides, so mirror the same optimistic override
-            // locally to flip the label immediately.
-            publish_settings_update(
-                &client,
-                guild_id,
-                None,
-                Some((channel_id, muted, mute_end_time)),
-            )
-            .await;
+            client
+                .publish_event(AppEvent::ThreadMuteUpdate {
+                    channel_id,
+                    muted,
+                    mute_end_time: mute_end_time
+                        .map(|end_time| end_time.to_rfc3339_opts(SecondsFormat::Millis, true)),
+                })
+                .await;
         }
         Err(error) => publish_app_error(&client, "set post mute failed", &error).await,
     }

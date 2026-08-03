@@ -51,6 +51,11 @@ pub struct ChannelInfo {
     /// Discord's raw current-user thread member `flags` bitfield. This keeps
     /// non-notification bits such as `HAS_INTERACTED` intact.
     pub current_user_thread_notification_flags: Option<u64>,
+    /// Discord's current-user thread member mute state. `None` means the
+    /// payload did not include thread member settings.
+    pub current_user_thread_muted: Option<bool>,
+    /// End time from the current-user thread member `mute_config`.
+    pub current_user_thread_mute_end_time: Option<String>,
     pub recipients: Option<Vec<ChannelRecipientInfo>>,
     /// Channel-level permission overrides. The empty default means a
     /// gateway/REST payload that omitted the field is treated as "no
@@ -137,6 +142,8 @@ impl ChannelInfo {
             applied_tags: Vec::new(),
             current_user_joined_thread: None,
             current_user_thread_notification_flags: None,
+            current_user_thread_muted: None,
+            current_user_thread_mute_end_time: None,
             recipients: None,
             permission_overwrites: Vec::new(),
             is_message_request: None,

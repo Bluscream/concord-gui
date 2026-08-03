@@ -168,6 +168,21 @@ pub(super) fn handle_forum_post_composer_key(
     }
 
     match key.code {
+        KeyCode::Char('s' | 'S')
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            return state.save_forum_post_composer();
+        }
+        KeyCode::Char('c' | 'C')
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            state.close_forum_post_composer();
+            return None;
+        }
         KeyCode::Tab => {
             state.cycle_forum_post_field_next();
             return None;
@@ -304,6 +319,21 @@ pub(super) fn handle_thread_edit_key(
     }
 
     match key.code {
+        KeyCode::Char('s' | 'S')
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            return state.submit_thread_edit();
+        }
+        KeyCode::Char('c' | 'C')
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            state.close_thread_edit();
+            return None;
+        }
         KeyCode::Tab => {
             state.cycle_thread_edit_field_next();
             return None;

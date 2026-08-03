@@ -22,6 +22,9 @@ const GUILD_UNREADS_ALL_MESSAGES: u64 = 1 << 11;
 const GUILD_UNREADS_ONLY_MENTIONS: u64 = 1 << 12;
 const GUILD_OPT_IN_CHANNELS_OFF: u64 = 1 << 13;
 const GUILD_OPT_IN_CHANNELS_ON: u64 = 1 << 14;
+const THREAD_NOTIFICATIONS_ALL_MESSAGES: u64 = 1 << 1;
+const THREAD_NOTIFICATIONS_ONLY_MENTIONS: u64 = 1 << 2;
+const THREAD_NOTIFICATIONS_NONE: u64 = 1 << 3;
 // Discord only nests a thread under a channel and a channel under a category.
 const MAX_CHANNEL_ANCESTRY_NODES: usize = 3;
 pub(in crate::discord) const READ_STATE_MENTION_LOW_IMPORTANCE: u64 = 1 << 2;
@@ -111,14 +114,8 @@ impl DiscordState {
     }
 
     pub fn channel_sidebar_unread(&self, channel_id: Id<ChannelMarker>) -> ChannelUnreadState {
-        if !self.channel_visible_in_notification_settings(channel_id) {
-            return ChannelUnreadState::Seen;
-        }
-        if self
-            .navigation
-            .channels
-            .get(&channel_id)
-            .is_some_and(|channel| channel.is_thread() && !channel.current_user_joined_thread)
+        if !self.channel_notification_eligible(channel_id)
+            || !self.channel_visible_in_notification_settings(channel_id)
         {
             return ChannelUnreadState::Seen;
         }
@@ -138,8 +135,7 @@ impl DiscordState {
                         .filter(|channel| {
                             channel.is_thread()
                                 && channel.parent_id == Some(channel_id)
-                                && channel.current_user_joined_thread
-                                && self.can_view_channel(channel)
+                                && self.channel_notification_eligible(channel.id)
                         })
                         .map(|channel| self.channel_sidebar_unread(channel.id)),
                 ),
@@ -182,27 +178,42 @@ impl DiscordState {
     }
 
     pub fn channel_notification_muted(&self, channel_id: Id<ChannelMarker>) -> bool {
+        if self.thread_notification_muted(channel_id) {
+            return true;
+        }
         self.notification_settings_for_channel(channel_id)
             .is_some_and(|settings| {
                 self.channel_notification_muted_in_settings(settings, channel_id)
             })
     }
 
-    /// Inbox visibility uses the effective notification state for the whole
-    /// channel scope. Keep this separate from `channel_notification_muted`,
-    /// which represents only the channel override used by mute toggle actions.
+    pub fn thread_notification_muted(&self, channel_id: Id<ChannelMarker>) -> bool {
+        self.navigation
+            .channels
+            .get(&channel_id)
+            .filter(|channel| channel.is_thread())
+            .is_some_and(|channel| {
+                notification_setting_muted(
+                    channel.current_user_thread_muted,
+                    channel.current_user_thread_mute_end_time.as_deref(),
+                )
+            })
+    }
+
+    /// Inbox visibility also applies the whole-scope mute and channel-list
+    /// visibility rules that are not part of the effective channel mute.
     pub fn channel_inbox_unread(&self, channel_id: Id<ChannelMarker>) -> ChannelUnreadState {
-        let Some(channel) = self.navigation.channels.get(&channel_id) else {
+        if !self.navigation.channels.contains_key(&channel_id) {
             return ChannelUnreadState::Seen;
-        };
+        }
         let scope_muted = self
             .notification_settings_for_channel(channel_id)
             .is_some_and(|settings| {
                 notification_setting_muted(settings.muted, settings.mute_end_time.as_deref())
             });
         if scope_muted
+            || !self.channel_notification_eligible(channel_id)
             || !self.channel_visible_in_notification_settings(channel_id)
-            || channel.is_thread() && !channel.current_user_joined_thread
             || self.channel_notification_muted(channel_id)
         {
             ChannelUnreadState::Seen
@@ -380,6 +391,12 @@ impl DiscordState {
         let Some(guild_id) = message.guild_id else {
             return self.private_message_notification_kind(message.channel_id, message.mentions);
         };
+        if !self.channel_notification_eligible(message.channel_id) {
+            return MessageNotificationKind::None;
+        }
+        if self.thread_notification_muted(message.channel_id) {
+            return MessageNotificationKind::None;
+        }
         let mentions_current_user = |settings: &GuildNotificationSettingsState| {
             self.message_mentions_current_user(
                 guild_id,
@@ -391,17 +408,30 @@ impl DiscordState {
             )
         };
         let Some(settings) = self.notifications.notification_settings.get(&guild_id) else {
-            return if self.message_mentions_current_user(
+            let mentions_current_user = self.message_mentions_current_user(
                 guild_id,
                 message.mentions,
                 message.mention_everyone,
                 message.mention_roles,
                 false,
                 false,
-            ) {
-                MessageNotificationKind::Mention
-            } else {
-                MessageNotificationKind::None
+            );
+            return match self
+                .thread_notification_level(message.channel_id)
+                .unwrap_or(NotificationLevel::OnlyMentions)
+            {
+                NotificationLevel::AllMessages if mentions_current_user => {
+                    MessageNotificationKind::Mention
+                }
+                NotificationLevel::AllMessages => MessageNotificationKind::Notify,
+                NotificationLevel::OnlyMentions | NotificationLevel::ParentDefault
+                    if mentions_current_user =>
+                {
+                    MessageNotificationKind::Mention
+                }
+                NotificationLevel::OnlyMentions
+                | NotificationLevel::ParentDefault
+                | NotificationLevel::NoMessages => MessageNotificationKind::None,
             };
         };
         if notification_setting_muted(settings.muted, settings.mute_end_time.as_deref())
@@ -504,6 +534,9 @@ impl DiscordState {
         settings: &GuildNotificationSettingsState,
         channel_id: Id<ChannelMarker>,
     ) -> NotificationLevel {
+        if let Some(level) = self.thread_notification_level(channel_id) {
+            return level;
+        }
         if let Some(flags) = settings
             .channel_overrides
             .get(&channel_id)
@@ -566,6 +599,41 @@ impl DiscordState {
             .is_some_and(|setting| {
                 notification_setting_muted(setting.muted, setting.mute_end_time.as_deref())
             })
+    }
+
+    pub fn channel_notification_eligible(&self, channel_id: Id<ChannelMarker>) -> bool {
+        let Some(channel) = self.navigation.channels.get(&channel_id) else {
+            // Gateway message events can arrive before a lazy channel payload.
+            // Keep the existing optimistic policy until Discord supplies the
+            // channel data needed for membership and permission checks.
+            return true;
+        };
+        if !self.can_view_channel(channel) {
+            return false;
+        }
+        !channel.is_thread()
+            || channel.current_user_joined_thread && !channel.thread_archived().unwrap_or(false)
+    }
+
+    fn thread_notification_level(
+        &self,
+        channel_id: Id<ChannelMarker>,
+    ) -> Option<NotificationLevel> {
+        let flags = self
+            .navigation
+            .channels
+            .get(&channel_id)
+            .filter(|channel| channel.is_thread())?
+            .current_user_thread_notification_flags?;
+        if flags & THREAD_NOTIFICATIONS_NONE != 0 {
+            Some(NotificationLevel::NoMessages)
+        } else if flags & THREAD_NOTIFICATIONS_ONLY_MENTIONS != 0 {
+            Some(NotificationLevel::OnlyMentions)
+        } else if flags & THREAD_NOTIFICATIONS_ALL_MESSAGES != 0 {
+            Some(NotificationLevel::AllMessages)
+        } else {
+            None
+        }
     }
 
     fn notification_settings_for_channel(

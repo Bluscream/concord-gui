@@ -383,6 +383,215 @@ fn thread_notification_settings_walk_the_full_channel_ancestry() {
 }
 
 #[test]
+fn thread_notification_policy_uses_membership_activity_permissions_mute_and_level() {
+    const VIEW_CHANNEL: u64 = 0x0000_0000_0000_0400;
+
+    struct Case {
+        name: &'static str,
+        joined: bool,
+        archived: bool,
+        can_view: bool,
+        muted: bool,
+        flags: Option<u64>,
+        mentions_current_user: bool,
+        audible: bool,
+        inbox: ChannelUnreadState,
+    }
+
+    let guild_id = Id::new(1);
+    let parent_id = Id::new(2);
+    let thread_id = Id::new(3);
+    let current_user_id = Id::new(10);
+    let author_id = Id::new(20);
+
+    for case in [
+        Case {
+            name: "joined active thread inherits all messages",
+            joined: true,
+            archived: false,
+            can_view: true,
+            muted: false,
+            flags: None,
+            mentions_current_user: false,
+            audible: true,
+            inbox: ChannelUnreadState::Notified(1),
+        },
+        Case {
+            name: "unjoined thread",
+            joined: false,
+            archived: false,
+            can_view: true,
+            muted: false,
+            flags: Some(2),
+            mentions_current_user: true,
+            audible: false,
+            inbox: ChannelUnreadState::Seen,
+        },
+        Case {
+            name: "archived thread",
+            joined: true,
+            archived: true,
+            can_view: true,
+            muted: false,
+            flags: Some(2),
+            mentions_current_user: true,
+            audible: false,
+            inbox: ChannelUnreadState::Seen,
+        },
+        Case {
+            name: "hidden thread",
+            joined: true,
+            archived: false,
+            can_view: false,
+            muted: false,
+            flags: Some(2),
+            mentions_current_user: true,
+            audible: false,
+            inbox: ChannelUnreadState::Seen,
+        },
+        Case {
+            name: "muted thread member",
+            joined: true,
+            archived: false,
+            can_view: true,
+            muted: true,
+            flags: Some(2),
+            mentions_current_user: true,
+            audible: false,
+            inbox: ChannelUnreadState::Seen,
+        },
+        Case {
+            name: "all messages thread flag",
+            joined: true,
+            archived: false,
+            can_view: true,
+            muted: false,
+            flags: Some(2),
+            mentions_current_user: false,
+            audible: true,
+            inbox: ChannelUnreadState::Notified(1),
+        },
+        Case {
+            name: "mentions-only thread flag without mention",
+            joined: true,
+            archived: false,
+            can_view: true,
+            muted: false,
+            flags: Some(4),
+            mentions_current_user: false,
+            audible: false,
+            inbox: ChannelUnreadState::Unread,
+        },
+        Case {
+            name: "mentions-only thread flag with mention",
+            joined: true,
+            archived: false,
+            can_view: true,
+            muted: false,
+            flags: Some(4),
+            mentions_current_user: true,
+            audible: true,
+            inbox: ChannelUnreadState::Mentioned(1),
+        },
+        Case {
+            name: "no-messages thread flag",
+            joined: true,
+            archived: false,
+            can_view: true,
+            muted: false,
+            flags: Some(8),
+            mentions_current_user: true,
+            audible: false,
+            inbox: ChannelUnreadState::Unread,
+        },
+    ] {
+        let parent_permissions = if case.can_view { VIEW_CHANNEL } else { 0 };
+        let mut state = DiscordState::default();
+        state.apply_event(&AppEvent::Ready {
+            user: "me".to_owned(),
+            user_id: Some(current_user_id),
+        });
+        state.apply_event(&guild_create_event(GuildCreateFixture {
+            guild_id,
+            owner_id: Some(Id::new(99)),
+            channels: vec![
+                ChannelInfo {
+                    guild_id: Some(guild_id),
+                    name: "forum".to_owned(),
+                    kind: "forum".to_owned(),
+                    ..channel_info(parent_id, "forum", Vec::new())
+                },
+                ChannelInfo {
+                    guild_id: Some(guild_id),
+                    parent_id: Some(parent_id),
+                    name: "post".to_owned(),
+                    current_user_joined_thread: Some(case.joined),
+                    current_user_thread_notification_flags: case.flags,
+                    current_user_thread_muted: Some(false),
+                    thread_metadata: Some(crate::discord::ThreadMetadataInfo::test(
+                        case.archived,
+                        false,
+                    )),
+                    ..channel_info(thread_id, "GuildPublicThread", Vec::new())
+                },
+            ],
+            members: vec![member_with_roles(current_user_id, "me", Vec::new())],
+            roles: vec![role_info(
+                Id::new(guild_id.get()),
+                "@everyone",
+                parent_permissions,
+            )],
+            ..GuildCreateFixture::new(guild_id)
+        }));
+        state.apply_event(&user_guild_settings_init(vec![notification_settings(
+            guild_id,
+            NotificationLevel::AllMessages,
+        )]));
+        if case.muted {
+            state.apply_event(&AppEvent::ThreadMuteUpdate {
+                channel_id: thread_id,
+                muted: true,
+                mute_end_time: None,
+            });
+        }
+
+        let mentions = if case.mentions_current_user {
+            vec![mention_info(current_user_id.get(), "me")]
+        } else {
+            Vec::new()
+        };
+        let event = message_create(
+            Some(guild_id),
+            thread_id,
+            Id::new(30),
+            author_id,
+            "hello",
+            mentions,
+        );
+
+        assert_eq!(
+            state.message_event_triggers_notification(&event),
+            case.audible,
+            "{}",
+            case.name
+        );
+        state.apply_event(&event);
+        assert_eq!(
+            state.channel_inbox_unread(thread_id),
+            case.inbox,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            state.channel_sidebar_unread(thread_id),
+            case.inbox,
+            "{}",
+            case.name
+        );
+    }
+}
+
+#[test]
 fn only_mentions_settings_use_resolved_mentions() {
     let guild_id = Id::new(1);
     let channel_id = Id::new(2);

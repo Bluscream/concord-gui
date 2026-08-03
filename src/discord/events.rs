@@ -104,6 +104,9 @@ pub struct ThreadListSyncInfo {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ThreadMemberUpdateInfo {
     pub user_id: Id<UserMarker>,
+    pub flags: Option<u64>,
+    pub muted: Option<bool>,
+    pub mute_end_time: Option<String>,
     pub extra_fields: BTreeMap<String, Value>,
 }
 
@@ -113,7 +116,6 @@ pub struct ThreadMembersUpdateInfo {
     pub channel_id: Id<ChannelMarker>,
     pub member_count: Option<u64>,
     pub added_members: Vec<ThreadMemberUpdateInfo>,
-    pub added_user_ids: Vec<Id<UserMarker>>,
     pub removed_user_ids: Vec<Id<UserMarker>>,
     pub extra_fields: BTreeMap<String, Value>,
 }
@@ -278,6 +280,8 @@ pub enum AppEvent {
         guild_id: Option<Id<GuildMarker>>,
         channel_id: Id<ChannelMarker>,
         flags: Option<u64>,
+        muted: Option<bool>,
+        mute_end_time: Option<String>,
     },
     MessageCreate {
         message: MessageInfo,
@@ -702,6 +706,12 @@ pub enum AppEvent {
         channel_id: Id<ChannelMarker>,
         flags: u64,
     },
+    /// Optimistic update for the current user's thread member mute settings.
+    ThreadMuteUpdate {
+        channel_id: Id<ChannelMarker>,
+        muted: bool,
+        mute_end_time: Option<String>,
+    },
 }
 
 macro_rules! define_app_event_kinds {
@@ -815,6 +825,7 @@ define_app_event_kinds! {
     GatewayError: AppEvent::GatewayError { .. },
     CaptchaRequired: AppEvent::CaptchaRequired { .. },
     ThreadNotificationLevelUpdate: AppEvent::ThreadNotificationLevelUpdate { .. },
+    ThreadMuteUpdate: AppEvent::ThreadMuteUpdate { .. },
     MediaPlaybackWindowReady: AppEvent::MediaPlaybackWindowReady { .. },
     StreamPlaybackWindowReady: AppEvent::StreamPlaybackWindowReady { .. },
     StreamPlaybackEnded: AppEvent::StreamPlaybackEnded { .. },
@@ -1899,7 +1910,7 @@ impl AppEventKind {
                 AppEventMetadata::mutating_effect(SnapshotAreas::navigation())
             }
 
-            AppEventKind::ThreadNotificationLevelUpdate => {
+            AppEventKind::ThreadNotificationLevelUpdate | AppEventKind::ThreadMuteUpdate => {
                 AppEventMetadata::mutating(SnapshotAreas::navigation())
             }
         }

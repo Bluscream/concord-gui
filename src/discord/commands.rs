@@ -716,7 +716,6 @@ pub enum AppCommand {
     /// Mute a forum post (thread). Uses the thread-member settings endpoint
     /// rather than the guild `channel_overrides`, which rejects thread types.
     SetThreadMuted {
-        guild_id: Option<Id<GuildMarker>>,
         channel_id: Id<ChannelMarker>,
         muted: bool,
         duration: Option<MuteDuration>,

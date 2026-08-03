@@ -189,16 +189,11 @@ impl DashboardState {
     }
 
     fn option_category_items(&self) -> Vec<DisplayOptionItem> {
-        let key_bindings = self.options.key_bindings();
         vec![
             DisplayOptionItem {
                 label: "Display",
                 enabled: true,
-                value: Some(
-                    key_bindings
-                        .options_category_shortcut_label(OptionsCategoryShortcut::Display)
-                        .to_owned(),
-                ),
+                value: Some(OptionsCategoryShortcut::Display.key().to_string()),
                 gauge: None,
                 effective: true,
                 description: "Image, custom emoji, and pane display settings.",
@@ -206,11 +201,7 @@ impl DashboardState {
             DisplayOptionItem {
                 label: "Composer",
                 enabled: true,
-                value: Some(
-                    key_bindings
-                        .options_category_shortcut_label(OptionsCategoryShortcut::Composer)
-                        .to_owned(),
-                ),
+                value: Some(OptionsCategoryShortcut::Composer.key().to_string()),
                 gauge: None,
                 effective: true,
                 description: "Message input and send-format settings.",
@@ -218,11 +209,7 @@ impl DashboardState {
             DisplayOptionItem {
                 label: "Notifications",
                 enabled: true,
-                value: Some(
-                    key_bindings
-                        .options_category_shortcut_label(OptionsCategoryShortcut::Notifications)
-                        .to_owned(),
-                ),
+                value: Some(OptionsCategoryShortcut::Notifications.key().to_string()),
                 gauge: None,
                 effective: true,
                 description: "Desktop notification settings.",
@@ -230,11 +217,7 @@ impl DashboardState {
             DisplayOptionItem {
                 label: "Voice",
                 enabled: true,
-                value: Some(
-                    key_bindings
-                        .options_category_shortcut_label(OptionsCategoryShortcut::Voice)
-                        .to_owned(),
-                ),
+                value: Some(OptionsCategoryShortcut::Voice.key().to_string()),
                 gauge: None,
                 effective: true,
                 description: "Mute, deaf, push-to-talk, microphone processing, and volume settings.",

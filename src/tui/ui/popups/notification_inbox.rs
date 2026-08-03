@@ -323,6 +323,9 @@ fn notification_inbox_unread_placeholder(item: &NotificationInboxUnreadItem) -> 
     if item.load == NotificationInboxChannelLoad::Loading {
         return "loading…".to_owned();
     }
+    if let Some(fallback) = &item.fallback {
+        return fallback.clone();
+    }
     match item.unread {
         ChannelUnreadState::Mentioned(count) => {
             format!("{count} new mention{}", plural_suffix(count))

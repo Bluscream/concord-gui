@@ -564,6 +564,8 @@ fn channel_with_recipients(kind: &str, statuses: &[PresenceStatus]) -> ChannelSt
         applied_tags: Vec::new(),
         current_user_joined_thread: false,
         current_user_thread_notification_flags: None,
+        current_user_thread_muted: false,
+        current_user_thread_mute_end_time: None,
         recipients: statuses
             .iter()
             .enumerate()

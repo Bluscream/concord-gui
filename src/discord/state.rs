@@ -378,19 +378,34 @@ impl DiscordState {
                 let Some(current_user_id) = self.session.current_user_id else {
                     return;
                 };
-                if update.added_user_ids.contains(&current_user_id) {
-                    self.set_current_user_thread_membership(update.channel_id, true);
+                if let Some(member) = update
+                    .added_members
+                    .iter()
+                    .find(|member| member.user_id == current_user_id)
+                {
+                    self.set_current_user_thread_member_settings(
+                        update.channel_id,
+                        member.flags,
+                        member.muted,
+                        member.mute_end_time.clone(),
+                    );
                 } else if update.removed_user_ids.contains(&current_user_id) {
                     self.set_current_user_thread_membership(update.channel_id, false);
                 }
             }
             AppEvent::ThreadMemberUpdate {
-                channel_id, flags, ..
+                channel_id,
+                flags,
+                muted,
+                mute_end_time,
+                ..
             } => {
-                self.set_current_user_thread_membership(*channel_id, true);
-                if let Some(flags) = flags {
-                    self.set_thread_notification_flags(*channel_id, *flags);
-                }
+                self.set_current_user_thread_member_settings(
+                    *channel_id,
+                    *flags,
+                    *muted,
+                    mute_end_time.clone(),
+                );
             }
             AppEvent::ForumPostsLoaded {
                 threads,
@@ -824,6 +839,13 @@ impl DiscordState {
             }
             AppEvent::ThreadNotificationLevelUpdate { channel_id, flags } => {
                 self.set_thread_notification_level(*channel_id, *flags);
+            }
+            AppEvent::ThreadMuteUpdate {
+                channel_id,
+                muted,
+                mute_end_time,
+            } => {
+                self.set_thread_mute(*channel_id, *muted, mute_end_time.clone());
             }
             AppEvent::GatewayDispatchReceived { .. }
             | AppEvent::GatewayError { .. }

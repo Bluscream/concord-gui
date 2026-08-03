@@ -371,6 +371,30 @@ pub enum OptionsCategoryShortcut {
     Voice,
 }
 
+impl OptionsCategoryShortcut {
+    pub(in crate::tui) const ALL: [Self; 4] = [
+        Self::Display,
+        Self::Composer,
+        Self::Notifications,
+        Self::Voice,
+    ];
+
+    pub(in crate::tui) const fn key(self) -> char {
+        match self {
+            Self::Display => 'd',
+            Self::Composer => 'c',
+            Self::Notifications => 'n',
+            Self::Voice => 'v',
+        }
+    }
+
+    pub(in crate::tui) fn from_key(value: char) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|category| value.eq_ignore_ascii_case(&category.key()))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::tui) enum OptionsPopupAction {
     Close,

@@ -143,8 +143,7 @@ impl DiscordState {
             .filter(|channel| {
                 channel.is_thread()
                     && channel.parent_id == Some(forum_id)
-                    && channel.current_user_joined_thread
-                    && self.can_view_channel(channel)
+                    && self.channel_notification_eligible(channel.id)
             })
             .filter_map(|channel| {
                 self.channel_ack_target(channel.id)

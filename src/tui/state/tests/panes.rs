@@ -517,7 +517,6 @@ fn channel_tree_removes_thread_after_current_user_leaves() {
 
     state.push_event(thread_members_update_event(
         thread_id,
-        Vec::new(),
         vec![current_user_id],
     ));
 

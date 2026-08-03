@@ -67,6 +67,7 @@ pub struct NotificationInboxUnreadItem {
     pub context: Option<String>,
     pub unread: ChannelUnreadState,
     pub messages: Vec<NotificationInboxMessage>,
+    pub fallback: Option<String>,
     pub load: NotificationInboxChannelLoad,
 }
 
@@ -537,6 +538,11 @@ impl DashboardState {
         }
         let items = messages
             .iter()
+            .filter(|message| {
+                self.discord
+                    .cache
+                    .channel_notification_eligible(message.channel_id)
+            })
             .map(|message| self.inbox_mention_item(message))
             .collect::<Vec<_>>();
         let next_before = messages.last().map(|message| message.message_id);
@@ -597,7 +603,10 @@ impl DashboardState {
             return;
         }
         let refs = messages.iter().collect::<Vec<_>>();
-        let previews = self.inbox_channel_previews(&refs);
+        let mut previews = self.inbox_channel_previews(&refs);
+        if previews.is_empty() {
+            previews = self.inbox_cached_channel_previews(channel_id);
+        }
         if let Some(inbox) = self.popups.notification_inbox_mut() {
             inbox.finish_unread_history_request(channel_id);
             if let Some(item) = inbox.unread_item_mut(channel_id) {
@@ -616,9 +625,11 @@ impl DashboardState {
         if !self.inbox_request_matches(request_id) {
             return;
         }
+        let previews = self.inbox_cached_channel_previews(channel_id);
         if let Some(inbox) = self.popups.notification_inbox_mut() {
             inbox.finish_unread_history_request(channel_id);
             if let Some(item) = inbox.unread_item_mut(channel_id) {
+                item.messages = previews;
                 item.load = NotificationInboxChannelLoad::Loaded;
             }
         }
@@ -837,6 +848,9 @@ impl DashboardState {
             context,
             unread,
             messages: Vec::new(),
+            fallback: channel
+                .is_thread()
+                .then(|| format!("Post: {}", channel.name)),
             load: NotificationInboxChannelLoad::Pending,
         }
     }
@@ -880,6 +894,49 @@ impl DashboardState {
             .collect()
     }
 
+    fn inbox_cached_channel_previews(
+        &self,
+        channel_id: Id<ChannelMarker>,
+    ) -> Vec<NotificationInboxMessage> {
+        let current_user = self.current_user_id();
+        let messages = self.discord.cache.messages_for_channel(channel_id);
+        let eligible = messages
+            .into_iter()
+            .filter(|message| Some(message.author_id) != current_user)
+            .filter(|message| {
+                message.content.is_some()
+                    || !message.attachments.is_empty()
+                    || !message.sticker_names.is_empty()
+                    || !message.embeds.is_empty()
+            })
+            .collect::<Vec<_>>();
+        let start = eligible
+            .len()
+            .saturating_sub(MAX_INBOX_MESSAGES_PER_CHANNEL);
+        eligible[start..]
+            .iter()
+            .map(|message| NotificationInboxMessage {
+                author_id: message.author_id,
+                author: message.author.clone(),
+                author_role_ids: Vec::new(),
+                author_role_color: self.inbox_author_role_color(
+                    message.guild_id,
+                    message.channel_id,
+                    message.author_id,
+                    &[],
+                ),
+                content: self.inbox_preview_content(
+                    message.guild_id,
+                    &message.mentions,
+                    message.content.as_deref(),
+                    !message.attachments.is_empty(),
+                    &message.sticker_names,
+                    !message.embeds.is_empty(),
+                ),
+            })
+            .collect()
+    }
+
     fn inbox_message_preview(&self, message: &MessageInfo) -> NotificationInboxMessage {
         let author_role_color = self.inbox_author_role_color(
             message.guild_id,
@@ -887,30 +944,44 @@ impl DashboardState {
             message.author_id,
             &message.author_role_ids,
         );
-        let content = match message
-            .content
-            .as_deref()
-            .map(str::trim)
-            .filter(|content| !content.is_empty())
-        {
-            Some(text) => self
-                .render_user_mentions(message.guild_id, &message.mentions, text)
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" "),
-            None if !message.attachments.is_empty() => "[attachment]".to_owned(),
-            None if !message.sticker_names.is_empty() => {
-                format!("[sticker] {}", message.sticker_names.join(", "))
-            }
-            None if !message.embeds.is_empty() => "[embed]".to_owned(),
-            None => "<empty message>".to_owned(),
-        };
+        let content = self.inbox_preview_content(
+            message.guild_id,
+            &message.mentions,
+            message.content.as_deref(),
+            !message.attachments.is_empty(),
+            &message.sticker_names,
+            !message.embeds.is_empty(),
+        );
         NotificationInboxMessage {
             author_id: message.author_id,
             author: message.author.clone(),
             author_role_ids: message.author_role_ids.clone(),
             author_role_color,
             content,
+        }
+    }
+
+    fn inbox_preview_content(
+        &self,
+        guild_id: Option<Id<GuildMarker>>,
+        mentions: &[crate::discord::MentionInfo],
+        content: Option<&str>,
+        has_attachments: bool,
+        sticker_names: &[String],
+        has_embeds: bool,
+    ) -> String {
+        match content.map(str::trim).filter(|content| !content.is_empty()) {
+            Some(text) => self
+                .render_user_mentions(guild_id, mentions, text)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
+            None if has_attachments => "[attachment]".to_owned(),
+            None if !sticker_names.is_empty() => {
+                format!("[sticker] {}", sticker_names.join(", "))
+            }
+            None if has_embeds => "[embed]".to_owned(),
+            None => "<empty message>".to_owned(),
         }
     }
 
@@ -974,6 +1045,7 @@ mod tests {
             context: None,
             unread: ChannelUnreadState::Unread,
             messages: Vec::new(),
+            fallback: None,
             load: NotificationInboxChannelLoad::Pending,
         }
     }

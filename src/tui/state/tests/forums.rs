@@ -697,37 +697,42 @@ fn forum_sidebar_unread_aggregates_unread_child_posts() {
 }
 
 #[test]
-fn forum_sidebar_unread_ignores_left_child_posts() {
+fn forum_sidebar_unread_ignores_ineligible_child_posts() {
     let guild_id = Id::new(1);
     let forum_id = Id::new(20);
     let thread_id = Id::new(31);
-    let mut left_thread = forum_thread_info(
-        guild_id,
-        forum_id,
-        thread_id.get(),
-        "left post",
-        Some(300),
-        false,
-    );
-    left_thread.current_user_joined_thread = Some(false);
-    let mut state = DashboardState::new();
 
-    state.push_event(guild_create_event(GuildCreateFixture {
-        channels: vec![forum_channel_info(guild_id, forum_id), left_thread],
-        ..GuildCreateFixture::new(guild_id)
-    }));
-    state.push_event(AppEvent::ReadStateInit {
-        entries: vec![read_state_info(thread_id, Some(Id::new(299)), 0)],
-    });
+    for (name, joined, archived) in [("left post", false, false), ("archived post", true, true)] {
+        let mut thread = forum_thread_info(
+            guild_id,
+            forum_id,
+            thread_id.get(),
+            name,
+            Some(300),
+            archived,
+        );
+        thread.current_user_joined_thread = Some(joined);
+        let mut state = DashboardState::new();
 
-    assert_eq!(
-        state.sidebar_channel_unread(forum_id),
-        ChannelUnreadState::Seen
-    );
-    assert_eq!(
-        state.sidebar_guild_unread(guild_id),
-        ChannelUnreadState::Seen
-    );
+        state.push_event(guild_create_event(GuildCreateFixture {
+            channels: vec![forum_channel_info(guild_id, forum_id), thread],
+            ..GuildCreateFixture::new(guild_id)
+        }));
+        state.push_event(AppEvent::ReadStateInit {
+            entries: vec![read_state_info(thread_id, Some(Id::new(299)), 0)],
+        });
+
+        assert_eq!(
+            state.sidebar_channel_unread(forum_id),
+            ChannelUnreadState::Seen,
+            "{name}"
+        );
+        assert_eq!(
+            state.sidebar_guild_unread(guild_id),
+            ChannelUnreadState::Seen,
+            "{name}"
+        );
+    }
 }
 
 #[test]
@@ -1810,6 +1815,8 @@ fn thread_notification_settings_marks_current_level_after_update() {
         guild_id: Some(Id::new(1)),
         channel_id: Id::new(31),
         flags: Some(9),
+        muted: None,
+        mute_end_time: None,
     });
     state.push_event(AppEvent::ThreadNotificationLevelUpdate {
         channel_id: Id::new(31),

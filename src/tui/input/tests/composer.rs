@@ -18,7 +18,7 @@ fn composer_requires_selected_channel() {
 }
 
 #[test]
-fn thread_edit_selector_cycles_with_h_and_l() {
+fn thread_edit_shortcuts_cycle_selectors_submit_and_cancel() {
     let mut state = state_with_forum_channel_posts();
     state.open_thread_edit(Id::new(31));
 
@@ -46,6 +46,18 @@ fn thread_edit_selector_cycles_with_h_and_l() {
         .expect("edit view")
         .auto_archive_label;
     assert_eq!(initial, back);
+
+    assert!(matches!(
+        handle_key(&mut state, char_key('s')),
+        Some(AppCommand::EditThread { channel_id, .. }) if channel_id == Id::new(31)
+    ));
+    assert!(!state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::ThreadEdit));
+
+    let mut state = state_with_forum_channel_posts();
+    state.open_thread_edit(Id::new(31));
+    handle_key(&mut state, char_key('c'));
+
+    assert!(!state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::ThreadEdit));
 }
 
 #[test]
@@ -90,7 +102,7 @@ fn forum_post_overlay_requires_enter_before_text_editing() {
 }
 
 #[test]
-fn forum_post_overlay_keys_submit_with_pasted_attachment() {
+fn forum_post_overlay_shortcuts_submit_and_cancel() {
     let attachment = temp_upload_file("forum post.txt", b"attachment body");
     let mut state = state_with_forum_channel_posts();
     handle_key(&mut state, char_key('i'));
@@ -111,13 +123,8 @@ fn forum_post_overlay_keys_submit_with_pasted_attachment() {
     ));
     handle_key(&mut state, key(KeyCode::Enter));
 
-    // Tab from Body past Attachments and Tags to the submit button, then Enter.
-    handle_key(&mut state, key(KeyCode::Tab));
-    handle_key(&mut state, key(KeyCode::Tab));
-    handle_key(&mut state, key(KeyCode::Tab));
-    let Some(AppCommand::CreateForumPost { post }) = handle_key(&mut state, key(KeyCode::Enter))
-    else {
-        panic!("forum post overlay should submit create command from the Create Post button");
+    let Some(AppCommand::CreateForumPost { post }) = handle_key(&mut state, char_key('s')) else {
+        panic!("forum post overlay should submit create command with its submit shortcut");
     };
 
     assert_eq!(post.channel_id, Id::new(20));
@@ -129,6 +136,14 @@ fn forum_post_overlay_keys_submit_with_pasted_attachment() {
         !state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::ForumPostComposer)
     );
     remove_temp_upload_file(&attachment);
+
+    let mut state = state_with_forum_channel_posts();
+    handle_key(&mut state, char_key('i'));
+    handle_key(&mut state, char_key('c'));
+
+    assert!(
+        !state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::ForumPostComposer)
+    );
 }
 
 #[test]

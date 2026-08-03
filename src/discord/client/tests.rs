@@ -113,6 +113,8 @@ async fn publish_event_sends_matching_snapshot_and_effect_revisions() {
             guild_id: Some(Id::new(1)),
             channel_id: Id::new(2),
             flags: Some(9),
+            muted: None,
+            mute_end_time: None,
         })
         .await;
 

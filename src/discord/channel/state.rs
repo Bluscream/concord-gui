@@ -49,6 +49,10 @@ pub struct ChannelState {
     /// Discord's raw current-user thread member flags. Notification settings
     /// use bits 1 through 3, while other bits remain preserved.
     pub current_user_thread_notification_flags: Option<u64>,
+    /// Mute state stored on the current user's thread member object.
+    pub current_user_thread_muted: bool,
+    /// Optional expiry for the current user's thread mute.
+    pub current_user_thread_mute_end_time: Option<String>,
     pub recipients: Vec<ChannelRecipientState>,
     /// Channel-level permission overrides used by `can_view_channel`. Threads
     /// inherit from their parent channel, so this stays empty for threads
@@ -367,6 +371,11 @@ impl DiscordState {
                 created_by_current_user.then_some(true)
             })
             .unwrap_or(false);
+        let current_user_thread_mute_end_time = if channel.current_user_thread_muted.is_some() {
+            channel.current_user_thread_mute_end_time.clone()
+        } else {
+            existing.and_then(|existing| existing.current_user_thread_mute_end_time.clone())
+        };
 
         // Build the row before touching the index so the `existing` borrow ends
         // before the copy-on-write mutable borrow starts.
@@ -395,6 +404,11 @@ impl DiscordState {
                 .or_else(|| {
                     existing.and_then(|existing| existing.current_user_thread_notification_flags)
                 }),
+            current_user_thread_muted: channel
+                .current_user_thread_muted
+                .or_else(|| existing.map(|existing| existing.current_user_thread_muted))
+                .unwrap_or(false),
+            current_user_thread_mute_end_time,
             recipients,
             permission_overwrites,
             // Preserve across upserts: a partial CHANNEL_UPDATE that omits
@@ -411,16 +425,6 @@ impl DiscordState {
             .insert(channel.channel_id, state);
     }
 
-    pub(in crate::discord) fn set_thread_notification_flags(
-        &mut self,
-        channel_id: Id<ChannelMarker>,
-        flags: u64,
-    ) {
-        if let Some(channel) = self.navigation_mut().channels.get_mut(&channel_id) {
-            channel.current_user_thread_notification_flags = Some(flags);
-        }
-    }
-
     pub(in crate::discord) fn set_thread_notification_level(
         &mut self,
         channel_id: Id<ChannelMarker>,
@@ -432,6 +436,42 @@ impl DiscordState {
                 (current_flags & !THREAD_NOTIFICATION_FLAGS_MASK)
                     | (flags & THREAD_NOTIFICATION_FLAGS_MASK),
             );
+        }
+    }
+
+    pub(in crate::discord) fn set_thread_mute(
+        &mut self,
+        channel_id: Id<ChannelMarker>,
+        muted: bool,
+        mute_end_time: Option<String>,
+    ) {
+        if let Some(channel) = self.navigation_mut().channels.get_mut(&channel_id) {
+            channel.current_user_thread_muted = muted;
+            channel.current_user_thread_mute_end_time = mute_end_time;
+        }
+    }
+
+    pub(in crate::discord) fn set_current_user_thread_member_settings(
+        &mut self,
+        channel_id: Id<ChannelMarker>,
+        flags: Option<u64>,
+        muted: Option<bool>,
+        mute_end_time: Option<String>,
+    ) {
+        if let Some(channel) = self
+            .navigation_mut()
+            .channels
+            .get_mut(&channel_id)
+            .filter(|channel| channel.is_thread())
+        {
+            channel.current_user_joined_thread = true;
+            if let Some(flags) = flags {
+                channel.current_user_thread_notification_flags = Some(flags);
+            }
+            if let Some(muted) = muted {
+                channel.current_user_thread_muted = muted;
+                channel.current_user_thread_mute_end_time = mute_end_time;
+            }
         }
     }
 
@@ -447,6 +487,11 @@ impl DiscordState {
             .filter(|channel| channel.is_thread())
         {
             channel.current_user_joined_thread = joined;
+            if !joined {
+                channel.current_user_thread_notification_flags = None;
+                channel.current_user_thread_muted = false;
+                channel.current_user_thread_mute_end_time = None;
+            }
         }
     }
 
