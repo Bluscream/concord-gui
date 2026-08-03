@@ -249,7 +249,7 @@ impl DashboardState {
                         voice.scope == *scope && voice.channel_id == Some(*channel_id)
                     })
                 {
-                    self.popups.modal = Some(ModalPopup::ChannelActionMenu(
+                    self.popups.set_modal(ModalPopup::ChannelActionMenu(
                         ChannelActionMenuState::StreamTargets {
                             scope: *scope,
                             channel_id: *channel_id,

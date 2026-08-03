@@ -13,7 +13,9 @@ use super::super::{
     ActiveGuildScope, DashboardState, FocusPane, channel_tree,
     presentation::sort_direct_message_channels,
 };
-use crate::tui::state::popups::{ActiveModalPopupKind, ModalPopup, SelectablePopupState};
+use crate::tui::state::popups::{
+    ActiveModalPopupKind, ModalPopup, SelectablePopupState, SelectablePopupTarget,
+};
 
 const MAX_INBOX_MESSAGES_PER_CHANNEL: usize = 3;
 const UNREAD_PAGE_SIZE: usize = 4;
@@ -133,7 +135,7 @@ impl NotificationInboxState {
         }
     }
 
-    fn active_len(&self) -> usize {
+    pub(super) fn active_len(&self) -> usize {
         match self.tab {
             NotificationInboxTab::Unreads => self.unreads.len(),
             NotificationInboxTab::Mentions => self.mentions.len(),
@@ -157,14 +159,14 @@ impl NotificationInboxState {
         }
     }
 
-    fn selection(&self, tab: NotificationInboxTab) -> &SelectablePopupState {
+    pub(super) fn selection(&self, tab: NotificationInboxTab) -> &SelectablePopupState {
         match tab {
             NotificationInboxTab::Unreads => &self.unreads_selection,
             NotificationInboxTab::Mentions => &self.mentions_selection,
         }
     }
 
-    fn selection_mut(&mut self, tab: NotificationInboxTab) -> &mut SelectablePopupState {
+    pub(super) fn selection_mut(&mut self, tab: NotificationInboxTab) -> &mut SelectablePopupState {
         match tab {
             NotificationInboxTab::Unreads => &mut self.unreads_selection,
             NotificationInboxTab::Mentions => &mut self.mentions_selection,
@@ -290,9 +292,10 @@ impl DashboardState {
     pub fn open_notification_inbox(&mut self) {
         let request_id = self.next_inbox_request_id();
         let unreads = self.build_unread_inbox_items();
-        self.popups.modal = Some(ModalPopup::NotificationInbox(NotificationInboxState::new(
-            request_id, unreads,
-        )));
+        self.popups
+            .set_modal(ModalPopup::NotificationInbox(NotificationInboxState::new(
+                request_id, unreads,
+            )));
         self.enqueue_pending_command(AppCommand::LoadInboxMentions {
             request_id,
             before: None,
@@ -377,34 +380,17 @@ impl DashboardState {
     }
 
     pub fn move_notification_inbox_down(&mut self) {
-        let Some(inbox) = self.popups.notification_inbox() else {
-            return;
-        };
-        let (tab, len) = (inbox.tab, inbox.active_len());
-        if let Some(inbox) = self.popups.notification_inbox_mut() {
-            inbox.selection_mut(tab).move_down(len);
-        }
-        self.ensure_notification_inbox_requests();
+        self.move_selectable_popup(
+            SelectablePopupTarget::NotificationInbox,
+            SelectionAction::Next,
+        );
     }
 
     pub fn move_notification_inbox_up(&mut self) {
-        let Some(tab) = self.notification_inbox_tab() else {
-            return;
-        };
-        if let Some(inbox) = self.popups.notification_inbox_mut() {
-            inbox.selection_mut(tab).move_up();
-        }
-    }
-
-    pub(super) fn page_notification_inbox_selection(&mut self, action: SelectionAction) {
-        let Some(inbox) = self.popups.notification_inbox() else {
-            return;
-        };
-        let (tab, len) = (inbox.tab, inbox.active_len());
-        if let Some(inbox) = self.popups.notification_inbox_mut() {
-            inbox.selection_mut(tab).page(len, action);
-        }
-        self.ensure_notification_inbox_requests();
+        self.move_selectable_popup(
+            SelectablePopupTarget::NotificationInbox,
+            SelectionAction::Previous,
+        );
     }
 
     pub fn switch_notification_inbox_tab(&mut self, _action: SelectionAction) {
@@ -642,7 +628,7 @@ impl DashboardState {
             .is_some_and(|inbox| inbox.request_id == request_id)
     }
 
-    fn ensure_notification_inbox_requests(&mut self) {
+    pub(super) fn ensure_notification_inbox_requests(&mut self) {
         let Some(inbox) = self.popups.notification_inbox() else {
             return;
         };
@@ -1066,10 +1052,12 @@ mod tests {
     fn unread_inbox_appends_the_next_page_after_its_previews_settle() {
         let request_id = 7;
         let mut state = DashboardState::new();
-        state.popups.modal = Some(ModalPopup::NotificationInbox(NotificationInboxState::new(
-            request_id,
-            (1..=6).map(unread_item).collect(),
-        )));
+        state
+            .popups
+            .set_modal(ModalPopup::NotificationInbox(NotificationInboxState::new(
+                request_id,
+                (1..=6).map(unread_item).collect(),
+            )));
         state.ensure_unread_inbox_requests();
 
         assert_eq!(state.notification_inbox_unread_count(), 6);

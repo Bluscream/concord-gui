@@ -32,9 +32,9 @@ fn private_voice_state(kind: &str) -> DashboardState {
 
 fn current_voice_stream_leader_label(state: &mut DashboardState) -> String {
     state.open_leader();
-    state.push_leader_keymap_key(KeyChord::from_str("v").expect("voice prefix should parse"));
+    state.push_key_sequence_key(KeyChord::from_str("v").expect("voice prefix should parse"));
     state
-        .leader_keymap_shortcuts()
+        .key_sequence_shortcuts()
         .into_iter()
         .find(|item| item.action == Some(UiAction::ToggleStream))
         .expect("voice stream shortcut is present")
@@ -454,7 +454,10 @@ fn voice_channel_participant_audio_controls_persist() {
         })
     );
     assert_eq!(
-        crate::tui::input::handle_key(&mut state, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),),
+        crate::tui::input::handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        ),
         None
     );
     assert_eq!(
