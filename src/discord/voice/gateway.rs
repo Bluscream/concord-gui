@@ -984,34 +984,24 @@ pub(super) async fn discover_voice_udp_address(
 fn bind_voice_udp_socket() -> Result<UdpSocket, String> {
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
         .map_err(|error| format!("voice UDP socket creation failed: {error}"))?;
-    let buffer_error = socket
-        .set_recv_buffer_size(VOICE_UDP_RECEIVE_BUFFER_BYTES)
-        .err();
-    let applied_buffer = socket.recv_buffer_size();
-    match (buffer_error, applied_buffer) {
-        (None, Ok(applied_bytes)) => logging::debug(
+    if let Err(error) = socket.set_recv_buffer_size(VOICE_UDP_RECEIVE_BUFFER_BYTES) {
+        logging::debug(
             "voice",
             format!(
-                "voice UDP receive buffer configured: requested_bytes={VOICE_UDP_RECEIVE_BUFFER_BYTES} applied_bytes={applied_bytes}"
+                "voice UDP receive buffer configuration failed: requested_bytes={VOICE_UDP_RECEIVE_BUFFER_BYTES} error={error}"
+            ),
+        );
+    }
+    match socket.recv_buffer_size() {
+        Ok(applied_bytes) => logging::debug(
+            "voice",
+            format!(
+                "voice UDP receive buffer size: requested_bytes={VOICE_UDP_RECEIVE_BUFFER_BYTES} applied_bytes={applied_bytes}"
             ),
         ),
-        (Some(error), Ok(applied_bytes)) => logging::debug(
+        Err(error) => logging::debug(
             "voice",
-            format!(
-                "voice UDP receive buffer configuration failed: requested_bytes={VOICE_UDP_RECEIVE_BUFFER_BYTES} applied_bytes={applied_bytes} error={error}"
-            ),
-        ),
-        (None, Err(error)) => logging::debug(
-            "voice",
-            format!(
-                "read applied voice UDP receive buffer failed: requested_bytes={VOICE_UDP_RECEIVE_BUFFER_BYTES} error={error}"
-            ),
-        ),
-        (Some(set_error), Err(read_error)) => logging::debug(
-            "voice",
-            format!(
-                "voice UDP receive buffer configuration failed: requested_bytes={VOICE_UDP_RECEIVE_BUFFER_BYTES} set_error={set_error} read_error={read_error}"
-            ),
+            format!("read applied voice UDP receive buffer failed: {error}"),
         ),
     }
     socket

@@ -40,10 +40,14 @@ const STREAM_PRESENTATION_CLOCK_MAX_CORRECTION: Duration = Duration::from_millis
 // Allow normal packet jitter and short Opus duration changes, but do not carry
 // multi-second source clock resets into mpv's local playback timeline.
 const STREAM_AUDIO_CLOCK_DRIFT_TOLERANCE_TICKS: u32 = DISCORD_OPUS_TIMESTAMP_INCREMENT * 6;
+const STREAM_AUDIO_REORDER_DELAY: Duration = Duration::from_millis(100);
+const STREAM_AUDIO_REORDER_INTERVAL: Duration = Duration::from_millis(20);
+const STREAM_AUDIO_MAX_PENDING_PACKETS: usize = 64;
 const STREAM_KEYFRAME_REQUEST_INTERVAL: Duration = Duration::from_secs(1);
 const STREAM_VIDEO_NACK_INTERVAL: Duration = Duration::from_millis(100);
 const STREAM_VIDEO_GAP_TIMEOUT: Duration = Duration::from_millis(500);
-const STREAM_VIDEO_REORDER_WINDOW: u16 = 128;
+const STREAM_VIDEO_MAX_PENDING_PACKETS: usize = 2_048;
+const STREAM_VIDEO_MAX_PENDING_BYTES: usize = 4 * 1024 * 1024;
 const STREAM_VIDEO_MAX_NACK_SEQUENCES: usize = 64;
 const STREAM_RTCP_RECEIVER_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 const STREAM_TRANSPORT_FEEDBACK_INTERVAL: Duration = Duration::from_millis(50);
@@ -838,6 +842,35 @@ struct StreamVideoSource {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+struct RecoveredStreamAudioPacket {
+    marker: bool,
+    sequence: u16,
+    timestamp: u32,
+    opus: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct PendingStreamAudioPacket {
+    packet: RecoveredStreamAudioPacket,
+    arrived_at: Instant,
+}
+
+#[derive(Default)]
+struct StreamAudioRecovery {
+    next_sequence: Option<u16>,
+    pending: HashMap<u16, PendingStreamAudioPacket>,
+    first_buffered_at: Option<Instant>,
+    started: bool,
+}
+
+#[derive(Default)]
+struct StreamAudioRecoveryUpdate {
+    ready: Vec<RecoveredStreamAudioPacket>,
+    skipped_sequences: u16,
+    dropped_stale_packets: u64,
+}
+
+#[derive(Debug, Eq, PartialEq)]
 struct RecoveredStreamVideoPacket {
     header: RtpHeader,
     payload: Vec<u8>,
@@ -847,6 +880,7 @@ struct RecoveredStreamVideoPacket {
 struct StreamVideoRecovery {
     next_sequence: Option<u16>,
     pending: HashMap<u16, RecoveredStreamVideoPacket>,
+    pending_bytes: usize,
     gap_started_at: Option<Instant>,
     last_nack_at: Option<Instant>,
 }
@@ -909,15 +943,12 @@ impl StreamPliThrottle {
 
 #[derive(Clone, Copy, Default)]
 struct StreamMediaCounters {
-    audio_packets: u64,
-    audio_bytes: u64,
+    audio_stale_packets: u64,
+    audio_skipped_packets: u64,
     primary_video_packets: u64,
-    primary_video_bytes: u64,
     rtx_video_packets: u64,
-    rtx_video_bytes: u64,
     h264_frames: u64,
     h264_bytes: u64,
-    sender_reports: u64,
     decoder_resets: u64,
     transport_feedbacks: u64,
     nacks: u64,
@@ -926,33 +957,6 @@ struct StreamMediaCounters {
 }
 
 impl StreamMediaCounters {
-    fn interval_since(self, previous: Self) -> Self {
-        Self {
-            audio_packets: self.audio_packets.wrapping_sub(previous.audio_packets),
-            audio_bytes: self.audio_bytes.wrapping_sub(previous.audio_bytes),
-            primary_video_packets: self
-                .primary_video_packets
-                .wrapping_sub(previous.primary_video_packets),
-            primary_video_bytes: self
-                .primary_video_bytes
-                .wrapping_sub(previous.primary_video_bytes),
-            rtx_video_packets: self
-                .rtx_video_packets
-                .wrapping_sub(previous.rtx_video_packets),
-            rtx_video_bytes: self.rtx_video_bytes.wrapping_sub(previous.rtx_video_bytes),
-            h264_frames: self.h264_frames.wrapping_sub(previous.h264_frames),
-            h264_bytes: self.h264_bytes.wrapping_sub(previous.h264_bytes),
-            sender_reports: self.sender_reports.wrapping_sub(previous.sender_reports),
-            decoder_resets: self.decoder_resets.wrapping_sub(previous.decoder_resets),
-            transport_feedbacks: self
-                .transport_feedbacks
-                .wrapping_sub(previous.transport_feedbacks),
-            nacks: self.nacks.wrapping_sub(previous.nacks),
-            plis: self.plis.wrapping_sub(previous.plis),
-            suppressed_plis: self.suppressed_plis.wrapping_sub(previous.suppressed_plis),
-        }
-    }
-
     fn observe_pli_request(&mut self, sent: bool) {
         if sent {
             self.plis = self.plis.wrapping_add(1);
@@ -1395,6 +1399,115 @@ fn duration_to_rtcp_delay(duration: Duration) -> u32 {
     u32::try_from(whole.saturating_add(fraction)).unwrap_or(u32::MAX)
 }
 
+impl StreamAudioRecovery {
+    fn push(
+        &mut self,
+        packet: RecoveredStreamAudioPacket,
+        now: Instant,
+    ) -> StreamAudioRecoveryUpdate {
+        let sequence = packet.sequence;
+        if let Some(next_sequence) = self.next_sequence {
+            let distance = sequence.wrapping_sub(next_sequence);
+            if distance >= 0x8000 {
+                if self.started {
+                    return StreamAudioRecoveryUpdate {
+                        dropped_stale_packets: 1,
+                        ..StreamAudioRecoveryUpdate::default()
+                    };
+                }
+                self.next_sequence = Some(sequence);
+            }
+        } else {
+            self.next_sequence = Some(sequence);
+            self.first_buffered_at = Some(now);
+        }
+        if self.pending.contains_key(&sequence) {
+            return StreamAudioRecoveryUpdate {
+                dropped_stale_packets: 1,
+                ..StreamAudioRecoveryUpdate::default()
+            };
+        }
+        self.pending.insert(
+            sequence,
+            PendingStreamAudioPacket {
+                packet,
+                arrived_at: now,
+            },
+        );
+        self.poll(now)
+    }
+
+    fn poll(&mut self, now: Instant) -> StreamAudioRecoveryUpdate {
+        if self.pending.is_empty() {
+            return StreamAudioRecoveryUpdate::default();
+        }
+        if !self.started {
+            let buffered_long_enough = self.first_buffered_at.is_some_and(|first| {
+                now.saturating_duration_since(first) >= STREAM_AUDIO_REORDER_DELAY
+            });
+            if !buffered_long_enough && self.pending.len() < STREAM_AUDIO_MAX_PENDING_PACKETS {
+                return StreamAudioRecoveryUpdate::default();
+            }
+            self.started = true;
+            self.first_buffered_at = None;
+        }
+
+        let mut update = StreamAudioRecoveryUpdate::default();
+        loop {
+            while let Some(expected) = self.next_sequence {
+                let Some(pending) = self.pending.remove(&expected) else {
+                    break;
+                };
+                self.next_sequence = Some(expected.wrapping_add(1));
+                update.ready.push(pending.packet);
+            }
+            if self.pending.is_empty() {
+                break;
+            }
+
+            let expected = self
+                .next_sequence
+                .expect("started audio recovery has a next sequence");
+            let Some((next_sequence, distance)) = self
+                .pending
+                .keys()
+                .filter_map(|sequence| {
+                    let distance = sequence.wrapping_sub(expected);
+                    (distance < 0x8000).then_some((*sequence, distance))
+                })
+                .min_by_key(|(_, distance)| *distance)
+            else {
+                break;
+            };
+            let gap_started_at = self
+                .pending
+                .values()
+                .map(|pending| pending.arrived_at)
+                .min()
+                .expect("non-empty audio recovery has a packet arrival time");
+            let gap_expired =
+                now.saturating_duration_since(gap_started_at) >= STREAM_AUDIO_REORDER_DELAY;
+            if !gap_expired && self.pending.len() < STREAM_AUDIO_MAX_PENDING_PACKETS {
+                break;
+            }
+            self.next_sequence = Some(next_sequence);
+            update.skipped_sequences = update.skipped_sequences.wrapping_add(distance);
+        }
+        update
+    }
+
+    fn reset(&mut self) {
+        self.next_sequence = None;
+        self.pending.clear();
+        self.first_buffered_at = None;
+        self.started = false;
+    }
+
+    fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+}
+
 impl StreamVideoRecovery {
     fn push(
         &mut self,
@@ -1408,32 +1521,43 @@ impl StreamVideoRecovery {
             return StreamVideoRecoveryUpdate::default();
         }
 
-        let reset = if distance > STREAM_VIDEO_REORDER_WINDOW {
-            let reset = StreamVideoRecoveryReset {
+        let is_new = !self.pending.contains_key(&sequence);
+        if distance != 0 {
+            self.gap_started_at.get_or_insert(now);
+        }
+        let pending_packets = self.pending.len() + usize::from(is_new);
+        let pending_bytes =
+            self.pending_bytes
+                .saturating_add(if is_new { packet.payload.len() } else { 0 });
+        let reset = if distance != 0
+            && (pending_packets > STREAM_VIDEO_MAX_PENDING_PACKETS
+                || pending_bytes > STREAM_VIDEO_MAX_PENDING_BYTES)
+        {
+            let context = StreamVideoRecoveryReset {
                 distance,
-                pending_packets: self.pending.len(),
-                pending_bytes: self
-                    .pending
-                    .values()
-                    .map(|packet| packet.payload.len())
-                    .sum(),
+                pending_packets,
+                pending_bytes,
                 gap_age: self
                     .gap_started_at
                     .map(|started| now.saturating_duration_since(started)),
             };
             self.reset();
             self.next_sequence = Some(sequence);
-            Some(reset)
+            Some(context)
         } else {
             None
         };
-        self.pending.entry(sequence).or_insert(packet);
+        if !self.pending.contains_key(&sequence) {
+            self.pending_bytes = self.pending_bytes.saturating_add(packet.payload.len());
+            self.pending.insert(sequence, packet);
+        }
 
         let mut ready = Vec::new();
         while let Some(expected) = self.next_sequence {
             let Some(packet) = self.pending.remove(&expected) else {
                 break;
             };
+            self.pending_bytes = self.pending_bytes.saturating_sub(packet.payload.len());
             self.next_sequence = Some(expected.wrapping_add(1));
             ready.push(packet);
         }
@@ -1462,15 +1586,34 @@ impl StreamVideoRecovery {
         Some(missing)
     }
 
-    fn gap_expired(&self, now: Instant) -> bool {
-        self.gap_started_at.is_some_and(|started| {
-            now.saturating_duration_since(started) >= STREAM_VIDEO_GAP_TIMEOUT
-        })
+    fn take_expired_gap(&mut self, now: Instant) -> Option<StreamVideoRecoveryReset> {
+        let started = self.gap_started_at?;
+        let gap_age = now.saturating_duration_since(started);
+        if gap_age < STREAM_VIDEO_GAP_TIMEOUT {
+            return None;
+        }
+        let expected = self.next_sequence?;
+        let distance = self
+            .pending
+            .keys()
+            .map(|sequence| sequence.wrapping_sub(expected))
+            .filter(|distance| *distance < 0x8000)
+            .max()
+            .unwrap_or_default();
+        let context = StreamVideoRecoveryReset {
+            distance,
+            pending_packets: self.pending.len(),
+            pending_bytes: self.pending_bytes,
+            gap_age: Some(gap_age),
+        };
+        self.reset();
+        Some(context)
     }
 
     fn reset(&mut self) {
         self.next_sequence = None;
         self.pending.clear();
+        self.pending_bytes = 0;
         self.gap_started_at = None;
         self.last_nack_at = None;
     }
@@ -1705,11 +1848,11 @@ async fn run_stream_media(
     let mut h264 = H264Depacketizer::default();
     let mut h264_startup = H264StartupGate::default();
     let mut h264_startup_buffer = H264StartupBuffer::default();
+    let mut audio_recovery = StreamAudioRecovery::default();
     let mut video_recovery = StreamVideoRecovery::default();
+    let mut active_audio_source = 0u32;
     let mut active_video_source = (0u32, None);
-    let mut local_audio_sequence = 0u16;
-    let mut local_audio_packets = 0u32;
-    let mut local_audio_octets = 0u32;
+    let mut local_audio = LocalStreamAudioForwarder::default();
     let mut local_video = LocalStreamVideoForwarder::default();
     let mut discord_rtcp = StreamRtcpControl::default();
     let mut pli_throttle = StreamPliThrottle::default();
@@ -1717,13 +1860,10 @@ async fn run_stream_media(
     let mut presentation_clock = StreamPresentationClock::default();
     let mut media_counters = StreamMediaCounters::default();
     let mut previous_media_counters = StreamMediaCounters::default();
-    let mut previous_local_video_packets = 0u32;
     let mut previous_local_video_frames = 0u64;
     let mut previous_stats_elapsed = Duration::ZERO;
     let media_started_at = Instant::now();
-    let mut local_audio_clock = LocalStreamAudioClock::default();
     let mut player_audio = StreamPlayerAudioState::default();
-    let mut logged_first_audio = false;
     let mut logged_first_video_frame = false;
     let mut logged_video_before_player_ready = false;
     let mut logged_keyframe_request = false;
@@ -1734,6 +1874,8 @@ async fn run_stream_media(
     keyframe_request_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut video_recovery_interval = tokio::time::interval(STREAM_VIDEO_NACK_INTERVAL);
     video_recovery_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut audio_recovery_interval = tokio::time::interval(STREAM_AUDIO_REORDER_INTERVAL);
+    audio_recovery_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut local_rtcp_report_interval = tokio::time::interval(LOCAL_RTCP_REPORT_INTERVAL);
     local_rtcp_report_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut discord_rtcp_report_interval =
@@ -1773,15 +1915,15 @@ async fn run_stream_media(
                 let unix_time = current_unix_time();
                 let mut sent_report = false;
                 if source.audio_ssrc != 0
-                    && local_audio_packets != 0
-                    && let Some(audio_timestamp) = local_audio_clock.timestamp_at(elapsed)
+                    && local_audio.packets != 0
+                    && let Some(audio_timestamp) = local_audio.timestamp_at(elapsed)
                 {
                     let report = build_rtcp_sender_report(
                         source.audio_ssrc,
                         unix_time,
                         audio_timestamp,
-                        local_audio_packets,
-                        local_audio_octets,
+                        local_audio.packets,
+                        local_audio.octets,
                     );
                     let _ = local_socket.send_to(&report, audio_rtcp_target).await;
                     sent_report = true;
@@ -1809,51 +1951,40 @@ async fn run_stream_media(
                             ),
                         );
                     } else if local_rtcp_report_ticks.is_multiple_of(10) {
-                        let interval = media_counters.interval_since(previous_media_counters);
                         let interval_elapsed = elapsed.saturating_sub(previous_stats_elapsed);
-                        let interval_local_video_packets = local_video
-                            .packets
-                            .wrapping_sub(previous_local_video_packets);
                         let interval_local_video_frames = local_video
                             .frames
                             .wrapping_sub(previous_local_video_frames);
                         logging::debug(
                             "stream",
                             format!(
-                                "stream media stats: elapsed_ms={} interval_ms={} input_audio_packets={} input_audio_bytes={} input_video_packets={} input_video_bytes={} input_rtx_packets={} input_rtx_bytes={} h264_frames={} h264_bytes={} output_video_packets={} output_video_frames={} interval_audio_packets={} interval_audio_bytes={} interval_video_packets={} interval_video_bytes={} interval_rtx_packets={} interval_rtx_bytes={} interval_h264_frames={} interval_h264_bytes={} interval_output_video_packets={} interval_output_video_frames={} sender_reports={} decoder_resets={} transport_feedbacks={} nacks={} plis={} suppressed_plis={} last_video_timestamp={:?}",
+                                "stream media stats: elapsed_ms={} interval_ms={} interval_video_packets={} interval_rtx_packets={} interval_h264_frames={} interval_h264_bytes={} interval_output_video_frames={} audio_pending_packets={} audio_stale_packets={} audio_skipped_packets={} decoder_resets={} transport_feedbacks={} nacks={} plis={} suppressed_plis={}",
                                 elapsed.as_millis(),
                                 interval_elapsed.as_millis(),
-                                media_counters.audio_packets,
-                                media_counters.audio_bytes,
-                                media_counters.primary_video_packets,
-                                media_counters.primary_video_bytes,
-                                media_counters.rtx_video_packets,
-                                media_counters.rtx_video_bytes,
-                                media_counters.h264_frames,
-                                media_counters.h264_bytes,
-                                local_video.packets,
-                                local_video.frames,
-                                interval.audio_packets,
-                                interval.audio_bytes,
-                                interval.primary_video_packets,
-                                interval.primary_video_bytes,
-                                interval.rtx_video_packets,
-                                interval.rtx_video_bytes,
-                                interval.h264_frames,
-                                interval.h264_bytes,
-                                interval_local_video_packets,
+                                media_counters.primary_video_packets.wrapping_sub(
+                                    previous_media_counters.primary_video_packets,
+                                ),
+                                media_counters
+                                    .rtx_video_packets
+                                    .wrapping_sub(previous_media_counters.rtx_video_packets),
+                                media_counters
+                                    .h264_frames
+                                    .wrapping_sub(previous_media_counters.h264_frames),
+                                media_counters
+                                    .h264_bytes
+                                    .wrapping_sub(previous_media_counters.h264_bytes),
                                 interval_local_video_frames,
-                                media_counters.sender_reports,
+                                audio_recovery.pending_len(),
+                                media_counters.audio_stale_packets,
+                                media_counters.audio_skipped_packets,
                                 media_counters.decoder_resets,
                                 media_counters.transport_feedbacks,
                                 media_counters.nacks,
                                 media_counters.plis,
                                 media_counters.suppressed_plis,
-                                local_video.last_timestamp,
                             ),
                         );
                         previous_media_counters = media_counters;
-                        previous_local_video_packets = local_video.packets;
                         previous_local_video_frames = local_video.frames;
                         previous_stats_elapsed = elapsed;
                     }
@@ -1893,6 +2024,33 @@ async fn run_stream_media(
                         media_counters.transport_feedbacks.wrapping_add(1);
                 }
             }
+            _ = audio_recovery_interval.tick() => {
+                let source = *video_source_rx.borrow();
+                if source.audio_ssrc != active_audio_source {
+                    active_audio_source = source.audio_ssrc;
+                    audio_recovery.reset();
+                    local_audio.reset_source();
+                }
+                if source.audio_ssrc != 0 {
+                    let update = audio_recovery.poll(Instant::now());
+                    let destination = LocalStreamAudioDestination {
+                        socket: &local_socket,
+                        target: audio_target,
+                        ssrc: source.audio_ssrc,
+                        media_started_at,
+                        presentation_clock: &presentation_clock,
+                    };
+                    forward_recovered_stream_audio(
+                        update,
+                        audio_recovery.pending_len(),
+                        &mut local_audio,
+                        &destination,
+                        &mut player_audio,
+                        &mut media_counters,
+                    )
+                    .await;
+                }
+            }
             _ = video_recovery_interval.tick() => {
                 let source = *video_source_rx.borrow();
                 let source_identity = (source.video_ssrc, source.rtx_ssrc);
@@ -1908,8 +2066,7 @@ async fn run_stream_media(
                     );
                 }
                 let now = Instant::now();
-                if video_recovery.gap_expired(now) {
-                    video_recovery.reset();
+                if let Some(reset) = video_recovery.take_expired_gap(now) {
                     media_counters.decoder_resets =
                         media_counters.decoder_resets.wrapping_add(1);
                     reset_stream_h264_pipeline(
@@ -1935,11 +2092,15 @@ async fn run_stream_media(
                     logging::debug(
                         "stream",
                         format!(
-                            "stream video packet gap expired; {}",
+                            "stream video packet gap expired: distance={} pending_packets={} pending_bytes={} gap_age_ms={:?}; reset the H264 pipeline and {}",
+                            reset.distance,
+                            reset.pending_packets,
+                            reset.pending_bytes,
+                            reset.gap_age.map(|age| age.as_millis()),
                             match pli_sent {
                                 Some(true) => "requested a new keyframe",
                                 Some(false) => "kept the recent keyframe request",
-                                None => "no active video source for a keyframe request",
+                                None => "had no active video source for a keyframe request",
                             }
                         ),
                     );
@@ -2043,8 +2204,6 @@ async fn run_stream_media(
                             discord_rtcp.observe_sender_report(report, elapsed);
                         }
                         presentation_clock.observe_sender_report(report, elapsed);
-                        media_counters.sender_reports =
-                            media_counters.sender_reports.wrapping_add(1);
                         if !logged_discord_sender_report {
                             logged_discord_sender_report = true;
                             logging::debug(
@@ -2067,6 +2226,11 @@ async fn run_stream_media(
                     Err(_) => continue,
                 };
                 let source = *video_source_rx.borrow();
+                if source.audio_ssrc != active_audio_source {
+                    active_audio_source = source.audio_ssrc;
+                    audio_recovery.reset();
+                    local_audio.reset_source();
+                }
                 let source_identity = (source.video_ssrc, source.rtx_ssrc);
                 if source_identity != active_video_source {
                     active_video_source = source_identity;
@@ -2111,59 +2275,31 @@ async fn run_stream_media(
                         | VoiceMediaPayload::DaveDecrypted { opus, .. } => opus,
                         _ => continue,
                     };
-                    media_counters.audio_packets =
-                        media_counters.audio_packets.wrapping_add(1);
-                    media_counters.audio_bytes = media_counters
-                        .audio_bytes
-                        .wrapping_add(u64::try_from(received).expect("UDP packet length fits u64"));
-                    player_audio.observe_real_packet();
-                    let real_audio_at = media_started_at.elapsed();
-                    let synchronized_timestamp = presentation_clock.map_timestamp(
-                        header.ssrc,
-                        header.timestamp,
-                        OPUS_RTP_CLOCK_RATE,
+                    let update = audio_recovery.push(
+                        RecoveredStreamAudioPacket {
+                            marker: header.marker,
+                            sequence: header.sequence,
+                            timestamp: header.timestamp,
+                            opus,
+                        },
+                        Instant::now(),
                     );
-                    let audio_timestamp = local_audio_clock.rebase(
-                        header.timestamp,
-                        real_audio_at,
-                        synchronized_timestamp,
-                    );
-                    let local_timestamp = audio_timestamp.local_timestamp;
-                    if let Some(discontinuity) = audio_timestamp.discontinuity {
-                        logging::debug(
-                            "stream",
-                            format!(
-                                "stream audio RTP clock re-anchored: source_timestamp={} source_delta_ticks={} elapsed_delta_ticks={} local_timestamp={local_timestamp}",
-                                header.timestamp,
-                                discontinuity.source_delta_ticks,
-                                discontinuity.elapsed_delta_ticks,
-                            ),
-                        );
-                    }
-                    let packet = build_local_rtp_packet(
-                        LOCAL_STREAM_AUDIO_PAYLOAD_TYPE,
-                        header.marker,
-                        local_audio_sequence,
-                        local_timestamp,
-                        source.audio_ssrc,
-                        &opus,
-                    );
-                    local_audio_sequence = local_audio_sequence.wrapping_add(1);
-                    let _ = local_socket.send_to(&packet, audio_target).await;
-                    local_audio_packets = local_audio_packets.wrapping_add(1);
-                    local_audio_octets = local_audio_octets.wrapping_add(opus.len() as u32);
-                    if !logged_first_audio {
-                        logged_first_audio = true;
-                        logging::debug(
-                            "stream",
-                            format!(
-                                "first stream audio forwarded: elapsed_ms={} source_timestamp={} local_timestamp={}",
-                                media_started_at.elapsed().as_millis(),
-                                header.timestamp,
-                                local_timestamp
-                            ),
-                        );
-                    }
+                    let destination = LocalStreamAudioDestination {
+                        socket: &local_socket,
+                        target: audio_target,
+                        ssrc: source.audio_ssrc,
+                        media_started_at,
+                        presentation_clock: &presentation_clock,
+                    };
+                    forward_recovered_stream_audio(
+                        update,
+                        audio_recovery.pending_len(),
+                        &mut local_audio,
+                        &destination,
+                        &mut player_audio,
+                        &mut media_counters,
+                    )
+                    .await;
                 } else if source.video_ssrc != 0 {
                     let received_payload_type = header.payload_type;
                     if received_payload_type == DISCORD_STREAM_VIDEO_PAYLOAD_TYPE
@@ -2183,19 +2319,9 @@ async fn run_stream_media(
                     if received_payload_type == DISCORD_STREAM_VIDEO_RTX_PAYLOAD_TYPE {
                         media_counters.rtx_video_packets =
                             media_counters.rtx_video_packets.wrapping_add(1);
-                        media_counters.rtx_video_bytes = media_counters
-                            .rtx_video_bytes
-                            .wrapping_add(
-                                u64::try_from(received).expect("UDP packet length fits u64"),
-                            );
                     } else {
                         media_counters.primary_video_packets =
                             media_counters.primary_video_packets.wrapping_add(1);
-                        media_counters.primary_video_bytes = media_counters
-                            .primary_video_bytes
-                            .wrapping_add(
-                                u64::try_from(received).expect("UDP packet length fits u64"),
-                            );
                     }
                     let now = Instant::now();
                     let recovery = video_recovery.push(video_packet, now);
@@ -2221,11 +2347,12 @@ async fn run_stream_media(
                         logging::debug(
                             "stream",
                             format!(
-                                "stream video sequence exceeded the reorder window: distance={} limit={} pending_packets={} pending_bytes={} gap_age_ms={:?}; reset the H264 pipeline and {}",
+                                "stream video recovery budget exceeded: distance={} pending_packets={} packet_limit={} pending_bytes={} byte_limit={} gap_age_ms={:?}; reset the H264 pipeline and {}",
                                 reset.distance,
-                                STREAM_VIDEO_REORDER_WINDOW,
                                 reset.pending_packets,
+                                STREAM_VIDEO_MAX_PENDING_PACKETS,
                                 reset.pending_bytes,
+                                STREAM_VIDEO_MAX_PENDING_BYTES,
                                 reset.gap_age.map(|age| age.as_millis()),
                                 if pli_sent {
                                     "requested a new keyframe"
@@ -2452,7 +2579,7 @@ fn stream_player_command(
         // and scale the video inside it instead of following every change.
         .arg("--auto-window-resize=no")
         .arg("--geometry=1280x720")
-        .arg(format!("--title={display_name}'s stream"))
+        .arg(format!("--title=Concord - {display_name}'s stream"))
         // Audio and video share one player so its volume and mute controls
         // apply to the complete broadcast.
         .arg("--video-latency-hacks=no")
@@ -2542,6 +2669,15 @@ struct LocalStreamAudioClock {
 }
 
 impl LocalStreamAudioClock {
+    fn is_recent_replay(&self, source_timestamp: u32) -> bool {
+        let Some(last_source_timestamp) = self.last_source_timestamp else {
+            return false;
+        };
+        let source_delta_ticks = source_timestamp.wrapping_sub(last_source_timestamp) as i32;
+        source_delta_ticks <= 0
+            && source_delta_ticks.unsigned_abs() <= STREAM_AUDIO_CLOCK_DRIFT_TOLERANCE_TICKS
+    }
+
     // Discord can replay an old packet or restart an audio clock when a stream
     // subscription settles. Valid source deltas retain their media timing. A
     // discontinuity starts a new source epoch on the existing local timeline.
@@ -2626,6 +2762,137 @@ impl LocalStreamAudioClock {
 }
 
 #[derive(Default)]
+struct LocalStreamAudioForwarder {
+    sequence: u16,
+    packets: u32,
+    octets: u32,
+    clock: LocalStreamAudioClock,
+    logged_first_packet: bool,
+}
+
+struct LocalStreamAudioDestination<'a> {
+    socket: &'a UdpSocket,
+    target: SocketAddrV4,
+    ssrc: u32,
+    media_started_at: Instant,
+    presentation_clock: &'a StreamPresentationClock,
+}
+
+impl LocalStreamAudioForwarder {
+    async fn forward(
+        &mut self,
+        packets: Vec<RecoveredStreamAudioPacket>,
+        skipped_sequences: u16,
+        destination: &LocalStreamAudioDestination<'_>,
+        player_audio: &mut StreamPlayerAudioState,
+    ) -> u64 {
+        self.sequence = self.sequence.wrapping_add(skipped_sequences);
+        let mut dropped_replays = 0u64;
+        for packet in packets {
+            // A short backward source timestamp is a delayed replay, not a new
+            // clock epoch. Leave a local RTP sequence gap so mpv can conceal
+            // it instead of decoding old Opus after newer audio.
+            if self.clock.is_recent_replay(packet.timestamp) {
+                self.sequence = self.sequence.wrapping_add(1);
+                dropped_replays = dropped_replays.wrapping_add(1);
+                continue;
+            }
+            player_audio.observe_real_packet();
+            let elapsed = destination.media_started_at.elapsed();
+            let synchronized_timestamp = destination.presentation_clock.map_timestamp(
+                destination.ssrc,
+                packet.timestamp,
+                OPUS_RTP_CLOCK_RATE,
+            );
+            let audio_timestamp =
+                self.clock
+                    .rebase(packet.timestamp, elapsed, synchronized_timestamp);
+            let local_timestamp = audio_timestamp.local_timestamp;
+            if let Some(discontinuity) = audio_timestamp.discontinuity {
+                logging::debug(
+                    "stream",
+                    format!(
+                        "stream audio RTP clock re-anchored: source_timestamp={} source_delta_ticks={} elapsed_delta_ticks={} local_timestamp={local_timestamp}",
+                        packet.timestamp,
+                        discontinuity.source_delta_ticks,
+                        discontinuity.elapsed_delta_ticks,
+                    ),
+                );
+            }
+            let local_packet = build_local_rtp_packet(
+                LOCAL_STREAM_AUDIO_PAYLOAD_TYPE,
+                packet.marker,
+                self.sequence,
+                local_timestamp,
+                destination.ssrc,
+                &packet.opus,
+            );
+            self.sequence = self.sequence.wrapping_add(1);
+            let _ = destination
+                .socket
+                .send_to(&local_packet, destination.target)
+                .await;
+            self.packets = self.packets.wrapping_add(1);
+            self.octets = self.octets.wrapping_add(packet.opus.len() as u32);
+            if !self.logged_first_packet {
+                self.logged_first_packet = true;
+                logging::debug(
+                    "stream",
+                    format!(
+                        "first stream audio forwarded: elapsed_ms={} source_timestamp={} local_timestamp={local_timestamp}",
+                        elapsed.as_millis(),
+                        packet.timestamp,
+                    ),
+                );
+            }
+        }
+        dropped_replays
+    }
+
+    fn reset_source(&mut self) {
+        self.clock = LocalStreamAudioClock::default();
+    }
+
+    fn timestamp_at(&self, elapsed: Duration) -> Option<u32> {
+        self.clock.timestamp_at(elapsed)
+    }
+}
+
+async fn forward_recovered_stream_audio(
+    update: StreamAudioRecoveryUpdate,
+    pending_packets: usize,
+    forwarder: &mut LocalStreamAudioForwarder,
+    destination: &LocalStreamAudioDestination<'_>,
+    player_audio: &mut StreamPlayerAudioState,
+    counters: &mut StreamMediaCounters,
+) {
+    counters.audio_stale_packets = counters
+        .audio_stale_packets
+        .wrapping_add(update.dropped_stale_packets);
+    counters.audio_skipped_packets = counters
+        .audio_skipped_packets
+        .wrapping_add(u64::from(update.skipped_sequences));
+    if update.skipped_sequences != 0 {
+        logging::debug(
+            "stream",
+            format!(
+                "stream audio packet gap expired: skipped_packets={} pending_packets={pending_packets}",
+                update.skipped_sequences,
+            ),
+        );
+    }
+    let dropped_replays = forwarder
+        .forward(
+            update.ready,
+            update.skipped_sequences,
+            destination,
+            player_audio,
+        )
+        .await;
+    counters.audio_stale_packets = counters.audio_stale_packets.wrapping_add(dropped_replays);
+}
+
+#[derive(Default)]
 struct LocalRtpClock {
     source_origin: Option<u32>,
     local_origin: u32,
@@ -2695,7 +2962,6 @@ struct LocalStreamVideoForwarder {
     packets: u32,
     octets: u32,
     frames: u64,
-    last_timestamp: Option<u32>,
     clock: LocalRtpClock,
     logged_first_frame: bool,
 }
@@ -2778,7 +3044,6 @@ impl LocalStreamVideoForwarder {
         self.packets = self.packets.wrapping_add(packet_count);
         self.octets = self.octets.wrapping_add(octet_count);
         self.frames = self.frames.wrapping_add(1);
-        self.last_timestamp = Some(local_timestamp);
         if !self.logged_first_frame {
             self.logged_first_frame = true;
             logging::debug(
@@ -3059,7 +3324,7 @@ fn stream_sdp(
     format!(
         "v=0\r\n\
          o=- 0 0 IN IP4 127.0.0.1\r\n\
-         s=Concord Discord Stream\r\n\
+         s=-\r\n\
          c=IN IP4 127.0.0.1\r\n\
          t=0 0\r\n\
          m=audio {audio_port} RTP/AVP {LOCAL_STREAM_AUDIO_PAYLOAD_TYPE}\r\n\
@@ -3726,7 +3991,7 @@ mod tests {
     }
 
     #[test]
-    fn stream_video_recovery_reports_reorder_window_reset_context() {
+    fn stream_video_recovery_keeps_waiting_beyond_the_old_packet_window() {
         let now = Instant::now();
         let mut recovery = StreamVideoRecovery::default();
         let packet = |sequence, payload| RecoveredStreamVideoPacket {
@@ -3736,26 +4001,12 @@ mod tests {
 
         assert_eq!(recovery.push(packet(100, vec![1]), now).ready.len(), 1);
         assert!(recovery.push(packet(102, vec![2, 3]), now).ready.is_empty());
-        let reset_at = now + Duration::from_millis(25);
-        let update = recovery.push(packet(230, vec![4]), reset_at);
+        let update = recovery.push(packet(230, vec![4]), now + Duration::from_millis(25));
 
-        assert_eq!(
-            update.reset,
-            Some(StreamVideoRecoveryReset {
-                distance: 129,
-                pending_packets: 1,
-                pending_bytes: 2,
-                gap_age: Some(Duration::from_millis(25)),
-            })
-        );
-        assert_eq!(
-            update
-                .ready
-                .into_iter()
-                .map(|packet| packet.header.sequence)
-                .collect::<Vec<_>>(),
-            vec![230]
-        );
+        assert!(update.reset.is_none());
+        assert!(update.ready.is_empty());
+        assert_eq!(recovery.pending.len(), 2);
+        assert_eq!(recovery.pending_bytes, 3);
     }
 
     #[test]
@@ -3773,8 +4024,80 @@ mod tests {
 
         assert_eq!(recovery.push(first, now).ready.len(), 1);
         assert!(recovery.push(third, now).ready.is_empty());
-        assert!(!recovery.gap_expired(now + STREAM_VIDEO_GAP_TIMEOUT / 2));
-        assert!(recovery.gap_expired(now + STREAM_VIDEO_GAP_TIMEOUT));
+        assert_eq!(
+            recovery.take_expired_gap(now + STREAM_VIDEO_GAP_TIMEOUT / 2),
+            None
+        );
+        assert_eq!(
+            recovery.take_expired_gap(now + STREAM_VIDEO_GAP_TIMEOUT),
+            Some(StreamVideoRecoveryReset {
+                distance: 1,
+                pending_packets: 1,
+                pending_bytes: 1,
+                gap_age: Some(STREAM_VIDEO_GAP_TIMEOUT),
+            })
+        );
+        assert!(recovery.pending.is_empty());
+        assert_eq!(recovery.pending_bytes, 0);
+    }
+
+    #[test]
+    fn stream_video_recovery_resets_only_when_a_pending_budget_is_exceeded() {
+        let now = Instant::now();
+        let packet = |sequence, payload| RecoveredStreamVideoPacket {
+            header: stream_video_header(DISCORD_STREAM_VIDEO_PAYLOAD_TYPE, sequence, 90_000, 42),
+            payload,
+        };
+
+        let mut packet_limited = StreamVideoRecovery::default();
+        assert_eq!(packet_limited.push(packet(0, vec![0]), now).ready.len(), 1);
+        for sequence in 2..=u16::try_from(STREAM_VIDEO_MAX_PENDING_PACKETS + 1)
+            .expect("video packet budget fits u16")
+        {
+            assert!(
+                packet_limited
+                    .push(packet(sequence, vec![0]), now)
+                    .reset
+                    .is_none()
+            );
+        }
+        let packet_reset = packet_limited.push(
+            packet(
+                u16::try_from(STREAM_VIDEO_MAX_PENDING_PACKETS + 2)
+                    .expect("video packet budget fits u16"),
+                vec![0],
+            ),
+            now,
+        );
+        assert_eq!(
+            packet_reset.reset,
+            Some(StreamVideoRecoveryReset {
+                distance: u16::try_from(STREAM_VIDEO_MAX_PENDING_PACKETS + 1)
+                    .expect("video packet budget fits u16"),
+                pending_packets: STREAM_VIDEO_MAX_PENDING_PACKETS + 1,
+                pending_bytes: STREAM_VIDEO_MAX_PENDING_PACKETS + 1,
+                gap_age: Some(Duration::ZERO),
+            })
+        );
+
+        let mut byte_limited = StreamVideoRecovery::default();
+        assert_eq!(byte_limited.push(packet(0, vec![0]), now).ready.len(), 1);
+        assert!(
+            byte_limited
+                .push(packet(2, vec![0; STREAM_VIDEO_MAX_PENDING_BYTES]), now)
+                .reset
+                .is_none()
+        );
+        let byte_reset = byte_limited.push(packet(3, vec![0]), now);
+        assert_eq!(
+            byte_reset.reset,
+            Some(StreamVideoRecoveryReset {
+                distance: 2,
+                pending_packets: 2,
+                pending_bytes: STREAM_VIDEO_MAX_PENDING_BYTES + 1,
+                gap_age: Some(Duration::ZERO),
+            })
+        );
     }
 
     #[test]
@@ -4014,9 +4337,6 @@ mod tests {
         let mut forwarder = LocalStreamVideoForwarder::default();
 
         forwarder.replay_startup(&mut startup, &destination).await;
-        let replay_timestamp = forwarder
-            .last_timestamp
-            .expect("startup replay should set a local timestamp");
         forwarder
             .forward_live(
                 &destination,
@@ -4027,13 +4347,23 @@ mod tests {
                 None,
             )
             .await;
+        let mut timestamps = Vec::new();
+        let mut packet = [0u8; 1500];
+        for _ in 0..3 {
+            let (received, _) = timeout(Duration::from_secs(1), receiver.recv_from(&mut packet))
+                .await
+                .expect("local video packet should arrive")
+                .expect("local video packet should be readable");
+            timestamps.push(
+                parse_rtp_header(&packet[..received])
+                    .expect("local video packet should contain a valid RTP header")
+                    .timestamp,
+            );
+        }
 
         assert!(startup.is_empty());
         assert_eq!(forwarder.frames, 3);
-        assert_eq!(
-            forwarder.last_timestamp,
-            Some(replay_timestamp.wrapping_add(3_000))
-        );
+        assert_eq!(timestamps[2], timestamps[1].wrapping_add(3_000));
     }
 
     #[test]
@@ -4645,7 +4975,7 @@ mod tests {
                 "--force-window=immediate",
                 "--auto-window-resize=no",
                 "--geometry=1280x720",
-                "--title=neo's stream",
+                "--title=Concord - neo's stream",
                 "--video-latency-hacks=no",
                 "--video-sync=audio",
                 "--framedrop=vo",
@@ -4674,6 +5004,115 @@ mod tests {
             !audio.take_enable_request(true),
             "audio should be enabled only once"
         );
+    }
+
+    fn recovered_stream_audio_packet(sequence: u16, timestamp: u32) -> RecoveredStreamAudioPacket {
+        RecoveredStreamAudioPacket {
+            marker: false,
+            sequence,
+            timestamp,
+            opus: vec![sequence as u8],
+        }
+    }
+
+    #[test]
+    fn stream_audio_recovery_orders_delayed_packets_and_drops_duplicates() {
+        let now = Instant::now();
+        let mut recovery = StreamAudioRecovery::default();
+
+        assert!(
+            recovery
+                .push(recovered_stream_audio_packet(10, 10_000), now)
+                .ready
+                .is_empty()
+        );
+        assert!(
+            recovery
+                .push(
+                    recovered_stream_audio_packet(12, 11_920),
+                    now + Duration::from_millis(20),
+                )
+                .ready
+                .is_empty()
+        );
+        assert!(
+            recovery
+                .push(
+                    recovered_stream_audio_packet(11, 10_960),
+                    now + Duration::from_millis(40),
+                )
+                .ready
+                .is_empty()
+        );
+
+        let update = recovery.poll(now + STREAM_AUDIO_REORDER_DELAY);
+        assert_eq!(
+            update
+                .ready
+                .iter()
+                .map(|packet| packet.sequence)
+                .collect::<Vec<_>>(),
+            vec![10, 11, 12]
+        );
+        assert_eq!(update.skipped_sequences, 0);
+        assert_eq!(update.dropped_stale_packets, 0);
+
+        let duplicate = recovery.push(
+            recovered_stream_audio_packet(12, 11_920),
+            now + STREAM_AUDIO_REORDER_DELAY,
+        );
+        assert!(duplicate.ready.is_empty());
+        assert_eq!(duplicate.dropped_stale_packets, 1);
+    }
+
+    #[test]
+    fn stream_audio_recovery_exposes_expired_gaps_across_sequence_wrap() {
+        let now = Instant::now();
+        let mut recovery = StreamAudioRecovery::default();
+
+        assert!(
+            recovery
+                .push(recovered_stream_audio_packet(u16::MAX - 1, 10_000), now,)
+                .ready
+                .is_empty()
+        );
+        assert_eq!(
+            recovery
+                .poll(now + STREAM_AUDIO_REORDER_DELAY)
+                .ready
+                .into_iter()
+                .map(|packet| packet.sequence)
+                .collect::<Vec<_>>(),
+            vec![u16::MAX - 1]
+        );
+        assert!(
+            recovery
+                .push(
+                    recovered_stream_audio_packet(0, 11_920),
+                    now + STREAM_AUDIO_REORDER_DELAY + Duration::from_millis(20),
+                )
+                .ready
+                .is_empty()
+        );
+
+        let update =
+            recovery.poll(now + STREAM_AUDIO_REORDER_DELAY * 2 + Duration::from_millis(20));
+        assert_eq!(update.skipped_sequences, 1);
+        assert_eq!(
+            update
+                .ready
+                .iter()
+                .map(|packet| packet.sequence)
+                .collect::<Vec<_>>(),
+            vec![0]
+        );
+
+        let late = recovery.push(
+            recovered_stream_audio_packet(u16::MAX, 10_960),
+            now + STREAM_AUDIO_REORDER_DELAY * 2 + Duration::from_millis(20),
+        );
+        assert_eq!(late.dropped_stale_packets, 1);
+        assert!(late.ready.is_empty());
     }
 
     #[test]
@@ -4742,6 +5181,17 @@ mod tests {
             clock.timestamp_at(Duration::from_millis(3_980)),
             Some(191_040)
         );
+    }
+
+    #[test]
+    fn stream_audio_clock_recognizes_recent_replayed_timestamps() {
+        let mut clock = LocalStreamAudioClock::default();
+        let _ = clock.rebase(10_000, Duration::ZERO, None);
+
+        assert!(clock.is_recent_replay(10_000));
+        assert!(clock.is_recent_replay(6_160));
+        assert!(!clock.is_recent_replay(4_239));
+        assert!(!clock.is_recent_replay(10_960));
     }
 
     #[test]
