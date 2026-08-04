@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     io::Write,
     net::{Ipv4Addr, SocketAddrV4},
     path::Path,
@@ -35,6 +35,7 @@ const STREAM_PLAYER_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const STREAM_PLAYER_AUDIO_ENABLE_TIMEOUT: Duration = Duration::from_secs(1);
 const OPUS_RTP_CLOCK_RATE: u32 = 48_000;
 const VIDEO_RTP_CLOCK_RATE: u32 = 90_000;
+const STREAM_PRESENTATION_CLOCK_MAX_CORRECTION: Duration = Duration::from_millis(250);
 // Allow normal packet jitter and short Opus duration changes, but do not carry
 // multi-second source clock resets into mpv's local playback timeline.
 const STREAM_AUDIO_CLOCK_DRIFT_TOLERANCE_TICKS: u32 = DISCORD_OPUS_TIMESTAMP_INCREMENT * 6;
@@ -44,18 +45,29 @@ const STREAM_VIDEO_GAP_TIMEOUT: Duration = Duration::from_millis(500);
 const STREAM_VIDEO_REORDER_WINDOW: u16 = 128;
 const STREAM_VIDEO_MAX_NACK_SEQUENCES: usize = 64;
 const STREAM_RTCP_RECEIVER_REPORT_INTERVAL: Duration = Duration::from_secs(5);
+const STREAM_TRANSPORT_FEEDBACK_INTERVAL: Duration = Duration::from_millis(50);
+const STREAM_TRANSPORT_FEEDBACK_MAX_STATUSES: usize = 512;
 const LOCAL_RTCP_REPORT_INTERVAL: Duration = Duration::from_secs(1);
 const STREAM_CONNECTION_STABLE_INTERVAL: Duration = Duration::from_secs(10);
 const STREAM_WATCH_RECONNECT_BASE_DELAY: Duration = Duration::from_millis(250);
 const STREAM_WATCH_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(2);
+const RTCP_SENDER_REPORT: u8 = 200;
 const RTCP_TRANSPORT_LAYER_FEEDBACK: u8 = 205;
 const RTCP_GENERIC_NACK_FORMAT: u8 = 1;
+const RTCP_TRANSPORT_WIDE_FEEDBACK_FORMAT: u8 = 15;
 const RTCP_RECEIVER_REPORT: u8 = 201;
 const RTCP_SOURCE_DESCRIPTION: u8 = 202;
 const RTCP_SDES_CNAME: u8 = 1;
 const RTCP_PAYLOAD_SPECIFIC_FEEDBACK: u8 = 206;
 const RTCP_PLI_FORMAT: u8 = 1;
 const RTCP_PLI_LENGTH_WORDS_MINUS_ONE: u16 = 2;
+const RTP_ONE_BYTE_EXTENSION_PROFILE: u16 = 0xbede;
+const DISCORD_TRANSPORT_SEQUENCE_EXTENSION_ID: u8 = 5;
+const TRANSPORT_FEEDBACK_REFERENCE_TIME_MICROS: i64 = 64_000;
+const TRANSPORT_FEEDBACK_DELTA_MICROS: i64 = 250;
+const TRANSPORT_PACKET_NOT_RECEIVED: u8 = 0;
+const TRANSPORT_PACKET_RECEIVED_SMALL_DELTA: u8 = 1;
+const TRANSPORT_PACKET_RECEIVED_LARGE_DELTA: u8 = 2;
 
 #[derive(Clone, Eq, PartialEq)]
 pub(super) struct StreamGatewaySession {
@@ -677,8 +689,11 @@ async fn connect_stream_gateway(
                             logging::debug(
                                 "stream",
                                 format!(
-                                    "stream video source selected: audio_ssrc={} video_ssrc={} rtx_ssrc={:?}",
-                                    source.audio_ssrc, source.video_ssrc, source.rtx_ssrc
+                                    "stream video source selected: audio_ssrc={} video_ssrc={} rtx_ssrc={:?} pixel_count={:?}",
+                                    source.audio_ssrc,
+                                    source.video_ssrc,
+                                    source.rtx_ssrc,
+                                    source.pixel_count,
                                 ),
                             );
                             {
@@ -691,6 +706,7 @@ async fn connect_stream_gateway(
                                 stream_media_sink_wants_payload(
                                     source.audio_ssrc,
                                     source.video_ssrc,
+                                    source.pixel_count,
                                 ),
                             )
                             .await?;
@@ -787,13 +803,22 @@ fn stream_receive_only_video_payload(audio_ssrc: u32) -> String {
     .to_string()
 }
 
-fn stream_media_sink_wants_payload(audio_ssrc: u32, video_ssrc: u32) -> String {
+fn stream_media_sink_wants_payload(
+    audio_ssrc: u32,
+    video_ssrc: u32,
+    video_pixel_count: Option<u64>,
+) -> String {
     let mut wants = serde_json::Map::new();
     if audio_ssrc != 0 {
         wants.insert(audio_ssrc.to_string(), Value::from(100));
     }
     if video_ssrc != 0 {
         wants.insert(video_ssrc.to_string(), Value::from(100));
+        if let Some(pixel_count) = video_pixel_count {
+            let mut pixel_counts = serde_json::Map::new();
+            pixel_counts.insert(video_ssrc.to_string(), Value::from(pixel_count));
+            wants.insert("pixelCounts".to_owned(), Value::Object(pixel_counts));
+        }
     }
     wants.insert("any".to_owned(), Value::from(0));
     json!({
@@ -808,6 +833,7 @@ struct StreamVideoSource {
     audio_ssrc: u32,
     video_ssrc: u32,
     rtx_ssrc: Option<u32>,
+    pixel_count: Option<u64>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -830,11 +856,176 @@ struct StreamVideoRecoveryUpdate {
     reset_decoder: bool,
 }
 
+#[derive(Clone, Copy, Default)]
+struct StreamMediaCounters {
+    audio_packets: u64,
+    audio_bytes: u64,
+    primary_video_packets: u64,
+    primary_video_bytes: u64,
+    rtx_video_packets: u64,
+    rtx_video_bytes: u64,
+    h264_frames: u64,
+    h264_bytes: u64,
+    sender_reports: u64,
+    decoder_resets: u64,
+    transport_feedbacks: u64,
+    nacks: u64,
+    plis: u64,
+}
+
+impl StreamMediaCounters {
+    fn interval_since(self, previous: Self) -> Self {
+        Self {
+            audio_packets: self.audio_packets.wrapping_sub(previous.audio_packets),
+            audio_bytes: self.audio_bytes.wrapping_sub(previous.audio_bytes),
+            primary_video_packets: self
+                .primary_video_packets
+                .wrapping_sub(previous.primary_video_packets),
+            primary_video_bytes: self
+                .primary_video_bytes
+                .wrapping_sub(previous.primary_video_bytes),
+            rtx_video_packets: self
+                .rtx_video_packets
+                .wrapping_sub(previous.rtx_video_packets),
+            rtx_video_bytes: self.rtx_video_bytes.wrapping_sub(previous.rtx_video_bytes),
+            h264_frames: self.h264_frames.wrapping_sub(previous.h264_frames),
+            h264_bytes: self.h264_bytes.wrapping_sub(previous.h264_bytes),
+            sender_reports: self.sender_reports.wrapping_sub(previous.sender_reports),
+            decoder_resets: self.decoder_resets.wrapping_sub(previous.decoder_resets),
+            transport_feedbacks: self
+                .transport_feedbacks
+                .wrapping_sub(previous.transport_feedbacks),
+            nacks: self.nacks.wrapping_sub(previous.nacks),
+            plis: self.plis.wrapping_sub(previous.plis),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct StreamRtcpReportBlock {
     source_ssrc: u32,
-    cumulative_lost: u32,
+    fraction_lost: u8,
+    cumulative_lost: i32,
     extended_highest_sequence: u32,
+    interarrival_jitter: u32,
+    last_sender_report: u32,
+    delay_since_last_sender_report: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct StreamRtcpSenderReport {
+    sender_ssrc: u32,
+    ntp_timestamp: u64,
+    rtp_timestamp: u32,
+    packet_count: u32,
+    octet_count: u32,
+}
+
+#[derive(Clone, Copy)]
+struct StreamNtpOrigin {
+    ntp_timestamp: u64,
+    local_elapsed: Duration,
+}
+
+#[derive(Default)]
+struct StreamPresentationClock {
+    origin: Option<StreamNtpOrigin>,
+    reports: HashMap<u32, StreamRtcpSenderReport>,
+}
+
+impl StreamPresentationClock {
+    fn observe_sender_report(&mut self, report: StreamRtcpSenderReport, elapsed: Duration) {
+        self.origin.get_or_insert(StreamNtpOrigin {
+            ntp_timestamp: report.ntp_timestamp,
+            local_elapsed: elapsed,
+        });
+        self.reports.insert(report.sender_ssrc, report);
+    }
+
+    // RTCP Sender Reports connect every media RTP clock to one NTP clock. Map
+    // that common sender time onto the local elapsed timeline so audio and
+    // video no longer acquire separate offsets from their packet arrival time.
+    fn map_timestamp(&self, ssrc: u32, source_timestamp: u32, clock_rate: u32) -> Option<u32> {
+        let origin = self.origin?;
+        let report = self.reports.get(&ssrc)?;
+        let ntp_delta = report.ntp_timestamp.wrapping_sub(origin.ntp_timestamp) as i64;
+        let ntp_delta_ticks = i128::from(ntp_delta) * i128::from(clock_rate) / (1i128 << 32);
+        let source_delta_ticks =
+            i128::from(source_timestamp.wrapping_sub(report.rtp_timestamp) as i32);
+        let local_origin_ticks =
+            i128::from(elapsed_rtp_timestamp(origin.local_elapsed, clock_rate));
+        let local_timestamp = local_origin_ticks + ntp_delta_ticks + source_delta_ticks;
+        if local_timestamp < 0 {
+            return None;
+        }
+        Some(local_timestamp.rem_euclid(1i128 << 32) as u32)
+    }
+}
+
+fn parse_stream_rtcp_sender_reports(
+    compound: &[u8],
+) -> Result<Vec<StreamRtcpSenderReport>, String> {
+    let mut reports = Vec::new();
+    let mut offset = 0usize;
+    while offset < compound.len() {
+        let remaining = compound.len() - offset;
+        if remaining < 4 {
+            return Err("RTCP compound packet has a truncated header".to_owned());
+        }
+        if compound[offset] >> 6 != RTP_VERSION {
+            return Err("RTCP packet has an invalid version".to_owned());
+        }
+        let length_words_minus_one =
+            u16::from_be_bytes([compound[offset + 2], compound[offset + 3]]);
+        let packet_len = (usize::from(length_words_minus_one) + 1)
+            .checked_mul(4)
+            .ok_or_else(|| "RTCP packet length overflowed".to_owned())?;
+        let packet_end = offset
+            .checked_add(packet_len)
+            .filter(|end| *end <= compound.len())
+            .ok_or_else(|| "RTCP packet length exceeds the compound packet".to_owned())?;
+
+        if compound[offset + 1] == RTCP_SENDER_REPORT {
+            let report_count = usize::from(compound[offset] & 0x1f);
+            let minimum_len = 28 + report_count * 24;
+            if packet_len < minimum_len {
+                return Err("RTCP sender report is truncated".to_owned());
+            }
+            let sender_ssrc = rtcp_u32(compound, offset + 4);
+            let ntp_seconds = rtcp_u32(compound, offset + 8);
+            let ntp_fraction = rtcp_u32(compound, offset + 12);
+            reports.push(StreamRtcpSenderReport {
+                sender_ssrc,
+                ntp_timestamp: (u64::from(ntp_seconds) << 32) | u64::from(ntp_fraction),
+                rtp_timestamp: rtcp_u32(compound, offset + 16),
+                packet_count: rtcp_u32(compound, offset + 20),
+                octet_count: rtcp_u32(compound, offset + 24),
+            });
+        }
+        offset = packet_end;
+    }
+    Ok(reports)
+}
+
+fn rtcp_u32(packet: &[u8], offset: usize) -> u32 {
+    u32::from_be_bytes([
+        packet[offset],
+        packet[offset + 1],
+        packet[offset + 2],
+        packet[offset + 3],
+    ])
+}
+
+#[derive(Clone, Copy)]
+struct StreamRtcpJitterOrigin {
+    arrival_timestamp: u32,
+    source_timestamp: u32,
+}
+
+#[derive(Clone, Copy)]
+struct StreamRtcpLastSenderReport {
+    middle_ntp_timestamp: u32,
+    received_at: Duration,
 }
 
 #[derive(Default)]
@@ -844,6 +1035,12 @@ struct StreamRtcpControl {
     base_extended_sequence: Option<u32>,
     highest_extended_sequence: Option<u32>,
     received_packets: u32,
+    expected_prior: u32,
+    received_prior: u32,
+    jitter_origin: Option<StreamRtcpJitterOrigin>,
+    previous_transit: Option<i64>,
+    jitter_q4: i64,
+    last_sender_report: Option<StreamRtcpLastSenderReport>,
 }
 
 impl StreamRtcpControl {
@@ -851,47 +1048,89 @@ impl StreamRtcpControl {
         if self.source_ssrc == source_ssrc {
             return;
         }
-        self.source_ssrc = source_ssrc;
-        self.base_extended_sequence = None;
-        self.highest_extended_sequence = None;
-        self.received_packets = 0;
+        let nonce = self.nonce;
+        *self = Self {
+            nonce,
+            source_ssrc,
+            ..Self::default()
+        };
     }
 
-    fn observe(&mut self, sequence: u16) {
+    fn observe_rtp(&mut self, sequence: u16, timestamp: u32, arrival: Duration) {
         if self.source_ssrc == 0 {
             return;
         }
-        let extended = match self.highest_extended_sequence {
-            None => u32::from(sequence),
-            Some(highest) => {
-                let previous = highest as u16;
-                let next_cycle = if sequence < previous { 1 << 16 } else { 0 };
-                (highest & 0xffff_0000)
-                    .wrapping_add(next_cycle)
-                    .wrapping_add(u32::from(sequence))
-            }
-        };
+        let extended = extend_transport_sequence(sequence, self.highest_extended_sequence);
+        self.base_extended_sequence.get_or_insert(extended);
         if self
             .highest_extended_sequence
-            .is_some_and(|highest| extended <= highest)
+            .is_none_or(|highest| extended > highest)
         {
-            return;
+            self.highest_extended_sequence = Some(extended);
         }
-        self.base_extended_sequence.get_or_insert(extended);
-        self.highest_extended_sequence = Some(extended);
         self.received_packets = self.received_packets.wrapping_add(1);
+
+        let arrival_timestamp = elapsed_rtp_timestamp(arrival, VIDEO_RTP_CLOCK_RATE);
+        let origin = *self.jitter_origin.get_or_insert(StreamRtcpJitterOrigin {
+            arrival_timestamp,
+            source_timestamp: timestamp,
+        });
+        let arrival_delta = arrival_timestamp.wrapping_sub(origin.arrival_timestamp) as i32;
+        let source_delta = timestamp.wrapping_sub(origin.source_timestamp) as i32;
+        let transit = i64::from(arrival_delta) - i64::from(source_delta);
+        if let Some(previous_transit) = self.previous_transit {
+            let delta = transit.abs_diff(previous_transit) as i64;
+            self.jitter_q4 += delta - ((self.jitter_q4 + 8) >> 4);
+        }
+        self.previous_transit = Some(transit);
     }
 
-    fn report_block(&self) -> Option<StreamRtcpReportBlock> {
+    fn observe_sender_report(&mut self, report: StreamRtcpSenderReport, received_at: Duration) {
+        if report.sender_ssrc != self.source_ssrc {
+            return;
+        }
+        self.last_sender_report = Some(StreamRtcpLastSenderReport {
+            middle_ntp_timestamp: (report.ntp_timestamp >> 16) as u32,
+            received_at,
+        });
+    }
+
+    fn report_block(&mut self, now: Duration) -> Option<StreamRtcpReportBlock> {
         let base = self.base_extended_sequence?;
         let highest = self.highest_extended_sequence?;
         let expected = highest.wrapping_sub(base).wrapping_add(1);
+        let expected_interval = expected.wrapping_sub(self.expected_prior);
+        let received_interval = self.received_packets.wrapping_sub(self.received_prior);
+        let lost_interval = i64::from(expected_interval) - i64::from(received_interval);
+        let fraction_lost = if expected_interval == 0 || lost_interval <= 0 {
+            0
+        } else {
+            u8::try_from(((lost_interval << 8) / i64::from(expected_interval)).min(255))
+                .expect("RTCP fraction loss is bounded to u8")
+        };
+        self.expected_prior = expected;
+        self.received_prior = self.received_packets;
+
+        let cumulative_lost = (i64::from(expected) - i64::from(self.received_packets))
+            .clamp(-0x80_0000, 0x7f_ffff) as i32;
+        let (last_sender_report, delay_since_last_sender_report) = self
+            .last_sender_report
+            .map(|report| {
+                (
+                    report.middle_ntp_timestamp,
+                    duration_to_rtcp_delay(now.saturating_sub(report.received_at)),
+                )
+            })
+            .unwrap_or_default();
         Some(StreamRtcpReportBlock {
             source_ssrc: self.source_ssrc,
-            cumulative_lost: expected
-                .saturating_sub(self.received_packets)
-                .min(0x7f_ffff),
+            fraction_lost,
+            cumulative_lost,
             extended_highest_sequence: highest,
+            interarrival_jitter: u32::try_from((self.jitter_q4.max(0) + 8) >> 4)
+                .unwrap_or(u32::MAX),
+            last_sender_report,
+            delay_since_last_sender_report,
         })
     }
 
@@ -902,8 +1141,10 @@ impl StreamRtcpControl {
         sender_ssrc: u32,
         feedback: &[u8],
         kind: &str,
+        elapsed: Duration,
     ) -> Result<(), String> {
-        let packet = build_stream_rtcp_compound(sender_ssrc, self.report_block(), Some(feedback));
+        let report = self.report_block(elapsed);
+        let packet = build_stream_rtcp_compound(sender_ssrc, report, Some(feedback));
         self.send_packet(socket, encryptor, &packet, kind).await
     }
 
@@ -912,8 +1153,10 @@ impl StreamRtcpControl {
         socket: &UdpSocket,
         encryptor: &VoiceRtpEncryptor,
         sender_ssrc: u32,
+        elapsed: Duration,
     ) -> Result<(), String> {
-        let packet = build_stream_rtcp_compound(sender_ssrc, self.report_block(), None);
+        let report = self.report_block(elapsed);
+        let packet = build_stream_rtcp_compound(sender_ssrc, report, None);
         self.send_packet(socket, encryptor, &packet, "receiver report")
             .await
     }
@@ -936,6 +1179,159 @@ impl StreamRtcpControl {
             .map_err(|error| format!("send stream RTCP {kind} failed: {error}"))?;
         Ok(())
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StreamTransportReceiveDelta {
+    Small(u8),
+    Large(i16),
+}
+
+impl StreamTransportReceiveDelta {
+    fn status(self) -> u8 {
+        match self {
+            Self::Small(_) => TRANSPORT_PACKET_RECEIVED_SMALL_DELTA,
+            Self::Large(_) => TRANSPORT_PACKET_RECEIVED_LARGE_DELTA,
+        }
+    }
+}
+
+#[derive(Default)]
+struct StreamTransportFeedback {
+    arrivals: BTreeMap<u32, Duration>,
+    highest_extended_sequence: Option<u32>,
+    next_unreported_sequence: Option<u32>,
+    last_reported_sequence: Option<u32>,
+    feedback_packet_count: u8,
+}
+
+impl StreamTransportFeedback {
+    fn reset(&mut self) {
+        self.arrivals.clear();
+        self.highest_extended_sequence = None;
+        self.next_unreported_sequence = None;
+        self.last_reported_sequence = None;
+    }
+
+    fn observe(&mut self, sequence: u16, arrival: Duration) {
+        let extended = extend_transport_sequence(sequence, self.highest_extended_sequence);
+        if self
+            .last_reported_sequence
+            .is_some_and(|reported| extended <= reported)
+        {
+            return;
+        }
+
+        if self.next_unreported_sequence.is_some_and(|base| {
+            extended.saturating_sub(base) >= STREAM_TRANSPORT_FEEDBACK_MAX_STATUSES as u32
+        }) {
+            self.arrivals.clear();
+            self.next_unreported_sequence = Some(extended);
+            self.last_reported_sequence = extended.checked_sub(1);
+        } else {
+            self.next_unreported_sequence = Some(
+                self.next_unreported_sequence
+                    .map_or(extended, |base| base.min(extended)),
+            );
+        }
+
+        self.highest_extended_sequence = Some(
+            self.highest_extended_sequence
+                .map_or(extended, |highest| highest.max(extended)),
+        );
+        self.arrivals.entry(extended).or_insert(arrival);
+    }
+
+    fn take_feedback(&mut self, sender_ssrc: u32, media_ssrc: u32) -> Option<Vec<u8>> {
+        let base = self.next_unreported_sequence?;
+        let highest = self.highest_extended_sequence?;
+        if base > highest {
+            return None;
+        }
+        let end =
+            highest.min(base.saturating_add(STREAM_TRANSPORT_FEEDBACK_MAX_STATUSES as u32 - 1));
+        let first_received = self.arrivals.range(base..=end).next()?.1;
+        let first_arrival_micros = duration_micros(*first_received);
+        let reference_time =
+            first_arrival_micros.div_euclid(TRANSPORT_FEEDBACK_REFERENCE_TIME_MICROS);
+        let reference_micros = reference_time * TRANSPORT_FEEDBACK_REFERENCE_TIME_MICROS;
+
+        let mut statuses = Vec::with_capacity((end - base + 1) as usize);
+        let mut deltas = Vec::new();
+        let mut previous_received_micros = reference_micros;
+        for extended in base..=end {
+            let Some(arrival) = self.arrivals.get(&extended) else {
+                statuses.push(TRANSPORT_PACKET_NOT_RECEIVED);
+                continue;
+            };
+            let arrival_micros = duration_micros(*arrival);
+            let delta = rounded_divide(
+                arrival_micros - previous_received_micros,
+                TRANSPORT_FEEDBACK_DELTA_MICROS,
+            );
+            let encoded = if let Ok(delta) = u8::try_from(delta) {
+                StreamTransportReceiveDelta::Small(delta)
+            } else if let Ok(delta) = i16::try_from(delta) {
+                StreamTransportReceiveDelta::Large(delta)
+            } else {
+                break;
+            };
+            statuses.push(encoded.status());
+            deltas.push(encoded);
+            previous_received_micros = arrival_micros;
+        }
+        if statuses.is_empty() || !statuses.iter().any(|status| *status != 0) {
+            return None;
+        }
+
+        let status_count =
+            u16::try_from(statuses.len()).expect("transport status count is bounded");
+        let actual_end = base + u32::from(status_count) - 1;
+        let packet = build_transport_wide_feedback(
+            sender_ssrc,
+            media_ssrc,
+            base as u16,
+            reference_time,
+            self.feedback_packet_count,
+            &statuses,
+            &deltas,
+        );
+        self.feedback_packet_count = self.feedback_packet_count.wrapping_add(1);
+        self.last_reported_sequence = Some(actual_end);
+        self.next_unreported_sequence = actual_end.checked_add(1);
+        self.arrivals.retain(|sequence, _| *sequence > actual_end);
+        Some(packet)
+    }
+}
+
+fn extend_transport_sequence(sequence: u16, highest: Option<u32>) -> u32 {
+    let Some(highest) = highest else {
+        return u32::from(sequence);
+    };
+    let delta = i32::from(sequence.wrapping_sub(highest as u16) as i16);
+    if delta >= 0 {
+        highest.wrapping_add(delta as u32)
+    } else {
+        highest.saturating_sub(delta.unsigned_abs())
+    }
+}
+
+fn duration_micros(duration: Duration) -> i64 {
+    i64::try_from(duration.as_micros()).unwrap_or(i64::MAX)
+}
+
+fn rounded_divide(value: i64, divisor: i64) -> i64 {
+    if value >= 0 {
+        (value + divisor / 2) / divisor
+    } else {
+        (value - divisor / 2) / divisor
+    }
+}
+
+fn duration_to_rtcp_delay(duration: Duration) -> u32 {
+    let whole = duration.as_secs().saturating_mul(1 << 16);
+    let fraction = u64::from(duration.subsec_nanos()).saturating_mul(1 << 16) / 1_000_000_000;
+    u32::try_from(whole.saturating_add(fraction)).unwrap_or(u32::MAX)
 }
 
 impl StreamVideoRecovery {
@@ -1058,6 +1454,36 @@ fn recover_stream_video_packet(
     })
 }
 
+fn parse_stream_transport_sequence(
+    extension_profile: Option<u16>,
+    extension_body: &[u8],
+) -> Option<u16> {
+    if extension_profile != Some(RTP_ONE_BYTE_EXTENSION_PROFILE) {
+        return None;
+    }
+
+    let mut offset = 0usize;
+    while offset < extension_body.len() {
+        let descriptor = extension_body[offset];
+        offset += 1;
+        let extension_id = descriptor >> 4;
+        if extension_id == 0 {
+            continue;
+        }
+        if extension_id == 15 {
+            break;
+        }
+        let extension_len = usize::from(descriptor & 0x0f) + 1;
+        let end = offset.checked_add(extension_len)?;
+        let value = extension_body.get(offset..end)?;
+        if extension_id == DISCORD_TRANSPORT_SEQUENCE_EXTENSION_ID {
+            return matches!(value.len(), 2 | 4).then(|| u16::from_be_bytes([value[0], value[1]]));
+        }
+        offset = end;
+    }
+    None
+}
+
 fn parse_stream_video_source(value: &Value, owner_id: Id<UserMarker>) -> Option<StreamVideoSource> {
     let data = value.get("d")?;
     if data.get("user_id").and_then(Value::as_str) != Some(owner_id.to_string().as_str()) {
@@ -1096,16 +1522,22 @@ fn parse_stream_video_source(value: &Value, owner_id: Id<UserMarker>) -> Option<
                 .get("rtx_ssrc")
                 .and_then(Value::as_u64)
                 .and_then(|ssrc| u32::try_from(ssrc).ok());
-            Some((quality, ssrc, rtx_ssrc))
+            let pixel_count = stream.get("max_resolution").and_then(|resolution| {
+                let width = resolution.get("width")?.as_u64()?;
+                let height = resolution.get("height")?.as_u64()?;
+                width.checked_mul(height).filter(|pixels| *pixels != 0)
+            });
+            Some((quality, ssrc, rtx_ssrc, pixel_count))
         })
-        .max_by_key(|(quality, _, _)| *quality);
-    let (video_ssrc, rtx_ssrc) = selected
-        .map(|(_, ssrc, rtx)| (ssrc, rtx))
-        .or_else(|| fallback_video_ssrc.map(|ssrc| (ssrc, Some(ssrc.wrapping_add(1)))))?;
+        .max_by_key(|(quality, _, _, _)| *quality);
+    let (video_ssrc, rtx_ssrc, pixel_count) = selected
+        .map(|(_, ssrc, rtx, pixels)| (ssrc, rtx, pixels))
+        .or_else(|| fallback_video_ssrc.map(|ssrc| (ssrc, Some(ssrc.wrapping_add(1)), None)))?;
     Some(StreamVideoSource {
         audio_ssrc,
         video_ssrc,
         rtx_ssrc,
+        pixel_count,
     })
 }
 
@@ -1199,6 +1631,13 @@ async fn run_stream_media(
     let mut local_audio_octets = 0u32;
     let mut local_video = LocalStreamVideoForwarder::default();
     let mut discord_rtcp = StreamRtcpControl::default();
+    let mut transport_feedback = StreamTransportFeedback::default();
+    let mut presentation_clock = StreamPresentationClock::default();
+    let mut media_counters = StreamMediaCounters::default();
+    let mut previous_media_counters = StreamMediaCounters::default();
+    let mut previous_local_video_packets = 0u32;
+    let mut previous_local_video_frames = 0u64;
+    let mut previous_stats_elapsed = Duration::ZERO;
     let media_started_at = Instant::now();
     let mut local_audio_clock = LocalStreamAudioClock::default();
     let mut player_audio = StreamPlayerAudioState::default();
@@ -1207,6 +1646,7 @@ async fn run_stream_media(
     let mut logged_video_before_player_ready = false;
     let mut logged_keyframe_request = false;
     let mut logged_local_sender_reports = false;
+    let mut logged_discord_sender_report = false;
     let mut local_rtcp_report_ticks = 0u64;
     let mut keyframe_request_interval = tokio::time::interval(STREAM_KEYFRAME_REQUEST_INTERVAL);
     keyframe_request_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1217,6 +1657,8 @@ async fn run_stream_media(
     let mut discord_rtcp_report_interval =
         tokio::time::interval(STREAM_RTCP_RECEIVER_REPORT_INTERVAL);
     discord_rtcp_report_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut transport_feedback_interval = tokio::time::interval(STREAM_TRANSPORT_FEEDBACK_INTERVAL);
+    transport_feedback_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let player_ready_timeout = tokio::time::sleep(STREAM_PLAYER_READY_TIMEOUT);
     tokio::pin!(player_ready_timeout);
 
@@ -1285,16 +1727,52 @@ async fn run_stream_media(
                             ),
                         );
                     } else if local_rtcp_report_ticks.is_multiple_of(10) {
+                        let interval = media_counters.interval_since(previous_media_counters);
+                        let interval_elapsed = elapsed.saturating_sub(previous_stats_elapsed);
+                        let interval_local_video_packets = local_video
+                            .packets
+                            .wrapping_sub(previous_local_video_packets);
+                        let interval_local_video_frames = local_video
+                            .frames
+                            .wrapping_sub(previous_local_video_frames);
                         logging::debug(
                             "stream",
                             format!(
-                                "local stream RTP stats: elapsed_ms={} audio_packets={local_audio_packets} video_packets={} video_frames={} last_video_timestamp={:?}",
+                                "stream media stats: elapsed_ms={} interval_ms={} input_audio_packets={} input_audio_bytes={} input_video_packets={} input_video_bytes={} input_rtx_packets={} input_rtx_bytes={} h264_frames={} h264_bytes={} output_video_packets={} output_video_frames={} interval_audio_packets={} interval_audio_bytes={} interval_video_packets={} interval_video_bytes={} interval_rtx_packets={} interval_rtx_bytes={} interval_h264_frames={} interval_h264_bytes={} interval_output_video_packets={} interval_output_video_frames={} sender_reports={} decoder_resets={} transport_feedbacks={} nacks={} plis={} last_video_timestamp={:?}",
                                 elapsed.as_millis(),
+                                interval_elapsed.as_millis(),
+                                media_counters.audio_packets,
+                                media_counters.audio_bytes,
+                                media_counters.primary_video_packets,
+                                media_counters.primary_video_bytes,
+                                media_counters.rtx_video_packets,
+                                media_counters.rtx_video_bytes,
+                                media_counters.h264_frames,
+                                media_counters.h264_bytes,
                                 local_video.packets,
                                 local_video.frames,
+                                interval.audio_packets,
+                                interval.audio_bytes,
+                                interval.primary_video_packets,
+                                interval.primary_video_bytes,
+                                interval.rtx_video_packets,
+                                interval.rtx_video_bytes,
+                                interval.h264_frames,
+                                interval.h264_bytes,
+                                interval_local_video_packets,
+                                interval_local_video_frames,
+                                media_counters.sender_reports,
+                                media_counters.decoder_resets,
+                                media_counters.transport_feedbacks,
+                                media_counters.nacks,
+                                media_counters.plis,
                                 local_video.last_timestamp,
                             ),
                         );
+                        previous_media_counters = media_counters;
+                        previous_local_video_packets = local_video.packets;
+                        previous_local_video_frames = local_video.frames;
+                        previous_stats_elapsed = elapsed;
                     }
                 }
             }
@@ -1303,8 +1781,33 @@ async fn run_stream_media(
                 if source.video_ssrc != 0 {
                     discord_rtcp.set_source(source.video_ssrc);
                     discord_rtcp
-                        .send_report(&discord_socket, &encryptor, local_ssrc)
+                        .send_report(
+                            &discord_socket,
+                            &encryptor,
+                            local_ssrc,
+                            media_started_at.elapsed(),
+                        )
                         .await?;
+                }
+            }
+            _ = transport_feedback_interval.tick() => {
+                let source = *video_source_rx.borrow();
+                if source.video_ssrc != 0
+                    && let Some(feedback) = transport_feedback
+                        .take_feedback(local_ssrc, source.video_ssrc)
+                {
+                    discord_rtcp
+                        .send_feedback(
+                            &discord_socket,
+                            &encryptor,
+                            local_ssrc,
+                            &feedback,
+                            "transport-wide feedback",
+                            media_started_at.elapsed(),
+                        )
+                        .await?;
+                    media_counters.transport_feedbacks =
+                        media_counters.transport_feedbacks.wrapping_add(1);
                 }
             }
             _ = video_recovery_interval.tick() => {
@@ -1313,6 +1816,7 @@ async fn run_stream_media(
                 if source_identity != active_video_source {
                     active_video_source = source_identity;
                     discord_rtcp.set_source(source.video_ssrc);
+                    transport_feedback.reset();
                     video_recovery.reset();
                     reset_stream_h264_pipeline(
                         &mut h264,
@@ -1323,6 +1827,8 @@ async fn run_stream_media(
                 let now = Instant::now();
                 if video_recovery.gap_expired(now) {
                     video_recovery.reset();
+                    media_counters.decoder_resets =
+                        media_counters.decoder_resets.wrapping_add(1);
                     reset_stream_h264_pipeline(
                         &mut h264,
                         &mut h264_startup,
@@ -1337,8 +1843,10 @@ async fn run_stream_media(
                                 local_ssrc,
                                 &feedback,
                                 "PLI",
+                                media_started_at.elapsed(),
                             )
                             .await?;
+                        media_counters.plis = media_counters.plis.wrapping_add(1);
                     }
                     logging::debug(
                         "stream",
@@ -1355,8 +1863,10 @@ async fn run_stream_media(
                             local_ssrc,
                             &feedback,
                             "NACK",
+                            media_started_at.elapsed(),
                         )
                         .await?;
+                    media_counters.nacks = media_counters.nacks.wrapping_add(1);
                 }
             }
             _ = keyframe_request_interval.tick(), if !h264_startup.is_started() => {
@@ -1371,8 +1881,10 @@ async fn run_stream_media(
                             local_ssrc,
                             &feedback,
                             "PLI",
+                            media_started_at.elapsed(),
                         )
                         .await?;
+                    media_counters.plis = media_counters.plis.wrapping_add(1);
                     if !logged_keyframe_request {
                         logged_keyframe_request = true;
                         logging::debug(
@@ -1405,8 +1917,59 @@ async fn run_stream_media(
             received = discord_socket.recv(&mut packet) => {
                 let received =
                     received.map_err(|error| format!("stream UDP receive failed: {error}"))?;
+                let packet_arrival = media_started_at.elapsed();
                 let packet = &packet[..received];
                 if looks_like_rtcp_packet(packet) {
+                    let decrypted = match decryptor.decrypt_rtcp_feedback(packet) {
+                        Ok(decrypted) => decrypted,
+                        Err(error) => {
+                            logging::debug(
+                                "stream",
+                                format!("stream RTCP decrypt failed: {error}"),
+                            );
+                            continue;
+                        }
+                    };
+                    let reports = match parse_stream_rtcp_sender_reports(&decrypted) {
+                        Ok(reports) => reports,
+                        Err(error) => {
+                            logging::debug(
+                                "stream",
+                                format!("stream RTCP parse failed: {error}"),
+                            );
+                            continue;
+                        }
+                    };
+                    let source = *video_source_rx.borrow();
+                    let elapsed = media_started_at.elapsed();
+                    for report in reports {
+                        if report.sender_ssrc != source.audio_ssrc
+                            && report.sender_ssrc != source.video_ssrc
+                        {
+                            continue;
+                        }
+                        if report.sender_ssrc == source.video_ssrc {
+                            discord_rtcp.set_source(source.video_ssrc);
+                            discord_rtcp.observe_sender_report(report, elapsed);
+                        }
+                        presentation_clock.observe_sender_report(report, elapsed);
+                        media_counters.sender_reports =
+                            media_counters.sender_reports.wrapping_add(1);
+                        if !logged_discord_sender_report {
+                            logged_discord_sender_report = true;
+                            logging::debug(
+                                "stream",
+                                format!(
+                                    "Discord RTCP sender clock started: elapsed_ms={} sender_ssrc={} rtp_timestamp={} packets={} octets={}",
+                                    elapsed.as_millis(),
+                                    report.sender_ssrc,
+                                    report.rtp_timestamp,
+                                    report.packet_count,
+                                    report.octet_count,
+                                ),
+                            );
+                        }
+                    }
                     continue;
                 }
                 let header = match parse_rtp_header(packet) {
@@ -1418,6 +1981,7 @@ async fn run_stream_media(
                 if source_identity != active_video_source {
                     active_video_source = source_identity;
                     discord_rtcp.set_source(source.video_ssrc);
+                    transport_feedback.reset();
                     video_recovery.reset();
                     reset_stream_h264_pipeline(
                         &mut h264,
@@ -1438,6 +2002,12 @@ async fn run_stream_media(
                         continue;
                     }
                 };
+                if let Some(sequence) = parse_stream_transport_sequence(
+                    decrypted.extension_profile,
+                    &decrypted.extension_body,
+                ) {
+                    transport_feedback.observe(sequence, packet_arrival);
+                }
                 if header.payload_type == DISCORD_VOICE_PAYLOAD_TYPE
                     && source.audio_ssrc != 0
                     && header.ssrc == source.audio_ssrc
@@ -1451,10 +2021,23 @@ async fn run_stream_media(
                         | VoiceMediaPayload::DaveDecrypted { opus, .. } => opus,
                         _ => continue,
                     };
+                    media_counters.audio_packets =
+                        media_counters.audio_packets.wrapping_add(1);
+                    media_counters.audio_bytes = media_counters
+                        .audio_bytes
+                        .wrapping_add(u64::try_from(received).expect("UDP packet length fits u64"));
                     player_audio.observe_real_packet();
                     let real_audio_at = media_started_at.elapsed();
-                    let audio_timestamp =
-                        local_audio_clock.rebase(header.timestamp, real_audio_at);
+                    let synchronized_timestamp = presentation_clock.map_timestamp(
+                        header.ssrc,
+                        header.timestamp,
+                        OPUS_RTP_CLOCK_RATE,
+                    );
+                    let audio_timestamp = local_audio_clock.rebase(
+                        header.timestamp,
+                        real_audio_at,
+                        synchronized_timestamp,
+                    );
                     let local_timestamp = audio_timestamp.local_timestamp;
                     if let Some(discontinuity) = audio_timestamp.discontinuity {
                         logging::debug(
@@ -1492,14 +2075,43 @@ async fn run_stream_media(
                         );
                     }
                 } else if source.video_ssrc != 0 {
+                    let received_payload_type = header.payload_type;
+                    if received_payload_type == DISCORD_STREAM_VIDEO_PAYLOAD_TYPE
+                        && header.ssrc == source.video_ssrc
+                    {
+                        discord_rtcp.observe_rtp(
+                            header.sequence,
+                            header.timestamp,
+                            packet_arrival,
+                        );
+                    }
                     let Some(video_packet) =
                         recover_stream_video_packet(header, decrypted.media_payload, source)
                     else {
                         continue;
                     };
+                    if received_payload_type == DISCORD_STREAM_VIDEO_RTX_PAYLOAD_TYPE {
+                        media_counters.rtx_video_packets =
+                            media_counters.rtx_video_packets.wrapping_add(1);
+                        media_counters.rtx_video_bytes = media_counters
+                            .rtx_video_bytes
+                            .wrapping_add(
+                                u64::try_from(received).expect("UDP packet length fits u64"),
+                            );
+                    } else {
+                        media_counters.primary_video_packets =
+                            media_counters.primary_video_packets.wrapping_add(1);
+                        media_counters.primary_video_bytes = media_counters
+                            .primary_video_bytes
+                            .wrapping_add(
+                                u64::try_from(received).expect("UDP packet length fits u64"),
+                            );
+                    }
                     let now = Instant::now();
                     let recovery = video_recovery.push(video_packet, now);
                     if recovery.reset_decoder {
+                        media_counters.decoder_resets =
+                            media_counters.decoder_resets.wrapping_add(1);
                         reset_stream_h264_pipeline(
                             &mut h264,
                             &mut h264_startup,
@@ -1513,8 +2125,14 @@ async fn run_stream_media(
                                 local_ssrc,
                                 &feedback,
                                 "PLI",
+                                media_started_at.elapsed(),
                             )
                             .await?;
+                        media_counters.plis = media_counters.plis.wrapping_add(1);
+                        logging::debug(
+                            "stream",
+                            "stream video sequence exceeded the reorder window; reset the decoder and requested a new keyframe",
+                        );
                     }
                     if let Some(missing) = video_recovery.take_nack_if_due(now) {
                         let feedback = build_rtcp_nack(local_ssrc, source.video_ssrc, &missing);
@@ -1525,16 +2143,29 @@ async fn run_stream_media(
                                 local_ssrc,
                                 &feedback,
                                 "NACK",
+                                media_started_at.elapsed(),
                             )
                             .await?;
+                        media_counters.nacks = media_counters.nacks.wrapping_add(1);
                     }
                     for video_packet in recovery.ready {
                         let header = video_packet.header;
-                        discord_rtcp.observe(header.sequence);
                         let frame = match h264.push(&header, &video_packet.payload) {
                             H264DepacketizerOutput::Pending => continue,
-                            H264DepacketizerOutput::Frame(frame) => frame,
+                            H264DepacketizerOutput::Frame(frame) => {
+                                media_counters.h264_frames =
+                                    media_counters.h264_frames.wrapping_add(1);
+                                media_counters.h264_bytes = media_counters
+                                    .h264_bytes
+                                    .wrapping_add(
+                                        u64::try_from(frame.len())
+                                            .expect("bounded H264 frame length fits u64"),
+                                    );
+                                frame
+                            }
                             H264DepacketizerOutput::BudgetExceeded => {
+                                media_counters.decoder_resets =
+                                    media_counters.decoder_resets.wrapping_add(1);
                                 reset_stream_h264_pipeline(
                                     &mut h264,
                                     &mut h264_startup,
@@ -1548,8 +2179,10 @@ async fn run_stream_media(
                                         local_ssrc,
                                         &feedback,
                                         "PLI",
+                                        media_started_at.elapsed(),
                                     )
                                     .await?;
+                                media_counters.plis = media_counters.plis.wrapping_add(1);
                                 logging::debug(
                                     "stream",
                                     "stream H264 access unit exceeded its safety budget; requested a new keyframe",
@@ -1624,7 +2257,15 @@ async fn run_stream_media(
                             continue;
                         };
                         local_video
-                            .forward_live(&local_video_destination, &frame)
+                            .forward_live(
+                                &local_video_destination,
+                                &frame,
+                                presentation_clock.map_timestamp(
+                                    source.video_ssrc,
+                                    frame.source_timestamp,
+                                    VIDEO_RTP_CLOCK_RATE,
+                                ),
+                            )
                             .await;
                     }
                 }
@@ -1664,21 +2305,37 @@ fn stream_player_command(sdp_path: &Path, display_name: &str, ipc_server: &str) 
         // packet selects it through JSON IPC after mpv has loaded the SDP.
         .arg("--aid=no")
         .arg(format!("--input-ipc-server={ipc_server}"))
-        .arg("--profile=low-latency")
-        .arg("--cache=no")
-        .arg("--demuxer-readahead-secs=0")
+        // Prefer mpv's safe hardware allowlist and let libavcodec use the
+        // available CPU cores when it falls back.
+        .arg("--hwdec=auto-safe")
+        .arg("--vd-lavc-threads=0")
+        // A high-resolution encoded frame can arrive as a short UDP burst.
+        // Keep enough byte capacity for that burst and only 150ms of forward
+        // media, which smooths arrival jitter without retaining stale history.
+        .arg("--stream-buffer-size=1MiB")
+        .arg("--audio-buffer=0.05")
+        .arg("--cache=yes")
+        .arg("--cache-pause=no")
+        .arg("--cache-pause-initial=no")
+        .arg("--cache-secs=0.15")
+        .arg("--demuxer-readahead-secs=0.15")
+        .arg("--demuxer-max-bytes=16MiB")
+        .arg("--demuxer-max-back-bytes=0")
         .arg("--demuxer=lavf")
         .arg("--demuxer-lavf-format=sdp")
+        .arg("--demuxer-lavf-probe-info=nostreams")
+        .arg("--demuxer-lavf-analyzeduration=0.1")
         .arg("--demuxer-lavf-probesize=32")
-        .arg("--demuxer-lavf-buffersize=4096")
+        .arg("--demuxer-lavf-buffersize=262144")
         // mpv uses commas between lavf key/value options. Square brackets keep
         // the protocol list together as one value.
-        .arg("--demuxer-lavf-o=protocol_whitelist=[file,udp,rtp],max_delay=0,reorder_queue_size=0")
+        .arg("--demuxer-lavf-o=protocol_whitelist=[file,udp,rtp],buffer_size=4194304,max_delay=50000,reorder_queue_size=512")
         .arg("--force-window=immediate")
         .arg(format!("--title={display_name}'s stream"))
         // Audio and video share one player so its volume and mute controls
         // apply to the complete broadcast.
-        .arg("--video-sync=desync")
+        .arg("--video-latency-hacks=no")
+        .arg("--video-sync=audio")
         // Skip late output frames instead of preserving live delay.
         // Decoder dropping can discard H264 reference frames.
         .arg("--framedrop=vo")
@@ -1767,9 +2424,20 @@ impl LocalStreamAudioClock {
     // Discord can replay an old packet or restart an audio clock when a stream
     // subscription settles. Valid source deltas retain their media timing. A
     // discontinuity starts a new source epoch on the existing local timeline.
-    fn rebase(&mut self, source_timestamp: u32, elapsed: Duration) -> StreamAudioTimestamp {
+    fn rebase(
+        &mut self,
+        source_timestamp: u32,
+        elapsed: Duration,
+        synchronized_timestamp: Option<u32>,
+    ) -> StreamAudioTimestamp {
         let Some(last_source_timestamp) = self.last_source_timestamp else {
-            let local_timestamp = elapsed_rtp_timestamp(elapsed, OPUS_RTP_CLOCK_RATE);
+            let fallback_timestamp = elapsed_rtp_timestamp(elapsed, OPUS_RTP_CLOCK_RATE);
+            let local_timestamp = select_synchronized_rtp_timestamp(
+                fallback_timestamp,
+                synchronized_timestamp,
+                None,
+                OPUS_RTP_CLOCK_RATE,
+            );
             self.record(source_timestamp, local_timestamp, elapsed);
             return StreamAudioTimestamp {
                 local_timestamp,
@@ -1789,7 +2457,7 @@ impl LocalStreamAudioClock {
         let source_is_continuous = source_delta_ticks > 0
             && drift_ticks <= u64::from(STREAM_AUDIO_CLOCK_DRIFT_TOLERANCE_TICKS);
 
-        let (local_timestamp, discontinuity) = if source_is_continuous {
+        let (fallback_timestamp, discontinuity) = if source_is_continuous {
             (
                 last_local_timestamp.wrapping_add(source_delta_ticks as u32),
                 None,
@@ -1806,6 +2474,12 @@ impl LocalStreamAudioClock {
                 }),
             )
         };
+        let local_timestamp = select_synchronized_rtp_timestamp(
+            fallback_timestamp,
+            synchronized_timestamp,
+            Some(last_local_timestamp),
+            OPUS_RTP_CLOCK_RATE,
+        );
 
         self.record(source_timestamp, local_timestamp, elapsed);
         StreamAudioTimestamp {
@@ -1842,13 +2516,55 @@ impl LocalRtpClock {
         self.local_origin = local_timestamp;
     }
 
-    fn rebase(&mut self, source_timestamp: u32, elapsed: Duration, clock_rate: u32) -> u32 {
+    fn rebase(
+        &mut self,
+        source_timestamp: u32,
+        elapsed: Duration,
+        clock_rate: u32,
+        synchronized_timestamp: Option<u32>,
+    ) -> u32 {
+        let previous_timestamp = self.source_origin.map(|_| self.local_origin);
         let source_origin = *self.source_origin.get_or_insert_with(|| {
             self.local_origin = elapsed_rtp_timestamp(elapsed, clock_rate);
             source_timestamp
         });
-        self.local_origin
-            .wrapping_add(source_timestamp.wrapping_sub(source_origin))
+        let fallback_timestamp = self
+            .local_origin
+            .wrapping_add(source_timestamp.wrapping_sub(source_origin));
+        let local_timestamp = select_synchronized_rtp_timestamp(
+            fallback_timestamp,
+            synchronized_timestamp,
+            previous_timestamp,
+            clock_rate,
+        );
+        self.anchor(source_timestamp, local_timestamp);
+        local_timestamp
+    }
+}
+
+fn select_synchronized_rtp_timestamp(
+    fallback_timestamp: u32,
+    synchronized_timestamp: Option<u32>,
+    previous_timestamp: Option<u32>,
+    clock_rate: u32,
+) -> u32 {
+    let Some(synchronized_timestamp) = synchronized_timestamp else {
+        return fallback_timestamp;
+    };
+    let correction = synchronized_timestamp
+        .wrapping_sub(fallback_timestamp)
+        .cast_signed()
+        .unsigned_abs();
+    let maximum_correction =
+        elapsed_rtp_timestamp(STREAM_PRESENTATION_CLOCK_MAX_CORRECTION, clock_rate);
+    if correction > maximum_correction
+        || previous_timestamp.is_some_and(|previous| {
+            synchronized_timestamp.wrapping_sub(previous).cast_signed() <= 0
+        })
+    {
+        fallback_timestamp
+    } else {
+        synchronized_timestamp
     }
 }
 
@@ -1910,11 +2626,13 @@ impl LocalStreamVideoForwarder {
         &mut self,
         destination: &LocalStreamVideoDestination<'_>,
         frame: &BufferedH264Frame,
+        synchronized_timestamp: Option<u32>,
     ) {
         let local_timestamp = self.clock.rebase(
             frame.source_timestamp,
             destination.media_started_at.elapsed(),
             VIDEO_RTP_CLOCK_RATE,
+            synchronized_timestamp,
         );
         self.forward_at_timestamp(destination, frame, local_timestamp, false)
             .await;
@@ -1982,13 +2700,16 @@ fn build_rtcp_receiver_report(sender_ssrc: u32, block: Option<StreamRtcpReportBl
     packet.extend_from_slice(&sender_ssrc.to_be_bytes());
     if let Some(block) = block {
         packet.extend_from_slice(&block.source_ssrc.to_be_bytes());
-        packet.push(0);
-        let cumulative_lost = block.cumulative_lost.to_be_bytes();
+        packet.push(block.fraction_lost);
+        let cumulative_lost = block
+            .cumulative_lost
+            .clamp(-0x80_0000, 0x7f_ffff)
+            .to_be_bytes();
         packet.extend_from_slice(&cumulative_lost[1..]);
         packet.extend_from_slice(&block.extended_highest_sequence.to_be_bytes());
-        packet.extend_from_slice(&0u32.to_be_bytes());
-        packet.extend_from_slice(&0u32.to_be_bytes());
-        packet.extend_from_slice(&0u32.to_be_bytes());
+        packet.extend_from_slice(&block.interarrival_jitter.to_be_bytes());
+        packet.extend_from_slice(&block.last_sender_report.to_be_bytes());
+        packet.extend_from_slice(&block.delay_since_last_sender_report.to_be_bytes());
     }
     let length_words_minus_one =
         u16::try_from(packet.len() / 4 - 1).expect("RTCP receiver report length fits u16");
@@ -2064,6 +2785,60 @@ fn build_rtcp_nack(sender_ssrc: u32, media_ssrc: u32, missing: &[u16]) -> Vec<u8
     packet.extend_from_slice(&sender_ssrc.to_be_bytes());
     packet.extend_from_slice(&media_ssrc.to_be_bytes());
     packet.extend_from_slice(&feedback_control);
+    packet
+}
+
+fn build_transport_wide_feedback(
+    sender_ssrc: u32,
+    media_ssrc: u32,
+    base_sequence: u16,
+    reference_time: i64,
+    feedback_packet_count: u8,
+    statuses: &[u8],
+    deltas: &[StreamTransportReceiveDelta],
+) -> Vec<u8> {
+    let mut packet = Vec::with_capacity(20 + statuses.len() / 3 + deltas.len() * 2);
+    packet.extend_from_slice(&[
+        (RTP_VERSION << 6) | RTCP_TRANSPORT_WIDE_FEEDBACK_FORMAT,
+        RTCP_TRANSPORT_LAYER_FEEDBACK,
+        0,
+        0,
+    ]);
+    packet.extend_from_slice(&sender_ssrc.to_be_bytes());
+    packet.extend_from_slice(&media_ssrc.to_be_bytes());
+    packet.extend_from_slice(&base_sequence.to_be_bytes());
+    packet.extend_from_slice(
+        &u16::try_from(statuses.len())
+            .expect("transport feedback status count fits u16")
+            .to_be_bytes(),
+    );
+    let reference_time = (reference_time as u32) & 0x00ff_ffff;
+    packet.extend_from_slice(&reference_time.to_be_bytes()[1..]);
+    packet.push(feedback_packet_count);
+
+    // Two-bit status vectors are slightly larger than mixed RLE chunks, but
+    // their fixed seven-packet shape keeps loss and reordered arrivals clear.
+    for statuses in statuses.chunks(7) {
+        let mut chunk = 0xc000u16;
+        for (index, status) in statuses.iter().enumerate() {
+            chunk |= u16::from(*status & 0x03) << (12 - index * 2);
+        }
+        packet.extend_from_slice(&chunk.to_be_bytes());
+    }
+    for delta in deltas {
+        match delta {
+            StreamTransportReceiveDelta::Small(delta) => packet.push(*delta),
+            StreamTransportReceiveDelta::Large(delta) => {
+                packet.extend_from_slice(&delta.to_be_bytes());
+            }
+        }
+    }
+    while !packet.len().is_multiple_of(4) {
+        packet.push(0);
+    }
+    let length_words_minus_one =
+        u16::try_from(packet.len() / 4 - 1).expect("transport feedback length fits u16");
+    packet[2..4].copy_from_slice(&length_words_minus_one.to_be_bytes());
     packet
 }
 
@@ -2775,6 +3550,7 @@ mod tests {
             audio_ssrc: 7,
             video_ssrc: 42,
             rtx_ssrc: Some(43),
+            pixel_count: None,
         };
         let now = Instant::now();
         let mut recovery = StreamVideoRecovery::default();
@@ -2859,6 +3635,90 @@ mod tests {
     }
 
     #[test]
+    fn stream_transport_sequence_parses_native_one_byte_extensions() {
+        let extensions = [0x30, 0xaa, 0, 0x51, 0x12, 0x34, 0];
+
+        assert_eq!(
+            parse_stream_transport_sequence(Some(RTP_ONE_BYTE_EXTENSION_PROFILE), &extensions),
+            Some(0x1234)
+        );
+        assert_eq!(
+            parse_stream_transport_sequence(
+                Some(RTP_ONE_BYTE_EXTENSION_PROFILE),
+                &[0x53, 0x12, 0x34, 0x80, 0x10],
+            ),
+            Some(0x1234)
+        );
+        assert_eq!(
+            parse_stream_transport_sequence(Some(0x1000), &extensions),
+            None
+        );
+        assert_eq!(
+            parse_stream_transport_sequence(Some(RTP_ONE_BYTE_EXTENSION_PROFILE), &[0x50, 0x12],),
+            None
+        );
+    }
+
+    #[test]
+    fn stream_transport_feedback_reports_loss_arrival_deltas_and_wrap() {
+        assert_eq!(
+            extend_transport_sequence(0, Some(u32::from(u16::MAX))),
+            1 << 16
+        );
+        assert_eq!(
+            extend_transport_sequence(u16::MAX, Some(1 << 16)),
+            u32::from(u16::MAX)
+        );
+
+        let mut feedback = StreamTransportFeedback::default();
+        feedback.observe(u16::MAX - 1, Duration::from_millis(64));
+        feedback.observe(u16::MAX, Duration::from_micros(64_250));
+        feedback.observe(1, Duration::from_millis(65));
+
+        let packet = feedback
+            .take_feedback(7, 42)
+            .expect("received transport packets should produce feedback");
+        assert_eq!(&packet[..4], &[0x8f, RTCP_TRANSPORT_LAYER_FEEDBACK, 0, 6]);
+        assert_eq!(&packet[4..8], &7u32.to_be_bytes());
+        assert_eq!(&packet[8..12], &42u32.to_be_bytes());
+        assert_eq!(&packet[12..14], &(u16::MAX - 1).to_be_bytes());
+        assert_eq!(&packet[14..16], &4u16.to_be_bytes());
+        assert_eq!(&packet[16..19], &[0, 0, 1]);
+        assert_eq!(packet[19], 0);
+        assert_eq!(&packet[20..22], &0xd440u16.to_be_bytes());
+        assert_eq!(&packet[22..25], &[0, 1, 3]);
+        assert_eq!(&packet[25..], &[0, 0, 0]);
+        assert!(feedback.take_feedback(7, 42).is_none());
+
+        let compound = build_stream_rtcp_compound(7, None, Some(&packet));
+        let key = [0x42; 32];
+        let encryptor = VoiceRtpEncryptor::new(AEAD_AES256_GCM_RTPSIZE, &key)
+            .expect("transport feedback encryptor should initialize");
+        let encrypted = encryptor
+            .encrypt_rtcp_feedback(&compound, 11u32.to_be_bytes())
+            .expect("transport feedback should encrypt as compound RTCP");
+        let decryptor = VoiceRtpDecryptor::new(AEAD_AES256_GCM_RTPSIZE, &key)
+            .expect("transport feedback decryptor should initialize");
+        assert_eq!(
+            decryptor
+                .decrypt_rtcp_feedback(&encrypted)
+                .expect("transport feedback should decrypt"),
+            compound
+        );
+
+        let mut reordered = StreamTransportFeedback::default();
+        reordered.observe(11, Duration::from_millis(90));
+        reordered.observe(10, Duration::from_millis(100));
+        let packet = reordered
+            .take_feedback(7, 42)
+            .expect("reordered transport packets should produce feedback");
+        assert_eq!(&packet[12..16], &[0, 10, 0, 2]);
+        assert_eq!(&packet[20..22], &0xd800u16.to_be_bytes());
+        assert_eq!(packet[22], 144);
+        assert_eq!(&packet[23..25], &(-40i16).to_be_bytes());
+    }
+
+    #[test]
     fn stream_video_starts_at_idr_with_cached_parameter_sets() {
         let parameter_sets = vec![0, 0, 0, 1, 0x67, 0x11, 0, 0, 0, 1, 0x68, 0x22];
         let predicted = vec![0, 0, 0, 1, 0x41, 0x33];
@@ -2938,7 +3798,7 @@ mod tests {
         let mut clock = LocalRtpClock::default();
         clock.anchor(93_000, 10_000);
         assert_eq!(
-            clock.rebase(96_000, Duration::from_secs(10), VIDEO_RTP_CLOCK_RATE),
+            clock.rebase(96_000, Duration::from_secs(10), VIDEO_RTP_CLOCK_RATE, None,),
             13_000
         );
         assert!(stream_player_input_is_ready(
@@ -2993,6 +3853,7 @@ mod tests {
                     encoded: vec![0, 0, 0, 1, 0x41, 0x33],
                     source_timestamp: 96_000,
                 },
+                None,
             )
             .await;
 
@@ -3041,15 +3902,33 @@ mod tests {
         let media_ssrc = 42;
         let mut control = StreamRtcpControl::default();
         control.set_source(media_ssrc);
-        for sequence in [u16::MAX - 1, u16::MAX, 0] {
-            control.observe(sequence);
+        for (sequence, timestamp, arrival) in [
+            (u16::MAX - 1, 0, Duration::ZERO),
+            (u16::MAX, 900, Duration::from_millis(10)),
+            (0, 1_800, Duration::from_millis(20)),
+        ] {
+            control.observe_rtp(sequence, timestamp, arrival);
         }
+        control.observe_sender_report(
+            StreamRtcpSenderReport {
+                sender_ssrc: media_ssrc,
+                ntp_timestamp: 0x0102_0304_0506_0708,
+                rtp_timestamp: 1_800,
+                packet_count: 3,
+                octet_count: 3_000,
+            },
+            Duration::from_secs(1),
+        );
         let block = control
-            .report_block()
+            .report_block(Duration::from_millis(1_500))
             .expect("received video should produce a report block");
         assert_eq!(block.source_ssrc, media_ssrc);
+        assert_eq!(block.fraction_lost, 0);
         assert_eq!(block.cumulative_lost, 0);
         assert_eq!(block.extended_highest_sequence, 1 << 16);
+        assert_eq!(block.interarrival_jitter, 0);
+        assert_eq!(block.last_sender_report, 0x0304_0506);
+        assert_eq!(block.delay_since_last_sender_report, 1 << 15);
 
         let pli = build_rtcp_pli(sender_ssrc, media_ssrc);
         let feedback = build_stream_rtcp_compound(sender_ssrc, Some(block), Some(&pli));
@@ -3058,6 +3937,9 @@ mod tests {
         assert_eq!(&feedback[8..12], &media_ssrc.to_be_bytes());
         assert_eq!(&feedback[13..16], &[0, 0, 0]);
         assert_eq!(&feedback[16..20], &(1u32 << 16).to_be_bytes());
+        assert_eq!(&feedback[20..24], &0u32.to_be_bytes());
+        assert_eq!(&feedback[24..28], &0x0304_0506u32.to_be_bytes());
+        assert_eq!(&feedback[28..32], &(1u32 << 15).to_be_bytes());
         assert_eq!(&feedback[32..36], &[0x81, RTCP_SOURCE_DESCRIPTION, 0, 4]);
         assert_eq!(&feedback[36..40], &sender_ssrc.to_be_bytes());
         assert_eq!(&feedback[40..42], &[RTCP_SDES_CNAME, 9]);
@@ -3101,6 +3983,28 @@ mod tests {
     }
 
     #[test]
+    fn stream_receiver_report_measures_interval_loss_and_jitter() {
+        let mut control = StreamRtcpControl::default();
+        control.set_source(42);
+        control.observe_rtp(10, 0, Duration::ZERO);
+        control.observe_rtp(12, 1_800, Duration::from_millis(30));
+
+        let first = control
+            .report_block(Duration::from_secs(1))
+            .expect("received video should produce a report block");
+        assert_eq!(first.fraction_lost, 85);
+        assert_eq!(first.cumulative_lost, 1);
+        assert_eq!(first.interarrival_jitter, 56);
+
+        control.observe_rtp(11, 900, Duration::from_millis(35));
+        let repaired = control
+            .report_block(Duration::from_secs(2))
+            .expect("late video should update the next report interval");
+        assert_eq!(repaired.fraction_lost, 0);
+        assert_eq!(repaired.cumulative_lost, 0);
+    }
+
+    #[test]
     fn local_sender_report_maps_rtp_to_a_shared_ntp_clock() {
         let report = build_rtcp_sender_report(
             0x0102_0304,
@@ -3117,6 +4021,113 @@ mod tests {
         assert_eq!(&report[16..20], &90_000u32.to_be_bytes());
         assert_eq!(&report[20..24], &30u32.to_be_bytes());
         assert_eq!(&report[24..28], &45_000u32.to_be_bytes());
+    }
+
+    #[test]
+    fn stream_parses_sender_reports_from_compound_rtcp() {
+        let sender_ssrc = 0x0102_0304;
+        let mut compound = build_rtcp_receiver_report(7, None);
+        compound.extend_from_slice(&build_rtcp_sender_report(
+            sender_ssrc,
+            Duration::new(1, 500_000_000),
+            90_000,
+            30,
+            45_000,
+        ));
+
+        let reports = parse_stream_rtcp_sender_reports(&compound)
+            .expect("compound RTCP should contain a valid sender report");
+
+        assert_eq!(
+            reports,
+            vec![StreamRtcpSenderReport {
+                sender_ssrc,
+                ntp_timestamp: (u64::from(2_208_988_801u32) << 32) | 0x8000_0000,
+                rtp_timestamp: 90_000,
+                packet_count: 30,
+                octet_count: 45_000,
+            }]
+        );
+    }
+
+    #[test]
+    fn stream_rejects_a_truncated_rtcp_sender_report() {
+        let mut report = build_rtcp_sender_report(42, Duration::from_secs(1), 90_000, 30, 45_000);
+        report[2..4].copy_from_slice(&100u16.to_be_bytes());
+
+        assert_eq!(
+            parse_stream_rtcp_sender_reports(&report),
+            Err("RTCP packet length exceeds the compound packet".to_owned())
+        );
+    }
+
+    #[test]
+    fn stream_presentation_clock_aligns_audio_and_video_sender_time() {
+        let ntp_timestamp = (u64::from(2_208_988_801u32) << 32) | 0x8000_0000;
+        let mut clock = StreamPresentationClock::default();
+        clock.observe_sender_report(
+            StreamRtcpSenderReport {
+                sender_ssrc: 7,
+                ntp_timestamp,
+                rtp_timestamp: 3_000_000,
+                packet_count: 0,
+                octet_count: 0,
+            },
+            Duration::from_millis(100),
+        );
+        clock.observe_sender_report(
+            StreamRtcpSenderReport {
+                sender_ssrc: 42,
+                ntp_timestamp,
+                rtp_timestamp: 90_000_000,
+                packet_count: 0,
+                octet_count: 0,
+            },
+            Duration::from_millis(105),
+        );
+
+        let synchronized_audio = clock.map_timestamp(7, 3_004_800, OPUS_RTP_CLOCK_RATE);
+        let synchronized_video = clock.map_timestamp(42, 90_009_000, VIDEO_RTP_CLOCK_RATE);
+        assert_eq!(synchronized_audio, Some(9_600));
+        assert_eq!(synchronized_video, Some(18_000));
+
+        let mut local_audio = LocalStreamAudioClock::default();
+        let mut local_video = LocalRtpClock::default();
+        assert_eq!(
+            local_audio
+                .rebase(3_004_800, Duration::from_millis(205), synchronized_audio,)
+                .local_timestamp,
+            9_600
+        );
+        assert_eq!(
+            local_video.rebase(
+                90_009_000,
+                Duration::from_millis(205),
+                VIDEO_RTP_CLOCK_RATE,
+                synchronized_video,
+            ),
+            18_000
+        );
+    }
+
+    #[test]
+    fn stream_presentation_clock_preserves_rtp_timestamp_wrap() {
+        let mut clock = StreamPresentationClock::default();
+        clock.observe_sender_report(
+            StreamRtcpSenderReport {
+                sender_ssrc: 42,
+                ntp_timestamp: u64::from(2_208_988_801u32) << 32,
+                rtp_timestamp: u32::MAX - 8_999,
+                packet_count: 0,
+                octet_count: 0,
+            },
+            Duration::from_millis(100),
+        );
+
+        assert_eq!(
+            clock.map_timestamp(42, 0, VIDEO_RTP_CLOCK_RATE),
+            Some(18_000)
+        );
     }
 
     #[test]
@@ -3139,7 +4150,13 @@ mod tests {
                 "video_ssrc": 20,
                 "streams": [
                     {"ssrc": 20, "rtx_ssrc": 21, "quality": 50, "active": true},
-                    {"ssrc": 30, "rtx_ssrc": 31, "quality": 100, "active": true}
+                    {
+                        "ssrc": 30,
+                        "rtx_ssrc": 31,
+                        "quality": 100,
+                        "active": true,
+                        "max_resolution": {"type": "fixed", "width": 2560, "height": 1440}
+                    }
                 ]
             }
         });
@@ -3149,6 +4166,7 @@ mod tests {
                 audio_ssrc: 10,
                 video_ssrc: 30,
                 rtx_ssrc: Some(31),
+                pixel_count: Some(2560 * 1440),
             })
         );
     }
@@ -3391,11 +4409,23 @@ mod tests {
         assert_eq!(selected["d"]["codecs"][1]["payload_type"], 103);
         assert_eq!(selected["d"]["codecs"][1]["decode"], true);
 
-        let wants: Value = serde_json::from_str(&stream_media_sink_wants_payload(800, 900))
-            .expect("valid media sink wants json");
+        let wants: Value = serde_json::from_str(&stream_media_sink_wants_payload(
+            800,
+            900,
+            Some(2560 * 1440),
+        ))
+        .expect("valid media sink wants json");
         assert_eq!(
             wants,
-            json!({"op": 15, "d": {"800": 100, "900": 100, "any": 0}})
+            json!({
+                "op": 15,
+                "d": {
+                    "800": 100,
+                    "900": 100,
+                    "any": 0,
+                    "pixelCounts": {"900": 2560 * 1440}
+                }
+            })
         );
     }
 
@@ -3420,17 +4450,28 @@ mod tests {
                 "--msg-level=all=warn,cplayer=v,lavf=v,vd=v,ad=v",
                 "--aid=no",
                 "--input-ipc-server=/tmp/concord-stream-mpv.sock",
-                "--profile=low-latency",
-                "--cache=no",
-                "--demuxer-readahead-secs=0",
+                "--hwdec=auto-safe",
+                "--vd-lavc-threads=0",
+                "--stream-buffer-size=1MiB",
+                "--audio-buffer=0.05",
+                "--cache=yes",
+                "--cache-pause=no",
+                "--cache-pause-initial=no",
+                "--cache-secs=0.15",
+                "--demuxer-readahead-secs=0.15",
+                "--demuxer-max-bytes=16MiB",
+                "--demuxer-max-back-bytes=0",
                 "--demuxer=lavf",
                 "--demuxer-lavf-format=sdp",
+                "--demuxer-lavf-probe-info=nostreams",
+                "--demuxer-lavf-analyzeduration=0.1",
                 "--demuxer-lavf-probesize=32",
-                "--demuxer-lavf-buffersize=4096",
-                "--demuxer-lavf-o=protocol_whitelist=[file,udp,rtp],max_delay=0,reorder_queue_size=0",
+                "--demuxer-lavf-buffersize=262144",
+                "--demuxer-lavf-o=protocol_whitelist=[file,udp,rtp],buffer_size=4194304,max_delay=50000,reorder_queue_size=512",
                 "--force-window=immediate",
                 "--title=neo's stream",
-                "--video-sync=desync",
+                "--video-latency-hacks=no",
+                "--video-sync=audio",
                 "--framedrop=vo",
                 "--video-timing-offset=0",
                 "--",
@@ -3462,22 +4503,32 @@ mod tests {
 
         assert_eq!(
             audio
-                .rebase(3_000_000, Duration::from_millis(100))
+                .rebase(3_000_000, Duration::from_millis(100), None)
                 .local_timestamp,
             4_800
         );
         assert_eq!(
-            video.rebase(90_000_000, Duration::from_millis(125), VIDEO_RTP_CLOCK_RATE),
+            video.rebase(
+                90_000_000,
+                Duration::from_millis(125),
+                VIDEO_RTP_CLOCK_RATE,
+                None,
+            ),
             11_250
         );
         assert_eq!(
             audio
-                .rebase(3_000_960, Duration::from_millis(120))
+                .rebase(3_000_960, Duration::from_millis(120), None)
                 .local_timestamp,
             5_760
         );
         assert_eq!(
-            video.rebase(90_003_000, Duration::from_millis(158), VIDEO_RTP_CLOCK_RATE),
+            video.rebase(
+                90_003_000,
+                Duration::from_millis(158),
+                VIDEO_RTP_CLOCK_RATE,
+                None,
+            ),
             14_250
         );
     }
@@ -3486,15 +4537,15 @@ mod tests {
     fn stream_audio_clock_reanchors_a_backward_source_timestamp() {
         let mut clock = LocalStreamAudioClock::default();
 
-        let first = clock.rebase(3_181_287_385, Duration::ZERO);
+        let first = clock.rebase(3_181_287_385, Duration::ZERO, None);
         assert_eq!(first.local_timestamp, 0);
         assert!(first.discontinuity.is_none());
 
-        let before_reset = clock.rebase(3_181_475_545, Duration::from_millis(3_920));
+        let before_reset = clock.rebase(3_181_475_545, Duration::from_millis(3_920), None);
         assert_eq!(before_reset.local_timestamp, 188_160);
         assert!(before_reset.discontinuity.is_none());
 
-        let reset = clock.rebase(3_181_114_584, Duration::from_millis(3_940));
+        let reset = clock.rebase(3_181_114_584, Duration::from_millis(3_940), None);
         assert_eq!(reset.local_timestamp, 189_120);
         assert_eq!(
             reset.discontinuity,
@@ -3504,7 +4555,7 @@ mod tests {
             })
         );
 
-        let after_reset = clock.rebase(3_181_115_544, Duration::from_millis(3_960));
+        let after_reset = clock.rebase(3_181_115_544, Duration::from_millis(3_960), None);
         assert_eq!(after_reset.local_timestamp, 190_080);
         assert!(after_reset.discontinuity.is_none());
         assert_eq!(
@@ -3517,8 +4568,8 @@ mod tests {
     fn stream_audio_clock_preserves_a_source_timestamp_wrap() {
         let mut clock = LocalStreamAudioClock::default();
 
-        let before_wrap = clock.rebase(u32::MAX - 479, Duration::from_millis(100));
-        let after_wrap = clock.rebase(480, Duration::from_millis(120));
+        let before_wrap = clock.rebase(u32::MAX - 479, Duration::from_millis(100), None);
+        let after_wrap = clock.rebase(480, Duration::from_millis(120), None);
 
         assert_eq!(before_wrap.local_timestamp, 4_800);
         assert_eq!(after_wrap.local_timestamp, 5_760);

@@ -1876,6 +1876,8 @@ fn rtp_decrypts_aead_rtpsize_modes_and_strips_extension_body_and_padding() {
             .expect("RTP payload should decrypt");
 
         assert_eq!(decrypted.encrypted_extension_body_len, 4);
+        assert_eq!(decrypted.extension_profile, Some(0x1000));
+        assert_eq!(decrypted.extension_body, b"ext!");
         assert_eq!(decrypted.media_payload, b"opus-frame");
     }
 }
