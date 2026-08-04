@@ -2,7 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.5.2] - 2026-08-04
+## [2.5.3] - 2026-08-04
+
+### Bug Fixes
+
+- _(stream)_ Start video-only broadcasts immediately by @chojs23
+- _(stream)_ Scale stream playback for high-resolution and high-frame-rate video by @chojs23
+- _(stream)_ Add UDP safeguards and recovery diagnostics by @chojs23
+- _(stream)_ Preserve manual mpv window resizing and disable pause by @chojs23
+- _(stream)_ Stabilize RTP recovery and live playback timing by @chojs23
+- _(broadcast)_ Fix Linux screen-share startup readiness and add lifecycle diagnostics by @chojs23
+
+### Miscellaneous Tasks
+
+- _(docs)_ Add debug mode instruction by @chojs23
+
+## [2.5.2] - 2026-08-03
 
 ### Bug Fixes
 
