@@ -850,10 +850,60 @@ struct StreamVideoRecovery {
     last_nack_at: Option<Instant>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct StreamVideoRecoveryReset {
+    distance: u16,
+    pending_packets: usize,
+    pending_bytes: usize,
+    gap_age: Option<Duration>,
+}
+
 #[derive(Default)]
 struct StreamVideoRecoveryUpdate {
     ready: Vec<RecoveredStreamVideoPacket>,
-    reset_decoder: bool,
+    reset: Option<StreamVideoRecoveryReset>,
+}
+
+#[derive(Default)]
+struct StreamPliThrottle {
+    media_ssrc: Option<u32>,
+    last_sent_at: Option<Instant>,
+}
+
+impl StreamPliThrottle {
+    fn permit(&mut self, media_ssrc: u32, now: Instant) -> bool {
+        if self.media_ssrc != Some(media_ssrc) {
+            self.media_ssrc = Some(media_ssrc);
+            self.last_sent_at = Some(now);
+            return true;
+        }
+        if self.last_sent_at.is_some_and(|last| {
+            now.saturating_duration_since(last) < STREAM_KEYFRAME_REQUEST_INTERVAL
+        }) {
+            return false;
+        }
+        self.last_sent_at = Some(now);
+        true
+    }
+
+    async fn send_if_due(
+        &mut self,
+        control: &mut StreamRtcpControl,
+        socket: &UdpSocket,
+        encryptor: &VoiceRtpEncryptor,
+        sender_ssrc: u32,
+        media_ssrc: u32,
+        elapsed: Duration,
+    ) -> Result<bool, String> {
+        if !self.permit(media_ssrc, Instant::now()) {
+            return Ok(false);
+        }
+        let feedback = build_rtcp_pli(sender_ssrc, media_ssrc);
+        control
+            .send_feedback(socket, encryptor, sender_ssrc, &feedback, "PLI", elapsed)
+            .await?;
+        Ok(true)
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -871,6 +921,7 @@ struct StreamMediaCounters {
     transport_feedbacks: u64,
     nacks: u64,
     plis: u64,
+    suppressed_plis: u64,
 }
 
 impl StreamMediaCounters {
@@ -897,6 +948,15 @@ impl StreamMediaCounters {
                 .wrapping_sub(previous.transport_feedbacks),
             nacks: self.nacks.wrapping_sub(previous.nacks),
             plis: self.plis.wrapping_sub(previous.plis),
+            suppressed_plis: self.suppressed_plis.wrapping_sub(previous.suppressed_plis),
+        }
+    }
+
+    fn observe_pli_request(&mut self, sent: bool) {
+        if sent {
+            self.plis = self.plis.wrapping_add(1);
+        } else {
+            self.suppressed_plis = self.suppressed_plis.wrapping_add(1);
         }
     }
 }
@@ -1347,11 +1407,25 @@ impl StreamVideoRecovery {
             return StreamVideoRecoveryUpdate::default();
         }
 
-        let reset_decoder = distance > STREAM_VIDEO_REORDER_WINDOW;
-        if reset_decoder {
+        let reset = if distance > STREAM_VIDEO_REORDER_WINDOW {
+            let reset = StreamVideoRecoveryReset {
+                distance,
+                pending_packets: self.pending.len(),
+                pending_bytes: self
+                    .pending
+                    .values()
+                    .map(|packet| packet.payload.len())
+                    .sum(),
+                gap_age: self
+                    .gap_started_at
+                    .map(|started| now.saturating_duration_since(started)),
+            };
             self.reset();
             self.next_sequence = Some(sequence);
-        }
+            Some(reset)
+        } else {
+            None
+        };
         self.pending.entry(sequence).or_insert(packet);
 
         let mut ready = Vec::new();
@@ -1369,10 +1443,7 @@ impl StreamVideoRecovery {
             self.gap_started_at.get_or_insert(now);
         }
 
-        StreamVideoRecoveryUpdate {
-            ready,
-            reset_decoder,
-        }
+        StreamVideoRecoveryUpdate { ready, reset }
     }
 
     fn take_nack_if_due(&mut self, now: Instant) -> Option<Vec<u16>> {
@@ -1631,6 +1702,7 @@ async fn run_stream_media(
     let mut local_audio_octets = 0u32;
     let mut local_video = LocalStreamVideoForwarder::default();
     let mut discord_rtcp = StreamRtcpControl::default();
+    let mut pli_throttle = StreamPliThrottle::default();
     let mut transport_feedback = StreamTransportFeedback::default();
     let mut presentation_clock = StreamPresentationClock::default();
     let mut media_counters = StreamMediaCounters::default();
@@ -1738,7 +1810,7 @@ async fn run_stream_media(
                         logging::debug(
                             "stream",
                             format!(
-                                "stream media stats: elapsed_ms={} interval_ms={} input_audio_packets={} input_audio_bytes={} input_video_packets={} input_video_bytes={} input_rtx_packets={} input_rtx_bytes={} h264_frames={} h264_bytes={} output_video_packets={} output_video_frames={} interval_audio_packets={} interval_audio_bytes={} interval_video_packets={} interval_video_bytes={} interval_rtx_packets={} interval_rtx_bytes={} interval_h264_frames={} interval_h264_bytes={} interval_output_video_packets={} interval_output_video_frames={} sender_reports={} decoder_resets={} transport_feedbacks={} nacks={} plis={} last_video_timestamp={:?}",
+                                "stream media stats: elapsed_ms={} interval_ms={} input_audio_packets={} input_audio_bytes={} input_video_packets={} input_video_bytes={} input_rtx_packets={} input_rtx_bytes={} h264_frames={} h264_bytes={} output_video_packets={} output_video_frames={} interval_audio_packets={} interval_audio_bytes={} interval_video_packets={} interval_video_bytes={} interval_rtx_packets={} interval_rtx_bytes={} interval_h264_frames={} interval_h264_bytes={} interval_output_video_packets={} interval_output_video_frames={} sender_reports={} decoder_resets={} transport_feedbacks={} nacks={} plis={} suppressed_plis={} last_video_timestamp={:?}",
                                 elapsed.as_millis(),
                                 interval_elapsed.as_millis(),
                                 media_counters.audio_packets,
@@ -1766,6 +1838,7 @@ async fn run_stream_media(
                                 media_counters.transport_feedbacks,
                                 media_counters.nacks,
                                 media_counters.plis,
+                                media_counters.suppressed_plis,
                                 local_video.last_timestamp,
                             ),
                         );
@@ -1834,23 +1907,31 @@ async fn run_stream_media(
                         &mut h264_startup,
                         &mut h264_startup_buffer,
                     );
+                    let mut pli_sent = None;
                     if source.video_ssrc != 0 {
-                        let feedback = build_rtcp_pli(local_ssrc, source.video_ssrc);
-                        discord_rtcp
-                            .send_feedback(
+                        let sent = pli_throttle
+                            .send_if_due(
+                                &mut discord_rtcp,
                                 &discord_socket,
                                 &encryptor,
                                 local_ssrc,
-                                &feedback,
-                                "PLI",
+                                source.video_ssrc,
                                 media_started_at.elapsed(),
                             )
                             .await?;
-                        media_counters.plis = media_counters.plis.wrapping_add(1);
+                        media_counters.observe_pli_request(sent);
+                        pli_sent = Some(sent);
                     }
                     logging::debug(
                         "stream",
-                        "stream video packet gap expired; requested a new keyframe",
+                        format!(
+                            "stream video packet gap expired; {}",
+                            match pli_sent {
+                                Some(true) => "requested a new keyframe",
+                                Some(false) => "kept the recent keyframe request",
+                                None => "no active video source for a keyframe request",
+                            }
+                        ),
                     );
                 } else if let Some(missing) = video_recovery.take_nack_if_due(now)
                     && source.video_ssrc != 0
@@ -1873,19 +1954,18 @@ async fn run_stream_media(
                 let source = *video_source_rx.borrow();
                 if source.video_ssrc != 0 {
                     discord_rtcp.set_source(source.video_ssrc);
-                    let feedback = build_rtcp_pli(local_ssrc, source.video_ssrc);
-                    discord_rtcp
-                        .send_feedback(
+                    let sent = pli_throttle
+                        .send_if_due(
+                            &mut discord_rtcp,
                             &discord_socket,
                             &encryptor,
                             local_ssrc,
-                            &feedback,
-                            "PLI",
+                            source.video_ssrc,
                             media_started_at.elapsed(),
                         )
                         .await?;
-                    media_counters.plis = media_counters.plis.wrapping_add(1);
-                    if !logged_keyframe_request {
+                    media_counters.observe_pli_request(sent);
+                    if sent && !logged_keyframe_request {
                         logged_keyframe_request = true;
                         logging::debug(
                             "stream",
@@ -2109,7 +2189,7 @@ async fn run_stream_media(
                     }
                     let now = Instant::now();
                     let recovery = video_recovery.push(video_packet, now);
-                    if recovery.reset_decoder {
+                    if let Some(reset) = recovery.reset {
                         media_counters.decoder_resets =
                             media_counters.decoder_resets.wrapping_add(1);
                         reset_stream_h264_pipeline(
@@ -2117,21 +2197,32 @@ async fn run_stream_media(
                             &mut h264_startup,
                             &mut h264_startup_buffer,
                         );
-                        let feedback = build_rtcp_pli(local_ssrc, source.video_ssrc);
-                        discord_rtcp
-                            .send_feedback(
+                        let pli_sent = pli_throttle
+                            .send_if_due(
+                                &mut discord_rtcp,
                                 &discord_socket,
                                 &encryptor,
                                 local_ssrc,
-                                &feedback,
-                                "PLI",
+                                source.video_ssrc,
                                 media_started_at.elapsed(),
                             )
                             .await?;
-                        media_counters.plis = media_counters.plis.wrapping_add(1);
+                        media_counters.observe_pli_request(pli_sent);
                         logging::debug(
                             "stream",
-                            "stream video sequence exceeded the reorder window; reset the decoder and requested a new keyframe",
+                            format!(
+                                "stream video sequence exceeded the reorder window: distance={} limit={} pending_packets={} pending_bytes={} gap_age_ms={:?}; reset the H264 pipeline and {}",
+                                reset.distance,
+                                STREAM_VIDEO_REORDER_WINDOW,
+                                reset.pending_packets,
+                                reset.pending_bytes,
+                                reset.gap_age.map(|age| age.as_millis()),
+                                if pli_sent {
+                                    "requested a new keyframe"
+                                } else {
+                                    "kept the recent keyframe request"
+                                }
+                            ),
                         );
                     }
                     if let Some(missing) = video_recovery.take_nack_if_due(now) {
@@ -2171,21 +2262,27 @@ async fn run_stream_media(
                                     &mut h264_startup,
                                     &mut h264_startup_buffer,
                                 );
-                                let feedback = build_rtcp_pli(local_ssrc, source.video_ssrc);
-                                discord_rtcp
-                                    .send_feedback(
+                                let pli_sent = pli_throttle
+                                    .send_if_due(
+                                        &mut discord_rtcp,
                                         &discord_socket,
                                         &encryptor,
                                         local_ssrc,
-                                        &feedback,
-                                        "PLI",
+                                        source.video_ssrc,
                                         media_started_at.elapsed(),
                                     )
                                     .await?;
-                                media_counters.plis = media_counters.plis.wrapping_add(1);
+                                media_counters.observe_pli_request(pli_sent);
                                 logging::debug(
                                     "stream",
-                                    "stream H264 access unit exceeded its safety budget; requested a new keyframe",
+                                    format!(
+                                        "stream H264 access unit exceeded its safety budget; {}",
+                                        if pli_sent {
+                                            "requested a new keyframe"
+                                        } else {
+                                            "kept the recent keyframe request"
+                                        }
+                                    ),
                                 );
                                 continue;
                             }
@@ -3605,6 +3702,39 @@ mod tests {
     }
 
     #[test]
+    fn stream_video_recovery_reports_reorder_window_reset_context() {
+        let now = Instant::now();
+        let mut recovery = StreamVideoRecovery::default();
+        let packet = |sequence, payload| RecoveredStreamVideoPacket {
+            header: stream_video_header(DISCORD_STREAM_VIDEO_PAYLOAD_TYPE, sequence, 90_000, 42),
+            payload,
+        };
+
+        assert_eq!(recovery.push(packet(100, vec![1]), now).ready.len(), 1);
+        assert!(recovery.push(packet(102, vec![2, 3]), now).ready.is_empty());
+        let reset_at = now + Duration::from_millis(25);
+        let update = recovery.push(packet(230, vec![4]), reset_at);
+
+        assert_eq!(
+            update.reset,
+            Some(StreamVideoRecoveryReset {
+                distance: 129,
+                pending_packets: 1,
+                pending_bytes: 2,
+                gap_age: Some(Duration::from_millis(25)),
+            })
+        );
+        assert_eq!(
+            update
+                .ready
+                .into_iter()
+                .map(|packet| packet.header.sequence)
+                .collect::<Vec<_>>(),
+            vec![230]
+        );
+    }
+
+    #[test]
     fn stream_video_recovery_expires_an_unrepaired_gap() {
         let now = Instant::now();
         let mut recovery = StreamVideoRecovery::default();
@@ -3632,6 +3762,23 @@ mod tests {
         assert_eq!(&nack[8..12], &42u32.to_be_bytes());
         assert_eq!(&nack[12..16], &[0x03, 0xe8, 0, 5]);
         assert_eq!(&nack[16..20], &[0x03, 0xfc, 0, 0]);
+    }
+
+    #[test]
+    fn stream_pli_throttle_limits_the_active_video_source_to_one_request_per_second() {
+        let now = Instant::now();
+        let mut throttle = StreamPliThrottle::default();
+
+        assert!(throttle.permit(42, now));
+        assert!(!throttle.permit(
+            42,
+            now + STREAM_KEYFRAME_REQUEST_INTERVAL - Duration::from_millis(1)
+        ));
+        assert!(throttle.permit(42, now + STREAM_KEYFRAME_REQUEST_INTERVAL));
+        assert!(throttle.permit(
+            43,
+            now + STREAM_KEYFRAME_REQUEST_INTERVAL + Duration::from_millis(1)
+        ));
     }
 
     #[test]
