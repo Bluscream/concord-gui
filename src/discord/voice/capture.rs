@@ -606,6 +606,10 @@ fn fill_opaque_black(rgba: &mut [u8]) {
 
 impl Drop for CaptureSource {
     fn drop(&mut self) {
+        logging::debug(
+            "stream",
+            "stopping native capture backend because the capture source ended",
+        );
         if let Err(error) = self.session.stop() {
             logging::debug(
                 "stream",
@@ -617,6 +621,10 @@ impl Drop for CaptureSource {
 
 impl Drop for StreamCaptureHandle {
     fn drop(&mut self) {
+        logging::debug(
+            "stream",
+            "stream capture handle dropped; signaling the capture worker to stop",
+        );
         self.stop.store(true, Ordering::Release);
         if let Some(worker) = self.worker.take() {
             reap_capture_worker(worker);
@@ -727,7 +735,16 @@ pub(super) fn prepare_stream_capture(
         worker: Some(worker),
     };
 
-    wait_for_capture_ready(&ready_rx, &handle.stop, STREAM_CAPTURE_PREPARATION_TIMEOUT)?;
+    if let Err(error) =
+        wait_for_capture_ready(&ready_rx, &handle.stop, STREAM_CAPTURE_PREPARATION_TIMEOUT)
+    {
+        logging::debug(
+            "stream",
+            format!("stream capture preparation failed while waiting for readiness: {error}"),
+        );
+        return Err(error);
+    }
+    logging::debug("stream", "stream capture encoder is ready");
     Ok(PreparedStreamCapture {
         handle,
         frames,
@@ -770,16 +787,35 @@ fn run_capture_worker(
     force_keyframe: Arc<AtomicBool>,
     ready_tx: SyncSender<Result<(), String>>,
 ) {
-    if let Err(error) = run_capture_loop(
+    let result = run_capture_loop(
         &target,
         &frames_tx,
         &preview_frames_tx,
         &stop,
         &force_keyframe,
         &ready_tx,
-    ) {
-        let _ = ready_tx.try_send(Err(error.clone()));
-        let _ = errors_tx.send(error);
+    );
+    match result {
+        Ok(()) => logging::debug(
+            "stream",
+            format!(
+                "stream capture worker stopped cleanly: target_kind={:?} cancelled={}",
+                target.kind,
+                stop.load(Ordering::Acquire),
+            ),
+        ),
+        Err(error) => {
+            logging::debug(
+                "stream",
+                format!(
+                    "stream capture worker failed: target_kind={:?} cancelled={} error={error}",
+                    target.kind,
+                    stop.load(Ordering::Acquire),
+                ),
+            );
+            let _ = ready_tx.try_send(Err(error.clone()));
+            let _ = errors_tx.send(error);
+        }
     }
 }
 
@@ -793,11 +829,27 @@ fn run_capture_loop(
 ) -> Result<(), String> {
     let source = resolve_capture_source(target, stop)?;
     let Some(mut image) = source.wait_for_initial_image(stop)? else {
+        logging::debug(
+            "stream",
+            "stream capture stopped before receiving an initial image",
+        );
         return Ok(());
     };
+    logging::debug(
+        "stream",
+        format!(
+            "stream capture received its initial image: width={} height={}",
+            image.image().width(),
+            image.image().height(),
+        ),
+    );
     let mut encoder = Encoder::with_api_config(OpenH264API::from_source(), stream_encoder_config())
         .map_err(|error| format!("H264 encoder creation failed: {error}"))?;
     if ready_tx.send(Ok(())).is_err() {
+        logging::debug(
+            "stream",
+            "stream capture readiness receiver closed before encoder startup completed",
+        );
         return Ok(());
     }
     let started_at = Instant::now();

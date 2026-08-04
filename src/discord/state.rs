@@ -862,6 +862,7 @@ impl DiscordState {
             | AppEvent::VoiceAudioSourcesApplyFailed { .. }
             | AppEvent::StreamBroadcastStarted { .. }
             | AppEvent::StreamBroadcastAudioUnavailable { .. }
+            | AppEvent::StreamBroadcastStartFailed { .. }
             | AppEvent::StreamBroadcastEnded { .. }
             | AppEvent::ApplicationCommandsLoaded { .. }
             | AppEvent::ApplicationCommandIndexUpdated { .. }

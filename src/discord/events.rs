@@ -602,6 +602,10 @@ pub enum AppEvent {
     StreamBroadcastAudioUnavailable {
         message: String,
     },
+    StreamBroadcastStartFailed {
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+    },
     StreamBroadcastEnded {
         scope: VoiceScope,
         channel_id: Id<ChannelMarker>,
@@ -832,6 +836,7 @@ define_app_event_kinds! {
     StreamCaptureTargetsLoaded: AppEvent::StreamCaptureTargetsLoaded { .. },
     StreamBroadcastStarted: AppEvent::StreamBroadcastStarted { .. },
     StreamBroadcastAudioUnavailable: AppEvent::StreamBroadcastAudioUnavailable { .. },
+    StreamBroadcastStartFailed: AppEvent::StreamBroadcastStartFailed { .. },
     StreamBroadcastEnded: AppEvent::StreamBroadcastEnded { .. },
     AttachmentDownloadStarted: AppEvent::AttachmentDownloadStarted { .. },
     AttachmentDownloadProgress: AppEvent::AttachmentDownloadProgress { .. },
@@ -1859,6 +1864,7 @@ impl AppEventKind {
             | AppEventKind::VoiceAudioSourcesApplyFailed
             | AppEventKind::StreamBroadcastStarted
             | AppEventKind::StreamBroadcastAudioUnavailable
+            | AppEventKind::StreamBroadcastStartFailed
             | AppEventKind::StreamBroadcastEnded
             | AppEventKind::ApplicationCommandsLoaded
             | AppEventKind::ApplicationCommandIndexUpdated

@@ -181,7 +181,13 @@ impl StreamBroadcastCaptureRegistry {
             .state
             .lock()
             .expect("stream capture registry lock is not poisoned");
-        state.active_requests.insert(stream_key, request_id);
+        let previous_request_id = state.active_requests.insert(stream_key.clone(), request_id);
+        logging::debug(
+            "stream",
+            format!(
+                "activated stream capture request: stream_key={stream_key} request_id={request_id} previous_request_id={previous_request_id:?}"
+            ),
+        );
     }
 
     pub(super) fn prepare(
@@ -191,6 +197,13 @@ impl StreamBroadcastCaptureRegistry {
         target: super::StreamCaptureTarget,
         cancellation: capture::StreamCaptureCancellation,
     ) -> Result<bool, String> {
+        logging::debug(
+            "stream",
+            format!(
+                "starting stream capture preparation: stream_key={stream_key} request_id={request_id} target_kind={:?}",
+                target.kind,
+            ),
+        );
         let capture = capture::prepare_stream_capture(target, cancellation)?;
         let prepared = PreparedBroadcastCapture {
             request_id,
@@ -201,10 +214,23 @@ impl StreamBroadcastCaptureRegistry {
             .state
             .lock()
             .expect("stream capture registry lock is not poisoned");
-        if state.active_requests.get(&stream_key) != Some(&request_id) {
+        let active_request_id = state.active_requests.get(&stream_key).copied();
+        if active_request_id != Some(request_id) {
+            logging::debug(
+                "stream",
+                format!(
+                    "discarding stale prepared stream capture: stream_key={stream_key} request_id={request_id} active_request_id={active_request_id:?}"
+                ),
+            );
             return Ok(false);
         }
-        state.captures.insert(stream_key, prepared);
+        state.captures.insert(stream_key.clone(), prepared);
+        logging::debug(
+            "stream",
+            format!(
+                "stored prepared stream capture: stream_key={stream_key} request_id={request_id}"
+            ),
+        );
         Ok(true)
     }
 
@@ -213,9 +239,39 @@ impl StreamBroadcastCaptureRegistry {
             .state
             .lock()
             .expect("stream capture registry lock is not poisoned");
-        let active_request_id = *state.active_requests.get(stream_key)?;
-        let prepared = state.captures.remove(stream_key)?;
-        (prepared.request_id == active_request_id).then_some(prepared)
+        let Some(active_request_id) = state.active_requests.get(stream_key).copied() else {
+            logging::debug(
+                "stream",
+                format!("prepared stream capture has no active request: stream_key={stream_key}"),
+            );
+            return None;
+        };
+        let Some(prepared) = state.captures.remove(stream_key) else {
+            logging::debug(
+                "stream",
+                format!(
+                    "active stream capture request has no prepared capture: stream_key={stream_key} request_id={active_request_id}"
+                ),
+            );
+            return None;
+        };
+        if prepared.request_id != active_request_id {
+            logging::debug(
+                "stream",
+                format!(
+                    "prepared stream capture request mismatch: stream_key={stream_key} prepared_request_id={} active_request_id={active_request_id}",
+                    prepared.request_id,
+                ),
+            );
+            return None;
+        }
+        logging::debug(
+            "stream",
+            format!(
+                "taking prepared stream capture: stream_key={stream_key} request_id={active_request_id}"
+            ),
+        );
+        Some(prepared)
     }
 
     fn restore(
@@ -227,7 +283,15 @@ impl StreamBroadcastCaptureRegistry {
             .state
             .lock()
             .expect("stream capture registry lock is not poisoned");
-        if state.active_requests.get(&stream_key) != Some(&prepared.request_id) {
+        let active_request_id = state.active_requests.get(&stream_key).copied();
+        if active_request_id != Some(prepared.request_id) {
+            logging::debug(
+                "stream",
+                format!(
+                    "could not restore stale stream capture: stream_key={stream_key} prepared_request_id={} active_request_id={active_request_id:?}",
+                    prepared.request_id,
+                ),
+            );
             return Err(prepared);
         }
         state.captures.insert(stream_key, prepared);
@@ -239,8 +303,14 @@ impl StreamBroadcastCaptureRegistry {
             .state
             .lock()
             .expect("stream capture registry lock is not poisoned");
-        state.active_requests.remove(stream_key);
-        state.captures.remove(stream_key);
+        let request_id = state.active_requests.remove(stream_key);
+        let had_capture = state.captures.remove(stream_key).is_some();
+        logging::debug(
+            "stream",
+            format!(
+                "discarded stream capture registry entry: stream_key={stream_key} request_id={request_id:?} had_capture={had_capture}"
+            ),
+        );
     }
 
     #[cfg(test)]

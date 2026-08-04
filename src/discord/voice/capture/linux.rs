@@ -44,6 +44,31 @@ struct PipeWireState {
     frames_tx: SyncSender<CaptureFrame>,
     errors_tx: Sender<String>,
     buffer_pool: CaptureFrameBufferPool,
+    ready_tx: Option<SyncSender<Result<(), String>>>,
+}
+
+impl PipeWireState {
+    fn report_error(&mut self, error: String) {
+        logging::debug(
+            "stream",
+            format!("PipeWire video capture reported an error: {error}"),
+        );
+        let _ = self.errors_tx.send(error.clone());
+        if let Some(ready_tx) = self.ready_tx.take() {
+            let _ = ready_tx.send(Err(error));
+        }
+    }
+
+    fn queue_frame(&mut self, frame: CaptureFrame) {
+        send_capture_result(&self.frames_tx, &self.errors_tx, Ok(frame));
+        if let Some(ready_tx) = self.ready_tx.take() {
+            logging::debug(
+                "stream",
+                "PipeWire video capture produced its first valid frame",
+            );
+            let _ = ready_tx.send(Ok(()));
+        }
+    }
 }
 
 struct PortalCapture {
@@ -103,11 +128,27 @@ pub(super) fn start_capture(
                 stop_rx,
                 ready_tx.clone(),
             );
-            if let Err(error) = result
-                && !worker_stopping.load(Ordering::Acquire)
-            {
-                let _ = ready_tx.send(Err(error.clone()));
-                let _ = errors_tx.send(error);
+            match result {
+                Ok(()) if worker_stopping.load(Ordering::Acquire) => {
+                    logging::debug("stream", "PipeWire video worker stopped on request");
+                }
+                Ok(()) => {
+                    let error = "PipeWire video worker stopped unexpectedly".to_owned();
+                    logging::debug("stream", &error);
+                    let _ = ready_tx.try_send(Err(error.clone()));
+                    let _ = errors_tx.send(error);
+                }
+                Err(error) if worker_stopping.load(Ordering::Acquire) => {
+                    logging::debug(
+                        "stream",
+                        format!("PipeWire video worker stopped during shutdown: {error}"),
+                    );
+                }
+                Err(error) => {
+                    logging::debug("stream", format!("PipeWire video worker failed: {error}"));
+                    let _ = ready_tx.try_send(Err(error.clone()));
+                    let _ = errors_tx.send(error);
+                }
             }
         })
         .map_err(|error| format!("PipeWire video worker spawn failed: {error}"));
@@ -320,41 +361,52 @@ fn run_pipewire_capture(
 
     let stop_mainloop = mainloop.clone();
     let _stop_listener = stop_rx.attach(mainloop.loop_(), move |_| stop_mainloop.quit());
-    let error_mainloop = mainloop.clone();
-    let state_frames_tx = frames_tx.clone();
-    let state_errors_tx = errors_tx.clone();
+    let state_error_mainloop = mainloop.clone();
+    let format_error_mainloop = mainloop.clone();
+    let frame_error_mainloop = mainloop.clone();
     let state = PipeWireState {
         format: Default::default(),
         frames_tx,
         errors_tx,
         buffer_pool,
+        ready_tx: Some(ready_tx.clone()),
     };
     let _stream_listener = stream
         .add_local_listener_with_user_data(state)
-        .state_changed(move |_, _, _, new| {
+        .state_changed(move |_, state, old, new| {
+            logging::debug(
+                "stream",
+                format!("PipeWire video stream state changed: {old:?} -> {new:?}"),
+            );
             if let pw::stream::StreamState::Error(error) = new {
-                send_capture_result(
-                    &state_frames_tx,
-                    &state_errors_tx,
-                    Err(format!("PipeWire video stream failed: {error}")),
-                );
-                error_mainloop.quit();
+                state.report_error(format!("PipeWire video stream failed: {error}"));
+                state_error_mainloop.quit();
             }
         })
-        .param_changed(|_, state, id, param| {
+        .param_changed(move |_, state, id, param| {
             let Some(param) = param else {
                 return;
             };
             if id != spa::param::ParamType::Format.as_raw() {
                 return;
             }
-            let Ok((media_type, media_subtype)) = spa::param::format_utils::parse_format(param)
-            else {
-                return;
+            let (media_type, media_subtype) = match spa::param::format_utils::parse_format(param) {
+                Ok(format) => format,
+                Err(error) => {
+                    state.report_error(format!(
+                        "PipeWire video media format parse failed: {error}"
+                    ));
+                    format_error_mainloop.quit();
+                    return;
+                }
             };
             if media_type != spa::param::format::MediaType::Video
                 || media_subtype != spa::param::format::MediaSubtype::Raw
             {
+                state.report_error(format!(
+                    "PipeWire negotiated an unsupported media format: {media_type:?}/{media_subtype:?}"
+                ));
+                format_error_mainloop.quit();
                 return;
             }
             match state.format.parse(param) {
@@ -374,23 +426,25 @@ fn run_pipewire_capture(
                     );
                 }
                 Err(error) => {
-                    send_capture_result(
-                        &state.frames_tx,
-                        &state.errors_tx,
-                        Err(format!("PipeWire video format parse failed: {error}")),
-                    );
+                    state.report_error(format!("PipeWire video format parse failed: {error}"));
+                    format_error_mainloop.quit();
                 }
             }
         })
-        .process(|stream, state| {
+        .process(move |stream, state| {
             let Some(mut buffer) = stream.dequeue_buffer() else {
                 return;
             };
             let Some(data) = buffer.datas_mut().first_mut() else {
                 return;
             };
-            if let Some(frame) = pipewire_frame(data, state.format, &state.buffer_pool) {
-                send_capture_result(&state.frames_tx, &state.errors_tx, frame);
+            match pipewire_frame(data, state.format, &state.buffer_pool) {
+                Some(Ok(frame)) => state.queue_frame(frame),
+                Some(Err(error)) => {
+                    state.report_error(error);
+                    frame_error_mainloop.quit();
+                }
+                None => {}
             }
         })
         .register()
@@ -470,8 +524,20 @@ fn run_pipewire_capture(
         )
         .map_err(|error| format!("PipeWire video stream connection failed: {error}"))?;
 
-    let _ = ready_tx.send(Ok(()));
+    logging::debug(
+        "stream",
+        format!(
+            "PipeWire video stream connection requested: node_id={} preferred_size={}x{}",
+            portal.stream.pipe_wire_node_id(),
+            width,
+            height,
+        ),
+    );
     mainloop.run();
+    logging::debug("stream", "PipeWire video main loop stopped");
+    let _ = ready_tx.try_send(Err(
+        "PipeWire video capture stopped before producing its first frame".to_owned(),
+    ));
     Ok(())
 }
 
@@ -576,5 +642,46 @@ mod tests {
         )
         .await
         .expect("capture cancellation should wake the portal wait");
+    }
+
+    #[test]
+    fn first_valid_pipewire_frame_completes_startup_once() {
+        let (frames_tx, frames_rx) = mpsc::sync_channel(2);
+        let (errors_tx, _errors_rx) = mpsc::channel();
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let buffer_pool = CaptureFrameBufferPool::default();
+        let mut state = PipeWireState {
+            format: Default::default(),
+            frames_tx,
+            errors_tx,
+            buffer_pool: buffer_pool.clone(),
+            ready_tx: Some(ready_tx),
+        };
+
+        state.queue_frame(CaptureFrame::new(
+            1,
+            1,
+            vec![1, 2, 3, 255],
+            buffer_pool.clone(),
+        ));
+        assert_eq!(
+            ready_rx
+                .recv()
+                .expect("first frame should report readiness"),
+            Ok(())
+        );
+        assert_eq!(
+            frames_rx
+                .recv()
+                .expect("first frame should remain queued")
+                .rgba,
+            vec![1, 2, 3, 255]
+        );
+
+        state.queue_frame(CaptureFrame::new(1, 1, vec![4, 5, 6, 255], buffer_pool));
+        assert!(matches!(
+            ready_rx.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
     }
 }

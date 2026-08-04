@@ -224,6 +224,33 @@ impl DashboardState {
         false
     }
 
+    pub(in crate::tui) fn cancel_stream_broadcast_preparing(
+        &mut self,
+        scope: VoiceScope,
+        channel_id: Id<ChannelMarker>,
+    ) -> bool {
+        if !self
+            .runtime
+            .stream_broadcast_preparing
+            .as_ref()
+            .is_some_and(|target| target.matches(scope, channel_id))
+        {
+            return false;
+        }
+
+        self.runtime.stream_broadcast_preparing = None;
+        if self
+            .runtime
+            .toast_message
+            .as_ref()
+            .is_some_and(|message| message.expires_at.is_none())
+        {
+            self.runtime.toast_message = None;
+            return true;
+        }
+        false
+    }
+
     pub(in crate::tui) fn record_stream_broadcast_ended(
         &mut self,
         scope: VoiceScope,
@@ -532,7 +559,7 @@ mod tests {
     }
 
     #[test]
-    fn stream_broadcast_preparing_toast_waits_for_matching_started_event() {
+    fn stream_broadcast_preparing_toast_tracks_matching_broadcast_lifecycle() {
         let mut state = DashboardState::new();
         let scope = VoiceScope::Guild(Id::new(1));
         let channel_id = Id::new(2);
@@ -545,6 +572,15 @@ mod tests {
                 .text,
             STREAM_BROADCAST_PREPARING_TEXT
         );
+        state.push_event(AppEvent::StreamBroadcastStartFailed {
+            scope,
+            channel_id: Id::new(3),
+        });
+        assert!(state.toast_message().is_some());
+        state.push_event(AppEvent::StreamBroadcastStartFailed { scope, channel_id });
+        assert!(state.toast_message().is_none());
+
+        assert!(state.show_stream_broadcast_preparing_toast(scope, channel_id));
         state.push_event(AppEvent::StreamBroadcastStarted {
             scope,
             channel_id: Id::new(3),
@@ -552,6 +588,8 @@ mod tests {
         assert!(state.toast_message().is_some());
         state.push_event(AppEvent::StreamBroadcastStarted { scope, channel_id });
         assert!(state.toast_message().is_none());
+        assert!(!state.show_stream_broadcast_preparing_toast(scope, channel_id));
+        state.push_event(AppEvent::StreamBroadcastStartFailed { scope, channel_id });
         assert!(!state.show_stream_broadcast_preparing_toast(scope, channel_id));
 
         state.push_event(AppEvent::StreamBroadcastEnded { scope, channel_id });
