@@ -33,6 +33,7 @@ const STREAM_H264_ACCESS_UNIT_MAX_PACKETS: usize = 4096;
 const STREAM_STARTUP_REPLAY_FRAME_TICKS: u32 = 90;
 const STREAM_PLAYER_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const STREAM_PLAYER_AUDIO_ENABLE_TIMEOUT: Duration = Duration::from_secs(1);
+const STREAM_PLAYER_INPUT_CONFIG: &str = "SPACE ignore\np ignore\nPAUSE ignore\nPLAYPAUSE ignore\nPAUSEONLY ignore\nXF86_PAUSE ignore\n. ignore\n, ignore\n";
 const OPUS_RTP_CLOCK_RATE: u32 = 48_000;
 const VIDEO_RTP_CLOCK_RATE: u32 = 90_000;
 const STREAM_PRESENTATION_CLOCK_MAX_CORRECTION: Duration = Duration::from_millis(250);
@@ -1633,6 +1634,14 @@ async fn run_stream_media(
         .map_err(|error| format!("write stream SDP failed: {error}"))?;
     sdp.flush()
         .map_err(|error| format!("flush stream SDP failed: {error}"))?;
+    let mut player_input_config = NamedTempFile::new()
+        .map_err(|error| format!("create stream mpv input config failed: {error}"))?;
+    player_input_config
+        .write_all(STREAM_PLAYER_INPUT_CONFIG.as_bytes())
+        .map_err(|error| format!("write stream mpv input config failed: {error}"))?;
+    player_input_config
+        .flush()
+        .map_err(|error| format!("flush stream mpv input config failed: {error}"))?;
 
     // Keep both RTP/RTCP pairs reserved until the SDP is complete, then
     // release them immediately before mpv binds its receive sockets.
@@ -1644,6 +1653,7 @@ async fn run_stream_media(
         .map_err(|error| format!("prepare stream mpv IPC failed: {error}"))?;
     let mut player = stream_player_command(
         sdp.path(),
+        player_input_config.path(),
         &stream_player_ready.display_name,
         player_ipc.server_arg(),
     );
@@ -2381,7 +2391,12 @@ fn stream_player_spawn_failure(error: std::io::Error) -> StreamConnectionFailure
     StreamConnectionFailure::stop(message)
 }
 
-fn stream_player_command(sdp_path: &Path, display_name: &str, ipc_server: &str) -> Command {
+fn stream_player_command(
+    sdp_path: &Path,
+    input_config_path: &Path,
+    display_name: &str,
+    ipc_server: &str,
+) -> Command {
     let mut player = Command::new("mpv");
     player
         // Keep playback deterministic and prevent user cache settings from
@@ -2394,6 +2409,9 @@ fn stream_player_command(sdp_path: &Path, display_name: &str, ipc_server: &str) 
         // Built-in UI scripts delay SDP socket creation and are not needed for
         // the dedicated stream window.
         .arg("--load-scripts=no")
+        // RTP has no seekable live edge. Remove pause controls that would leave
+        // the viewer replaying buffered history after the broadcast resumes.
+        .arg("--osc=no")
         // Keep normal output quiet, but include the lifecycle stages needed to
         // separate SDP, decoder, and display startup delay in a live log.
         .arg("--msg-level=all=warn,cplayer=v,lavf=v,vd=v,ad=v")
@@ -2402,6 +2420,7 @@ fn stream_player_command(sdp_path: &Path, display_name: &str, ipc_server: &str) 
         // packet selects it through JSON IPC after mpv has loaded the SDP.
         .arg("--aid=no")
         .arg(format!("--input-ipc-server={ipc_server}"))
+        .arg(format!("--input-conf={}", input_config_path.display()))
         // Prefer mpv's safe hardware allowlist and let libavcodec use the
         // available CPU cores when it falls back.
         .arg("--hwdec=auto-safe")
@@ -2428,6 +2447,11 @@ fn stream_player_command(sdp_path: &Path, display_name: &str, ipc_server: &str) 
         // the protocol list together as one value.
         .arg("--demuxer-lavf-o=protocol_whitelist=[file,udp,rtp],buffer_size=4194304,max_delay=50000,reorder_queue_size=512")
         .arg("--force-window=immediate")
+        // Discord can change the encoded resolution when the broadcaster
+        // resizes the captured window. Keep the native player window stable
+        // and scale the video inside it instead of following every change.
+        .arg("--auto-window-resize=no")
+        .arg("--geometry=1280x720")
         .arg(format!("--title={display_name}'s stream"))
         // Audio and video share one player so its volume and mute controls
         // apply to the complete broadcast.
@@ -4580,6 +4604,7 @@ mod tests {
     fn stream_player_controls_the_complete_broadcast() {
         let player = stream_player_command(
             Path::new("/tmp/concord-stream.sdp"),
+            Path::new("/tmp/concord-stream-input.conf"),
             "neo",
             "/tmp/concord-stream-mpv.sock",
         )
@@ -4594,9 +4619,11 @@ mod tests {
                 "--no-config",
                 "--terminal=yes",
                 "--load-scripts=no",
+                "--osc=no",
                 "--msg-level=all=warn,cplayer=v,lavf=v,vd=v,ad=v",
                 "--aid=no",
                 "--input-ipc-server=/tmp/concord-stream-mpv.sock",
+                "--input-conf=/tmp/concord-stream-input.conf",
                 "--hwdec=auto-safe",
                 "--vd-lavc-threads=0",
                 "--stream-buffer-size=1MiB",
@@ -4616,6 +4643,8 @@ mod tests {
                 "--demuxer-lavf-buffersize=262144",
                 "--demuxer-lavf-o=protocol_whitelist=[file,udp,rtp],buffer_size=4194304,max_delay=50000,reorder_queue_size=512",
                 "--force-window=immediate",
+                "--auto-window-resize=no",
+                "--geometry=1280x720",
                 "--title=neo's stream",
                 "--video-latency-hacks=no",
                 "--video-sync=audio",
@@ -4624,6 +4653,10 @@ mod tests {
                 "--",
                 "/tmp/concord-stream.sdp",
             ]
+        );
+        assert_eq!(
+            STREAM_PLAYER_INPUT_CONFIG,
+            "SPACE ignore\np ignore\nPAUSE ignore\nPLAYPAUSE ignore\nPAUSEONLY ignore\nXF86_PAUSE ignore\n. ignore\n, ignore\n"
         );
     }
 
