@@ -11,6 +11,7 @@ Concord is a feature-rich TUI client for Discord, written in Rust with ratatui.
 - [Features](#features)
 - [Configuration](#configuration)
 - [Performance](#performance)
+- [Debug mode](#debug-mode)
 - [FAQ](#faq)
 - [Security](#security)
 - [Contributing](#contributing)
@@ -997,6 +998,11 @@ Image-heavy screens can temporarily use more memory because compressed image
 bytes need to be decoded before they can be rendered in the terminal. When many
 images are loaded, memory can briefly rise to around 100-200 MB while decoding
 and then drop again as work completes and caches are pruned.
+
+## Debug mode
+
+Run `CONCORD_DEBUG=1 concord`. Logs are written to `concord.log` in the Concord
+config directory.
 
 ## FAQ
 
