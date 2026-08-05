@@ -16,14 +16,6 @@ use fast_image_resize::{
     images::{CroppedImageMut, Image, ImageRef},
 };
 use image::RgbaImage;
-use openh264::{
-    OpenH264API,
-    encoder::{
-        BitRate, Encoder, EncoderConfig, FrameRate, FrameType, IntraFramePeriod, Level, Profile,
-        RateControlMode, UsageType, VuiConfig,
-    },
-    formats::YUVSlices,
-};
 use tokio::sync::mpsc;
 use yuv::{
     YuvChromaSubsampling, YuvConversionMode, YuvPlanarImageMut, YuvRange, YuvStandardMatrix,
@@ -35,6 +27,10 @@ use super::{
     preview::{StreamPreviewCadence, StreamPreviewFrame},
 };
 use crate::logging;
+
+#[path = "capture/encoder.rs"]
+mod encoder;
+use encoder::{I420Frame, StreamEncoder};
 
 #[cfg(target_os = "linux")]
 #[path = "capture/linux.rs"]
@@ -568,22 +564,16 @@ impl StreamFrameProcessor {
         })
     }
 
-    fn yuv_source(&self) -> YUVSlices<'_> {
-        YUVSlices::new(
-            (
-                self.yuv.y_plane.borrow(),
-                self.yuv.u_plane.borrow(),
-                self.yuv.v_plane.borrow(),
-            ),
-            (
-                STREAM_CAPTURE_WIDTH as usize,
-                STREAM_CAPTURE_HEIGHT as usize,
-            ),
-            (
-                self.yuv.y_stride as usize,
-                self.yuv.u_stride as usize,
-                self.yuv.v_stride as usize,
-            ),
+    fn i420_source(&self) -> I420Frame<'_> {
+        I420Frame::new(
+            self.yuv.y_plane.borrow(),
+            self.yuv.u_plane.borrow(),
+            self.yuv.v_plane.borrow(),
+            STREAM_CAPTURE_WIDTH as usize,
+            STREAM_CAPTURE_HEIGHT as usize,
+            self.yuv.y_stride as usize,
+            self.yuv.u_stride as usize,
+            self.yuv.v_stride as usize,
         )
     }
 
@@ -843,8 +833,7 @@ fn run_capture_loop(
             image.image().height(),
         ),
     );
-    let mut encoder = Encoder::with_api_config(OpenH264API::from_source(), stream_encoder_config())
-        .map_err(|error| format!("H264 encoder creation failed: {error}"))?;
+    let mut encoder = StreamEncoder::new_auto()?;
     if ready_tx.send(Ok(())).is_err() {
         logging::debug(
             "stream",
@@ -902,27 +891,21 @@ fn run_capture_loop(
         };
 
         let encode_started_at = Instant::now();
-        if force_keyframe.swap(false, Ordering::AcqRel) {
-            encoder.force_intra_frame();
-        }
-        let yuv = frame_processor.yuv_source();
-        let encoded = encoder
-            .encode(&yuv)
-            .map_err(|error| format!("H264 frame encoding failed: {error}"))?;
-        let is_keyframe = matches!(encoded.frame_type(), FrameType::IDR | FrameType::I);
-        let annex_b = encoded.to_vec();
+        let force_keyframe = force_keyframe.swap(false, Ordering::AcqRel);
+        let encoded = encoder.encode(frame_processor.i420_source(), force_keyframe)?;
         let encode_time = encode_started_at.elapsed();
-        let encoded_bytes = annex_b.len();
-        let outcome = if annex_b.is_empty() {
-            CaptureFrameOutcome::EncoderSkipped
-        } else {
-            let timestamp = stream_rtp_timestamp(started_at.elapsed());
-            frame_slot.send(Ok(EncodedStreamFrame {
-                timestamp,
-                annex_b,
-                is_keyframe,
-            }));
-            CaptureFrameOutcome::Queued
+        let (outcome, encoded_bytes) = match encoded {
+            Some(encoded) => {
+                let encoded_bytes = encoded.annex_b.len();
+                let timestamp = stream_rtp_timestamp(started_at.elapsed());
+                frame_slot.send(Ok(EncodedStreamFrame {
+                    timestamp,
+                    annex_b: encoded.annex_b,
+                    is_keyframe: encoded.is_keyframe,
+                }));
+                (CaptureFrameOutcome::Queued, encoded_bytes)
+            }
+            None => (CaptureFrameOutcome::EncoderSkipped, 0),
         };
         stats.record_frame(
             outcome,
@@ -951,25 +934,6 @@ fn try_reserve_encoded_frame_slot(
         Err(mpsc::error::TrySendError::Full(_)) => Err(CaptureFrameOutcome::QueueFull),
         Err(mpsc::error::TrySendError::Closed(_)) => Err(CaptureFrameOutcome::QueueClosed),
     }
-}
-
-fn stream_encoder_config() -> EncoderConfig {
-    // OpenH264 enables these camera-oriented tools by default, but its
-    // screen-content mode rejects them and writes warnings directly to stderr.
-    EncoderConfig::new()
-        .usage_type(UsageType::ScreenContentRealTime)
-        .skip_frames(true)
-        .adaptive_quantization(false)
-        .background_detection(false)
-        .rate_control_mode(RateControlMode::Bitrate)
-        .bitrate(BitRate::from_bps(STREAM_CAPTURE_BITRATE))
-        .max_frame_rate(FrameRate::from_hz(STREAM_CAPTURE_FPS as f32))
-        .profile(Profile::Baseline)
-        .level(Level::Level_3_1)
-        .intra_frame_period(IntraFramePeriod::from_num_frames(
-            STREAM_INTRA_FRAME_PERIOD_FRAMES,
-        ))
-        .vui(VuiConfig::bt709())
 }
 
 fn resolve_capture_source(
@@ -1011,33 +975,6 @@ mod tests {
     fn test_capture_frame(image: RgbaImage, buffer_pool: &CaptureFrameBufferPool) -> CaptureFrame {
         let (width, height) = image.dimensions();
         CaptureFrame::new(width, height, image.into_raw(), buffer_pool.clone())
-    }
-
-    #[test]
-    fn screen_content_encoder_configuration_initializes_cleanly() {
-        let _encoder =
-            Encoder::with_api_config(OpenH264API::from_source(), stream_encoder_config())
-                .expect("screen content encoder configuration should initialize");
-    }
-
-    #[test]
-    fn screen_content_encoder_uses_a_two_second_intra_period() {
-        let config = format!("{:?}", stream_encoder_config());
-
-        assert!(
-            config.contains("intra_frame_period: IntraFramePeriod(60)"),
-            "unexpected stream encoder configuration: {config}"
-        );
-    }
-
-    #[test]
-    fn screen_content_encoder_targets_eight_megabits_per_second() {
-        let config = format!("{:?}", stream_encoder_config());
-
-        assert!(
-            config.contains("bitrate: BitRate(8000000)"),
-            "unexpected stream encoder configuration: {config}"
-        );
     }
 
     #[test]
@@ -1282,7 +1219,7 @@ mod tests {
         assert!(u.abs_diff(102) <= 1, "unexpected BT.709 limited red U: {u}");
         assert!(v.abs_diff(240) <= 1, "unexpected BT.709 limited red V: {v}");
 
-        let config = format!("{:?}", stream_encoder_config());
+        let config = format!("{:?}", encoder::openh264_encoder_config());
         assert!(
             config.contains("matrix_coefficients: Bt709") && config.contains("full_range: false"),
             "unexpected stream VUI configuration: {config}"

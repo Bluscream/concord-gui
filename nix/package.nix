@@ -8,6 +8,9 @@
 , opus
 , alsa-lib
 , pipewire
+, libva
+, libdrm
+, mesa
 , src
 , pname
 , version
@@ -42,6 +45,9 @@ let
     ] ++ lib.optionals stdenv.isLinux [
       alsa-lib
       pipewire
+      libva
+      libdrm
+      mesa
     ];
 
     # The unit tests in this repo do not require network or a TTY, but disable

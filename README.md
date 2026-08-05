@@ -89,16 +89,18 @@ macOS 13 or later is required. Linux release builds need these packages:
 
 ```sh
 # Fedora
-sudo dnf install alsa-lib opus pipewire-libs xdg-desktop-portal
+sudo dnf install alsa-lib libva mesa-libgbm opus pipewire-libs xdg-desktop-portal
 
 # Debian or Ubuntu
-sudo apt install libasound2 libopus0 libpipewire-0.3-0 xdg-desktop-portal
+sudo apt install libasound2 libgbm1 libopus0 libpipewire-0.3-0 libva-drm2 libva2 xdg-desktop-portal
 
 # Arch Linux
-sudo pacman -S alsa-lib opus pipewire xdg-desktop-portal
+sudo pacman -S alsa-lib libva mesa opus pipewire xdg-desktop-portal
 ```
 
 Screen sharing requires the portal backend for your desktop environment.
+Concord uses native H.264 hardware encoding when available: VA API on Linux,
+VideoToolbox on macOS, and Media Foundation on Windows. If hardware encoding is unavailable, Concord falls back to software encoding.
 
 ### Build from source
 
@@ -114,13 +116,13 @@ brew install opus pkg-config
 brew install nasm # Intel only
 
 # Fedora
-sudo dnf install alsa-lib-devel clang-devel gcc gcc-c++ nasm opus-devel pipewire-devel pkgconf-pkg-config
+sudo dnf install alsa-lib-devel clang-devel gcc gcc-c++ libdrm-devel libva-devel mesa-libgbm-devel nasm opus-devel pipewire-devel pkgconf-pkg-config
 
 # Debian or Ubuntu
-sudo apt install build-essential libasound2-dev libclang-dev libopus-dev libpipewire-0.3-dev nasm pkg-config
+sudo apt install build-essential libasound2-dev libclang-dev libdrm-dev libgbm-dev libopus-dev libpipewire-0.3-dev libva-dev nasm pkg-config
 
 # Arch Linux
-sudo pacman -S alsa-lib base-devel clang nasm opus pipewire pkgconf
+sudo pacman -S alsa-lib base-devel clang libdrm libva mesa nasm opus pipewire pkgconf
 ```
 
 Windows source builds require the MSVC Rust toolchain, Visual Studio 2022 Build

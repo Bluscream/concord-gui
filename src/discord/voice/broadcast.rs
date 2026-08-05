@@ -26,6 +26,7 @@ use super::runtime::MAX_VOICE_RECONNECT_ATTEMPTS;
 use super::{
     DISCORD_OPUS_TIMESTAMP_INCREMENT, DISCORD_STREAM_VIDEO_PAYLOAD_TYPE,
     DISCORD_STREAM_VIDEO_RTX_PAYLOAD_TYPE, DISCORD_VOICE_PAYLOAD_TYPE, DiscoveredVoiceAddress,
+    RTP_AEAD_NONCE_SUFFIX_BYTES, RTP_AEAD_TAG_BYTES, RTP_HEADER_EXTENSION_BYTES,
     RTP_HEADER_MIN_LEN, RTP_VERSION, StreamBroadcastRequest, StreamCreateInfo, StreamServerInfo,
     VOICE_OP_READY, VOICE_OP_SESSION_DESCRIPTION, VOICE_OP_SPEAKING,
     VOICE_WEBSOCKET_CONNECT_TIMEOUT, VoiceConnectionEnd, VoiceDaveState, VoiceRuntimeEvent,
@@ -53,6 +54,8 @@ use crate::{
 
 const STREAM_RID: &str = "100";
 const STREAM_RTP_MAX_PAYLOAD_BYTES: usize = 1_100;
+const STREAM_RTP_EXTENSION_BODY_BYTES: usize = 16;
+const STREAM_RTX_ORIGINAL_SEQUENCE_BYTES: usize = 2;
 const RTP_EXTENSION_PROFILE_ONE_BYTE: u16 = 0xbede;
 const RTP_EXTENSION_TRANSPORT_SEQUENCE: u8 = 5;
 const RTP_EXTENSION_PLAYOUT_DELAY: u8 = 6;
@@ -62,7 +65,7 @@ const RTP_EXTENSION_REPAIRED_RID: u8 = 12;
 const VIDEO_CONTENT_TYPE_SCREEN: u8 = 1;
 const RTCP_SENDER_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 const BROADCAST_SEND_STATS_INTERVAL: Duration = Duration::from_secs(5);
-const STREAM_RTP_PACING_BUDGET: Duration = Duration::from_millis(25);
+const STREAM_RTP_SMALL_FRAME_PACING_BUDGET: Duration = Duration::from_millis(25);
 const STREAM_RTP_MAX_PACKET_SPACING: Duration = Duration::from_millis(2);
 const STREAM_RTP_HISTORY_CAPACITY: usize = 2_048;
 const STREAM_RTX_MAX_RETRANSMISSIONS_PER_FEEDBACK: usize = 128;
@@ -1422,7 +1425,10 @@ impl BroadcastVideoTransport {
             &mut self.transport_sequence,
         );
         let packet_count = packets.len();
-        let pacing_interval = rtp_packet_pacing_interval(packet_count);
+        let estimated_wire_bytes = packets.iter().fold(0usize, |total, packet| {
+            total.saturating_add(packet.len() + RTP_AEAD_TAG_BYTES + RTP_AEAD_NONCE_SUFFIX_BYTES)
+        });
+        let pacing_interval = rtp_packet_pacing_interval(packet_count, estimated_wire_bytes);
         let pacing_started_at = TokioInstant::now();
         let mut wire_bytes = 0usize;
 
@@ -1507,7 +1513,17 @@ impl BroadcastVideoTransport {
             .nack_sequences
             .len()
             .min(STREAM_RTX_MAX_RETRANSMISSIONS_PER_FEEDBACK);
-        let pacing_interval = rtp_packet_pacing_interval(retransmission_count);
+        let estimated_wire_bytes = retransmission_count.saturating_mul(
+            STREAM_RTP_MAX_PAYLOAD_BYTES
+                + RTP_HEADER_MIN_LEN
+                + RTP_HEADER_EXTENSION_BYTES
+                + STREAM_RTP_EXTENSION_BODY_BYTES
+                + STREAM_RTX_ORIGINAL_SEQUENCE_BYTES
+                + RTP_AEAD_TAG_BYTES
+                + RTP_AEAD_NONCE_SUFFIX_BYTES,
+        );
+        let pacing_interval =
+            rtp_packet_pacing_interval(retransmission_count, estimated_wire_bytes);
         let pacing_started_at = TokioInstant::now();
         for (index, original_sequence) in feedback
             .nack_sequences
@@ -1918,12 +1934,39 @@ fn broadcast_audio_elapsed_frames(previous: Option<u64>, frame_index: u64) -> u3
         .unwrap_or(1)
 }
 
-fn rtp_packet_pacing_interval(packet_count: usize) -> Option<Duration> {
+fn rtp_packet_pacing_interval(
+    packet_count: usize,
+    estimated_wire_bytes: usize,
+) -> Option<Duration> {
     let gap_count = u32::try_from(packet_count.checked_sub(1)?).unwrap_or(u32::MAX);
     if gap_count == 0 {
         return None;
     }
-    Some((STREAM_RTP_PACING_BUDGET / gap_count).min(STREAM_RTP_MAX_PACKET_SPACING))
+
+    // Small frames keep the prior low-latency spacing. Large hardware IDRs
+    // need a longer budget so they do not turn the advertised stream bitrate
+    // into a short network burst that loses packets before DAVE decryption.
+    let low_latency_interval =
+        (STREAM_RTP_SMALL_FRAME_PACING_BUDGET / gap_count).min(STREAM_RTP_MAX_PACKET_SPACING);
+    let rate_limited_budget = duration_for_bitrate(
+        estimated_wire_bytes,
+        u64::from(capture::STREAM_CAPTURE_BITRATE),
+    );
+    let rate_limited_interval = duration_div_ceil(rate_limited_budget, gap_count);
+    Some(low_latency_interval.max(rate_limited_interval))
+}
+
+fn duration_for_bitrate(bytes: usize, bits_per_second: u64) -> Duration {
+    let nanoseconds = (bytes as u128)
+        .saturating_mul(8)
+        .saturating_mul(1_000_000_000)
+        .div_ceil(u128::from(bits_per_second.max(1)));
+    Duration::from_nanos(u64::try_from(nanoseconds).unwrap_or(u64::MAX))
+}
+
+fn duration_div_ceil(duration: Duration, divisor: u32) -> Duration {
+    let nanoseconds = duration.as_nanos().div_ceil(u128::from(divisor.max(1)));
+    Duration::from_nanos(u64::try_from(nanoseconds).unwrap_or(u64::MAX))
 }
 
 fn receiver_report_has_new_loss(
@@ -2134,7 +2177,8 @@ fn build_discord_video_rtx_packet(
     let original_payload = original
         .get(header.payload_offset..)
         .ok_or_else(|| "original RTP packet is missing media payload".to_owned())?;
-    let mut rtx_payload = Vec::with_capacity(2 + original_payload.len());
+    let mut rtx_payload =
+        Vec::with_capacity(STREAM_RTX_ORIGINAL_SEQUENCE_BYTES + original_payload.len());
     rtx_payload.extend_from_slice(&header.sequence.to_be_bytes());
     rtx_payload.extend_from_slice(original_payload);
     Ok(build_discord_video_rtp_packet_with_payload_type(
@@ -2160,7 +2204,7 @@ fn build_discord_video_rtp_packet_with_payload_type(
     rid_extension: u8,
     payload: &[u8],
 ) -> Vec<u8> {
-    let mut extensions = Vec::with_capacity(16);
+    let mut extensions = Vec::with_capacity(STREAM_RTP_EXTENSION_BODY_BYTES);
     push_one_byte_extension(
         &mut extensions,
         RTP_EXTENSION_TRANSPORT_SEQUENCE,
@@ -2177,7 +2221,9 @@ fn build_discord_video_rtp_packet_with_payload_type(
         extensions.push(0);
     }
 
-    let mut packet = Vec::with_capacity(RTP_HEADER_MIN_LEN + 4 + extensions.len() + payload.len());
+    let mut packet = Vec::with_capacity(
+        RTP_HEADER_MIN_LEN + RTP_HEADER_EXTENSION_BYTES + extensions.len() + payload.len(),
+    );
     packet.push((RTP_VERSION << 6) | 0x10);
     packet.push((u8::from(marker) << 7) | payload_type);
     packet.extend_from_slice(&sequence.to_be_bytes());
@@ -3048,19 +3094,24 @@ mod tests {
     }
 
     #[test]
-    fn large_frames_are_paced_with_bounded_latency() {
-        assert_eq!(rtp_packet_pacing_interval(1), None);
+    fn large_frames_are_paced_at_the_stream_bitrate() {
+        assert_eq!(rtp_packet_pacing_interval(1, 1_100), None);
 
         let small_frame_interval =
-            rtp_packet_pacing_interval(3).expect("multiple packets should be paced");
+            rtp_packet_pacing_interval(3, 3_300).expect("multiple packets should be paced");
         assert!(small_frame_interval <= STREAM_RTP_MAX_PACKET_SPACING);
 
-        let packet_count = 100;
-        let large_frame_interval =
-            rtp_packet_pacing_interval(packet_count).expect("large frame should be paced");
+        let packet_count = 250;
+        let estimated_wire_bytes = 280_000;
+        let large_frame_interval = rtp_packet_pacing_interval(packet_count, estimated_wire_bytes)
+            .expect("large frame should be paced");
         let total_pacing = large_frame_interval * (packet_count as u32 - 1);
-        assert!(total_pacing <= STREAM_RTP_PACING_BUDGET);
-        assert!(total_pacing >= STREAM_RTP_PACING_BUDGET - Duration::from_millis(1));
+        let minimum_pacing = duration_for_bitrate(
+            estimated_wire_bytes,
+            u64::from(capture::STREAM_CAPTURE_BITRATE),
+        );
+        assert!(total_pacing >= minimum_pacing);
+        assert!(total_pacing > STREAM_RTP_SMALL_FRAME_PACING_BUDGET);
     }
 
     #[tokio::test]
