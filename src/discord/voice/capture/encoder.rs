@@ -239,10 +239,7 @@ fn recover_runtime_hardware_failure<'a, T, E>(
 fn validate_runtime_fallback_frame(encoded: Option<&EncodedH264Frame>) -> Result<(), String> {
     let encoded =
         encoded.ok_or_else(|| "OpenH264 runtime fallback produced no H264 frame".to_owned())?;
-    let nal_types = crate::discord::voice::media::annex_b_nals(&encoded.annex_b)
-        .into_iter()
-        .filter_map(|nal| nal.first().map(|header| header & 0x1f))
-        .collect::<Vec<_>>();
+    let nal_types = h264_nal_types(&encoded.annex_b);
     if !encoded.is_keyframe
         || !nal_types.contains(&7)
         || !nal_types.contains(&8)
@@ -253,6 +250,31 @@ fn validate_runtime_fallback_frame(encoded: Option<&EncodedH264Frame>) -> Result
         );
     }
     Ok(())
+}
+
+fn h264_nal_types(frame: &[u8]) -> Vec<u8> {
+    crate::discord::voice::media::annex_b_nals(frame)
+        .into_iter()
+        .filter_map(|nal| nal.first().map(|header| header & 0x1f))
+        .collect()
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn validate_parameterized_h264_keyframe(
+    encoded: &EncodedH264Frame,
+    source: &str,
+) -> Result<(), String> {
+    let nal_types = h264_nal_types(&encoded.annex_b);
+    let has_vcl_picture = nal_types.contains(&1) || nal_types.contains(&5);
+    if encoded.is_keyframe && nal_types.contains(&7) && nal_types.contains(&8) && has_vcl_picture {
+        return Ok(());
+    }
+
+    Err(format!(
+        "{source} did not produce a parameterized keyframe: keyframe={} nal_types={nal_types:?} bytes={}",
+        encoded.is_keyframe,
+        encoded.annex_b.len()
+    ))
 }
 
 pub(super) struct OpenH264Encoder {
@@ -354,45 +376,43 @@ mod windows;
 #[cfg(target_os = "linux")]
 mod vaapi {
     use std::{
-        collections::VecDeque,
+        borrow::Borrow,
         path::{Path, PathBuf},
         rc::Rc,
-        sync::Arc,
     };
 
     use cros_codecs::{
-        BlockingMode, DecodedFormat, Fourcc, FrameLayout, PlaneLayout, Resolution,
+        BlockingMode, Fourcc, FrameLayout, PlaneLayout, Resolution,
         backend::vaapi::encoder::VaapiBackend,
+        backend::vaapi::surface_pool::{PooledVaSurface, VaSurfacePool},
         codec::h264::parser::{Level, Profile},
-        decoder::StreamInfo,
+        decoder::FramePool as VaFramePool,
         encoder::{
             FrameMetadata, PredictionStructure, RateControl, Tunings, VideoEncoder,
             h264::EncoderConfig, stateless::h264::StatelessEncoder as H264StatelessEncoder,
         },
-        libva::{Display, Surface, VAEntrypoint, VAProfile},
-        video_frame::{
-            VideoFrame,
-            frame_pool::{FramePool, PooledVideoFrame},
-            gbm_video_frame::{GbmDevice, GbmExternalBufferDescriptor, GbmUsage, GbmVideoFrame},
+        libva::{
+            Display, Image, Surface, UsageHint, VA_FOURCC_NV12, VA_RT_FORMAT_YUV420, VAEntrypoint,
+            VAImageFormat, VAProfile,
         },
     };
 
     use super::{
         EncodedH264Frame, I420Frame, STREAM_CAPTURE_FPS, STREAM_CAPTURE_HEIGHT,
         STREAM_CAPTURE_WIDTH, STREAM_ENCODER_BITRATE, STREAM_INTRA_FRAME_PERIOD_FRAMES,
-        annex_b_contains_idr, copy_i420_to_nv12,
+        annex_b_contains_idr, copy_i420_to_nv12, split_nv12_image_planes,
+        validate_parameterized_h264_keyframe,
     };
 
     const VA_INPUT_FRAME_COUNT: usize = 3;
 
-    type HardwareEncoder = H264StatelessEncoder<
-        PooledVideoFrame<GbmVideoFrame>,
-        VaapiBackend<GbmExternalBufferDescriptor, Surface<GbmExternalBufferDescriptor>>,
-    >;
+    type HardwareEncoder =
+        H264StatelessEncoder<PooledVaSurface<()>, VaapiBackend<(), PooledVaSurface<()>>>;
 
     pub(in crate::discord::voice::capture) struct VaApiEncoder {
         encoder: HardwareEncoder,
-        frames: FramePool<GbmVideoFrame>,
+        frames: VaSurfacePool<()>,
+        image_format: VAImageFormat,
         frame_layout: FrameLayout,
         frame_index: u64,
     }
@@ -418,12 +438,11 @@ mod vaapi {
         fn for_device(path: &Path) -> Result<Self, String> {
             let display = Display::open_drm_display(path)
                 .map_err(|error| format!("VA display initialization failed: {error}"))?;
-            let gbm_device = GbmDevice::open(path)
-                .map_err(|error| format!("GBM device initialization failed: {error}"))?;
             let entrypoints = display
                 .query_config_entrypoints(VAProfile::VAProfileH264ConstrainedBaseline)
                 .map_err(|error| format!("VA H264 entrypoint query failed: {error}"))?;
             let power_modes = encoder_power_modes(&entrypoints)?;
+            let image_format = nv12_image_format(&display)?;
             let resolution = Resolution {
                 width: STREAM_CAPTURE_WIDTH,
                 height: STREAM_CAPTURE_HEIGHT,
@@ -436,11 +455,11 @@ mod vaapi {
             for low_power in power_modes {
                 match Self::for_power_mode(
                     Rc::clone(&display),
-                    Arc::clone(&gbm_device),
                     config.clone(),
                     fourcc,
                     resolution,
                     frame_layout.clone(),
+                    image_format,
                     low_power,
                 ) {
                     Ok(encoder) => return Ok(encoder),
@@ -459,14 +478,14 @@ mod vaapi {
 
         fn for_power_mode(
             display: Rc<Display>,
-            gbm_device: Arc<GbmDevice>,
             config: EncoderConfig,
             fourcc: Fourcc,
             resolution: Resolution,
             frame_layout: FrameLayout,
+            image_format: VAImageFormat,
             low_power: bool,
         ) -> Result<Self, String> {
-            let frames = create_frame_pool(Rc::clone(&display), gbm_device, fourcc, resolution)?;
+            let frames = create_surface_pool(Rc::clone(&display), resolution)?;
             let encoder = HardwareEncoder::new_vaapi(
                 Rc::clone(&display),
                 config.clone(),
@@ -479,6 +498,7 @@ mod vaapi {
             let mut candidate = Self {
                 encoder,
                 frames,
+                image_format,
                 frame_layout: frame_layout.clone(),
                 frame_index: 0,
             };
@@ -500,6 +520,7 @@ mod vaapi {
             Ok(Self {
                 encoder,
                 frames,
+                image_format,
                 frame_layout,
                 frame_index: 0,
             })
@@ -513,12 +534,9 @@ mod vaapi {
             let v = vec![128; width * height / 4];
             let frame = I420Frame::new(&y, &u, &v, width, height, width, width / 2, width / 2);
             let encoded = self
-                .encode(frame, false)?
+                .encode(frame, true)?
                 .ok_or_else(|| "VA H264 probe produced no encoded frame".to_owned())?;
-            if !encoded.is_keyframe {
-                return Err("VA H264 probe did not produce an initial keyframe".to_owned());
-            }
-            Ok(())
+            validate_parameterized_h264_keyframe(&encoded, "VA H264 probe")
         }
 
         pub(super) fn encode(
@@ -528,10 +546,14 @@ mod vaapi {
         ) -> Result<Option<EncodedH264Frame>, String> {
             let mut frame = self
                 .frames
-                .alloc()
+                .get_surface()
                 .ok_or_else(|| "VA API input surface pool is exhausted".to_owned())?;
-            upload_i420_frame(&mut frame, input)?;
+            upload_i420_frame(&mut frame, self.image_format, input)?;
 
+            // Keep Linux consistent with the other native encoders. The first
+            // submitted frame must be independently decodable even before
+            // Discord sends keyframe feedback.
+            let force_keyframe = force_keyframe || self.frame_index == 0;
             let metadata = FrameMetadata {
                 timestamp: self.frame_index,
                 layout: self.frame_layout.clone(),
@@ -594,77 +616,65 @@ mod vaapi {
         Ok(modes)
     }
 
-    fn create_frame_pool(
+    fn nv12_image_format(display: &Display) -> Result<VAImageFormat, String> {
+        display
+            .query_image_formats()
+            .map_err(|error| format!("VA image format query failed: {error}"))?
+            .into_iter()
+            .find(|format| format.fourcc == VA_FOURCC_NV12)
+            .ok_or_else(|| "VA driver does not expose an NV12 image format".to_owned())
+    }
+
+    fn create_surface_pool(
         display: Rc<Display>,
-        gbm_device: Arc<GbmDevice>,
-        fourcc: Fourcc,
         resolution: Resolution,
-    ) -> Result<FramePool<GbmVideoFrame>, String> {
-        let mut allocated = VecDeque::with_capacity(VA_INPUT_FRAME_COUNT);
-        for _ in 0..VA_INPUT_FRAME_COUNT {
-            allocated.push_back(
-                Arc::clone(&gbm_device)
-                    .new_frame(fourcc, resolution, resolution, GbmUsage::Encode)
-                    .map_err(|error| format!("VA API input surface allocation failed: {error}"))?,
-            );
-        }
-
-        let probe = allocated
-            .front_mut()
-            .expect("VA API input surface count is non-zero");
-        validate_mappable_frame(probe)?;
-        let native = probe
-            .to_native_handle(&display)
-            .map_err(|error| format!("VA API input surface import failed: {error}"))?;
-        drop(native);
-
-        let mut frames = FramePool::new(move |_| {
-            allocated
-                .pop_front()
-                .expect("VA API frame pool uses only preallocated surfaces")
-        });
-        frames.resize(&StreamInfo {
-            format: DecodedFormat::NV12,
-            coded_resolution: resolution,
-            display_resolution: resolution,
-            min_num_frames: VA_INPUT_FRAME_COUNT,
-        });
+    ) -> Result<VaSurfacePool<()>, String> {
+        let mut frames = VaSurfacePool::new(
+            display,
+            VA_RT_FORMAT_YUV420,
+            Some(UsageHint::USAGE_HINT_ENCODER),
+            resolution,
+        );
+        frames
+            .add_frames(vec![(); VA_INPUT_FRAME_COUNT])
+            .map_err(|error| format!("VA API input surface allocation failed: {error}"))?;
         Ok(frames)
     }
 
-    fn validate_mappable_frame(frame: &mut GbmVideoFrame) -> Result<(), String> {
-        let strides = frame.get_plane_pitch();
-        if strides.len() < 2 {
-            return Err("VA API NV12 input surface does not expose two planes".to_owned());
-        }
-        let mapping = frame
-            .map_mut()
-            .map_err(|error| format!("VA API input surface mapping failed: {error}"))?;
-        let planes = mapping.get();
-        if planes.len() < 2 {
-            return Err("VA API NV12 input mapping does not expose two planes".to_owned());
-        }
-        Ok(())
-    }
-
     fn upload_i420_frame(
-        frame: &mut PooledVideoFrame<GbmVideoFrame>,
+        frame: &mut PooledVaSurface<()>,
+        image_format: VAImageFormat,
         input: I420Frame<'_>,
     ) -> Result<(), String> {
-        let strides = frame.get_plane_pitch();
-        if strides.len() < 2 {
-            return Err("VA API NV12 input surface does not expose two strides".to_owned());
+        let surface = Borrow::<Surface<()>>::borrow(frame);
+        let (surface_width, surface_height) = surface.size();
+        if input.width != surface_width as usize || input.height != surface_height as usize {
+            return Err(format!(
+                "VA API input dimensions do not match the surface: input={}x{} surface={}x{}",
+                input.width, input.height, surface_width, surface_height
+            ));
         }
-        let mapping = frame
-            .map_mut()
-            .map_err(|error| format!("VA API input surface mapping failed: {error}"))?;
-        let planes = mapping.get();
-        if planes.len() < 2 {
-            return Err("VA API NV12 input mapping does not expose two planes".to_owned());
+        let resolution = (surface_width, surface_height);
+        let mut image = Image::create_from(surface, image_format, resolution, resolution)
+            .map_err(|error| format!("VA API NV12 image creation failed: {error}"))?;
+        let image_layout = *image.image();
+        if image_layout.format.fourcc != VA_FOURCC_NV12 || image_layout.num_planes != 2 {
+            return Err(format!(
+                "VA API returned an invalid NV12 image layout: fourcc={} planes={}",
+                image_layout.format.fourcc, image_layout.num_planes
+            ));
         }
-        let mut y = planes[0].borrow_mut();
-        let mut uv = planes[1].borrow_mut();
-        copy_i420_to_nv12(input, &mut y, &mut uv, strides[0], strides[1])
+        let offsets = [
+            image_layout.offsets[0] as usize,
+            image_layout.offsets[1] as usize,
+        ];
+        let pitches = [
+            image_layout.pitches[0] as usize,
+            image_layout.pitches[1] as usize,
+        ];
+        let (y, uv) =
+            split_nv12_image_planes(image.as_mut(), offsets, pitches, input.width, input.height)?;
+        copy_i420_to_nv12(input, y, uv, pitches[0], pitches[1])
             .map_err(|error| format!("VA API NV12 upload failed: {error}"))
     }
 
@@ -704,6 +714,55 @@ mod vaapi {
             ],
         }
     }
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn split_nv12_image_planes(
+    data: &mut [u8],
+    offsets: [usize; 2],
+    pitches: [usize; 2],
+    width: usize,
+    height: usize,
+) -> Result<(&mut [u8], &mut [u8]), String> {
+    fn required_plane_length(
+        pitch: usize,
+        row_width: usize,
+        rows: usize,
+        name: &str,
+    ) -> Result<usize, String> {
+        if rows == 0 {
+            return Ok(0);
+        }
+        pitch
+            .checked_mul(rows - 1)
+            .and_then(|prefix| prefix.checked_add(row_width))
+            .ok_or_else(|| format!("VA API NV12 {name} plane length overflowed"))
+    }
+
+    let y_length = required_plane_length(pitches[0], width, height, "Y")?;
+    let uv_length = required_plane_length(pitches[1], width, height / 2, "UV")?;
+    let y_end = offsets[0]
+        .checked_add(y_length)
+        .ok_or_else(|| "VA API NV12 Y plane offset overflowed".to_owned())?;
+    let uv_end = offsets[1]
+        .checked_add(uv_length)
+        .ok_or_else(|| "VA API NV12 UV plane offset overflowed".to_owned())?;
+    if y_end > data.len() || uv_end > data.len() {
+        return Err(format!(
+            "VA API NV12 image is too short: required={} available={}",
+            y_end.max(uv_end),
+            data.len()
+        ));
+    }
+    if y_end <= offsets[1] {
+        let (before_uv, from_uv) = data.split_at_mut(offsets[1]);
+        return Ok((&mut before_uv[offsets[0]..y_end], &mut from_uv[..uv_length]));
+    }
+    if uv_end <= offsets[0] {
+        let (before_y, from_y) = data.split_at_mut(offsets[0]);
+        return Ok((&mut from_y[..y_length], &mut before_y[offsets[1]..uv_end]));
+    }
+    Err("VA API NV12 image planes overlap".to_owned())
 }
 
 #[cfg(any(test, target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -1009,6 +1068,30 @@ mod tests {
     }
 
     #[test]
+    fn parameterized_keyframe_validation_accepts_driver_intra_slices() {
+        fn encoded(nal_types: &[u8], is_keyframe: bool) -> EncodedH264Frame {
+            let mut annex_b = Vec::new();
+            for nal_type in nal_types {
+                annex_b.extend_from_slice(&[0, 0, 0, 1, 0x60 | *nal_type]);
+            }
+            EncodedH264Frame {
+                annex_b,
+                is_keyframe,
+            }
+        }
+
+        for slice_type in [1, 5] {
+            let frame = encoded(&[7, 8, slice_type], true);
+            validate_parameterized_h264_keyframe(&frame, "test encoder")
+                .expect("parameterized intra picture should be accepted");
+        }
+
+        let error = validate_parameterized_h264_keyframe(&encoded(&[7, 1], true), "test encoder")
+            .expect_err("missing PPS should be rejected");
+        assert!(error.contains("nal_types=[7, 1]"));
+    }
+
+    #[test]
     fn openh264_runtime_fallback_produces_a_parameterized_idr() {
         let mut encoder = OpenH264Encoder::new().expect("OpenH264 should initialize");
         let width = STREAM_CAPTURE_WIDTH as usize;
@@ -1057,6 +1140,36 @@ mod tests {
         let error = copy_i420_to_nv12(valid, &mut [0; 8], &mut [0; 3], 4, 3)
             .expect_err("short destination planes should be rejected");
         assert!(error.contains("destination UV stride is shorter"));
+    }
+
+    #[test]
+    fn nv12_image_plane_split_respects_offsets_and_rejects_unsafe_layouts() {
+        let mut image = [0; 32];
+        {
+            let (y, uv) = split_nv12_image_planes(&mut image, [4, 24], [6, 4], 4, 2)
+                .expect("separate NV12 planes should be accepted");
+            y.fill(1);
+            uv.fill(2);
+        }
+        assert_eq!(&image[4..14], &[1; 10]);
+        assert_eq!(&image[24..28], &[2; 4]);
+
+        {
+            let (y, uv) = split_nv12_image_planes(&mut image, [18, 2], [4, 4], 4, 2)
+                .expect("reversed non-overlapping planes should be accepted");
+            y.fill(3);
+            uv.fill(4);
+        }
+        assert_eq!(&image[18..26], &[3; 8]);
+        assert_eq!(&image[2..6], &[4; 4]);
+
+        let overlap = split_nv12_image_planes(&mut image, [4, 12], [6, 4], 4, 2)
+            .expect_err("overlapping NV12 planes should be rejected");
+        assert_eq!(overlap, "VA API NV12 image planes overlap");
+
+        let short = split_nv12_image_planes(&mut image, [4, 30], [6, 4], 4, 2)
+            .expect_err("out-of-bounds NV12 planes should be rejected");
+        assert!(short.contains("image is too short"));
     }
 
     #[test]

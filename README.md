@@ -89,10 +89,10 @@ macOS 13 or later is required. Linux release builds need these packages:
 
 ```sh
 # Fedora
-sudo dnf install alsa-lib libva mesa-libgbm pipewire-libs xdg-desktop-portal
+sudo dnf install alsa-lib libva mesa-libEGL pipewire-libs xdg-desktop-portal
 
 # Debian or Ubuntu
-sudo apt install libasound2 libgbm1 libpipewire-0.3-0 libva-drm2 libva2 xdg-desktop-portal
+sudo apt install libasound2 libegl1 libpipewire-0.3-0 libva-drm2 libva2 xdg-desktop-portal
 
 # Arch Linux
 sudo pacman -S alsa-lib libva mesa pipewire xdg-desktop-portal
@@ -116,13 +116,13 @@ brew install cmake pkg-config
 brew install nasm # Intel only
 
 # Fedora
-sudo dnf install alsa-lib-devel clang-devel cmake gcc gcc-c++ libdrm-devel libva-devel mesa-libgbm-devel nasm pipewire-devel pkgconf-pkg-config
+sudo dnf install alsa-lib-devel clang-devel cmake gcc gcc-c++ libva-devel nasm pipewire-devel pkgconf-pkg-config
 
 # Debian or Ubuntu
-sudo apt install build-essential cmake libasound2-dev libclang-dev libdrm-dev libgbm-dev libpipewire-0.3-dev libva-dev nasm pkg-config
+sudo apt install build-essential cmake libasound2-dev libclang-dev libpipewire-0.3-dev libva-dev nasm pkg-config
 
 # Arch Linux
-sudo pacman -S alsa-lib base-devel clang cmake libdrm libva mesa nasm pipewire pkgconf
+sudo pacman -S alsa-lib base-devel clang cmake libva mesa nasm pipewire pkgconf
 ```
 
 Windows source builds require the MSVC Rust toolchain, Visual Studio 2022 Build

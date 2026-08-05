@@ -9,7 +9,6 @@
 , alsa-lib
 , pipewire
 , libva
-, libdrm
 , mesa
 , src
 , pname
@@ -45,7 +44,6 @@ let
       alsa-lib
       pipewire
       libva
-      libdrm
       mesa
     ];
 

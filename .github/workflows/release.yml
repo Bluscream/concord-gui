@@ -71,8 +71,6 @@ jobs:
             cmake \
             libasound2-dev \
             libclang-dev \
-            libdrm-dev \
-            libgbm-dev \
             libpipewire-0.3-dev \
             libva-dev \
             nasm \
