@@ -89,13 +89,13 @@ macOS 13 or later is required. Linux release builds need these packages:
 
 ```sh
 # Fedora
-sudo dnf install alsa-lib libva mesa-libgbm opus pipewire-libs xdg-desktop-portal
+sudo dnf install alsa-lib libva mesa-libgbm pipewire-libs xdg-desktop-portal
 
 # Debian or Ubuntu
-sudo apt install libasound2 libgbm1 libopus0 libpipewire-0.3-0 libva-drm2 libva2 xdg-desktop-portal
+sudo apt install libasound2 libgbm1 libpipewire-0.3-0 libva-drm2 libva2 xdg-desktop-portal
 
 # Arch Linux
-sudo pacman -S alsa-lib libva mesa opus pipewire xdg-desktop-portal
+sudo pacman -S alsa-lib libva mesa pipewire xdg-desktop-portal
 ```
 
 Screen sharing requires the portal backend for your desktop environment.
@@ -112,17 +112,17 @@ Install the Rust stable toolchain and the native dependencies for your platform:
 ```sh
 # macOS
 xcode-select --install
-brew install opus pkg-config
+brew install cmake pkg-config
 brew install nasm # Intel only
 
 # Fedora
-sudo dnf install alsa-lib-devel clang-devel gcc gcc-c++ libdrm-devel libva-devel mesa-libgbm-devel nasm opus-devel pipewire-devel pkgconf-pkg-config
+sudo dnf install alsa-lib-devel clang-devel cmake gcc gcc-c++ libdrm-devel libva-devel mesa-libgbm-devel nasm pipewire-devel pkgconf-pkg-config
 
 # Debian or Ubuntu
-sudo apt install build-essential libasound2-dev libclang-dev libdrm-dev libgbm-dev libopus-dev libpipewire-0.3-dev libva-dev nasm pkg-config
+sudo apt install build-essential cmake libasound2-dev libclang-dev libdrm-dev libgbm-dev libpipewire-0.3-dev libva-dev nasm pkg-config
 
 # Arch Linux
-sudo pacman -S alsa-lib base-devel clang libdrm libva mesa nasm opus pipewire pkgconf
+sudo pacman -S alsa-lib base-devel clang cmake libdrm libva mesa nasm pipewire pkgconf
 ```
 
 Windows source builds require the MSVC Rust toolchain, Visual Studio 2022 Build

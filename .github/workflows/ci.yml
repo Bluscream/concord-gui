@@ -29,11 +29,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            cmake \
             libasound2-dev \
             libclang-dev \
             libdrm-dev \
             libgbm-dev \
-            libopus-dev \
             libpipewire-0.3-dev \
             libva-dev \
             nasm \
@@ -84,15 +84,11 @@ jobs:
 
       - name: install macOS media dependencies
         if: runner.os == 'macOS'
-        run: brew install nasm opus pkg-config
-
-      - name: expose Homebrew Opus to pkg-config
-        if: runner.os == 'macOS'
-        run: echo "PKG_CONFIG_PATH=$(brew --prefix opus)/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
+        run: brew install cmake nasm pkg-config
 
       - name: install Windows media dependencies
         if: runner.os == 'Windows'
-        run: choco install nasm --no-progress -y
+        run: choco install cmake nasm --no-progress -y
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -189,12 +185,6 @@ jobs:
       - name: Install dependencies
         run: |
           ${{ matrix.packages_install }}
-
-      - name: expose Homebrew Opus to pkg-config (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          echo "PKG_CONFIG_PATH=$(brew --prefix opus)/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
 
       - name: Build artifacts to warm cache
         run: |

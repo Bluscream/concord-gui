@@ -35,7 +35,7 @@ keyring = { version = "3.6.3", default-features = false, features = [
 ] }
 mime_guess = "2.0"
 notify-rust = "4"
-opus = "0.3.1"
+opus = { version = "1.6.1", package = "opusic-c" }
 qrcode = { version = "0.14", default-features = false }
 rand = "0.8"
 ratatui = "0.30.0"

@@ -68,11 +68,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            cmake \
             libasound2-dev \
             libclang-dev \
             libdrm-dev \
             libgbm-dev \
-            libopus-dev \
             libpipewire-0.3-dev \
             libva-dev \
             nasm \
@@ -194,11 +194,6 @@ jobs:
       - name: Install dependencies
         run: |
           ${{ matrix.packages_install }}
-      - name: expose Homebrew Opus to pkg-config (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          echo "PKG_CONFIG_PATH=$(brew --prefix opus)/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
       - name: Build artifacts
         run: |
           # Actually do builds and make zips and whatnot
@@ -381,12 +376,9 @@ jobs:
             '  depends_on "alsa-lib"',
             '  depends_on "libva"',
             '  depends_on "mesa"',
-            '  depends_on "opus"',
             '  depends_on "pipewire"',
           ].join("\n")
           scoped_dependencies = [
-            '  depends_on "opus"',
-            '',
             '  on_linux do',
             '    depends_on "alsa-lib"',
             '    depends_on "libva"',

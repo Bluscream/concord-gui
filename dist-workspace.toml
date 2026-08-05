@@ -40,8 +40,8 @@ aarch64-unknown-linux-gnu = "ubuntu-24.04-arm"
 x86_64-unknown-linux-gnu = "ubuntu-24.04"
 
 [dist.dependencies.homebrew]
+cmake = { stage = ["build"] }
 nasm = { stage = ["build"], targets = ["x86_64-apple-darwin"] }
-opus = { stage = ["build", "run"] }
 pkg-config = { stage = ["build"] }
 alsa-lib = { stage = [
   "run",
@@ -69,7 +69,7 @@ mesa = { stage = [
 ] }
 
 [dist.dependencies.apt]
-libopus-dev = { stage = ["build"] }
+cmake = { stage = ["build"] }
 libasound2-dev = { stage = ["build"] }
 libclang-dev = { stage = ["build"] }
 libdrm-dev = { stage = ["build"] }
@@ -80,4 +80,5 @@ nasm = { stage = ["build"], targets = ["x86_64-unknown-linux-gnu"] }
 pkg-config = { stage = ["build"] }
 
 [dist.dependencies.chocolatey]
+cmake = { stage = ["build"], targets = ["x86_64-pc-windows-msvc"] }
 nasm = { stage = ["build"], targets = ["x86_64-pc-windows-msvc"] }
