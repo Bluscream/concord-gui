@@ -1,9 +1,8 @@
 use std::{
-    collections::HashMap,
-    io,
-    os::fd::OwnedFd,
-    os::fd::RawFd,
-    ptr::NonNull,
+    cell::Cell,
+    collections::{HashMap, HashSet},
+    os::fd::{OwnedFd, RawFd},
+    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -24,39 +23,28 @@ use pw::{properties::properties, spa};
 use spa::pod::Pod;
 
 use super::{
-    CaptureFrame, CaptureFrameBufferPool, CaptureOutput, STREAM_CAPTURE_FPS, send_capture_result,
+    CaptureFrame, CaptureFrameBufferPool, CaptureOutput, STREAM_CAPTURE_FPS,
+    conversion::{
+        CaptureColorInfo, CaptureColorMatrix, CaptureColorPrimaries, CaptureColorRange,
+        CapturePixelFormat, CapturePlane, CaptureTransferFunction, convert_capture_frame,
+    },
+    send_capture_result,
 };
 use crate::{
     discord::voice::{StreamCaptureTarget, StreamCaptureTargetKind},
     logging,
 };
 
+#[path = "linux/dmabuf.rs"]
+mod dmabuf;
+use dmabuf::{
+    DRM_FORMAT_MOD_LINEAR, DmaBufMapping, DmaBufPlane, DmaBufReadGuard, EglDmaBufImporter,
+    finish_dma_buf_reads,
+};
+
 const FRAME_QUEUE_CAPACITY: usize = 2;
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 const CANCEL_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
-const DRM_FORMAT_MOD_LINEAR: u64 = 0;
-const DMA_BUF_SYNC_READ: u64 = 1 << 0;
-const DMA_BUF_SYNC_START: u64 = 0 << 2;
-const DMA_BUF_SYNC_END: u64 = 1 << 2;
-const DMA_BUF_READY_TIMEOUT_MS: libc::c_int = 1_000;
-
-// Linux's generic _IOW('b', 0, struct dma_buf_sync) encoding. These are the
-// architectures supported by Concord's release targets. Other Linux targets
-// use the generic encoding unless their kernel ABI overrides it.
-#[cfg(any(
-    target_arch = "mips",
-    target_arch = "mips64",
-    target_arch = "powerpc",
-    target_arch = "powerpc64"
-))]
-const DMA_BUF_IOCTL_SYNC: libc::c_ulong = 0x8008_6200;
-#[cfg(not(any(
-    target_arch = "mips",
-    target_arch = "mips64",
-    target_arch = "powerpc",
-    target_arch = "powerpc64"
-)))]
-const DMA_BUF_IOCTL_SYNC: libc::c_ulong = 0x4008_6200;
 
 pub(super) struct CaptureSession {
     stop_tx: pw::channel::Sender<()>,
@@ -70,6 +58,7 @@ struct PipeWireState {
     format: spa::param::video::VideoInfoRaw,
     memory: PipeWireMemory,
     dma_buf_mappings: HashMap<RawFd, DmaBufMapping>,
+    dma_buf_importer: Option<EglDmaBufImporter>,
     frames_tx: SyncSender<CaptureFrame>,
     errors_tx: Sender<String>,
     buffer_pool: CaptureFrameBufferPool,
@@ -81,99 +70,7 @@ enum PipeWireMemory {
     #[default]
     Unknown,
     SharedMemory,
-    LinearDmaBuf,
-}
-
-struct DmaBufMapping {
-    pointer: NonNull<u8>,
-    length: usize,
-}
-
-impl DmaBufMapping {
-    fn new(fd: RawFd) -> Result<Self, String> {
-        let length = dma_buf_length(fd)?;
-        let pointer = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                length,
-                libc::PROT_READ,
-                libc::MAP_SHARED,
-                fd,
-                0,
-            )
-        };
-        if pointer == libc::MAP_FAILED {
-            return Err(format!(
-                "PipeWire linear DMA-BUF could not be mapped for CPU conversion: {}",
-                io::Error::last_os_error()
-            ));
-        }
-        let Some(pointer) = NonNull::new(pointer.cast::<u8>()) else {
-            let _ = unsafe { libc::munmap(pointer, length) };
-            return Err("PipeWire linear DMA-BUF mapping returned a null pointer".to_owned());
-        };
-        Ok(Self { pointer, length })
-    }
-
-    fn bytes(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.pointer.as_ptr(), self.length) }
-    }
-}
-
-impl Drop for DmaBufMapping {
-    fn drop(&mut self) {
-        if unsafe { libc::munmap(self.pointer.as_ptr().cast(), self.length) } != 0 {
-            logging::debug(
-                "stream",
-                format!(
-                    "PipeWire linear DMA-BUF unmap failed: {}",
-                    io::Error::last_os_error()
-                ),
-            );
-        }
-    }
-}
-
-#[repr(C)]
-struct DmaBufSync {
-    flags: u64,
-}
-
-struct DmaBufReadGuard {
-    fd: RawFd,
-    finished: bool,
-}
-
-impl DmaBufReadGuard {
-    fn begin(fd: RawFd) -> Result<Self, String> {
-        wait_for_dma_buf(fd)?;
-        dma_buf_sync(fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ).map_err(|error| {
-            format!("PipeWire DMA-BUF CPU read synchronization failed: {error}")
-        })?;
-        Ok(Self {
-            fd,
-            finished: false,
-        })
-    }
-
-    fn finish(mut self) -> Result<(), String> {
-        self.finished = true;
-        dma_buf_sync(self.fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ)
-            .map_err(|error| format!("PipeWire DMA-BUF CPU read completion failed: {error}"))
-    }
-}
-
-impl Drop for DmaBufReadGuard {
-    fn drop(&mut self) {
-        if !self.finished
-            && let Err(error) = dma_buf_sync(self.fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ)
-        {
-            logging::debug(
-                "stream",
-                format!("PipeWire DMA-BUF CPU read cleanup failed: {error}"),
-            );
-        }
-    }
+    DmaBuf,
 }
 
 impl PipeWireState {
@@ -477,6 +374,85 @@ fn run_pipewire_capture(
     let core = context
         .connect_fd_rc(portal.remote_fd, None)
         .map_err(|error| format!("PipeWire portal connection failed: {error}"))?;
+    let stop_mainloop = mainloop.clone();
+    let _stop_listener = stop_rx.attach(mainloop.loop_(), move |_| stop_mainloop.quit());
+
+    let size = portal.stream.size().unwrap_or((1280, 720));
+    let width = u32::try_from(size.0.max(2)).unwrap_or(1280);
+    let height = u32::try_from(size.1.max(2)).unwrap_or(720);
+    let maximum_width = width.max(8192);
+    let maximum_height = height.max(4320);
+    let node_id = portal.stream.pipe_wire_node_id();
+    let mut include_dma_buf = true;
+
+    loop {
+        match run_pipewire_stream_attempt(
+            core.clone(),
+            &mainloop,
+            node_id,
+            width,
+            height,
+            maximum_width,
+            maximum_height,
+            include_dma_buf,
+            frames_tx.clone(),
+            errors_tx.clone(),
+            buffer_pool.clone(),
+            ready_tx.clone(),
+        ) {
+            Ok(PipeWireAttemptResult::SharedMemoryFallback) if include_dma_buf => {
+                include_dma_buf = false;
+                logging::debug(
+                    "stream",
+                    "PipeWire DMA-BUF capture failed; restarting with shared memory only",
+                );
+            }
+            Ok(PipeWireAttemptResult::SharedMemoryFallback) => {
+                return Err("PipeWire shared-memory fallback requested twice".to_owned());
+            }
+            Ok(PipeWireAttemptResult::Stopped) => break,
+            Err(error) if include_dma_buf => {
+                include_dma_buf = false;
+                logging::debug(
+                    "stream",
+                    format!(
+                        "PipeWire capture attempt failed before streaming; retrying with shared memory only: {error}"
+                    ),
+                );
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    logging::debug("stream", "PipeWire video main loop stopped");
+    let _ = ready_tx.try_send(Err(
+        "PipeWire video capture stopped before producing its first frame".to_owned(),
+    ));
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum PipeWireAttemptResult {
+    #[default]
+    Stopped,
+    SharedMemoryFallback,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_pipewire_stream_attempt(
+    core: pw::core::CoreRc,
+    mainloop: &pw::main_loop::MainLoopRc,
+    node_id: u32,
+    width: u32,
+    height: u32,
+    maximum_width: u32,
+    maximum_height: u32,
+    include_dma_buf: bool,
+    frames_tx: SyncSender<CaptureFrame>,
+    errors_tx: Sender<String>,
+    buffer_pool: CaptureFrameBufferPool,
+    ready_tx: SyncSender<Result<(), String>>,
+) -> Result<PipeWireAttemptResult, String> {
     let stream = pw::stream::StreamRc::new(
         core,
         "concord-screen-capture",
@@ -488,15 +464,38 @@ fn run_pipewire_capture(
     )
     .map_err(|error| format!("PipeWire video stream creation failed: {error}"))?;
 
-    let stop_mainloop = mainloop.clone();
-    let _stop_listener = stop_rx.attach(mainloop.loop_(), move |_| stop_mainloop.quit());
+    let outcome = Rc::new(Cell::new(PipeWireAttemptResult::Stopped));
     let state_error_mainloop = mainloop.clone();
     let format_error_mainloop = mainloop.clone();
     let frame_error_mainloop = mainloop.clone();
+    let state_outcome = outcome.clone();
+    let format_outcome = outcome.clone();
+    let frame_outcome = outcome.clone();
+    let dma_buf_importer = if include_dma_buf {
+        match EglDmaBufImporter::new() {
+            Ok(importer) => Some(importer),
+            Err(error) => {
+                logging::debug(
+                    "stream",
+                    format!(
+                        "EGL DMA-BUF import is unavailable; keeping linear DMA-BUF and shared-memory capture: {error}"
+                    ),
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let non_linear_formats = dma_buf_importer
+        .as_ref()
+        .map(non_linear_dma_buf_formats)
+        .unwrap_or_default();
     let state = PipeWireState {
         format: Default::default(),
         memory: PipeWireMemory::Unknown,
         dma_buf_mappings: HashMap::new(),
+        dma_buf_importer,
         frames_tx,
         errors_tx,
         buffer_pool,
@@ -510,7 +509,17 @@ fn run_pipewire_capture(
                 format!("PipeWire video stream state changed: {old:?} -> {new:?}"),
             );
             if let pw::stream::StreamState::Error(error) = new {
-                state.report_error(format!("PipeWire video stream failed: {error}"));
+                if include_dma_buf {
+                    state_outcome.set(PipeWireAttemptResult::SharedMemoryFallback);
+                    logging::debug(
+                        "stream",
+                        format!(
+                            "PipeWire stream failed while DMA-BUF was enabled; requesting shared-memory fallback: {error}"
+                        ),
+                    );
+                } else {
+                    state.report_error(format!("PipeWire video stream failed: {error}"));
+                }
                 state_error_mainloop.quit();
             }
         })
@@ -546,15 +555,31 @@ fn run_pipewire_capture(
                     let framerate = state.format.framerate();
                     let has_modifier = pipewire_format_has_modifier(param);
                     state.memory = if has_modifier {
-                        if state.format.modifier() != DRM_FORMAT_MOD_LINEAR {
-                            state.report_error(format!(
-                                "PipeWire negotiated unsupported non-linear DMA-BUF modifier: {}",
-                                state.format.modifier()
-                            ));
+                        let capture_format = match capture_pixel_format(state.format.format()) {
+                            Ok(format) => format,
+                            Err(error) => {
+                                state.report_error(error);
+                                format_error_mainloop.quit();
+                                return;
+                            }
+                        };
+                        if state.format.modifier() != DRM_FORMAT_MOD_LINEAR
+                            && !state.dma_buf_importer.as_ref().is_some_and(|importer| {
+                                importer.supports(capture_format, state.format.modifier())
+                            })
+                        {
+                            format_outcome.set(PipeWireAttemptResult::SharedMemoryFallback);
+                            logging::debug(
+                                "stream",
+                                format!(
+                                    "PipeWire negotiated unsupported non-linear DMA-BUF modifier {}; requesting shared-memory fallback",
+                                    state.format.modifier()
+                                ),
+                            );
                             format_error_mainloop.quit();
                             return;
                         }
-                        PipeWireMemory::LinearDmaBuf
+                        PipeWireMemory::DmaBuf
                     } else {
                         PipeWireMemory::SharedMemory
                     };
@@ -611,27 +636,30 @@ fn run_pipewire_capture(
                 return;
             };
             let datas = buffer.datas_mut();
-            if state.memory == PipeWireMemory::LinearDmaBuf && datas.len() != 1 {
-                state.report_error(format!(
-                    "PipeWire linear DMA-BUF has {} planes; packed RGB capture requires one",
-                    datas.len()
-                ));
-                frame_error_mainloop.quit();
+            if datas.is_empty() {
                 return;
             }
-            let Some(data) = datas.first_mut() else {
-                return;
-            };
             match pipewire_frame(
-                data,
+                datas,
                 state.format,
                 state.memory,
                 &mut state.dma_buf_mappings,
+                state.dma_buf_importer.as_mut(),
                 &state.buffer_pool,
             ) {
                 Ok(Some(frame)) => state.queue_frame(frame),
                 Err(error) => {
-                    state.report_error(error);
+                    if include_dma_buf && state.memory == PipeWireMemory::DmaBuf {
+                        frame_outcome.set(PipeWireAttemptResult::SharedMemoryFallback);
+                        logging::debug(
+                            "stream",
+                            format!(
+                                "PipeWire DMA-BUF frame processing failed; requesting shared-memory fallback: {error}"
+                            ),
+                        );
+                    } else {
+                        state.report_error(error);
+                    }
                     frame_error_mainloop.quit();
                 }
                 Ok(None) => {}
@@ -641,12 +669,14 @@ fn run_pipewire_capture(
         .register()
         .map_err(|error| format!("PipeWire video listener setup failed: {error}"))?;
 
-    let size = portal.stream.size().unwrap_or((1280, 720));
-    let width = u32::try_from(size.0.max(2)).unwrap_or(1280);
-    let height = u32::try_from(size.1.max(2)).unwrap_or(720);
-    let maximum_width = width.max(8192);
-    let maximum_height = height.max(4320);
-    let formats = pipewire_format_params(width, height, maximum_width, maximum_height);
+    let formats = pipewire_format_params(
+        width,
+        height,
+        maximum_width,
+        maximum_height,
+        include_dma_buf,
+        &non_linear_formats,
+    );
     let format_values = formats
         .into_iter()
         .map(|format| {
@@ -660,7 +690,7 @@ fn run_pipewire_capture(
     stream
         .connect(
             spa::utils::Direction::Input,
-            Some(portal.stream.pipe_wire_node_id()),
+            Some(node_id),
             pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS,
             &mut params,
         )
@@ -670,17 +700,11 @@ fn run_pipewire_capture(
         "stream",
         format!(
             "PipeWire video stream connection requested: node_id={} preferred_size={}x{}",
-            portal.stream.pipe_wire_node_id(),
-            width,
-            height,
+            node_id, width, height,
         ),
     );
     mainloop.run();
-    logging::debug("stream", "PipeWire video main loop stopped");
-    let _ = ready_tx.try_send(Err(
-        "PipeWire video capture stopped before producing its first frame".to_owned(),
-    ));
-    Ok(())
+    Ok(outcome.get())
 }
 
 fn pipewire_format_params(
@@ -688,8 +712,13 @@ fn pipewire_format_params(
     height: u32,
     maximum_width: u32,
     maximum_height: u32,
+    include_dma_buf: bool,
+    non_linear_formats: &[(spa::param::video::VideoFormat, Vec<u64>)],
 ) -> Vec<spa::pod::Object> {
     let shared_memory = pipewire_format_param(width, height, maximum_width, maximum_height);
+    if !include_dma_buf {
+        return vec![shared_memory];
+    }
     let mut dma_buf = pipewire_format_param(width, height, maximum_width, maximum_height);
     let mut modifier = spa::pod::Property::new(
         spa::param::format::FormatProperties::VideoModifier.as_raw(),
@@ -704,9 +733,101 @@ fn pipewire_format_params(
     modifier.flags = spa::pod::PropertyFlags::MANDATORY | spa::pod::PropertyFlags::DONT_FIXATE;
     dma_buf.properties.insert(3, modifier);
 
-    // Concord converts frames on the CPU. Prefer mapped shared memory when the
-    // producer offers it, while retaining linear DMA-BUF for DMA-only producers.
-    vec![shared_memory, dma_buf]
+    // Concord converts frames on the CPU. Prefer mapped shared memory, retain
+    // linear DMA-BUF, then add only the non-linear pairs verified by EGL.
+    let mut formats = vec![shared_memory, dma_buf];
+    formats.extend(non_linear_formats.iter().map(|(format, modifiers)| {
+        pipewire_non_linear_format_param(
+            width,
+            height,
+            maximum_width,
+            maximum_height,
+            *format,
+            modifiers,
+        )
+    }));
+    formats
+}
+
+fn non_linear_dma_buf_formats(
+    importer: &EglDmaBufImporter,
+) -> Vec<(spa::param::video::VideoFormat, Vec<u64>)> {
+    [
+        (
+            spa::param::video::VideoFormat::RGBA,
+            CapturePixelFormat::Rgba,
+        ),
+        (
+            spa::param::video::VideoFormat::RGBx,
+            CapturePixelFormat::Rgbx,
+        ),
+        (
+            spa::param::video::VideoFormat::BGRA,
+            CapturePixelFormat::Bgra,
+        ),
+        (
+            spa::param::video::VideoFormat::BGRx,
+            CapturePixelFormat::Bgrx,
+        ),
+        (
+            spa::param::video::VideoFormat::xRGB_210LE,
+            CapturePixelFormat::Xrgb210Le,
+        ),
+        (
+            spa::param::video::VideoFormat::xBGR_210LE,
+            CapturePixelFormat::Xbgr210Le,
+        ),
+        (
+            spa::param::video::VideoFormat::RGBx_102LE,
+            CapturePixelFormat::Rgbx102Le,
+        ),
+        (
+            spa::param::video::VideoFormat::BGRx_102LE,
+            CapturePixelFormat::Bgrx102Le,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(video_format, capture_format)| {
+        let modifiers = importer.modifiers(capture_format);
+        (!modifiers.is_empty()).then(|| (video_format, modifiers.to_vec()))
+    })
+    .collect()
+}
+
+fn pipewire_non_linear_format_param(
+    width: u32,
+    height: u32,
+    maximum_width: u32,
+    maximum_height: u32,
+    format: spa::param::video::VideoFormat,
+    modifiers: &[u64],
+) -> spa::pod::Object {
+    let mut param = pipewire_format_param(width, height, maximum_width, maximum_height);
+    let format_property = param
+        .properties
+        .iter_mut()
+        .find(|property| property.key == spa::param::format::FormatProperties::VideoFormat.as_raw())
+        .expect("PipeWire raw format parameter contains a video format");
+    format_property.value = spa::pod::Value::Id(spa::utils::Id(format.as_raw()));
+
+    let modifier_values = modifiers
+        .iter()
+        .copied()
+        .map(|modifier| modifier as i64)
+        .collect::<Vec<_>>();
+    let mut modifier = spa::pod::Property::new(
+        spa::param::format::FormatProperties::VideoModifier.as_raw(),
+        spa::pod::Value::Choice(spa::pod::ChoiceValue::Long(spa::utils::Choice(
+            spa::utils::ChoiceFlags::empty(),
+            spa::utils::ChoiceEnum::Enum {
+                default: modifier_values[0],
+                alternatives: modifier_values,
+            },
+        ))),
+    );
+    modifier.flags = spa::pod::PropertyFlags::MANDATORY | spa::pod::PropertyFlags::DONT_FIXATE;
+    param.properties.push(modifier);
+    param
 }
 
 fn pipewire_format_param(
@@ -738,6 +859,12 @@ fn pipewire_format_param(
             spa::param::video::VideoFormat::RGBx,
             spa::param::video::VideoFormat::BGRA,
             spa::param::video::VideoFormat::BGRx,
+            spa::param::video::VideoFormat::xRGB_210LE,
+            spa::param::video::VideoFormat::xBGR_210LE,
+            spa::param::video::VideoFormat::RGBx_102LE,
+            spa::param::video::VideoFormat::BGRx_102LE,
+            spa::param::video::VideoFormat::NV12,
+            spa::param::video::VideoFormat::P010_10LE,
         ),
         spa::pod::property!(
             spa::param::format::FormatProperties::VideoSize,
@@ -797,12 +924,15 @@ fn pipewire_buffer_param(
     format: spa::param::video::VideoInfoRaw,
     memory: PipeWireMemory,
 ) -> Result<spa::pod::Object, String> {
+    let capture_format = capture_pixel_format(format.format())?;
+    let plane_count = i32::try_from(capture_format.plane_count())
+        .map_err(|_| "PipeWire video plane count is too large".to_owned())?;
     let data_type_mask = match memory {
         PipeWireMemory::SharedMemory => {
             pipewire_data_type_mask(spa::buffer::DataType::MemFd)
                 | pipewire_data_type_mask(spa::buffer::DataType::MemPtr)
         }
-        PipeWireMemory::LinearDmaBuf => pipewire_data_type_mask(spa::buffer::DataType::DmaBuf),
+        PipeWireMemory::DmaBuf => pipewire_data_type_mask(spa::buffer::DataType::DmaBuf),
         PipeWireMemory::Unknown => {
             return Err("PipeWire requested buffers before negotiating a video format".to_owned());
         }
@@ -821,7 +951,17 @@ fn pipewire_buffer_param(
                 },
             ))),
         ),
-        spa::pod::Property::new(spa::sys::SPA_PARAM_BUFFERS_blocks, spa::pod::Value::Int(1),),
+        spa::pod::Property::new(
+            spa::sys::SPA_PARAM_BUFFERS_blocks,
+            spa::pod::Value::Choice(spa::pod::ChoiceValue::Int(spa::utils::Choice(
+                spa::utils::ChoiceFlags::empty(),
+                spa::utils::ChoiceEnum::Range {
+                    default: plane_count,
+                    min: 1,
+                    max: plane_count,
+                },
+            ))),
+        ),
         spa::pod::Property::new(
             spa::sys::SPA_PARAM_BUFFERS_dataType,
             spa::pod::Value::Choice(spa::pod::ChoiceValue::Int(spa::utils::Choice(
@@ -834,18 +974,26 @@ fn pipewire_buffer_param(
         ),
     );
     if memory == PipeWireMemory::SharedMemory {
-        let stride = format
-            .size()
-            .width
-            .checked_mul(4)
-            .and_then(|stride| i32::try_from(stride).ok())
-            .ok_or_else(|| "PipeWire video row stride is too large".to_owned())?;
-        let size = stride
-            .checked_mul(
-                i32::try_from(format.size().height)
-                    .map_err(|_| "PipeWire video buffer height is too large".to_owned())?,
-            )
-            .ok_or_else(|| "PipeWire video buffer is too large".to_owned())?;
+        let row_lengths = capture_format.plane_row_lengths(format.size().width)?;
+        let plane_heights = capture_format.plane_heights(format.size().height);
+        let stride_length = row_lengths
+            .iter()
+            .copied()
+            .max()
+            .expect("capture formats contain at least one plane");
+        let stride = i32::try_from(stride_length)
+            .map_err(|_| "PipeWire video row stride is too large".to_owned())?;
+        let size = plane_heights
+            .into_iter()
+            .try_fold(0_usize, |size, plane_height| {
+                stride_length
+                    .checked_mul(plane_height as usize)
+                    .and_then(|plane_size| size.checked_add(plane_size))
+                    .ok_or_else(|| "PipeWire video buffer is too large".to_owned())
+            })
+            .and_then(|size| {
+                i32::try_from(size).map_err(|_| "PipeWire video buffer is too large".to_owned())
+            })?;
         param.properties.push(spa::pod::Property::new(
             spa::sys::SPA_PARAM_BUFFERS_size,
             spa::pod::Value::Int(size),
@@ -862,6 +1010,60 @@ fn pipewire_data_type_mask(data_type: spa::buffer::DataType) -> i32 {
     1_i32
         .checked_shl(data_type.as_raw())
         .expect("PipeWire data type fits in its negotiated bit mask")
+}
+
+fn capture_pixel_format(
+    format: spa::param::video::VideoFormat,
+) -> Result<CapturePixelFormat, String> {
+    match format {
+        spa::param::video::VideoFormat::RGBA => Ok(CapturePixelFormat::Rgba),
+        spa::param::video::VideoFormat::RGBx => Ok(CapturePixelFormat::Rgbx),
+        spa::param::video::VideoFormat::BGRA => Ok(CapturePixelFormat::Bgra),
+        spa::param::video::VideoFormat::BGRx => Ok(CapturePixelFormat::Bgrx),
+        spa::param::video::VideoFormat::xRGB_210LE => Ok(CapturePixelFormat::Xrgb210Le),
+        spa::param::video::VideoFormat::xBGR_210LE => Ok(CapturePixelFormat::Xbgr210Le),
+        spa::param::video::VideoFormat::RGBx_102LE => Ok(CapturePixelFormat::Rgbx102Le),
+        spa::param::video::VideoFormat::BGRx_102LE => Ok(CapturePixelFormat::Bgrx102Le),
+        spa::param::video::VideoFormat::NV12 => Ok(CapturePixelFormat::Nv12),
+        spa::param::video::VideoFormat::P010_10LE => Ok(CapturePixelFormat::P010Le),
+        _ => Err(format!(
+            "PipeWire negotiated an unsupported video format: {format:?}"
+        )),
+    }
+}
+
+fn capture_color_info(format: spa::param::video::VideoInfoRaw) -> CaptureColorInfo {
+    // libspa exposes these ABI-stable C enum values as raw integers.
+    let range = match format.color_range() {
+        1 => CaptureColorRange::Full,
+        2 => CaptureColorRange::Limited,
+        _ => CaptureColorRange::Unknown,
+    };
+    let matrix = match format.color_matrix() {
+        3 => CaptureColorMatrix::Bt709,
+        4 => CaptureColorMatrix::Bt601,
+        6 => CaptureColorMatrix::Bt2020,
+        _ => CaptureColorMatrix::Unknown,
+    };
+    let transfer = match format.transfer_function() {
+        5 => CaptureTransferFunction::Bt709,
+        7 => CaptureTransferFunction::Srgb,
+        13 => CaptureTransferFunction::Bt2020Ten,
+        14 => CaptureTransferFunction::Pq,
+        15 => CaptureTransferFunction::Hlg,
+        _ => CaptureTransferFunction::Unknown,
+    };
+    let primaries = match format.color_primaries() {
+        1 => CaptureColorPrimaries::Bt709,
+        7 => CaptureColorPrimaries::Bt2020,
+        _ => CaptureColorPrimaries::Unknown,
+    };
+    CaptureColorInfo {
+        range,
+        matrix,
+        transfer,
+        primaries,
+    }
 }
 
 fn remove_dma_buf_mapping(state: &mut PipeWireState, buffer: *mut pw::sys::pw_buffer) {
@@ -885,11 +1087,19 @@ fn remove_dma_buf_mapping(state: &mut PipeWireState, buffer: *mut pw::sys::pw_bu
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PipeWirePlaneLayout {
+    data_index: usize,
+    offset: isize,
+    stride: isize,
+}
+
 fn pipewire_frame(
-    data: &mut spa::buffer::Data,
+    datas: &mut [spa::buffer::Data],
     format: spa::param::video::VideoInfoRaw,
     memory: PipeWireMemory,
     dma_buf_mappings: &mut HashMap<RawFd, DmaBufMapping>,
+    dma_buf_importer: Option<&mut EglDmaBufImporter>,
     buffer_pool: &CaptureFrameBufferPool,
 ) -> Result<Option<CaptureFrame>, String> {
     let width = format.size().width;
@@ -898,179 +1108,262 @@ fn pipewire_frame(
     if width == 0 || height == 0 || video_format == spa::param::video::VideoFormat::Unknown {
         return Ok(None);
     }
+    let capture_format = capture_pixel_format(video_format)?;
+    let color = capture_color_info(format);
+    let layouts = pipewire_plane_layouts(datas, capture_format, width, height)?;
 
-    let chunk = data.chunk();
-    let offset = isize::try_from(chunk.offset())
-        .map_err(|_| "PipeWire video frame offset is too large".to_owned())?;
-    let stride = if chunk.stride() == 0 {
-        isize::try_from(
-            width
-                .checked_mul(4)
-                .ok_or_else(|| "PipeWire video row stride overflowed".to_owned())?,
-        )
-        .map_err(|_| "PipeWire video row stride is too large".to_owned())?
-    } else {
-        isize::try_from(chunk.stride())
-            .map_err(|_| "PipeWire video row stride is too large".to_owned())?
-    };
-    let row_length = usize::try_from(
-        width
-            .checked_mul(4)
-            .ok_or_else(|| "PipeWire video row length overflowed".to_owned())?,
-    )
-    .map_err(|_| "PipeWire video row length is too large".to_owned())?;
-    if stride.unsigned_abs() < row_length {
-        return Err("PipeWire video frame has an invalid row stride".to_owned());
-    }
-    let output_length = row_length
-        .checked_mul(height as usize)
-        .ok_or_else(|| "PipeWire video output buffer is too large".to_owned())?;
-    let required_length = pipewire_frame_required_length(offset, stride, row_length, height)?;
-
-    let frame = match (memory, data.type_()) {
-        (PipeWireMemory::SharedMemory, spa::buffer::DataType::MemPtr)
-        | (PipeWireMemory::SharedMemory, spa::buffer::DataType::MemFd) => {
-            let bytes = data
-                .data()
-                .ok_or_else(|| "PipeWire shared-memory video buffer is not mapped".to_owned())?;
-            convert_pipewire_frame(
-                bytes,
-                required_length,
-                offset,
-                stride,
-                row_length,
-                output_length,
+    let frame = match memory {
+        PipeWireMemory::SharedMemory => {
+            let mut sources = Vec::with_capacity(datas.len());
+            for data in datas {
+                if !matches!(
+                    data.type_(),
+                    spa::buffer::DataType::MemPtr | spa::buffer::DataType::MemFd
+                ) {
+                    return Err(format!(
+                        "PipeWire shared-memory buffer has an unexpected data type: {:?}",
+                        data.type_()
+                    ));
+                }
+                sources.push(
+                    data.data().ok_or_else(|| {
+                        "PipeWire shared-memory video buffer is not mapped".to_owned()
+                    })? as &[u8],
+                );
+            }
+            convert_pipewire_planes(
+                &sources,
+                &layouts,
                 width,
                 height,
-                video_format,
+                capture_format,
+                color,
                 buffer_pool,
             )?
         }
-        (PipeWireMemory::LinearDmaBuf, spa::buffer::DataType::DmaBuf) => {
-            let fd = data.fd();
-            if fd < 0 {
-                return Err(
-                    "PipeWire DMA-BUF video buffer has an invalid file descriptor".to_owned(),
+        PipeWireMemory::DmaBuf => {
+            let mut fds = Vec::with_capacity(datas.len());
+            for data in datas.iter() {
+                if data.type_() != spa::buffer::DataType::DmaBuf {
+                    return Err(format!(
+                        "PipeWire DMA-BUF buffer has an unexpected data type: {:?}",
+                        data.type_()
+                    ));
+                }
+                let fd = data.fd();
+                if fd < 0 {
+                    return Err(
+                        "PipeWire DMA-BUF video buffer has an invalid file descriptor".to_owned(),
+                    );
+                }
+                fds.push(fd);
+            }
+            let dma_layouts = dma_buf_plane_layouts(datas, &layouts)?;
+
+            if format.modifier() != DRM_FORMAT_MOD_LINEAR {
+                // EGL DMA-BUF import uses the driver's implicit synchronization.
+                // TODO: Negotiate SPA_META_SyncTimeline when Concord can require
+                // PipeWire 1.2 instead of the current 0.3.33-compatible ABI.
+                let importer = dma_buf_importer.ok_or_else(|| {
+                    "PipeWire negotiated non-linear DMA-BUF without an EGL importer".to_owned()
+                })?;
+                let planes = dma_layouts
+                    .iter()
+                    .map(|layout| {
+                        let pitch = u32::try_from(layout.stride).map_err(|_| {
+                            "EGL DMA-BUF import requires a positive plane stride".to_owned()
+                        })?;
+                        let offset = u32::try_from(layout.offset)
+                            .map_err(|_| "EGL DMA-BUF plane offset is too large".to_owned())?;
+                        Ok(DmaBufPlane {
+                            fd: fds[layout.data_index],
+                            offset,
+                            pitch,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                let output_length = width
+                    .checked_mul(height)
+                    .and_then(|pixels| pixels.checked_mul(4))
+                    .and_then(|length| usize::try_from(length).ok())
+                    .ok_or_else(|| "PipeWire video output buffer is too large".to_owned())?;
+                let mut rgba = buffer_pool.take(output_length);
+                importer.import(
+                    width,
+                    height,
+                    capture_format,
+                    format.modifier(),
+                    color,
+                    &planes,
+                    &mut rgba,
+                )?;
+                CaptureFrame::new(width, height, rgba, buffer_pool.clone())
+            } else {
+                for fd in fds.iter().copied() {
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        dma_buf_mappings.entry(fd)
+                    {
+                        entry.insert(DmaBufMapping::new(fd)?);
+                    }
+                }
+
+                let mut synchronized = Vec::new();
+                let mut unique_fds = HashSet::new();
+                for fd in fds.iter().copied() {
+                    if unique_fds.insert(fd) {
+                        synchronized.push(DmaBufReadGuard::begin(fd)?);
+                    }
+                }
+                let sources = fds
+                    .iter()
+                    .map(|fd| {
+                        dma_buf_mappings
+                            .get(fd)
+                            .expect("validated DMA-BUF mapping is available")
+                            .bytes()
+                    })
+                    .collect::<Vec<_>>();
+                let conversion = convert_pipewire_planes(
+                    &sources,
+                    &dma_layouts,
+                    width,
+                    height,
+                    capture_format,
+                    color,
+                    buffer_pool,
                 );
-            }
-            if let std::collections::hash_map::Entry::Vacant(entry) = dma_buf_mappings.entry(fd) {
-                entry.insert(DmaBufMapping::new(fd)?);
-            }
-            let mapping = dma_buf_mappings
-                .get(&fd)
-                .expect("newly inserted DMA-BUF mapping is available");
-            if required_length > mapping.length {
-                return Err(format!(
-                    "PipeWire DMA-BUF is shorter than the negotiated frame layout: required={required_length} available={}",
-                    mapping.length
-                ));
-            }
-            let sync = DmaBufReadGuard::begin(fd)?;
-            let conversion = convert_pipewire_frame(
-                mapping.bytes(),
-                required_length,
-                offset,
-                stride,
-                row_length,
-                output_length,
-                width,
-                height,
-                video_format,
-                buffer_pool,
-            );
-            let sync_result = sync.finish();
-            match (conversion, sync_result) {
-                (Ok(frame), Ok(())) => frame,
-                (Err(error), _) => return Err(error),
-                (Ok(_), Err(error)) => return Err(error),
+                let synchronization = finish_dma_buf_reads(synchronized);
+                match (conversion, synchronization) {
+                    (Ok(frame), Ok(())) => frame,
+                    (Err(error), _) | (Ok(_), Err(error)) => return Err(error),
+                }
             }
         }
-        (PipeWireMemory::Unknown, _) => return Ok(None),
-        (expected, actual) => {
-            return Err(format!(
-                "PipeWire video buffer memory type does not match the negotiated format: expected={expected:?} actual={actual:?}"
-            ));
-        }
+        PipeWireMemory::Unknown => return Ok(None),
     };
 
     Ok(Some(frame))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn convert_pipewire_frame(
-    bytes: &[u8],
-    required_length: usize,
-    offset: isize,
-    stride: isize,
-    row_length: usize,
-    output_length: usize,
+fn dma_buf_plane_layouts(
+    datas: &[spa::buffer::Data],
+    layouts: &[PipeWirePlaneLayout],
+) -> Result<Vec<PipeWirePlaneLayout>, String> {
+    layouts
+        .iter()
+        .map(|layout| {
+            let map_offset = isize::try_from(datas[layout.data_index].as_raw().mapoffset)
+                .map_err(|_| "PipeWire DMA-BUF map offset is too large".to_owned())?;
+            let offset = layout
+                .offset
+                .checked_add(map_offset)
+                .ok_or_else(|| "PipeWire DMA-BUF plane offset overflowed".to_owned())?;
+            Ok(PipeWirePlaneLayout { offset, ..*layout })
+        })
+        .collect()
+}
+
+fn pipewire_plane_layouts(
+    datas: &[spa::buffer::Data],
+    format: CapturePixelFormat,
     width: u32,
     height: u32,
-    video_format: spa::param::video::VideoFormat,
-    buffer_pool: &CaptureFrameBufferPool,
-) -> Result<CaptureFrame, String> {
-    if required_length > bytes.len() {
+) -> Result<Vec<PipeWirePlaneLayout>, String> {
+    let plane_count = format.plane_count();
+    if datas.len() != plane_count && !(datas.len() == 1 && plane_count == 2) {
         return Err(format!(
-            "PipeWire video frame is shorter than expected: required={required_length} available={}",
-            bytes.len()
+            "PipeWire video format {format:?} requires {plane_count} image planes, received {}",
+            datas.len()
         ));
     }
-    let mut rgba = buffer_pool.take(output_length);
-
-    for row in 0..height as usize {
-        let source_offset = offset
-            .checked_add(
-                stride
-                    .checked_mul(row as isize)
-                    .ok_or_else(|| "PipeWire video row offset overflowed".to_owned())?,
-            )
-            .ok_or_else(|| "PipeWire video row offset overflowed".to_owned())?;
-        let source_offset = match usize::try_from(source_offset) {
-            Ok(offset) => offset,
-            Err(_) => {
-                return Err("PipeWire video frame has a negative row offset".to_owned());
-            }
+    let row_lengths = format.plane_row_lengths(width)?;
+    let plane_heights = format.plane_heights(height);
+    let mut layouts = Vec::with_capacity(plane_count);
+    for (plane, data) in datas.iter().enumerate() {
+        let row_length = row_lengths[plane];
+        let chunk = data.chunk();
+        let offset = isize::try_from(chunk.offset())
+            .map_err(|_| "PipeWire video frame offset is too large".to_owned())?;
+        let default_stride = if datas.len() == 1 && plane_count > 1 {
+            row_lengths
+                .iter()
+                .copied()
+                .max()
+                .expect("capture formats contain at least one plane")
+        } else {
+            row_length
         };
-        let source_end = source_offset
-            .checked_add(row_length)
-            .ok_or_else(|| "PipeWire video row end overflowed".to_owned())?;
-        if source_end > bytes.len() {
-            return Err("PipeWire video frame is shorter than expected".to_owned());
-        }
-        let source = &bytes[source_offset..source_end];
-        let destination = &mut rgba[row * row_length..(row + 1) * row_length];
-        match video_format {
-            spa::param::video::VideoFormat::RGBA => destination.copy_from_slice(source),
-            spa::param::video::VideoFormat::RGBx => {
-                destination.copy_from_slice(source);
-                for alpha in destination.iter_mut().skip(3).step_by(4) {
-                    *alpha = 255;
-                }
-            }
-            spa::param::video::VideoFormat::BGRA | spa::param::video::VideoFormat::BGRx => {
-                for (source, destination) in
-                    source.chunks_exact(4).zip(destination.chunks_exact_mut(4))
-                {
-                    destination.copy_from_slice(&[
-                        source[2],
-                        source[1],
-                        source[0],
-                        if video_format == spa::param::video::VideoFormat::BGRA {
-                            source[3]
-                        } else {
-                            255
-                        },
-                    ]);
-                }
-            }
-            _ => {
-                return Err(format!(
-                    "PipeWire negotiated an unsupported video format: {video_format:?}"
-                ));
-            }
-        }
+        let stride = if chunk.stride() == 0 {
+            isize::try_from(default_stride)
+                .map_err(|_| "PipeWire video row stride is too large".to_owned())?
+        } else {
+            isize::try_from(chunk.stride())
+                .map_err(|_| "PipeWire video row stride is too large".to_owned())?
+        };
+        pipewire_frame_required_length(offset, stride, row_length, plane_heights[plane])?;
+        layouts.push(PipeWirePlaneLayout {
+            data_index: plane,
+            offset,
+            stride,
+        });
     }
 
+    if datas.len() == 1 && plane_count == 2 {
+        let first = layouts[0];
+        if first.stride < 0 {
+            return Err(
+                "PipeWire contiguous planar video does not support a negative stride".to_owned(),
+            );
+        }
+        let second_offset = first
+            .stride
+            .checked_mul(
+                isize::try_from(plane_heights[0])
+                    .map_err(|_| "PipeWire video plane height is too large".to_owned())?,
+            )
+            .and_then(|size| first.offset.checked_add(size))
+            .ok_or_else(|| "PipeWire video plane offset overflowed".to_owned())?;
+        pipewire_frame_required_length(
+            second_offset,
+            first.stride,
+            row_lengths[1],
+            plane_heights[1],
+        )?;
+        layouts.push(PipeWirePlaneLayout {
+            data_index: 0,
+            offset: second_offset,
+            stride: first.stride,
+        });
+    }
+
+    Ok(layouts)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn convert_pipewire_planes(
+    sources: &[&[u8]],
+    layouts: &[PipeWirePlaneLayout],
+    width: u32,
+    height: u32,
+    format: CapturePixelFormat,
+    color: CaptureColorInfo,
+    buffer_pool: &CaptureFrameBufferPool,
+) -> Result<CaptureFrame, String> {
+    let output_length = width
+        .checked_mul(height)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .and_then(|length| usize::try_from(length).ok())
+        .ok_or_else(|| "PipeWire video output buffer is too large".to_owned())?;
+    let planes = layouts
+        .iter()
+        .map(|layout| CapturePlane {
+            bytes: sources[layout.data_index],
+            offset: layout.offset,
+            stride: layout.stride,
+        })
+        .collect::<Vec<_>>();
+    let mut rgba = buffer_pool.take(output_length);
+    convert_capture_frame(&planes, width, height, format, color, &mut rgba)?;
     Ok(CaptureFrame::new(width, height, rgba, buffer_pool.clone()))
 }
 
@@ -1100,80 +1393,6 @@ fn pipewire_frame_required_length(
         .ok_or_else(|| "PipeWire video frame layout is too large".to_owned())
 }
 
-fn dma_buf_length(fd: RawFd) -> Result<usize, String> {
-    let length = unsafe { libc::lseek(fd, 0, libc::SEEK_END) };
-    if length < 0 {
-        return Err(format!(
-            "PipeWire DMA-BUF size lookup failed: {}",
-            io::Error::last_os_error()
-        ));
-    }
-    if unsafe { libc::lseek(fd, 0, libc::SEEK_SET) } < 0 {
-        return Err(format!(
-            "PipeWire DMA-BUF offset reset failed: {}",
-            io::Error::last_os_error()
-        ));
-    }
-    let length =
-        usize::try_from(length).map_err(|_| "PipeWire DMA-BUF size is too large".to_owned())?;
-    if length == 0 {
-        return Err("PipeWire DMA-BUF has zero length".to_owned());
-    }
-    if length > isize::MAX as usize {
-        return Err("PipeWire DMA-BUF is too large to map safely".to_owned());
-    }
-    Ok(length)
-}
-
-fn wait_for_dma_buf(fd: RawFd) -> Result<(), String> {
-    let mut poll_fd = libc::pollfd {
-        fd,
-        events: libc::POLLIN,
-        revents: 0,
-    };
-    loop {
-        let result = unsafe { libc::poll(&mut poll_fd, 1, DMA_BUF_READY_TIMEOUT_MS) };
-        if result > 0 {
-            if poll_fd.revents & libc::POLLNVAL != 0 {
-                return Err("PipeWire DMA-BUF became invalid before CPU conversion".to_owned());
-            }
-            if poll_fd.revents & libc::POLLERR != 0 {
-                return Err("PipeWire DMA-BUF reported an error before CPU conversion".to_owned());
-            }
-            if poll_fd.revents & libc::POLLIN == 0 {
-                return Err(format!(
-                    "PipeWire DMA-BUF readiness wait returned unexpected flags: {}",
-                    poll_fd.revents
-                ));
-            }
-            return Ok(());
-        }
-        if result == 0 {
-            return Err("PipeWire DMA-BUF did not become ready for CPU conversion".to_owned());
-        }
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::EINTR) {
-            continue;
-        }
-        return Err(format!("PipeWire DMA-BUF readiness wait failed: {error}"));
-    }
-}
-
-fn dma_buf_sync(fd: RawFd, flags: u64) -> io::Result<()> {
-    let sync = DmaBufSync { flags };
-    loop {
-        if unsafe { libc::ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync) } == 0 {
-            return Ok(());
-        }
-        let error = io::Error::last_os_error();
-        if matches!(error.raw_os_error(), Some(code) if code == libc::EINTR || code == libc::EAGAIN)
-        {
-            continue;
-        }
-        return Err(error);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1200,6 +1419,7 @@ mod tests {
             format: Default::default(),
             memory: PipeWireMemory::Unknown,
             dma_buf_mappings: HashMap::new(),
+            dma_buf_importer: None,
             frames_tx,
             errors_tx,
             buffer_pool: buffer_pool.clone(),
@@ -1235,7 +1455,7 @@ mod tests {
 
     #[test]
     fn pipewire_formats_prefer_shared_memory_with_linear_dma_buf_fallback() {
-        let formats = pipewire_format_params(1920, 1080, 8192, 4320);
+        let formats = pipewire_format_params(1920, 1080, 8192, 4320, true, &[]);
 
         assert_eq!(formats.len(), 2);
         assert!(formats[0].properties.iter().all(|property| {
@@ -1270,11 +1490,64 @@ mod tests {
             let param = Pod::from_bytes(&values).expect("serialized test format should be valid");
             assert_eq!(pipewire_format_has_modifier(param), expected);
         }
+
+        let shared_memory_only = pipewire_format_params(1920, 1080, 8192, 4320, false, &[]);
+        assert_eq!(shared_memory_only.len(), 1);
+        assert!(shared_memory_only[0].properties.iter().all(|property| {
+            property.key != spa::param::format::FormatProperties::VideoModifier.as_raw()
+        }));
+    }
+
+    #[test]
+    fn pipewire_formats_advertise_only_egl_verified_non_linear_pairs() {
+        let modifiers = [(
+            spa::param::video::VideoFormat::RGBA,
+            vec![0x0102_0304_0506_0708, 0x1112_1314_1516_1718],
+        )];
+        let formats = pipewire_format_params(1920, 1080, 8192, 4320, true, &modifiers);
+
+        assert_eq!(formats.len(), 3);
+        let video_format = formats[2]
+            .properties
+            .iter()
+            .find(|property| {
+                property.key == spa::param::format::FormatProperties::VideoFormat.as_raw()
+            })
+            .expect("non-linear format should fix the video format");
+        assert_eq!(
+            video_format.value,
+            spa::pod::Value::Id(spa::utils::Id(
+                spa::param::video::VideoFormat::RGBA.as_raw()
+            ))
+        );
+        let modifier = formats[2]
+            .properties
+            .iter()
+            .find(|property| {
+                property.key == spa::param::format::FormatProperties::VideoModifier.as_raw()
+            })
+            .expect("non-linear format should contain EGL modifiers");
+        assert_eq!(
+            modifier.value,
+            spa::pod::Value::Choice(spa::pod::ChoiceValue::Long(spa::utils::Choice(
+                spa::utils::ChoiceFlags::empty(),
+                spa::utils::ChoiceEnum::Enum {
+                    default: modifiers[0].1[0] as i64,
+                    alternatives: modifiers[0]
+                        .1
+                        .iter()
+                        .copied()
+                        .map(|modifier| modifier as i64)
+                        .collect(),
+                },
+            )))
+        );
     }
 
     #[test]
     fn pipewire_buffer_types_follow_the_negotiated_memory_path() {
         let mut format = spa::param::video::VideoInfoRaw::new();
+        format.set_format(spa::param::video::VideoFormat::RGBA);
         format.set_size(spa::utils::Rectangle {
             width: 1920,
             height: 1080,
@@ -1287,7 +1560,7 @@ mod tests {
                     | pipewire_data_type_mask(spa::buffer::DataType::MemPtr),
             ),
             (
-                PipeWireMemory::LinearDmaBuf,
+                PipeWireMemory::DmaBuf,
                 pipewire_data_type_mask(spa::buffer::DataType::DmaBuf),
             ),
         ] {
@@ -1308,6 +1581,56 @@ mod tests {
                     },
                 )))
             );
+        }
+    }
+
+    #[test]
+    fn pipewire_buffer_layout_matches_each_formats_image_planes() {
+        let cases = [
+            (spa::param::video::VideoFormat::RGBA, 2, 2, 1, 8, 16),
+            (spa::param::video::VideoFormat::NV12, 3, 3, 2, 4, 20),
+            (spa::param::video::VideoFormat::P010_10LE, 3, 3, 2, 8, 40),
+        ];
+
+        for (video_format, width, height, plane_count, stride, size) in cases {
+            let mut format = spa::param::video::VideoInfoRaw::new();
+            format.set_format(video_format);
+            format.set_size(spa::utils::Rectangle { width, height });
+            let param = pipewire_buffer_param(format, PipeWireMemory::SharedMemory)
+                .expect("supported format should produce a buffer parameter");
+
+            let blocks = param
+                .properties
+                .iter()
+                .find(|property| property.key == spa::sys::SPA_PARAM_BUFFERS_blocks)
+                .expect("buffer parameter should declare plane blocks");
+            assert_eq!(
+                blocks.value,
+                spa::pod::Value::Choice(spa::pod::ChoiceValue::Int(spa::utils::Choice(
+                    spa::utils::ChoiceFlags::empty(),
+                    spa::utils::ChoiceEnum::Range {
+                        default: plane_count,
+                        min: 1,
+                        max: plane_count,
+                    },
+                ))),
+                "format={video_format:?}"
+            );
+            for (property_key, expected) in [
+                (spa::sys::SPA_PARAM_BUFFERS_stride, stride),
+                (spa::sys::SPA_PARAM_BUFFERS_size, size),
+            ] {
+                let property = param
+                    .properties
+                    .iter()
+                    .find(|property| property.key == property_key)
+                    .expect("shared-memory buffer parameter should declare its layout");
+                assert_eq!(
+                    property.value,
+                    spa::pod::Value::Int(expected),
+                    "format={video_format:?} key={property_key}"
+                );
+            }
         }
     }
 

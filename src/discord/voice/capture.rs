@@ -32,6 +32,10 @@ use crate::logging;
 mod encoder;
 use encoder::{I420Frame, StreamEncoder};
 
+#[path = "capture/conversion.rs"]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod conversion;
+
 #[cfg(target_os = "linux")]
 #[path = "capture/linux.rs"]
 mod platform;
