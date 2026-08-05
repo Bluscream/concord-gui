@@ -38,8 +38,8 @@ use objc2_video_toolbox::{
 };
 
 use super::{
-    EncodedH264Frame, I420Frame, STREAM_CAPTURE_BITRATE, STREAM_CAPTURE_FPS, STREAM_CAPTURE_HEIGHT,
-    STREAM_CAPTURE_WIDTH, STREAM_INTRA_FRAME_PERIOD_FRAMES, annex_b_contains_idr,
+    EncodedH264Frame, I420Frame, STREAM_CAPTURE_FPS, STREAM_CAPTURE_HEIGHT, STREAM_CAPTURE_WIDTH,
+    STREAM_ENCODER_BITRATE, STREAM_INTRA_FRAME_PERIOD_FRAMES, annex_b_contains_idr,
     copy_i420_to_nv12, length_prefixed_h264_to_annex_b,
 };
 use crate::logging;
@@ -206,7 +206,7 @@ fn configure_session(session: &VTCompressionSession) -> Result<(), String> {
     set_number_property(
         session,
         bitrate,
-        STREAM_CAPTURE_BITRATE as i32,
+        STREAM_ENCODER_BITRATE as i32,
         "average bitrate",
     )?;
     if let Err(error) = set_data_rate_limits(session) {
@@ -293,7 +293,7 @@ fn set_data_rate_limits(session: &VTCompressionSession) -> Result<(), String> {
     // Match WebRTC's 1.5x one-second cap to bound sustained encoder output.
     // The RTP pacer separately spreads short packet bursts on the wire.
     let peak_bytes_per_second = i32::try_from(
-        u64::from(STREAM_CAPTURE_BITRATE)
+        u64::from(STREAM_ENCODER_BITRATE)
             .saturating_mul(3)
             .saturating_div(2)
             .saturating_div(8),

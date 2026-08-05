@@ -67,6 +67,8 @@ const RTCP_SENDER_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 const BROADCAST_SEND_STATS_INTERVAL: Duration = Duration::from_secs(5);
 const STREAM_RTP_SMALL_FRAME_PACING_BUDGET: Duration = Duration::from_millis(25);
 const STREAM_RTP_MAX_PACKET_SPACING: Duration = Duration::from_millis(2);
+const STREAM_RTP_BURST_CREDIT: Duration = Duration::from_millis(150);
+const STREAM_RTP_MAX_BURST_BITRATE: u64 = 16_000_000;
 const STREAM_RTP_HISTORY_CAPACITY: usize = 2_048;
 const STREAM_RTX_MAX_RETRANSMISSIONS_PER_FEEDBACK: usize = 128;
 const STREAM_UDP_RECEIVE_PACKET_BYTES: usize = 2_048;
@@ -1218,7 +1220,7 @@ fn stream_broadcast_video_payload(audio_ssrc: u32, video: BroadcastVideoSsrcs) -
                 "rtx_ssrc": video.rtx_ssrc,
                 "active": true,
                 "quality": 100,
-                "max_bitrate": capture::STREAM_CAPTURE_BITRATE,
+                "max_bitrate": capture::STREAM_TRANSPORT_BITRATE,
                 "max_framerate": capture::STREAM_CAPTURE_FPS,
                 "max_resolution": {
                     "type": "fixed",
@@ -1381,6 +1383,7 @@ struct BroadcastVideoTransport {
     transport_sequence: u16,
     video_sent_packets: u32,
     video_sent_octets: u32,
+    pacer: BroadcastRtpPacer,
     next_video_sender_report_at: Instant,
     last_reported_packet_loss: HashMap<u32, i32>,
     history: BroadcastRtpHistory,
@@ -1394,6 +1397,7 @@ impl BroadcastVideoTransport {
         packet_encryptor: Arc<BroadcastPacketEncryptor>,
         stats: SharedBroadcastSendStats,
     ) -> Result<Self, String> {
+        let now = Instant::now();
         Ok(Self {
             video,
             packet_encryptor,
@@ -1403,7 +1407,8 @@ impl BroadcastVideoTransport {
             transport_sequence: random(),
             video_sent_packets: 0,
             video_sent_octets: 0,
-            next_video_sender_report_at: Instant::now() + RTCP_SENDER_REPORT_INTERVAL,
+            pacer: BroadcastRtpPacer::new(now),
+            next_video_sender_report_at: now + RTCP_SENDER_REPORT_INTERVAL,
             last_reported_packet_loss: HashMap::new(),
             history: BroadcastRtpHistory::new(),
             stats,
@@ -1428,7 +1433,9 @@ impl BroadcastVideoTransport {
         let estimated_wire_bytes = packets.iter().fold(0usize, |total, packet| {
             total.saturating_add(packet.len() + RTP_AEAD_TAG_BYTES + RTP_AEAD_NONCE_SUFFIX_BYTES)
         });
-        let pacing_interval = rtp_packet_pacing_interval(packet_count, estimated_wire_bytes);
+        let pacing_interval =
+            self.pacer
+                .pacing_interval(packet_count, estimated_wire_bytes, Instant::now());
         let pacing_started_at = TokioInstant::now();
         let mut wire_bytes = 0usize;
 
@@ -1523,7 +1530,8 @@ impl BroadcastVideoTransport {
                 + RTP_AEAD_NONCE_SUFFIX_BYTES,
         );
         let pacing_interval =
-            rtp_packet_pacing_interval(retransmission_count, estimated_wire_bytes);
+            self.pacer
+                .pacing_interval(retransmission_count, estimated_wire_bytes, Instant::now());
         let pacing_started_at = TokioInstant::now();
         for (index, original_sequence) in feedback
             .nack_sequences
@@ -1934,10 +1942,47 @@ fn broadcast_audio_elapsed_frames(previous: Option<u64>, frame_index: u64) -> u3
         .unwrap_or(1)
 }
 
-fn rtp_packet_pacing_interval(
-    packet_count: usize,
-    estimated_wire_bytes: usize,
-) -> Option<Duration> {
+struct BroadcastRtpPacer {
+    debt: Duration,
+    updated_at: Instant,
+}
+
+impl BroadcastRtpPacer {
+    fn new(now: Instant) -> Self {
+        Self {
+            debt: Duration::ZERO,
+            updated_at: now,
+        }
+    }
+
+    fn pacing_interval(
+        &mut self,
+        packet_count: usize,
+        estimated_wire_bytes: usize,
+        now: Instant,
+    ) -> Option<Duration> {
+        // Unused transport time becomes bounded burst credit. This lets an IDR
+        // use bandwidth saved by smaller frames without weakening the rolling
+        // bitrate limit or accumulating latency in the encoded-frame queue.
+        self.debt = self
+            .debt
+            .saturating_sub(now.saturating_duration_since(self.updated_at));
+        self.updated_at = now;
+        let frame_budget = duration_for_bitrate(
+            estimated_wire_bytes,
+            u64::from(capture::STREAM_TRANSPORT_BITRATE),
+        );
+        self.debt = self.debt.saturating_add(frame_budget);
+        let rolling_budget = self.debt.saturating_sub(STREAM_RTP_BURST_CREDIT);
+        // A separate burst ceiling prevents saved credit from releasing a large
+        // IDR fast enough to cause loss and another keyframe request.
+        let burst_budget = duration_for_bitrate(estimated_wire_bytes, STREAM_RTP_MAX_BURST_BITRATE);
+
+        packet_pacing_interval(packet_count, rolling_budget.max(burst_budget))
+    }
+}
+
+fn packet_pacing_interval(packet_count: usize, rate_limited_budget: Duration) -> Option<Duration> {
     let gap_count = u32::try_from(packet_count.checked_sub(1)?).unwrap_or(u32::MAX);
     if gap_count == 0 {
         return None;
@@ -1948,10 +1993,6 @@ fn rtp_packet_pacing_interval(
     // into a short network burst that loses packets before DAVE decryption.
     let low_latency_interval =
         (STREAM_RTP_SMALL_FRAME_PACING_BUDGET / gap_count).min(STREAM_RTP_MAX_PACKET_SPACING);
-    let rate_limited_budget = duration_for_bitrate(
-        estimated_wire_bytes,
-        u64::from(capture::STREAM_CAPTURE_BITRATE),
-    );
     let rate_limited_interval = duration_div_ceil(rate_limited_budget, gap_count);
     Some(low_latency_interval.max(rate_limited_interval))
 }
@@ -2812,7 +2853,7 @@ mod tests {
         assert_eq!(announced["d"]["streams"][0]["active"], true);
         assert_eq!(
             announced["d"]["streams"][0]["max_bitrate"],
-            capture::STREAM_CAPTURE_BITRATE
+            capture::STREAM_TRANSPORT_BITRATE
         );
         assert_eq!(
             announced["d"]["streams"][0]["max_framerate"],
@@ -3094,24 +3135,51 @@ mod tests {
     }
 
     #[test]
-    fn large_frames_are_paced_at_the_stream_bitrate() {
-        assert_eq!(rtp_packet_pacing_interval(1, 1_100), None);
+    fn rtp_pacer_limits_bursts_and_saved_bandwidth() {
+        let now = Instant::now();
+        let mut small_frame_pacer = BroadcastRtpPacer::new(now);
+        assert_eq!(small_frame_pacer.pacing_interval(1, 1_100, now), None);
 
-        let small_frame_interval =
-            rtp_packet_pacing_interval(3, 3_300).expect("multiple packets should be paced");
+        let small_frame_interval = small_frame_pacer
+            .pacing_interval(3, 3_300, now)
+            .expect("multiple packets should be paced");
         assert!(small_frame_interval <= STREAM_RTP_MAX_PACKET_SPACING);
 
         let packet_count = 250;
         let estimated_wire_bytes = 280_000;
-        let large_frame_interval = rtp_packet_pacing_interval(packet_count, estimated_wire_bytes)
-            .expect("large frame should be paced");
-        let total_pacing = large_frame_interval * (packet_count as u32 - 1);
-        let minimum_pacing = duration_for_bitrate(
+        let gap_count = packet_count as u32 - 1;
+        let frame_budget = duration_for_bitrate(
             estimated_wire_bytes,
-            u64::from(capture::STREAM_CAPTURE_BITRATE),
+            u64::from(capture::STREAM_TRANSPORT_BITRATE),
         );
-        assert!(total_pacing >= minimum_pacing);
-        assert!(total_pacing > STREAM_RTP_SMALL_FRAME_PACING_BUDGET);
+        let burst_budget = duration_for_bitrate(estimated_wire_bytes, STREAM_RTP_MAX_BURST_BITRATE);
+        let mut pacer = BroadcastRtpPacer::new(now);
+
+        let credited_interval = pacer
+            .pacing_interval(packet_count, estimated_wire_bytes, now)
+            .expect("large frame should be paced");
+        let credited_pacing = credited_interval * gap_count;
+        assert!(credited_pacing >= frame_budget - STREAM_RTP_BURST_CREDIT);
+        assert!(credited_pacing >= burst_budget);
+        assert!(credited_pacing < frame_budget);
+
+        let depleted_at = now + credited_pacing;
+        let depleted_interval = pacer
+            .pacing_interval(packet_count, estimated_wire_bytes, depleted_at)
+            .expect("large frame without saved credit should be paced");
+        let depleted_pacing = depleted_interval * gap_count;
+        let depleted_budget = frame_budget
+            .saturating_sub(credited_pacing)
+            .saturating_add(frame_budget)
+            .saturating_sub(STREAM_RTP_BURST_CREDIT);
+        assert!(depleted_pacing >= depleted_budget.max(burst_budget));
+        assert!(depleted_pacing > credited_pacing);
+
+        let refilled_at = depleted_at + depleted_pacing + Duration::from_secs(10);
+        let refilled_interval = pacer
+            .pacing_interval(packet_count, estimated_wire_bytes, refilled_at)
+            .expect("idle transport should refill only bounded credit");
+        assert_eq!(refilled_interval, credited_interval);
     }
 
     #[tokio::test]

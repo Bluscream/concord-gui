@@ -52,9 +52,12 @@ mod platform;
 pub(super) const STREAM_CAPTURE_WIDTH: u32 = 1280;
 pub(super) const STREAM_CAPTURE_HEIGHT: u32 = 720;
 pub(super) const STREAM_CAPTURE_FPS: u32 = 30;
-pub(super) const STREAM_CAPTURE_BITRATE: u32 = 8_000_000;
-// Explicit feedback can still request immediate recovery frames, so the
-// fallback GOP can avoid a large encoded-frame burst every second.
+pub(super) const STREAM_ENCODER_BITRATE: u32 = 6_000_000;
+// Keep headroom for RTP and DAVE overhead, plus short IDR bursts, instead of
+// making the encoder and transport pacer compete for the same bitrate limit.
+pub(super) const STREAM_TRANSPORT_BITRATE: u32 = 8_000_000;
+// Explicit feedback can still request immediate recovery frames, while this
+// fallback period bounds recovery latency without producing an IDR every second.
 const STREAM_INTRA_FRAME_PERIOD_FRAMES: u32 = STREAM_CAPTURE_FPS * 2;
 const STREAM_CAPTURE_FRAME_INTERVAL: Duration =
     Duration::from_nanos(1_000_000_000 / STREAM_CAPTURE_FPS as u64);
@@ -64,6 +67,7 @@ const STREAM_CAPTURE_PREPARATION_TIMEOUT: Duration = Duration::from_secs(60);
 const STREAM_CAPTURE_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const STREAM_CAPTURE_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const CAPTURE_FRAME_BUFFER_POOL_CAPACITY: usize = 4;
+const ENCODED_STREAM_FRAME_QUEUE_CAPACITY: usize = 8;
 
 #[derive(Debug)]
 pub(super) struct EncodedStreamFrame {
@@ -701,7 +705,7 @@ pub(super) fn prepare_stream_capture(
     target: StreamCaptureTarget,
     cancellation: StreamCaptureCancellation,
 ) -> Result<PreparedStreamCapture, String> {
-    let (frames_tx, frames) = mpsc::channel(2);
+    let (frames_tx, frames) = mpsc::channel(ENCODED_STREAM_FRAME_QUEUE_CAPACITY);
     let (preview_frames_tx, preview_frames) = mpsc::channel(1);
     let (errors_tx, errors) = mpsc::unbounded_channel();
     let (ready_tx, ready_rx) = sync_channel(1);

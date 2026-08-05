@@ -7,7 +7,7 @@ use openh264::{
     formats::YUVSlices,
 };
 
-use super::{STREAM_CAPTURE_BITRATE, STREAM_CAPTURE_FPS, STREAM_INTRA_FRAME_PERIOD_FRAMES};
+use super::{STREAM_CAPTURE_FPS, STREAM_ENCODER_BITRATE, STREAM_INTRA_FRAME_PERIOD_FRAMES};
 #[cfg(any(test, target_os = "linux", target_os = "macos", target_os = "windows"))]
 use super::{STREAM_CAPTURE_HEIGHT, STREAM_CAPTURE_WIDTH};
 use crate::logging;
@@ -302,7 +302,7 @@ pub(super) fn openh264_encoder_config() -> EncoderConfig {
         .adaptive_quantization(false)
         .background_detection(false)
         .rate_control_mode(RateControlMode::Bitrate)
-        .bitrate(BitRate::from_bps(STREAM_CAPTURE_BITRATE))
+        .bitrate(BitRate::from_bps(STREAM_ENCODER_BITRATE))
         .max_frame_rate(FrameRate::from_hz(STREAM_CAPTURE_FPS as f32))
         .profile(Profile::Baseline)
         .level(Level::Level_3_1)
@@ -378,8 +378,8 @@ mod vaapi {
     };
 
     use super::{
-        EncodedH264Frame, I420Frame, STREAM_CAPTURE_BITRATE, STREAM_CAPTURE_FPS,
-        STREAM_CAPTURE_HEIGHT, STREAM_CAPTURE_WIDTH, STREAM_INTRA_FRAME_PERIOD_FRAMES,
+        EncodedH264Frame, I420Frame, STREAM_CAPTURE_FPS, STREAM_CAPTURE_HEIGHT,
+        STREAM_CAPTURE_WIDTH, STREAM_ENCODER_BITRATE, STREAM_INTRA_FRAME_PERIOD_FRAMES,
         annex_b_contains_idr, copy_i420_to_nv12,
     };
 
@@ -678,7 +678,7 @@ mod vaapi {
                     .expect("stream intra period fits in u16"),
             },
             initial_tunings: Tunings {
-                rate_control: RateControl::ConstantBitrate(u64::from(STREAM_CAPTURE_BITRATE)),
+                rate_control: RateControl::ConstantBitrate(u64::from(STREAM_ENCODER_BITRATE)),
                 framerate: STREAM_CAPTURE_FPS,
                 ..Default::default()
             },
@@ -906,7 +906,7 @@ mod tests {
             "unexpected stream encoder configuration: {config}"
         );
         assert!(
-            config.contains("bitrate: BitRate(8000000)"),
+            config.contains("bitrate: BitRate(6000000)"),
             "unexpected stream encoder configuration: {config}"
         );
     }

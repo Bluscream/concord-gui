@@ -19,8 +19,8 @@ use windows::{
 };
 
 use super::{
-    EncodedH264Frame, I420Frame, STREAM_CAPTURE_BITRATE, STREAM_CAPTURE_FPS, STREAM_CAPTURE_HEIGHT,
-    STREAM_CAPTURE_WIDTH, STREAM_INTRA_FRAME_PERIOD_FRAMES, annex_b_contains_idr,
+    EncodedH264Frame, I420Frame, STREAM_CAPTURE_FPS, STREAM_CAPTURE_HEIGHT, STREAM_CAPTURE_WIDTH,
+    STREAM_ENCODER_BITRATE, STREAM_INTRA_FRAME_PERIOD_FRAMES, annex_b_contains_idr,
     copy_i420_to_nv12, normalize_h264_access_unit,
 };
 use crate::logging;
@@ -529,7 +529,7 @@ fn video_type(subtype: GUID, with_color: bool) -> Result<IMFMediaType, String> {
             media_type.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pack_pair(1, 1))?;
             media_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
             if subtype == MFVideoFormat_H264 {
-                media_type.SetUINT32(&MF_MT_AVG_BITRATE, STREAM_CAPTURE_BITRATE)?;
+                media_type.SetUINT32(&MF_MT_AVG_BITRATE, STREAM_ENCODER_BITRATE)?;
                 media_type.SetUINT32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base.0 as u32)?;
                 media_type.SetUINT32(&MF_MT_MPEG2_LEVEL, eAVEncH264VLevel3_1.0 as u32)?;
             }
@@ -557,7 +557,7 @@ fn configure_codec(codec: &ICodecApi) -> Result<(), String> {
     set_codec_u32(
         codec,
         &CODECAPI_AVEncCommonMeanBitRate,
-        STREAM_CAPTURE_BITRATE,
+        STREAM_ENCODER_BITRATE,
     )?;
     set_codec_u32(
         codec,
