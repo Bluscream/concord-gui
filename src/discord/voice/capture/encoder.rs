@@ -8,7 +8,7 @@ use openh264::{
 };
 
 use super::{STREAM_CAPTURE_BITRATE, STREAM_CAPTURE_FPS, STREAM_INTRA_FRAME_PERIOD_FRAMES};
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(test, target_os = "linux", target_os = "macos", target_os = "windows"))]
 use super::{STREAM_CAPTURE_HEIGHT, STREAM_CAPTURE_WIDTH};
 use crate::logging;
 
@@ -143,7 +143,51 @@ impl StreamEncoder {
         }
     }
 
+    fn hardware_name(&self) -> Option<&'static str> {
+        match self {
+            Self::OpenH264(_) => None,
+            #[cfg(target_os = "linux")]
+            Self::VaApi(_) => Some("VA API"),
+            #[cfg(target_os = "macos")]
+            Self::VideoToolbox(_) => Some("VideoToolbox"),
+            #[cfg(target_os = "windows")]
+            Self::MediaFoundation(_) => Some("Media Foundation"),
+        }
+    }
+
     pub(super) fn encode(
+        &mut self,
+        frame: I420Frame<'_>,
+        force_keyframe: bool,
+    ) -> Result<Option<EncodedH264Frame>, String> {
+        let hardware_name = self.hardware_name();
+        let initial_result = self.encode_current(frame, force_keyframe);
+        match recover_runtime_hardware_failure(hardware_name, initial_result, |force_keyframe| {
+            let mut encoder = Box::new(OpenH264Encoder::new()?);
+            let encoded = encoder.encode(frame, force_keyframe)?;
+            validate_runtime_fallback_frame(encoded.as_ref())?;
+            Ok((encoder, encoded))
+        })? {
+            RuntimeEncodeOutcome::Encoded(encoded) => Ok(encoded),
+            RuntimeEncodeOutcome::FellBack {
+                encoder,
+                encoded,
+                hardware_name,
+                hardware_error,
+            } => {
+                logging::debug(
+                    "stream",
+                    format!(
+                        "{hardware_name} H264 encoder failed during broadcast; switched to OpenH264: {hardware_error}"
+                    ),
+                );
+                *self = Self::OpenH264(encoder);
+                Ok(encoded)
+            }
+        }
+    }
+
+    fn encode_current(
         &mut self,
         frame: I420Frame<'_>,
         force_keyframe: bool,
@@ -158,6 +202,57 @@ impl StreamEncoder {
             Self::MediaFoundation(encoder) => encoder.encode(frame, force_keyframe),
         }
     }
+}
+
+enum RuntimeEncodeOutcome<'a, T, E> {
+    Encoded(T),
+    FellBack {
+        encoder: E,
+        encoded: T,
+        hardware_name: &'a str,
+        hardware_error: String,
+    },
+}
+
+fn recover_runtime_hardware_failure<'a, T, E>(
+    hardware_name: Option<&'a str>,
+    hardware_result: Result<T, String>,
+    software: impl FnOnce(bool) -> Result<(E, T), String>,
+) -> Result<RuntimeEncodeOutcome<'a, T, E>, String> {
+    match (hardware_name, hardware_result) {
+        (_, Ok(encoded)) => Ok(RuntimeEncodeOutcome::Encoded(encoded)),
+        (None, Err(error)) => Err(error),
+        (Some(hardware_name), Err(hardware_error)) => match software(true) {
+            Ok((encoder, encoded)) => Ok(RuntimeEncodeOutcome::FellBack {
+                encoder,
+                encoded,
+                hardware_name,
+                hardware_error,
+            }),
+            Err(software_error) => Err(format!(
+                "H264 encoding failed: {hardware_name}: {hardware_error}; OpenH264 fallback: {software_error}"
+            )),
+        },
+    }
+}
+
+fn validate_runtime_fallback_frame(encoded: Option<&EncodedH264Frame>) -> Result<(), String> {
+    let encoded =
+        encoded.ok_or_else(|| "OpenH264 runtime fallback produced no H264 frame".to_owned())?;
+    let nal_types = crate::discord::voice::media::annex_b_nals(&encoded.annex_b)
+        .into_iter()
+        .filter_map(|nal| nal.first().map(|header| header & 0x1f))
+        .collect::<Vec<_>>();
+    if !encoded.is_keyframe
+        || !nal_types.contains(&7)
+        || !nal_types.contains(&8)
+        || !nal_types.contains(&5)
+    {
+        return Err(
+            "OpenH264 runtime fallback did not produce a parameterized IDR frame".to_owned(),
+        );
+    }
+    Ok(())
 }
 
 pub(super) struct OpenH264Encoder {
@@ -842,6 +937,92 @@ mod tests {
             .expect("failure of both encoders should be reported");
         assert!(error.contains("native: no device"));
         assert!(error.contains("OpenH264: codec initialization failed"));
+    }
+
+    #[test]
+    fn runtime_fallback_is_forced_once_and_preserves_failures() {
+        let software_called = Cell::new(false);
+        let outcome = recover_runtime_hardware_failure(
+            Some("native"),
+            Ok::<_, String>("hardware frame"),
+            |_| {
+                software_called.set(true);
+                Ok(("software", "software frame"))
+            },
+        )
+        .expect("successful hardware encoding should continue");
+        assert!(matches!(
+            outcome,
+            RuntimeEncodeOutcome::Encoded("hardware frame")
+        ));
+        assert!(!software_called.get());
+
+        let forced_keyframe = Cell::new(false);
+        let outcome = recover_runtime_hardware_failure(
+            Some("native"),
+            Err("device reset".to_owned()),
+            |force_keyframe| {
+                forced_keyframe.set(force_keyframe);
+                Ok(("software", "software frame"))
+            },
+        )
+        .expect("software encoding should recover a hardware failure");
+        match outcome {
+            RuntimeEncodeOutcome::FellBack {
+                encoder,
+                encoded,
+                hardware_name,
+                hardware_error,
+            } => {
+                assert_eq!(encoder, "software");
+                assert_eq!(encoded, "software frame");
+                assert_eq!(hardware_name, "native");
+                assert_eq!(hardware_error, "device reset");
+            }
+            RuntimeEncodeOutcome::Encoded(_) => panic!("hardware failure should use fallback"),
+        }
+        assert!(forced_keyframe.get());
+
+        let software_called = Cell::new(false);
+        let error = recover_runtime_hardware_failure::<(), ()>(
+            None,
+            Err("software failed".to_owned()),
+            |_| {
+                software_called.set(true);
+                Ok(((), ()))
+            },
+        )
+        .err()
+        .expect("software errors should remain fatal");
+        assert_eq!(error, "software failed");
+        assert!(!software_called.get());
+
+        let error = recover_runtime_hardware_failure::<(), ()>(
+            Some("native"),
+            Err("device reset".to_owned()),
+            |_| Err("codec initialization failed".to_owned()),
+        )
+        .err()
+        .expect("failure of both runtime encoders should be reported");
+        assert!(error.contains("native: device reset"));
+        assert!(error.contains("OpenH264 fallback: codec initialization failed"));
+    }
+
+    #[test]
+    fn openh264_runtime_fallback_produces_a_parameterized_idr() {
+        let mut encoder = OpenH264Encoder::new().expect("OpenH264 should initialize");
+        let width = STREAM_CAPTURE_WIDTH as usize;
+        let height = STREAM_CAPTURE_HEIGHT as usize;
+        let y = vec![16; width * height];
+        let u = vec![128; width * height / 4];
+        let v = vec![128; width * height / 4];
+        let frame = I420Frame::new(&y, &u, &v, width, height, width, width / 2, width / 2);
+
+        let encoded = encoder
+            .encode(frame, true)
+            .expect("OpenH264 should encode the fallback frame");
+        validate_runtime_fallback_frame(encoded.as_ref())
+            .expect("the fallback frame should restart decoder state");
     }
 
     #[test]
