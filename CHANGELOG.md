@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.4] - 2026-08-06
+
+### Bug Fixes
+
+- _(stream)_ Handle capture failures and linear DMA-BUF negotiation (#299) in [#299](https://github.com/chojs23/concord/pull/299) by @chojs23
+- Enable windows OLE APIs for Media Foundation encoding by @chojs23
+- Preserve active DAVE media during MLS epoch preparation by @chojs23
+- _(stream)_ Smooth H.264 broadcast pacing by @chojs23
+- _(build)_ Replace audiopus_sys with opusic-c by @chojs23
+- _(linux)_ Use generic VA-API surfaces for H264 encoding by @chojs23
+- _(boradcast)_ Filter macOS capture targets and show loading feedback by @chojs23
+
+### Features
+
+- _(broadcast)_ Add hardware encoder by @chojs23
+- _(broadcast)_ Add one-way runtime fallback from hardware H264 encoders to OpenH264 by @chojs23
+- _(linux)_ Add 10-bit, multi-plane, and modifier-aware screen capture by @chojs23
+- _(stream)_ Improve cross-platform hardware encoding by @chojs23
+
 ## [2.5.3] - 2026-08-04
 
 ### Bug Fixes
