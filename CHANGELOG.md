@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.5] - 2026-08-06
+
+### Bug Fixes
+
+- Fix libva 2.24.1 compatible crates (#302) in [#302](https://github.com/chojs23/concord/pull/302) by @chojs23
+
 ## [2.5.4] - 2026-08-06
 
 ### Bug Fixes
