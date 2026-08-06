@@ -18,12 +18,13 @@ use objc2_core_media::{
     kCMVideoCodecType_H264,
 };
 use objc2_core_video::{
-    CVAttachmentMode, CVPixelBuffer, CVPixelBufferCreate, CVPixelBufferGetBaseAddressOfPlane,
+    CVAttachmentMode, CVPixelBuffer, CVPixelBufferGetBaseAddressOfPlane,
     CVPixelBufferGetBytesPerRowOfPlane, CVPixelBufferGetPlaneCount, CVPixelBufferLockBaseAddress,
-    CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
+    CVPixelBufferLockFlags, CVPixelBufferPool, CVPixelBufferUnlockBaseAddress,
     kCVImageBufferColorPrimaries_ITU_R_709_2, kCVImageBufferColorPrimariesKey,
     kCVImageBufferTransferFunction_ITU_R_709_2, kCVImageBufferTransferFunctionKey,
-    kCVImageBufferYCbCrMatrix_ITU_R_709_2, kCVImageBufferYCbCrMatrixKey,
+    kCVImageBufferYCbCrMatrix_ITU_R_709_2, kCVImageBufferYCbCrMatrixKey, kCVPixelBufferHeightKey,
+    kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey,
     kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, kCVReturnSuccess,
 };
 use objc2_video_toolbox::{
@@ -40,7 +41,7 @@ use objc2_video_toolbox::{
 use super::{
     EncodedH264Frame, I420Frame, STREAM_CAPTURE_FPS, STREAM_CAPTURE_HEIGHT, STREAM_CAPTURE_WIDTH,
     STREAM_ENCODER_BITRATE, STREAM_INTRA_FRAME_PERIOD_FRAMES, annex_b_contains_idr,
-    copy_i420_to_nv12, length_prefixed_h264_to_annex_b,
+    copy_i420_to_nv12, length_prefixed_h264_to_annex_b, validate_parameterized_h264_idr,
 };
 use crate::logging;
 
@@ -53,6 +54,7 @@ struct CallbackState {
 
 pub(in crate::discord::voice::capture) struct VideoToolboxEncoder {
     session: CFRetained<VTCompressionSession>,
+    pixel_buffer_pool: CFRetained<CVPixelBufferPool>,
     callback_state: Box<CallbackState>,
     frame_index: i64,
 }
@@ -75,6 +77,7 @@ impl VideoToolboxEncoder {
         });
         let callback_refcon = (&mut *callback_state as *mut CallbackState).cast::<c_void>();
         let encoder_specification = hardware_encoder_specification()?;
+        let source_pixel_buffer_attributes = source_pixel_buffer_attributes()?;
         let mut raw_session = ptr::null_mut();
 
         // VideoToolbox retains the specification and the callback refcon remains
@@ -86,7 +89,7 @@ impl VideoToolboxEncoder {
                 STREAM_CAPTURE_HEIGHT as i32,
                 kCMVideoCodecType_H264,
                 Some(&encoder_specification),
-                None,
+                Some(&source_pixel_buffer_attributes),
                 None,
                 Some(compression_output_callback),
                 callback_refcon,
@@ -103,9 +106,14 @@ impl VideoToolboxEncoder {
         let status = unsafe { session.prepare_to_encode_frames() };
         status_result(status, "VideoToolbox H264 encoder preparation")?;
         verify_hardware_encoder(&session)?;
+        // The compression session pool matches the hardware encoder's preferred
+        // layout and returns released buffers instead of allocating every frame.
+        let pixel_buffer_pool = unsafe { session.pixel_buffer_pool() }
+            .ok_or_else(|| "VideoToolbox returned no input pixel buffer pool".to_owned())?;
 
         Ok(Self {
             session,
+            pixel_buffer_pool,
             callback_state,
             frame_index: 0,
         })
@@ -116,7 +124,7 @@ impl VideoToolboxEncoder {
         frame: I420Frame<'_>,
         force_keyframe: bool,
     ) -> Result<Option<EncodedH264Frame>, String> {
-        let pixel_buffer = create_pixel_buffer(frame)?;
+        let pixel_buffer = create_pixel_buffer(&self.pixel_buffer_pool, frame)?;
         let presentation_time = unsafe { CMTime::new(self.frame_index, STREAM_CAPTURE_FPS as i32) };
         let duration = unsafe { CMTime::new(1, STREAM_CAPTURE_FPS as i32) };
         let force_keyframe = force_keyframe || self.frame_index == 0;
@@ -165,15 +173,11 @@ impl VideoToolboxEncoder {
         let v = vec![128; width * height / 4];
         let probe = I420Frame::new(&y, &u, &v, width, height, width, width / 2, width / 2);
 
-        match self.encode(probe, true)? {
-            Some(frame) if frame.is_keyframe && !frame.annex_b.is_empty() => {
-                validate_discord_h264_profile(&frame.annex_b)
-            }
-            Some(_) => {
-                Err("VideoToolbox startup probe did not produce an H264 keyframe".to_owned())
-            }
-            None => Err("VideoToolbox startup probe produced no H264 frame".to_owned()),
-        }
+        let frame = self
+            .encode(probe, true)?
+            .ok_or_else(|| "VideoToolbox startup probe produced no H264 frame".to_owned())?;
+        validate_parameterized_h264_idr(&frame, "VideoToolbox startup probe")?;
+        validate_discord_h264_profile(&frame.annex_b)
     }
 }
 
@@ -374,6 +378,31 @@ fn hardware_encoder_specification() -> Result<CFRetained<CFDictionary>, String> 
     cf_dictionary(&[(require_hardware, cf_boolean(true)?)])
 }
 
+fn source_pixel_buffer_attributes() -> Result<CFRetained<CFDictionary>, String> {
+    let pixel_format = cf_number(
+        i32::try_from(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
+            .map_err(|_| "VideoToolbox NV12 pixel format does not fit i32".to_owned())?,
+        "NV12 pixel format",
+    )?;
+    let width = cf_number(
+        i32::try_from(STREAM_CAPTURE_WIDTH)
+            .map_err(|_| "VideoToolbox input width does not fit i32".to_owned())?,
+        "input width",
+    )?;
+    let height = cf_number(
+        i32::try_from(STREAM_CAPTURE_HEIGHT)
+            .map_err(|_| "VideoToolbox input height does not fit i32".to_owned())?,
+        "input height",
+    )?;
+    // Core Video retains the values in the dictionary. VideoToolbox then uses
+    // these attributes to expose a pool compatible with its selected encoder.
+    cf_dictionary(&[
+        (unsafe { kCVPixelBufferPixelFormatTypeKey }, &pixel_format),
+        (unsafe { kCVPixelBufferWidthKey }, &width),
+        (unsafe { kCVPixelBufferHeightKey }, &height),
+    ])
+}
+
 fn hardware_force_keyframe_properties() -> Result<CFRetained<CFDictionary>, String> {
     // VideoToolbox exports this process-lifetime frame property key.
     let force_keyframe = unsafe { kVTEncodeFrameOptionKey_ForceKeyFrame };
@@ -414,7 +443,10 @@ fn cf_boolean(value: bool) -> Result<&'static CFBoolean, String> {
     value.ok_or_else(|| "Core Foundation boolean constant was unavailable".to_owned())
 }
 
-fn create_pixel_buffer(frame: I420Frame<'_>) -> Result<CFRetained<CVPixelBuffer>, String> {
+fn create_pixel_buffer(
+    pool: &CVPixelBufferPool,
+    frame: I420Frame<'_>,
+) -> Result<CFRetained<CVPixelBuffer>, String> {
     let width = STREAM_CAPTURE_WIDTH as usize;
     let height = STREAM_CAPTURE_HEIGHT as usize;
     if frame.width != width || frame.height != height {
@@ -424,16 +456,9 @@ fn create_pixel_buffer(frame: I420Frame<'_>) -> Result<CFRetained<CVPixelBuffer>
         ));
     }
     let mut raw_buffer = ptr::null_mut();
-    // The output pointer is valid and no generic attribute dictionary is used.
+    // The output pointer is valid and the retained pool owns its allocation policy.
     let status = unsafe {
-        CVPixelBufferCreate(
-            None,
-            frame.width,
-            frame.height,
-            kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
-            None,
-            NonNull::from(&mut raw_buffer),
-        )
+        CVPixelBufferPool::create_pixel_buffer(None, pool, NonNull::from(&mut raw_buffer))
     };
     if status != kCVReturnSuccess {
         return Err(format!(
@@ -442,7 +467,7 @@ fn create_pixel_buffer(frame: I420Frame<'_>) -> Result<CFRetained<CVPixelBuffer>
     }
     let raw_buffer = NonNull::new(raw_buffer)
         .ok_or_else(|| "Core Video returned a null NV12 pixel buffer".to_owned())?;
-    // `CVPixelBufferCreate` returns a +1 retained Core Foundation object.
+    // `CVPixelBufferPoolCreatePixelBuffer` returns a +1 retained Core Foundation object.
     let pixel_buffer = unsafe { CFRetained::from_raw(raw_buffer) };
 
     attach_bt709_metadata(&pixel_buffer);

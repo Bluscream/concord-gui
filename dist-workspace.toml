@@ -72,8 +72,6 @@ mesa = { stage = [
 cmake = { stage = ["build"] }
 libasound2-dev = { stage = ["build"] }
 libclang-dev = { stage = ["build"] }
-libdrm-dev = { stage = ["build"] }
-libgbm-dev = { stage = ["build"] }
 "libpipewire-0.3-dev" = { stage = ["build"] }
 libva-dev = { stage = ["build"] }
 nasm = { stage = ["build"], targets = ["x86_64-unknown-linux-gnu"] }

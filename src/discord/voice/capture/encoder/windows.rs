@@ -21,7 +21,7 @@ use windows::{
 use super::{
     EncodedH264Frame, I420Frame, STREAM_CAPTURE_FPS, STREAM_CAPTURE_HEIGHT, STREAM_CAPTURE_WIDTH,
     STREAM_ENCODER_BITRATE, STREAM_INTRA_FRAME_PERIOD_FRAMES, annex_b_contains_idr,
-    copy_i420_to_nv12, normalize_h264_access_unit,
+    copy_i420_to_nv12, normalize_h264_access_unit, validate_parameterized_h264_idr,
 };
 use crate::logging;
 
@@ -81,8 +81,8 @@ pub(in crate::discord::voice::capture) struct MediaFoundationEncoder {
     events: IMFMediaEventGenerator,
     codec_api: ICodecApi,
     activation: IMFActivate,
-    output_provides_samples: bool,
-    output_buffer_size: u32,
+    reusable_input_sample: Option<IMFSample>,
+    supplied_output_sample: Option<IMFSample>,
     frame_index: i64,
     need_input: bool,
     _media_foundation: Rc<MediaFoundationPlatform>,
@@ -156,14 +156,28 @@ impl MediaFoundationEncoder {
             & ((MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES.0)
                 as u32)
             != 0;
+        // An input sample can only be overwritten after ProcessInput when the
+        // transform explicitly promises that it does not retain the sample.
+        let mut input_info = MFT_INPUT_STREAM_INFO::default();
+        unsafe { transform.GetInputStreamInfo(INPUT_STREAM_ID, &mut input_info) }
+            .map_err(|error| format!("H264 MFT input stream query failed: {error}"))?;
+        let input_capacity = u32::try_from(nv12_frame_length()?)
+            .map_err(|_| "Media Foundation NV12 frame size does not fit u32".to_owned())?;
+        let reusable_input_sample =
+            (input_info.dwFlags & MFT_INPUT_STREAM_DOES_NOT_ADDREF.0 as u32 != 0)
+                .then(|| create_empty_sample(input_capacity))
+                .transpose()?;
+        let supplied_output_sample = (!output_provides_samples)
+            .then(|| create_empty_sample(output_info.cbSize.max(1)))
+            .transpose()?;
 
         let mut encoder = Self {
             transform,
             events,
             codec_api,
             activation,
-            output_provides_samples,
-            output_buffer_size: output_info.cbSize.max(1),
+            reusable_input_sample,
+            supplied_output_sample,
             frame_index: 0,
             need_input: false,
             _media_foundation: media_foundation,
@@ -189,10 +203,7 @@ impl MediaFoundationEncoder {
         }
         let encoded = encoded
             .ok_or_else(|| "Media Foundation H264 probe produced no encoded frame".to_owned())?;
-        if !encoded.is_keyframe || encoded.annex_b.is_empty() {
-            return Err("Media Foundation H264 probe did not produce an IDR frame".to_owned());
-        }
-        Ok(())
+        validate_parameterized_h264_idr(&encoded, "Media Foundation H264 probe")
     }
 
     pub(super) fn encode(
@@ -206,7 +217,15 @@ impl MediaFoundationEncoder {
                 .map_err(|error| format!("Media Foundation keyframe request failed: {error}"))?;
         }
 
-        let sample = create_input_sample(input, self.frame_index)?;
+        let sample = match self.reusable_input_sample.as_ref() {
+            Some(sample) => sample.clone(),
+            None => {
+                let capacity = u32::try_from(nv12_frame_length()?)
+                    .map_err(|_| "Media Foundation NV12 frame size does not fit u32".to_owned())?;
+                create_empty_sample(capacity)?
+            }
+        };
+        prepare_input_sample(&sample, input, self.frame_index)?;
         // SAFETY: The sample owns its buffer and the MFT requested input.
         unsafe { self.transform.ProcessInput(INPUT_STREAM_ID, &sample, 0) }
             .map_err(|error| format!("Media Foundation H264 frame submission failed: {error}"))?;
@@ -286,11 +305,10 @@ impl MediaFoundationEncoder {
     }
 
     fn process_output(&self) -> Result<Option<EncodedH264Frame>, String> {
-        let supplied_sample = if self.output_provides_samples {
-            None
-        } else {
-            Some(create_empty_sample(self.output_buffer_size)?)
-        };
+        if let Some(sample) = self.supplied_output_sample.as_ref() {
+            reset_output_sample(sample)?;
+        }
+        let supplied_sample = self.supplied_output_sample.clone();
         let mut output = MFT_OUTPUT_DATA_BUFFER {
             dwStreamID: OUTPUT_STREAM_ID,
             pSample: ManuallyDrop::new(supplied_sample),
@@ -629,7 +647,20 @@ fn variant_bool(value: bool) -> VARIANT {
     }
 }
 
-fn create_input_sample(input: I420Frame<'_>, frame_index: i64) -> Result<IMFSample, String> {
+fn nv12_frame_length() -> Result<usize, String> {
+    let pixels = (STREAM_CAPTURE_WIDTH as usize)
+        .checked_mul(STREAM_CAPTURE_HEIGHT as usize)
+        .ok_or_else(|| "Media Foundation NV12 frame size overflowed".to_owned())?;
+    pixels
+        .checked_add(pixels / 2)
+        .ok_or_else(|| "Media Foundation NV12 frame size overflowed".to_owned())
+}
+
+fn prepare_input_sample(
+    sample: &IMFSample,
+    input: I420Frame<'_>,
+    frame_index: i64,
+) -> Result<(), String> {
     let width = STREAM_CAPTURE_WIDTH as usize;
     let height = STREAM_CAPTURE_HEIGHT as usize;
     if input.width != width || input.height != height {
@@ -638,16 +669,9 @@ fn create_input_sample(input: I420Frame<'_>, frame_index: i64) -> Result<IMFSamp
             input.width, input.height
         ));
     }
-    let y_len = width * height;
-    let uv_len = y_len / 2;
-    let mut nv12 = vec![0; y_len + uv_len];
-    let (y, uv) = nv12.split_at_mut(y_len);
-    copy_i420_to_nv12(input, y, uv, width, width)?;
-
-    let sample = create_empty_sample(nv12.len() as u32)?;
     let buffer = unsafe { sample.GetBufferByIndex(0) }
         .map_err(|error| format!("Media Foundation input buffer query failed: {error}"))?;
-    write_buffer(&buffer, &nv12)?;
+    write_i420_to_nv12_buffer(&buffer, input)?;
     let duration = HNS_PER_SECOND / i64::from(STREAM_CAPTURE_FPS);
     // SAFETY: Timestamps are non-negative 100 ns Media Foundation units.
     let timestamp = || -> windows::core::Result<()> {
@@ -660,7 +684,7 @@ fn create_input_sample(input: I420Frame<'_>, frame_index: i64) -> Result<IMFSamp
     };
     timestamp()
         .map_err(|error| format!("Media Foundation input timestamp setup failed: {error}"))?;
-    Ok(sample)
+    Ok(())
 }
 
 fn create_empty_sample(capacity: u32) -> Result<IMFSample, String> {
@@ -674,16 +698,25 @@ fn create_empty_sample(capacity: u32) -> Result<IMFSample, String> {
     Ok(sample)
 }
 
-fn write_buffer(buffer: &IMFMediaBuffer, bytes: &[u8]) -> Result<(), String> {
+fn write_i420_to_nv12_buffer(buffer: &IMFMediaBuffer, input: I420Frame<'_>) -> Result<(), String> {
+    let width = input.width;
+    let height = input.height;
+    let y_len = width
+        .checked_mul(height)
+        .ok_or_else(|| "Media Foundation NV12 Y plane size overflowed".to_owned())?;
+    let frame_len = y_len
+        .checked_add(y_len / 2)
+        .ok_or_else(|| "Media Foundation NV12 frame size overflowed".to_owned())?;
     let mut destination = ptr::null_mut();
     let mut capacity = 0;
     // SAFETY: Lock initializes the pointer and capacity until the matching Unlock.
     unsafe { buffer.Lock(&mut destination, Some(&mut capacity), None) }
         .map_err(|error| format!("Media Foundation input buffer lock failed: {error}"))?;
-    let result = if bytes.len() <= capacity as usize {
-        // SAFETY: The locked allocation has at least bytes.len() writable bytes.
-        unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), destination, bytes.len()) };
-        Ok(())
+    let result = if frame_len <= capacity as usize {
+        // SAFETY: Lock returned at least frame_len writable bytes until Unlock.
+        let destination = unsafe { slice::from_raw_parts_mut(destination, frame_len) };
+        let (y, uv) = destination.split_at_mut(y_len);
+        copy_i420_to_nv12(input, y, uv, width, width)
     } else {
         Err("Media Foundation input buffer is smaller than one NV12 frame".to_owned())
     };
@@ -691,8 +724,19 @@ fn write_buffer(buffer: &IMFMediaBuffer, bytes: &[u8]) -> Result<(), String> {
     let unlock = unsafe { buffer.Unlock() };
     result?;
     unlock.map_err(|error| format!("Media Foundation input buffer unlock failed: {error}"))?;
-    unsafe { buffer.SetCurrentLength(bytes.len() as u32) }
+    unsafe { buffer.SetCurrentLength(frame_len as u32) }
         .map_err(|error| format!("Media Foundation input length update failed: {error}"))
+}
+
+fn reset_output_sample(sample: &IMFSample) -> Result<(), String> {
+    // Reused output samples must not carry CleanPoint or other attributes from
+    // the previous frame when a driver omits them on the next output.
+    unsafe { sample.DeleteAllItems() }
+        .map_err(|error| format!("Media Foundation output sample reset failed: {error}"))?;
+    let buffer = unsafe { sample.GetBufferByIndex(0) }
+        .map_err(|error| format!("Media Foundation output buffer query failed: {error}"))?;
+    unsafe { buffer.SetCurrentLength(0) }
+        .map_err(|error| format!("Media Foundation output buffer reset failed: {error}"))
 }
 
 fn read_sample(sample: &IMFSample) -> Result<Vec<u8>, String> {

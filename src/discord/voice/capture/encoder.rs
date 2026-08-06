@@ -239,17 +239,7 @@ fn recover_runtime_hardware_failure<'a, T, E>(
 fn validate_runtime_fallback_frame(encoded: Option<&EncodedH264Frame>) -> Result<(), String> {
     let encoded =
         encoded.ok_or_else(|| "OpenH264 runtime fallback produced no H264 frame".to_owned())?;
-    let nal_types = h264_nal_types(&encoded.annex_b);
-    if !encoded.is_keyframe
-        || !nal_types.contains(&7)
-        || !nal_types.contains(&8)
-        || !nal_types.contains(&5)
-    {
-        return Err(
-            "OpenH264 runtime fallback did not produce a parameterized IDR frame".to_owned(),
-        );
-    }
-    Ok(())
+    validate_parameterized_h264_idr(encoded, "OpenH264 runtime fallback")
 }
 
 fn h264_nal_types(frame: &[u8]) -> Vec<u8> {
@@ -259,19 +249,18 @@ fn h264_nal_types(frame: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-#[cfg(any(test, target_os = "linux"))]
-fn validate_parameterized_h264_keyframe(
-    encoded: &EncodedH264Frame,
-    source: &str,
-) -> Result<(), String> {
+fn validate_parameterized_h264_idr(encoded: &EncodedH264Frame, source: &str) -> Result<(), String> {
     let nal_types = h264_nal_types(&encoded.annex_b);
-    let has_vcl_picture = nal_types.contains(&1) || nal_types.contains(&5);
-    if encoded.is_keyframe && nal_types.contains(&7) && nal_types.contains(&8) && has_vcl_picture {
+    if encoded.is_keyframe
+        && nal_types.contains(&7)
+        && nal_types.contains(&8)
+        && nal_types.contains(&5)
+    {
         return Ok(());
     }
 
     Err(format!(
-        "{source} did not produce a parameterized keyframe: keyframe={} nal_types={nal_types:?} bytes={}",
+        "{source} did not produce a parameterized IDR frame: keyframe={} nal_types={nal_types:?} bytes={}",
         encoded.is_keyframe,
         encoded.annex_b.len()
     ))
@@ -378,7 +367,7 @@ mod vaapi {
     use std::{
         borrow::Borrow,
         path::{Path, PathBuf},
-        rc::Rc,
+        sync::Arc,
     };
 
     use cros_codecs::{
@@ -401,7 +390,7 @@ mod vaapi {
         EncodedH264Frame, I420Frame, STREAM_CAPTURE_FPS, STREAM_CAPTURE_HEIGHT,
         STREAM_CAPTURE_WIDTH, STREAM_ENCODER_BITRATE, STREAM_INTRA_FRAME_PERIOD_FRAMES,
         annex_b_contains_idr, copy_i420_to_nv12, split_nv12_image_planes,
-        validate_parameterized_h264_keyframe,
+        validate_parameterized_h264_idr,
     };
 
     const VA_INPUT_FRAME_COUNT: usize = 3;
@@ -454,7 +443,7 @@ mod vaapi {
 
             for low_power in power_modes {
                 match Self::for_power_mode(
-                    Rc::clone(&display),
+                    Arc::clone(&display),
                     config.clone(),
                     fourcc,
                     resolution,
@@ -477,7 +466,7 @@ mod vaapi {
         }
 
         fn for_power_mode(
-            display: Rc<Display>,
+            display: Arc<Display>,
             config: EncoderConfig,
             fourcc: Fourcc,
             resolution: Resolution,
@@ -485,9 +474,9 @@ mod vaapi {
             image_format: VAImageFormat,
             low_power: bool,
         ) -> Result<Self, String> {
-            let frames = create_surface_pool(Rc::clone(&display), resolution)?;
-            let encoder = HardwareEncoder::new_vaapi(
-                Rc::clone(&display),
+            let frames = create_surface_pool(Arc::clone(&display), resolution)?;
+            let encoder = HardwareEncoder::new_native_vaapi(
+                Arc::clone(&display),
                 config.clone(),
                 fourcc,
                 resolution,
@@ -508,7 +497,7 @@ mod vaapi {
             // the first frame sent to Discord remains the first IDR of the stream.
             let frames = candidate.frames;
             drop(candidate.encoder);
-            let encoder = HardwareEncoder::new_vaapi(
+            let encoder = HardwareEncoder::new_native_vaapi(
                 display,
                 config,
                 fourcc,
@@ -536,7 +525,7 @@ mod vaapi {
             let encoded = self
                 .encode(frame, true)?
                 .ok_or_else(|| "VA H264 probe produced no encoded frame".to_owned())?;
-            validate_parameterized_h264_keyframe(&encoded, "VA H264 probe")
+            validate_parameterized_h264_idr(&encoded, "VA H264 probe")
         }
 
         pub(super) fn encode(
@@ -558,6 +547,7 @@ mod vaapi {
                 timestamp: self.frame_index,
                 layout: self.frame_layout.clone(),
                 force_keyframe,
+                force_idr: force_keyframe,
             };
             self.frame_index = self.frame_index.wrapping_add(1);
             self.encoder
@@ -626,7 +616,7 @@ mod vaapi {
     }
 
     fn create_surface_pool(
-        display: Rc<Display>,
+        display: Arc<Display>,
         resolution: Resolution,
     ) -> Result<VaSurfacePool<()>, String> {
         let mut frames = VaSurfacePool::new(
@@ -1068,7 +1058,7 @@ mod tests {
     }
 
     #[test]
-    fn parameterized_keyframe_validation_accepts_driver_intra_slices() {
+    fn parameterized_idr_validation_requires_decoder_restart_state() {
         fn encoded(nal_types: &[u8], is_keyframe: bool) -> EncodedH264Frame {
             let mut annex_b = Vec::new();
             for nal_type in nal_types {
@@ -1080,15 +1070,21 @@ mod tests {
             }
         }
 
-        for slice_type in [1, 5] {
-            let frame = encoded(&[7, 8, slice_type], true);
-            validate_parameterized_h264_keyframe(&frame, "test encoder")
-                .expect("parameterized intra picture should be accepted");
-        }
+        validate_parameterized_h264_idr(&encoded(&[7, 8, 5], true), "test encoder")
+            .expect("parameterized IDR should be accepted");
 
-        let error = validate_parameterized_h264_keyframe(&encoded(&[7, 1], true), "test encoder")
-            .expect_err("missing PPS should be rejected");
-        assert!(error.contains("nal_types=[7, 1]"));
+        for (nal_types, is_keyframe, missing) in [
+            (&[8, 5][..], true, "SPS"),
+            (&[7, 5][..], true, "PPS"),
+            (&[7, 8, 1][..], true, "IDR"),
+            (&[7, 8, 5][..], false, "keyframe metadata"),
+        ] {
+            let error =
+                validate_parameterized_h264_idr(&encoded(nal_types, is_keyframe), "test encoder")
+                    .expect_err(missing);
+            assert!(error.contains("parameterized IDR frame"));
+            assert!(error.contains(&format!("nal_types={nal_types:?}")));
+        }
     }
 
     #[test]
