@@ -660,6 +660,13 @@ fn joined_voice_channel_can_select_a_stream_target_and_stop_sharing() {
             channel_id,
         })
     );
+    assert_eq!(
+        state
+            .toast_message()
+            .expect("capture target loading toast is visible")
+            .text,
+        "Loading screens and windows..."
+    );
     state.open_selected_channel_actions();
 
     let actions = state.selected_channel_action_items();
@@ -684,6 +691,13 @@ fn joined_voice_channel_can_select_a_stream_target_and_stop_sharing() {
         error: None,
     });
     assert!(!state.is_channel_action_stream_target_phase());
+    assert_eq!(
+        state
+            .toast_message()
+            .expect("newer capture target request remains visible")
+            .text,
+        "Loading screens and windows..."
+    );
 
     state.push_effect(AppEvent::StreamCaptureTargetsLoaded {
         request_id: crate::discord::StreamCaptureTargetsRequestId::new(1),
@@ -693,6 +707,7 @@ fn joined_voice_channel_can_select_a_stream_target_and_stop_sharing() {
         error: None,
     });
     assert!(state.is_channel_action_stream_target_phase());
+    assert!(state.toast_message().is_none());
     assert_eq!(
         state.selected_stream_capture_targets(),
         std::slice::from_ref(&target)

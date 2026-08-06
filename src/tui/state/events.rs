@@ -237,6 +237,7 @@ impl DashboardState {
                     return;
                 }
                 self.runtime.stream_capture_targets_request = None;
+                self.clear_stream_capture_targets_loading_toast();
                 if let Some(error) = error {
                     self.show_error_toast(error, Instant::now());
                 } else if targets.is_empty() {
