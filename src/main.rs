@@ -28,6 +28,10 @@ async fn main() -> Result<()> {
     #[cfg(all(target_os = "macos", feature = "stream-broadcast"))]
     initialize_macos_display_services();
 
+    // Native media libraries can write directly to stderr and corrupt the
+    // Ratatui screen. Capture those diagnostics only for the interactive app;
+    // CLI commands above keep their normal terminal output.
+    let _stderr_capture = concord::logging::capture_stderr()?;
     let app = App::new();
     app.run().await
 }
