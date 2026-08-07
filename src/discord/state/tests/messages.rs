@@ -63,7 +63,15 @@ fn duplicate_message_create_keeps_cached_payload_and_refreshes_kind() {
         channel_id,
         message_id,
         author_id,
+        author: "Helper Bot".to_owned(),
+        author_is_bot: true,
+        interaction: Some(crate::discord::MessageInteractionInfo {
+            user_id: Some(Id::new(77)),
+            command_name: Some("help".to_owned()),
+            ..crate::discord::MessageInteractionInfo::test("Alex")
+        }),
         reply: Some(ReplyInfo {
+            author_id: Some(Id::new(77)),
             content: Some("잘되는군".to_owned()),
             ..ReplyInfo::test("Alex")
         }),
@@ -78,6 +86,17 @@ fn duplicate_message_create_keeps_cached_payload_and_refreshes_kind() {
         channel_id,
         message_id,
         author_id,
+        author: "unknown".to_owned(),
+        author_is_bot: false,
+        interaction: Some(crate::discord::MessageInteractionInfo {
+            user_id: Some(Id::new(77)),
+            ..crate::discord::MessageInteractionInfo::test("unknown")
+        }),
+        reply: Some(ReplyInfo {
+            author_id: Some(Id::new(77)),
+            content: Some("잘되는군".to_owned()),
+            ..ReplyInfo::test("unknown")
+        }),
         message_kind: MessageKind::new(19),
         content: None,
         ..MessageCreateFixture::test_fixture_default()
@@ -85,6 +104,19 @@ fn duplicate_message_create_keeps_cached_payload_and_refreshes_kind() {
 
     let messages = state.messages_for_channel(channel_id);
     assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].author, "Helper Bot");
+    assert!(messages[0].author_is_bot);
+    assert_eq!(
+        messages[0]
+            .interaction
+            .as_ref()
+            .expect("interaction should remain cached"),
+        &crate::discord::MessageInteractionInfo {
+            user_id: Some(Id::new(77)),
+            user: "Alex".to_owned(),
+            command_name: Some("help".to_owned()),
+        }
+    );
     assert_eq!(messages[0].content.as_deref(), Some("cached"));
     assert_eq!(messages[0].message_kind, MessageKind::new(19));
     assert_eq!(
@@ -93,6 +125,13 @@ fn duplicate_message_create_keeps_cached_payload_and_refreshes_kind() {
             .as_ref()
             .and_then(|reply| reply.content.as_deref()),
         Some("잘되는군")
+    );
+    assert_eq!(
+        messages[0]
+            .reply
+            .as_ref()
+            .map(|reply| reply.author.as_str()),
+        Some("Alex")
     );
     assert_eq!(
         messages[0].poll.as_ref().map(|poll| poll.answers.len()),
@@ -760,20 +799,29 @@ fn history_merge_preserves_richer_gateway_mention_display_name() {
         channel_id,
         message_id: Id::new(20),
         author_id: Id::new(99),
-        content: Some("hello <@10>".to_owned()),
-        mentions: vec![mention_info(10, "global alias")],
+        content: Some("hello <@10> <@11>".to_owned()),
+        mentions: vec![
+            mention_info(10, "global alias"),
+            mention_info(11, "unknown"),
+        ],
         ..MessageCreateFixture::test_fixture_default()
     }));
     state.apply_event(&latest_history_loaded(
         channel_id,
         vec![MessageInfo {
-            mentions: vec![mention_info(10, "username")],
-            ..message_info(channel_id, 20, "hello <@10>")
+            mentions: vec![mention_info(10, "username"), mention_info(11, "recovered")],
+            ..message_info(channel_id, 20, "hello <@10> <@11>")
         }],
     ));
 
     let messages = state.messages_for_channel(channel_id);
-    assert_eq!(messages[0].mentions, vec![mention_info(10, "global alias")]);
+    assert_eq!(
+        messages[0].mentions,
+        vec![
+            mention_info(10, "global alias"),
+            mention_info(11, "recovered")
+        ]
+    );
 }
 
 #[test]

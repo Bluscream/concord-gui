@@ -1066,6 +1066,10 @@ pub struct ReactionUsersPopupState {
 }
 
 impl ReactionUsersPopupState {
+    pub(in crate::tui) fn channel_id(&self) -> Id<ChannelMarker> {
+        self.channel_id
+    }
+
     pub(super) fn new(
         channel_id: Id<ChannelMarker>,
         message_id: Id<MessageMarker>,

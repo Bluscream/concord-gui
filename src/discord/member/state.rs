@@ -4,13 +4,15 @@ use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 
+use crate::discord::guild::GUILD_FEATURE_MEMBER_VERIFICATION_GATE;
 use crate::discord::ids::{
     Id,
     marker::{ChannelMarker, GuildMarker, RoleMarker, UserMarker},
 };
 use crate::discord::member::onboarding_status_from_flags;
 use crate::discord::{
-    ActivityInfo, MemberInfo, MemberOnboardingStatus, PresenceStatus, RoleInfo, VoiceScope,
+    ActivityInfo, GuildVerificationLevel, MemberInfo, MemberOnboardingStatus, PresenceStatus,
+    RoleInfo, VoiceScope,
 };
 
 use crate::discord::state::{
@@ -199,19 +201,6 @@ impl DiscordState {
             .map(|member| member.display_name.as_str())
     }
 
-    pub fn member_has_known_name(
-        &self,
-        guild_id: Id<GuildMarker>,
-        user_id: Id<UserMarker>,
-    ) -> bool {
-        self.guild_details
-            .members
-            .get(&guild_id)
-            .and_then(|members| members.get(&user_id))
-            .map(|member| !is_fallback_identity(member.username.as_deref(), &member.display_name))
-            .unwrap_or(false)
-    }
-
     pub fn member_needs_hydration(
         &self,
         guild_id: Id<GuildMarker>,
@@ -228,6 +217,46 @@ impl DiscordState {
             .unwrap_or(true)
     }
 
+    fn current_member_participation_needs_hydration(
+        &self,
+        guild_id: Id<GuildMarker>,
+        user_id: Id<UserMarker>,
+    ) -> bool {
+        let Some(guild) = self.guild(guild_id) else {
+            return false;
+        };
+        if guild.owner_id == Some(user_id) {
+            return false;
+        }
+        let Some(member) = self
+            .guild_details
+            .members
+            .get(&guild_id)
+            .and_then(|members| members.get(&user_id))
+        else {
+            return true;
+        };
+
+        let membership_screening_enabled =
+            guild.has_feature(GUILD_FEATURE_MEMBER_VERIFICATION_GATE);
+        let onboarding_enabled = guild.onboarding_may_require_completion();
+        let verification_level = guild.verification_level.filter(|level| {
+            !matches!(
+                level,
+                GuildVerificationLevel::None | GuildVerificationLevel::Unknown(_)
+            )
+        });
+        let member_flags_required = onboarding_enabled
+            || (verification_level.is_some()
+                && member.role_ids_known
+                && member.role_ids.is_empty());
+
+        (member_flags_required && member.flags.is_none())
+            || (membership_screening_enabled && member.pending.is_none())
+            || (matches!(verification_level, Some(GuildVerificationLevel::High))
+                && member.joined_at.is_none())
+    }
+
     /// Collects persistent member demands from shared state. Event-specific
     /// message loads add their own demand immediately, while this sweep makes
     /// voice, typing, thread, and current-user permission data retryable after
@@ -238,6 +267,16 @@ impl DiscordState {
         now: Instant,
     ) -> Vec<(Id<GuildMarker>, Vec<Id<UserMarker>>)> {
         let mut by_guild: BTreeMap<Id<GuildMarker>, BTreeSet<Id<UserMarker>>> = BTreeMap::new();
+
+        if let Some(guild_id) = selected_guild_id
+            && let Some(current_user_id) = self.session.current_user_id
+            && self.current_member_participation_needs_hydration(guild_id, current_user_id)
+        {
+            by_guild
+                .entry(guild_id)
+                .or_default()
+                .insert(current_user_id);
+        }
 
         let mut require = |guild_id: Id<GuildMarker>, user_id: Id<UserMarker>| {
             if self.member_needs_hydration(guild_id, user_id) {

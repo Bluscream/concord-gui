@@ -84,7 +84,7 @@ impl MemberInfo {
             role_ids: Vec::new(),
             role_ids_present: true,
             joined_at: None,
-            flags: None,
+            flags: Some(0),
             pending: None,
             communication_disabled_until: None,
             communication_disabled_until_present: false,

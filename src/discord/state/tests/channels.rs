@@ -58,6 +58,8 @@ fn stores_channel_parent_and_position() {
 #[test]
 fn channel_upsert_stores_and_preserves_recipients() {
     let channel_id: Id<ChannelMarker> = Id::new(10);
+    let user_id = Id::new(20);
+    let avatar = "https://cdn.discordapp.com/avatar.png";
     let mut state = DiscordState::default();
 
     state.apply_event(&AppEvent::ChannelUpsert(dm_channel_with_recipients(
@@ -65,9 +67,11 @@ fn channel_upsert_stores_and_preserves_recipients() {
         "project chat",
         "group-dm",
         vec![ChannelRecipientInfo {
-            avatar_url: Some("https://cdn.discordapp.com/avatar.png".to_owned()),
+            username: Some("alice".to_owned()),
+            is_bot: true,
+            avatar_url: Some(avatar.to_owned()),
             status: Some(PresenceStatus::Online),
-            ..ChannelRecipientInfo::test(Id::new(20), "alice")
+            ..ChannelRecipientInfo::test(user_id, "alice")
         }],
     )));
 
@@ -80,13 +84,27 @@ fn channel_upsert_stores_and_preserves_recipients() {
     let channel = state.channel(channel_id).expect("channel should be stored");
     assert_eq!(channel.name, "renamed project chat");
     assert_eq!(channel.recipients.len(), 1);
-    assert_eq!(channel.recipients[0].user_id, Id::new(20));
+    assert_eq!(channel.recipients[0].user_id, user_id);
     assert_eq!(channel.recipients[0].display_name, "alice");
-    assert_eq!(
-        channel.recipients[0].avatar_url.as_deref(),
-        Some("https://cdn.discordapp.com/avatar.png")
-    );
+    assert_eq!(channel.recipients[0].avatar_url.as_deref(), Some(avatar));
     assert_eq!(channel.recipients[0].status, PresenceStatus::Online);
+
+    state.apply_event(&AppEvent::ChannelUpsert(dm_channel_with_recipients(
+        channel_id,
+        "unknown",
+        "group-dm",
+        vec![ChannelRecipientInfo::test(user_id, "unknown")],
+    )));
+
+    let recipient = &state
+        .channel(channel_id)
+        .expect("DM should remain cached")
+        .recipients[0];
+    assert_eq!(recipient.display_name, "alice");
+    assert_eq!(recipient.username.as_deref(), Some("alice"));
+    assert!(recipient.is_bot);
+    assert_eq!(recipient.avatar_url.as_deref(), Some(avatar));
+    assert_eq!(recipient.status, PresenceStatus::Online);
 }
 
 #[test]

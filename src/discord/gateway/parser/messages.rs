@@ -19,9 +19,7 @@ use crate::{
     logging,
 };
 
-use super::shared::{
-    display_name_from_parts, display_name_from_parts_or_unknown, extra_fields, parse_id,
-};
+use super::shared::{display_name_from_parts_or_unknown, extra_fields, parse_id};
 
 pub(crate) fn parse_message_info(data: &Value) -> Option<MessageInfo> {
     let channel_id = parse_id::<ChannelMarker>(data.get("channel_id")?)?;
@@ -33,6 +31,8 @@ pub(crate) fn parse_message_info(data: &Value) -> Option<MessageInfo> {
     let author_avatar_url = user_avatar_url(author_id, author);
     let author_is_bot = author.get("bot").and_then(Value::as_bool).unwrap_or(false);
     let author_role_ids = parse_message_author_role_ids(data);
+    let author_role_ids_present = author_role_ids.is_some();
+    let author_role_ids = author_role_ids.unwrap_or_default();
     let guild_id = data.get("guild_id").and_then(parse_id::<GuildMarker>);
     let message_kind = data
         .get("type")
@@ -82,6 +82,7 @@ pub(crate) fn parse_message_info(data: &Value) -> Option<MessageInfo> {
         author_avatar_url,
         author_is_bot,
         author_role_ids,
+        author_role_ids_present,
         message_kind,
         interaction,
         reference,
@@ -127,12 +128,11 @@ fn parse_message_interaction_info(data: &Value) -> Option<MessageInteractionInfo
     })
 }
 
-fn parse_message_author_role_ids(data: &Value) -> Vec<Id<RoleMarker>> {
+fn parse_message_author_role_ids(data: &Value) -> Option<Vec<Id<RoleMarker>>> {
     data.get("member")
         .and_then(|member| member.get("roles"))
         .and_then(Value::as_array)
         .map(|roles| roles.iter().filter_map(parse_id::<RoleMarker>).collect())
-        .unwrap_or_default()
 }
 
 fn parse_message_reference_info(value: &Value) -> MessageReferenceInfo {
@@ -376,13 +376,13 @@ fn parse_mention_info(value: &Value) -> Option<MentionInfo> {
         .and_then(Value::as_str);
     let global_name = value.get("global_name").and_then(Value::as_str);
     let username = value.get("username").and_then(Value::as_str);
-    let display_name = display_name_from_parts(nick, global_name, username)?;
-    log_mention_raw_fields(user_id, member, nick, global_name, username, display_name);
+    let display_name = display_name_from_parts_or_unknown(nick, global_name, username);
+    log_mention_raw_fields(user_id, member, nick, global_name, username, &display_name);
 
     Some(MentionInfo {
         user_id,
         guild_nick: nick.filter(|value| !value.is_empty()).map(str::to_owned),
-        display_name: display_name.to_owned(),
+        display_name,
     })
 }
 

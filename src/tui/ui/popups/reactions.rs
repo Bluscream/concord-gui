@@ -189,6 +189,13 @@ fn render_reaction_user_list(
         popup_state.user_scroll(),
         max_visible,
         inner_width,
+        |user| {
+            state.channel_user_display_name(
+                popup_state.channel_id(),
+                user.user_id,
+                &user.display_name,
+            )
+        },
     );
 
     let popup = reaction_users_popup_area(area, lines.len());
@@ -304,6 +311,13 @@ pub(in crate::tui::ui) fn reaction_users_popup_area_for_state(
             popup_state.user_scroll(),
             max_visible,
             inner_width,
+            |user| {
+                state.channel_user_display_name(
+                    popup_state.channel_id(),
+                    user.user_id,
+                    &user.display_name,
+                )
+            },
         )
         .len()
     } else {
@@ -350,7 +364,9 @@ pub(in crate::tui::ui) fn reaction_users_popup_lines(
     inner_width: usize,
 ) -> Vec<Line<'static>> {
     if popup.is_viewing_users() {
-        reaction_user_lines(popup, scroll, max_visible_lines, inner_width)
+        reaction_user_lines(popup, scroll, max_visible_lines, inner_width, |user| {
+            user.display_name.clone()
+        })
     } else {
         reaction_list_lines(
             popup.entries(),
@@ -465,8 +481,9 @@ fn reaction_user_lines(
     scroll: usize,
     max_visible_lines: usize,
     inner_width: usize,
+    display_name: impl Fn(&crate::discord::ReactionUserInfo) -> String,
 ) -> Vec<Line<'static>> {
-    let data_lines = reaction_user_data_lines(popup);
+    let data_lines = reaction_user_data_lines(popup, display_name);
     let visible_lines = max_visible_lines.min(data_lines.len());
     let scroll = scroll.min(data_lines.len().saturating_sub(visible_lines));
     data_lines
@@ -477,7 +494,10 @@ fn reaction_user_lines(
         .collect()
 }
 
-fn reaction_user_data_lines(popup: &ReactionUsersPopupState) -> Vec<Line<'static>> {
+fn reaction_user_data_lines(
+    popup: &ReactionUsersPopupState,
+    display_name: impl Fn(&crate::discord::ReactionUserInfo) -> String,
+) -> Vec<Line<'static>> {
     let Some(entry) = popup.viewed_entry() else {
         return vec![Line::from(Span::styled(
             "No users found",
@@ -498,7 +518,7 @@ fn reaction_user_data_lines(popup: &ReactionUsersPopupState) -> Vec<Line<'static
     entry
         .users()
         .iter()
-        .map(|user| Line::from(Span::raw(format!("  {}", user.display_name))))
+        .map(|user| Line::from(Span::raw(format!("  {}", display_name(user)))))
         .collect()
 }
 

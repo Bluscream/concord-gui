@@ -171,6 +171,7 @@ pub struct SearchFieldView {
 pub struct MessageSearchResultItem {
     pub channel_id: Id<ChannelMarker>,
     pub message_id: Id<MessageMarker>,
+    pub author_id: Id<UserMarker>,
     pub channel_label: String,
     pub author: String,
     pub content: String,

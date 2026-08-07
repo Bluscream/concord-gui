@@ -32,6 +32,8 @@ fn message_search_builds_query_and_jumps_to_selected_result() {
     assert!(state.needs_animation_frame());
 
     let mut result = message_info(Id::new(2), 42);
+    result.author_id = Id::new(99);
+    result.author = "unknown".to_owned();
     result.content = Some("needle in a haystack".to_owned());
     state.push_event(AppEvent::MessageSearchLoaded {
         page: MessageSearchPage {
@@ -41,12 +43,19 @@ fn message_search_builds_query_and_jumps_to_selected_result() {
             has_more: false,
         },
     });
+    state.push_event(AppEvent::GuildMemberUpsert {
+        guild_id: Id::new(1),
+        member: member_with_username(Id::new(99), "Search Alias", "search-user"),
+    });
     assert!(!state.needs_animation_frame());
 
     let view = state.search_popup_view().expect("search popup view");
     assert_eq!(view.results.len(), 1);
     match &view.results[0] {
-        SearchResultItem::Message(item) => assert_eq!(item.content, "needle in a haystack"),
+        SearchResultItem::Message(item) => {
+            assert_eq!(item.author, "Search Alias");
+            assert_eq!(item.content, "needle in a haystack");
+        }
         SearchResultItem::Member(_) => panic!("expected message result"),
     }
 

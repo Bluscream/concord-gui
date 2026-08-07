@@ -115,13 +115,44 @@ fn message_history_authors_missing_member_roles_are_requested_from_batch() {
     message.author_id = author_id;
     let mut duplicate = message_info(channel_id, 21);
     duplicate.author_id = author_id;
+    duplicate.mentions = vec![crate::discord::MentionInfo::test(Id::new(98), "mentioned")];
+    duplicate.reply = Some(ReplyInfo {
+        author_id: Some(Id::new(97)),
+        mentions: vec![crate::discord::MentionInfo::test(
+            Id::new(96),
+            "reply mention",
+        )],
+        ..ReplyInfo::test("reply author")
+    });
+    duplicate.interaction = Some(crate::discord::MessageInteractionInfo {
+        user_id: Some(Id::new(94)),
+        ..crate::discord::MessageInteractionInfo::test("interaction user")
+    });
+    duplicate.forwarded_snapshots = vec![MessageSnapshotInfo {
+        source_channel_id: Some(channel_id),
+        mentions: vec![crate::discord::MentionInfo::test(
+            Id::new(95),
+            "forwarded mention",
+        )],
+        ..MessageSnapshotInfo::test()
+    }];
     let mut known_member = message_info(channel_id, 22);
     known_member.author_id = Id::new(10);
     known_member.author_role_ids = vec![Id::new(100)];
 
     assert_eq!(
         state.missing_message_author_member_requests(&[message.clone(), duplicate, known_member]),
-        vec![(guild_id, vec![author_id])]
+        vec![(
+            guild_id,
+            vec![
+                Id::new(94),
+                Id::new(95),
+                Id::new(96),
+                Id::new(97),
+                Id::new(98),
+                author_id
+            ]
+        )]
     );
 
     state.push_event(AppEvent::GuildMemberUpsert {

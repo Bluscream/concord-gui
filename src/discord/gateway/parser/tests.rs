@@ -802,7 +802,7 @@ fn raw_member_list_update_handles_insert_and_update_items() {
 }
 
 #[test]
-fn relationship_add_emits_friend_upsert() {
+fn relationship_payloads_emit_upserts_and_authoritative_empty_lists() {
     let events = parse_user_account_event(
         &json!({
             "t": "RELATIONSHIP_ADD",
@@ -829,6 +829,21 @@ fn relationship_add_emits_friend_upsert() {
                 && relationship.display_name.as_deref() == Some("Alice Global")
                 && relationship.username.as_deref() == Some("alice")
     ));
+
+    let ready = parse_user_account_event(
+        &json!({
+            "t": "READY",
+            "d": {
+                "user": { "id": "10", "username": "me" },
+                "relationships": []
+            }
+        })
+        .to_string(),
+    );
+    assert!(ready.iter().any(|event| matches!(
+        event,
+        AppEvent::RelationshipsLoaded { relationships } if relationships.is_empty()
+    )));
 }
 
 #[test]
@@ -2642,19 +2657,43 @@ fn message_create_parser_resolves_author_name_by_precedence() {
 }
 
 #[test]
-fn message_info_parser_keeps_author_role_ids_from_member_payload() {
-    let message = parse_message_info(&json!({
-        "id": "20",
-        "channel_id": "10",
-        "guild_id": "1",
-        "author": { "id": "30", "username": "neo" },
-        "member": { "roles": ["90", "91"] },
-        "content": "hello",
-        "attachments": []
-    }))
-    .expect("message should parse");
+fn message_info_parser_tracks_author_role_payload_presence() {
+    let cases = [
+        (
+            "roles present",
+            json!({ "roles": ["90", "91"] }),
+            vec![Id::new(90), Id::new(91)],
+            true,
+        ),
+        (
+            "roles explicitly empty",
+            json!({ "roles": [] }),
+            vec![],
+            true,
+        ),
+        ("member omitted", Value::Null, vec![], false),
+    ];
 
-    assert_eq!(message.author_role_ids, vec![Id::new(90), Id::new(91)]);
+    for (label, member, expected_roles, expected_presence) in cases {
+        let mut payload = json!({
+            "id": "20",
+            "channel_id": "10",
+            "guild_id": "1",
+            "author": { "id": "30", "username": "neo" },
+            "content": "hello",
+            "attachments": []
+        });
+        if !member.is_null() {
+            payload["member"] = member;
+        }
+        let message = parse_message_info(&payload).expect("message should parse");
+
+        assert_eq!(message.author_role_ids, expected_roles, "{label}");
+        assert_eq!(
+            message.author_role_ids_present, expected_presence,
+            "{label}"
+        );
+    }
 }
 
 #[test]
@@ -2702,7 +2741,7 @@ fn message_create_parser_keeps_mention_display_names() {
         "id": "20",
         "channel_id": "10",
         "author": { "id": "30", "username": "neo" },
-        "content": "hello <@40> <@41> <@42>",
+        "content": "hello <@40> <@41> <@42> <@43>",
         "mention_everyone": true,
         "mention_roles": ["50", "51"],
         "flags": 4096,
@@ -2721,7 +2760,8 @@ fn message_create_parser_keeps_mention_display_names() {
             {
                 "id": "42",
                 "username": "gamma"
-            }
+            },
+            { "id": "43" }
         ],
         "attachments": []
     }))
@@ -2739,6 +2779,7 @@ fn message_create_parser_keeps_mention_display_names() {
             mention_info_with_nick(40, "Alpha Nick"),
             mention_info(41, "Beta Global"),
             mention_info(42, "gamma"),
+            mention_info(43, "unknown"),
         ]
     );
 }

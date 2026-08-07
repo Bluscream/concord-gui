@@ -146,11 +146,11 @@ pub(super) fn parse_ready(data: &Value) -> Vec<AppEvent> {
             .iter()
             .filter_map(parse_relationship_entry)
             .collect();
-        if !parsed.is_empty() {
-            events.push(AppEvent::RelationshipsLoaded {
-                relationships: parsed,
-            });
-        }
+        // The READY list is authoritative. Emit an empty list too so a new
+        // session can clear relationships that disappeared while offline.
+        events.push(AppEvent::RelationshipsLoaded {
+            relationships: parsed,
+        });
     }
 
     // VERSIONED_READ_STATES wraps the array as `{ entries, version, partial }`.

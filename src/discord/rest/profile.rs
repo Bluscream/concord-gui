@@ -264,12 +264,14 @@ impl UserProfileResponse {
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
             .map(str::to_owned);
-        let role_ids = body
+        let role_values = body
             .get("guild_member")
             .and_then(|member| member.get("roles"))
-            .and_then(Value::as_array)
+            .and_then(Value::as_array);
+        let role_ids = role_values
             .map(|roles| roles.iter().filter_map(parse_profile_role_id).collect())
             .unwrap_or_default();
+        let role_ids_present = role_values.is_some();
 
         Self {
             profile: UserProfileInfo {
@@ -278,6 +280,7 @@ impl UserProfileResponse {
                 global_name,
                 guild_nick,
                 role_ids,
+                role_ids_present,
                 avatar_url,
                 bio,
                 pronouns,

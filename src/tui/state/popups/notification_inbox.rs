@@ -330,9 +330,9 @@ impl DashboardState {
             .map(NotificationInboxState::active_items)
             .unwrap_or_default();
         // Inbox snapshots can arrive before the member request that supplies
-        // role IDs, so resolve author colors against the live cache on read.
+        // identity and roles, so resolve both against the live cache on read.
         for item in &mut items {
-            self.refresh_notification_inbox_item_role_colors(item);
+            self.refresh_notification_inbox_item_authors(item);
         }
         items
     }
@@ -1087,15 +1087,22 @@ impl DashboardState {
         }
     }
 
-    fn refresh_notification_inbox_item_role_colors(&self, item: &mut NotificationInboxItem) {
+    fn refresh_notification_inbox_item_authors(&self, item: &mut NotificationInboxItem) {
         match item {
             NotificationInboxItem::Unread(item) => {
                 for message in &mut item.messages {
+                    message.author = self.channel_user_display_name(
+                        message.channel_id,
+                        message.author_id,
+                        &message.author,
+                    );
                     message.author_role_color =
                         self.inbox_message_author_role_color(item.guild_id, message);
                 }
             }
             NotificationInboxItem::Mention(item) => {
+                item.author =
+                    self.channel_user_display_name(item.channel_id, item.author_id, &item.author);
                 item.author_role_color = self.inbox_author_role_color(
                     item.guild_id,
                     item.channel_id,

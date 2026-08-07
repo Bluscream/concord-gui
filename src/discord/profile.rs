@@ -56,6 +56,10 @@ pub struct UserProfileInfo {
     pub global_name: Option<String>,
     pub guild_nick: Option<String>,
     pub role_ids: Vec<Id<RoleMarker>>,
+    /// Whether the profile response included `guild_member.roles`. A profile
+    /// without guild member data must not erase roles cached from an earlier
+    /// guild-scoped response.
+    pub role_ids_present: bool,
     pub avatar_url: Option<String>,
     pub bio: Option<String>,
     pub pronouns: Option<String>,
@@ -85,6 +89,7 @@ impl UserProfileInfo {
             global_name: None,
             guild_nick: None,
             role_ids: Vec::new(),
+            role_ids_present: false,
             avatar_url: None,
             bio: None,
             pronouns: None,

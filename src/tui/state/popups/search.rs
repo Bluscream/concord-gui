@@ -274,7 +274,17 @@ impl DashboardState {
     }
 
     pub fn search_popup_view(&self) -> Option<SearchPopupView> {
-        self.popups.search_popup().map(SearchPopupState::view)
+        let mut view = self.popups.search_popup().map(SearchPopupState::view)?;
+        for result in &mut view.results {
+            if let SearchResultItem::Message(message) = result {
+                message.author = self.channel_user_display_name(
+                    message.channel_id,
+                    message.author_id,
+                    &message.author,
+                );
+            }
+        }
+        Some(view)
     }
 
     pub(in crate::tui) fn search_popup_has_visible_loading_indicator(&self) -> bool {
@@ -757,6 +767,7 @@ impl DashboardState {
         MessageSearchResultItem {
             channel_id: message.channel_id,
             message_id: message.message_id,
+            author_id: message.author_id,
             channel_label,
             author: message.author.clone(),
             content: message_search_content_label(message),

@@ -1034,6 +1034,14 @@ fn reaction_users_popup_buffer_renders_without_wrap_artifacts() {
     use crate::tui::keybindings::SelectionAction;
 
     let mut state = DashboardState::new();
+    state.push_event(guild_create_event(GuildCreateFixture {
+        channels: vec![ChannelInfo {
+            guild_id: Some(Id::new(1)),
+            ..ChannelInfo::test(Id::new(2), "GuildText")
+        }],
+        members: vec![member_info(1, "Guild Reactor")],
+        ..GuildCreateFixture::new(Id::new(1))
+    }));
     let emoji = ReactionEmoji::Unicode("👍".to_owned());
     state.open_reaction_users_popup(Id::new(2), Id::new(1), vec![(emoji.clone(), 5)]);
     // Drill into the reaction so the user list (with the long name) renders.
@@ -1043,7 +1051,7 @@ fn reaction_users_popup_buffer_renders_without_wrap_artifacts() {
         message_id: Id::new(1),
         emoji,
         users: vec![
-            ReactionUserInfo::test(Id::new(1), "갱생케가"),
+            ReactionUserInfo::test(Id::new(1), "unknown"),
             ReactionUserInfo::test(Id::new(2), "하나비"),
             ReactionUserInfo::test(Id::new(3), "슬기인뎅"),
             ReactionUserInfo::test(Id::new(4), "won"),
@@ -1097,6 +1105,11 @@ fn reaction_users_popup_buffer_renders_without_wrap_artifacts() {
                 .collect::<String>()
         })
         .collect::<Vec<_>>();
+
+    assert!(
+        dump.iter().any(|line| line.contains("Guild Reactor")),
+        "reaction user should use the shared guild member identity"
+    );
 
     // The reported artefact was the trailing fragment "? )" from
     // "파닥파닥( 40%..? )" appearing on rows that should hold a different

@@ -6,7 +6,7 @@ use crate::discord::ids::{
 };
 use crate::{
     Result,
-    discord::{ReactionEmoji, ReactionUserInfo},
+    discord::{ReactionEmoji, ReactionUserInfo, display_name::display_name_from_parts_or_unknown},
 };
 
 use super::DiscordRest;
@@ -97,7 +97,7 @@ pub(super) struct ReactionUsersResponse {
     pub(super) raw_users: Vec<Value>,
 }
 
-fn parse_reaction_users_response(raw_users: Vec<Value>) -> ReactionUsersResponse {
+pub(super) fn parse_reaction_users_response(raw_users: Vec<Value>) -> ReactionUsersResponse {
     let users = raw_users
         .iter()
         .filter_map(reaction_user_info_from_raw)
@@ -111,12 +111,11 @@ fn reaction_user_info_from_raw(value: &Value) -> Option<ReactionUserInfo> {
         .and_then(Value::as_str)
         .and_then(|raw| raw.parse::<u64>().ok())
         .and_then(Id::<UserMarker>::new_checked)?;
-    let display_name = value
-        .get("global_name")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .or_else(|| value.get("username").and_then(Value::as_str))?
-        .to_owned();
+    let display_name = display_name_from_parts_or_unknown(
+        None,
+        value.get("global_name").and_then(Value::as_str),
+        value.get("username").and_then(Value::as_str),
+    );
 
     Some(ReactionUserInfo {
         user_id,

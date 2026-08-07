@@ -840,31 +840,6 @@ impl DiscordState {
         selected_role_ids_color(role_ids, roles)
     }
 
-    pub fn message_author_role_ids_known(
-        &self,
-        guild_id: Id<GuildMarker>,
-        channel_id: Id<ChannelMarker>,
-        message_id: Id<MessageMarker>,
-        user_id: Id<UserMarker>,
-    ) -> bool {
-        if let Some(member) = self
-            .guild_details
-            .members
-            .get(&guild_id)
-            .and_then(|members| members.get(&user_id))
-        {
-            return member.role_ids_known;
-        }
-
-        self.profiles
-            .profile_role_ids
-            .contains_key(&(guild_id, user_id))
-            || self
-                .message_cache
-                .message_author_role_ids
-                .contains_key(&(channel_id, message_id))
-    }
-
     pub(in crate::discord) fn message_author_display_name(
         &self,
         guild_id: Option<Id<GuildMarker>>,
@@ -1000,6 +975,13 @@ impl DiscordState {
                 {
                     reply.author = display_name.clone();
                 }
+                if let Some(interaction) = message.interaction.as_mut()
+                    && let Some((display_name, _)) = interaction
+                        .user_id
+                        .and_then(|user_id| identities.get(&user_id))
+                {
+                    interaction.user = display_name.clone();
+                }
             }
         }
     }
@@ -1023,6 +1005,11 @@ impl DiscordState {
                     && reply.author_id == Some(user_id)
                 {
                     reply.author = display_name.to_owned();
+                }
+                if let Some(interaction) = &mut message.interaction
+                    && interaction.user_id == Some(user_id)
+                {
+                    interaction.user = display_name.to_owned();
                 }
             }
         });
@@ -1489,6 +1476,7 @@ impl DiscordState {
             message.channel_id,
             message.message_id,
             &message.author_role_ids,
+            message.author_role_ids_present,
         );
     }
 
@@ -1497,12 +1485,10 @@ impl DiscordState {
         channel_id: Id<ChannelMarker>,
         message_id: Id<MessageMarker>,
         author_role_ids: &[Id<RoleMarker>],
+        author_role_ids_present: bool,
     ) {
         let key = (channel_id, message_id);
-        if author_role_ids.is_empty() {
-            self.message_cache_mut()
-                .message_author_role_ids
-                .remove(&key);
+        if author_role_ids.is_empty() && !author_role_ids_present {
             return;
         }
 
@@ -1536,10 +1522,7 @@ impl DiscordState {
 
 fn merge_message(existing: &mut MessageState, incoming: &MessageState) {
     merge_shared_message_fields(existing, incoming);
-    existing.author_is_bot = incoming.author_is_bot;
-    if incoming.interaction.is_some() || existing.interaction.is_none() {
-        existing.interaction = incoming.interaction.clone();
-    }
+    existing.author_is_bot |= incoming.author_is_bot;
     if let Some(content) = &incoming.content
         && (!content.is_empty() || message_content_is_empty(existing))
     {
@@ -1580,13 +1563,33 @@ fn merge_shared_message_fields(existing: &mut MessageState, incoming: &MessageSt
     existing.guild_id = incoming.guild_id.or(existing.guild_id);
     existing.channel_id = incoming.channel_id;
     existing.author_id = incoming.author_id;
-    existing.author = incoming.author.clone();
+    existing.author = preferred_user_label(&existing.author, &incoming.author);
     if incoming.author_avatar_url.is_some() || existing.author_avatar_url.is_none() {
         existing.author_avatar_url = incoming.author_avatar_url.clone();
     }
     existing.message_kind = incoming.message_kind;
-    if incoming.reply.is_some() || existing.reply.is_none() {
-        existing.reply = incoming.reply.clone();
+    if let Some(incoming_reply) = incoming.reply.as_ref() {
+        let mut merged = incoming_reply.clone();
+        if let Some(previous) = existing.reply.as_ref()
+            && (merged.author_id == previous.author_id || merged.author_id.is_none())
+        {
+            merged.author_id = merged.author_id.or(previous.author_id);
+            merged.author = preferred_user_label(&previous.author, &merged.author);
+        }
+        existing.reply = Some(merged);
+    }
+    if let Some(incoming_interaction) = incoming.interaction.as_ref() {
+        let mut merged = incoming_interaction.clone();
+        if let Some(previous) = existing.interaction.as_ref()
+            && (merged.user_id == previous.user_id || merged.user_id.is_none())
+        {
+            merged.user_id = merged.user_id.or(previous.user_id);
+            merged.user = preferred_user_label(&previous.user, &merged.user);
+            if merged.command_name.is_none() {
+                merged.command_name = previous.command_name.clone();
+            }
+        }
+        existing.interaction = Some(merged);
     }
     if incoming.poll.is_some() || existing.poll.is_none() {
         existing.poll = incoming.poll.clone();
@@ -1598,6 +1601,18 @@ fn merge_shared_message_fields(existing: &mut MessageState, incoming: &MessageSt
     }
     if !incoming.forwarded_snapshots.is_empty() || existing.forwarded_snapshots.is_empty() {
         existing.forwarded_snapshots = incoming.forwarded_snapshots.clone();
+    }
+}
+
+fn user_label_is_fallback(label: &str) -> bool {
+    label.is_empty() || label == "unknown"
+}
+
+fn preferred_user_label(existing: &str, incoming: &str) -> String {
+    if user_label_is_fallback(incoming) && !user_label_is_fallback(existing) {
+        existing.to_owned()
+    } else {
+        incoming.to_owned()
     }
 }
 
@@ -1840,9 +1855,14 @@ fn merge_message_mentions(existing: &[MentionInfo], incoming: &[MentionInfo]) ->
             if mention.guild_nick.is_some() {
                 mention.clone()
             } else {
-                existing
+                let previous = existing
                     .iter()
-                    .find(|existing| existing.user_id == mention.user_id)
+                    .find(|existing| existing.user_id == mention.user_id);
+                previous
+                    .filter(|previous| {
+                        previous.guild_nick.is_some()
+                            || !user_label_is_fallback(&previous.display_name)
+                    })
                     .cloned()
                     .unwrap_or_else(|| mention.clone())
             }

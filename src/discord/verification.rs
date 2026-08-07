@@ -37,6 +37,8 @@ pub enum GuildParticipationDataGap {
     VerificationLevel,
     CurrentUser,
     CurrentMember,
+    MemberFlags,
+    MemberRoles,
     MembershipScreeningStatus,
     OnboardingStatus,
     EmailVerificationStatus,
@@ -52,6 +54,8 @@ impl fmt::Display for GuildParticipationDataGap {
             Self::VerificationLevel => "the server verification level is not loaded",
             Self::CurrentUser => "the current user is not loaded",
             Self::CurrentMember => "the current server member is not loaded",
+            Self::MemberFlags => "the current server member flags are not loaded",
+            Self::MemberRoles => "the current server member roles are not loaded",
             Self::MembershipScreeningStatus => "the membership screening status is not loaded",
             Self::OnboardingStatus => "the onboarding status is not loaded",
             Self::EmailVerificationStatus => "the email verification status is not loaded",
@@ -248,11 +252,17 @@ impl DiscordState {
         // Assigned roles exempt members from the classic guild verification
         // level. Membership screening and enabled onboarding remain separate
         // restrictions and are checked before this exemption.
+        if matches!(level, GuildVerificationLevel::None) {
+            return GuildParticipationDecision::Allowed;
+        }
+        if !member.role_ids_known {
+            return GuildParticipationDecision::Unavailable(GuildParticipationDataGap::MemberRoles);
+        }
         if !member.role_ids.is_empty() {
             return GuildParticipationDecision::Allowed;
         }
-        if matches!(level, GuildVerificationLevel::None) {
-            return GuildParticipationDecision::Allowed;
+        if member.flags.is_none() {
+            return GuildParticipationDecision::Unavailable(GuildParticipationDataGap::MemberFlags);
         }
         if self.session.current_user_phone_verified == Some(true) {
             return GuildParticipationDecision::Allowed;
@@ -413,7 +423,7 @@ mod tests {
                 member_age_minutes,
                 email,
                 phone,
-                None,
+                Some(0),
                 Some(false),
             );
             let channel = state.channel(channel_id).expect("channel should exist");
@@ -585,6 +595,67 @@ mod tests {
                 "onboarding enabled state {onboarding_enabled:?}"
             );
         }
+    }
+
+    #[test]
+    fn unknown_required_member_fields_keep_verification_decision_unavailable() {
+        let now = Utc
+            .with_ymd_and_hms(2026, 7, 15, 0, 0, 0)
+            .single()
+            .expect("test time should be valid");
+        let (mut state, channel_id) = verification_state(
+            GuildVerificationLevel::Low,
+            now,
+            60,
+            60,
+            true,
+            true,
+            Some(0),
+            Some(false),
+        );
+        let user_id = state.current_user_id().expect("current user should exist");
+        state
+            .guild_details_mut()
+            .members
+            .get_mut(&Id::new(100))
+            .and_then(|members| members.get_mut(&user_id))
+            .expect("current member should exist")
+            .role_ids_known = false;
+
+        assert_eq!(
+            state.guild_participation_decision_at(
+                state.channel(channel_id).expect("channel should exist"),
+                now,
+            ),
+            GuildParticipationDecision::Unavailable(GuildParticipationDataGap::MemberRoles)
+        );
+
+        let (mut state, channel_id) = verification_state(
+            GuildVerificationLevel::Low,
+            now,
+            60,
+            60,
+            true,
+            true,
+            Some(0),
+            Some(false),
+        );
+        let user_id = state.current_user_id().expect("current user should exist");
+        state
+            .guild_details_mut()
+            .members
+            .get_mut(&Id::new(100))
+            .and_then(|members| members.get_mut(&user_id))
+            .expect("current member should exist")
+            .flags = None;
+
+        assert_eq!(
+            state.guild_participation_decision_at(
+                state.channel(channel_id).expect("channel should exist"),
+                now,
+            ),
+            GuildParticipationDecision::Unavailable(GuildParticipationDataGap::MemberFlags)
+        );
     }
 
     #[test]

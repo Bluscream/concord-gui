@@ -7,7 +7,7 @@ use ratatui::{
 
 use crate::discord::ids::{
     Id,
-    marker::{GuildMarker, UserMarker},
+    marker::{ChannelMarker, GuildMarker, UserMarker},
 };
 use crate::discord::{ActivityInfo, AppCommand, ChannelInfo, MessageInfo, MessageState};
 use crate::tui::theme;
@@ -24,6 +24,18 @@ impl DashboardState {
         self.discord
             .cache
             .user_activities_for_guild(self.selected_guild_id(), user_id)
+    }
+
+    pub(in crate::tui) fn channel_user_display_name(
+        &self,
+        channel_id: Id<ChannelMarker>,
+        user_id: Id<UserMarker>,
+        fallback: &str,
+    ) -> String {
+        self.discord
+            .cache
+            .user_display_name_for_channel(channel_id, user_id)
+            .unwrap_or_else(|| fallback.to_owned())
     }
 
     pub fn members_grouped(&self) -> Vec<MemberGroup<'_>> {
@@ -70,17 +82,12 @@ impl DashboardState {
         )
     }
 
-    pub fn missing_message_author_member_requests(
+    pub(in crate::tui) fn missing_message_author_member_requests(
         &self,
         messages: &[MessageInfo],
     ) -> Vec<(Id<GuildMarker>, Vec<Id<UserMarker>>)> {
-        let mut by_guild: BTreeMap<Id<GuildMarker>, BTreeSet<Id<UserMarker>>> = BTreeMap::new();
-
+        let mut users = Vec::new();
         for message in messages {
-            if !message.author_role_ids.is_empty() {
-                continue;
-            }
-
             let channel = self.discord.cache.channel(message.channel_id);
             let Some(guild_id) = message
                 .guild_id
@@ -88,57 +95,83 @@ impl DashboardState {
             else {
                 continue;
             };
-
-            if !self.discord.cache.message_author_role_ids_known(
-                guild_id,
-                message.channel_id,
-                message.message_id,
-                message.author_id,
-            ) {
-                by_guild
-                    .entry(guild_id)
-                    .or_default()
-                    .insert(message.author_id);
+            users.push((guild_id, message.author_id));
+            users.extend(
+                message
+                    .interaction
+                    .as_ref()
+                    .and_then(|interaction| interaction.user_id)
+                    .map(|user_id| (guild_id, user_id)),
+            );
+            users.extend(
+                message
+                    .mentions
+                    .iter()
+                    .map(|mention| (guild_id, mention.user_id)),
+            );
+            if let Some(reply) = message.reply.as_ref() {
+                users.extend(reply.author_id.map(|user_id| (guild_id, user_id)));
+                users.extend(
+                    reply
+                        .mentions
+                        .iter()
+                        .map(|mention| (guild_id, mention.user_id)),
+                );
+            }
+            for snapshot in &message.forwarded_snapshots {
+                let Some(snapshot_guild_id) = snapshot
+                    .source_channel_id
+                    .and_then(|channel_id| self.discord.cache.channel(channel_id))
+                    .and_then(|channel| channel.guild_id)
+                else {
+                    continue;
+                };
+                users.extend(
+                    snapshot
+                        .mentions
+                        .iter()
+                        .map(|mention| (snapshot_guild_id, mention.user_id)),
+                );
             }
         }
-
-        by_guild
-            .into_iter()
-            .map(|(guild_id, user_ids)| (guild_id, user_ids.into_iter().collect()))
-            .collect()
+        self.missing_guild_member_requests(users)
     }
 
-    pub fn missing_thread_owner_member_requests(
+    pub(in crate::tui) fn missing_thread_owner_member_requests(
         &self,
         threads: &[ChannelInfo],
     ) -> Vec<(Id<GuildMarker>, Vec<Id<UserMarker>>)> {
-        let mut by_guild: BTreeMap<Id<GuildMarker>, BTreeSet<Id<UserMarker>>> = BTreeMap::new();
-
-        for thread in threads {
-            let Some(user_id) = thread.owner_id else {
-                continue;
-            };
+        let users = threads.iter().filter_map(|thread| {
+            let user_id = thread.owner_id?;
             let guild_id = thread.guild_id.or_else(|| {
                 self.discord
                     .cache
                     .channel(thread.channel_id)
                     .and_then(|channel| channel.guild_id)
-            });
-            let Some(guild_id) = guild_id else {
-                continue;
-            };
-            if !self.discord.cache.member_has_known_name(guild_id, user_id) {
-                by_guild.entry(guild_id).or_default().insert(user_id);
-            }
-        }
-
-        by_guild
-            .into_iter()
-            .map(|(guild_id, user_ids)| (guild_id, user_ids.into_iter().collect()))
-            .collect()
+            })?;
+            Some((guild_id, user_id))
+        });
+        self.missing_guild_member_requests(users)
     }
 
-    pub fn observed_member_hydration_requests(
+    pub(in crate::tui) fn missing_channel_user_member_requests(
+        &self,
+        channel_id: Id<ChannelMarker>,
+        guild_id: Option<Id<GuildMarker>>,
+        user_ids: impl IntoIterator<Item = Id<UserMarker>>,
+    ) -> Vec<(Id<GuildMarker>, Vec<Id<UserMarker>>)> {
+        let Some(guild_id) = guild_id.or_else(|| {
+            self.discord
+                .cache
+                .channel(channel_id)
+                .and_then(|channel| channel.guild_id)
+        }) else {
+            return Vec::new();
+        };
+        self.missing_guild_member_requests(user_ids.into_iter().map(|user_id| (guild_id, user_id)))
+    }
+
+    pub(in crate::tui) fn observed_member_hydration_requests(
         &self,
         now: std::time::Instant,
     ) -> Vec<(Id<GuildMarker>, Vec<Id<UserMarker>>)> {
@@ -147,7 +180,7 @@ impl DashboardState {
             .missing_member_hydration_requests(self.selected_guild_id(), now)
     }
 
-    pub fn enqueue_member_hydration_requests(
+    pub(in crate::tui) fn enqueue_member_hydration_requests(
         &mut self,
         requests: Vec<(Id<GuildMarker>, Vec<Id<UserMarker>>)>,
     ) {
@@ -169,6 +202,22 @@ impl DashboardState {
             }
         }
         enqueued
+    }
+
+    fn missing_guild_member_requests(
+        &self,
+        users: impl IntoIterator<Item = (Id<GuildMarker>, Id<UserMarker>)>,
+    ) -> Vec<(Id<GuildMarker>, Vec<Id<UserMarker>>)> {
+        let mut by_guild: BTreeMap<Id<GuildMarker>, BTreeSet<Id<UserMarker>>> = BTreeMap::new();
+        for (guild_id, user_id) in users {
+            if self.discord.cache.member_needs_hydration(guild_id, user_id) {
+                by_guild.entry(guild_id).or_default().insert(user_id);
+            }
+        }
+        by_guild
+            .into_iter()
+            .map(|(guild_id, user_ids)| (guild_id, user_ids.into_iter().collect()))
+            .collect()
     }
 
     pub fn member_role_color(&self, member: MemberEntry<'_>) -> Option<u32> {

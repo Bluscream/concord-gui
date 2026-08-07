@@ -102,6 +102,10 @@ fn user_identity_update_refreshes_existing_dm_message_author() {
         author_id,
         author: "alice".to_owned(),
         author_avatar_url: Some("https://cdn.discordapp.com/avatars/4/old.png".to_owned()),
+        interaction: Some(crate::discord::MessageInteractionInfo {
+            user_id: Some(author_id),
+            ..crate::discord::MessageInteractionInfo::test("alice")
+        }),
         content: Some("hello".to_owned()),
         ..MessageCreateFixture::test_fixture_default()
     }));
@@ -115,6 +119,14 @@ fn user_identity_update_refreshes_existing_dm_message_author() {
 
     let messages = state.messages_for_channel(channel_id);
     assert_eq!(messages[0].author, "Alice New");
+    assert_eq!(
+        messages[0]
+            .interaction
+            .as_ref()
+            .expect("interaction should remain cached")
+            .user,
+        "Alice New"
+    );
     assert_eq!(
         messages[0].author_avatar_url.as_deref(),
         Some("https://cdn.discordapp.com/avatars/4/new.png"),
@@ -133,6 +145,14 @@ fn member_update_refreshes_existing_message_author() {
         channel_id,
         message_id: Id::new(3),
         author_id,
+        interaction: Some(crate::discord::MessageInteractionInfo {
+            user_id: Some(author_id),
+            ..crate::discord::MessageInteractionInfo::test("unknown")
+        }),
+        reply: Some(ReplyInfo {
+            author_id: Some(author_id),
+            ..ReplyInfo::test("unknown")
+        }),
         content: Some("hello".to_owned()),
         ..MessageCreateFixture::test_fixture_default()
     }));
@@ -143,4 +163,20 @@ fn member_update_refreshes_existing_message_author() {
 
     let messages = state.messages_for_channel(channel_id);
     assert_eq!(messages[0].author, "server alias");
+    assert_eq!(
+        messages[0]
+            .interaction
+            .as_ref()
+            .expect("interaction should remain cached")
+            .user,
+        "server alias"
+    );
+    assert_eq!(
+        messages[0]
+            .reply
+            .as_ref()
+            .expect("reply should remain cached")
+            .author,
+        "server alias"
+    );
 }

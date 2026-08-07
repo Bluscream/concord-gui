@@ -13,7 +13,11 @@ use tokio::sync::mpsc;
 use crate::{
     config::NotificationOptions,
     discord::{
-        AppEvent, ChannelInfo, DiscordClient, MessageInfo, SequencedAppEvent, VoiceSoundKind,
+        AppEvent, DiscordClient, SequencedAppEvent, VoiceSoundKind,
+        ids::{
+            Id,
+            marker::{GuildMarker, UserMarker},
+        },
     },
     logging,
 };
@@ -85,21 +89,25 @@ pub(super) fn process_effect_event(
     ctx: &mut EffectContext<'_>,
 ) -> EffectProcessingOutcome {
     let outcome = EffectProcessingOutcome::processed(&event);
-    let member_hydration_messages = member_hydration_messages_for_event(&event);
-    let thread_owner_hydration_infos = thread_owner_hydration_infos_for_event(&event);
+    let now = std::time::Instant::now();
+    let missing_members = missing_members_for_effect(&event, ctx.state, now);
 
     dispatch_runtime_side_effects(&event, ctx);
     record_media_event(&event, ctx);
     push_dashboard_effect(event, ctx);
-    enqueue_missing_message_author_requests(member_hydration_messages, ctx);
-    enqueue_missing_thread_owner_requests(thread_owner_hydration_infos, ctx);
-    enqueue_observed_member_hydration_requests(ctx);
+    enqueue_member_hydration_requests(missing_members, ctx, now);
 
     outcome
 }
 
-fn member_hydration_messages_for_event(event: &AppEvent) -> Option<Vec<MessageInfo>> {
-    match event {
+fn missing_members_for_effect(
+    event: &AppEvent,
+    state: &DashboardState,
+    now: std::time::Instant,
+) -> Vec<(Id<GuildMarker>, Vec<Id<UserMarker>>)> {
+    let mut missing = state.observed_member_hydration_requests(now);
+    let messages = match event {
+        AppEvent::MessageCreate { message } => Some(std::slice::from_ref(message)),
         AppEvent::MessageHistoryLoaded { messages, .. }
         | AppEvent::MessageHistoryRefreshed { messages, .. }
         | AppEvent::MessageHistoryAfterLoaded { messages, .. }
@@ -113,16 +121,35 @@ fn member_hydration_messages_for_event(event: &AppEvent) -> Option<Vec<MessageIn
         | AppEvent::ForumPostsLoaded {
             first_messages: messages,
             ..
-        } => Some(messages.clone()),
+        } => Some(messages.as_slice()),
         _ => None,
+    };
+    if let Some(messages) = messages {
+        missing.extend(state.missing_message_author_member_requests(messages));
     }
-}
-
-fn thread_owner_hydration_infos_for_event(event: &AppEvent) -> Option<Vec<ChannelInfo>> {
-    match event {
-        AppEvent::ForumPostsLoaded { threads, .. } => Some(threads.clone()),
-        _ => None,
+    if let AppEvent::MessageUpdateDispatch { update } = event
+        && let Some(mentions) = update.fields.mentions.as_ref()
+    {
+        missing.extend(state.missing_channel_user_member_requests(
+            update.channel_id,
+            update.guild_id,
+            mentions.iter().map(|mention| mention.user_id),
+        ));
     }
+    if let AppEvent::ForumPostsLoaded { threads, .. } = event {
+        missing.extend(state.missing_thread_owner_member_requests(threads));
+    }
+    if let AppEvent::ReactionUsersLoaded {
+        channel_id, users, ..
+    } = event
+    {
+        missing.extend(state.missing_channel_user_member_requests(
+            *channel_id,
+            None,
+            users.iter().map(|user| user.user_id),
+        ));
+    }
+    missing
 }
 
 fn dispatch_runtime_side_effects(event: &AppEvent, ctx: &EffectContext<'_>) {
@@ -176,39 +203,13 @@ fn push_dashboard_effect(event: AppEvent, ctx: &mut EffectContext<'_>) {
     ctx.state.push_effect(event);
 }
 
-fn enqueue_missing_message_author_requests(
-    messages: Option<Vec<MessageInfo>>,
+fn enqueue_member_hydration_requests(
+    missing: Vec<(Id<GuildMarker>, Vec<Id<UserMarker>>)>,
     ctx: &mut EffectContext<'_>,
+    now: std::time::Instant,
 ) {
-    let Some(messages) = messages else {
-        return;
-    };
-    let missing = ctx.state.missing_message_author_member_requests(&messages);
-    let requests = ctx
-        .client
-        .next_member_hydration_requests(missing, std::time::Instant::now());
-    ctx.state.enqueue_member_hydration_requests(requests);
-}
-
-fn enqueue_missing_thread_owner_requests(
-    threads: Option<Vec<ChannelInfo>>,
-    ctx: &mut EffectContext<'_>,
-) {
-    let Some(threads) = threads else {
-        return;
-    };
-    let missing = ctx.state.missing_thread_owner_member_requests(&threads);
-    let requests = ctx
-        .client
-        .next_member_hydration_requests(missing, std::time::Instant::now());
-    ctx.state.enqueue_member_hydration_requests(requests);
-}
-
-fn enqueue_observed_member_hydration_requests(ctx: &mut EffectContext<'_>) {
-    let now = std::time::Instant::now();
-    let missing = ctx.state.observed_member_hydration_requests(now);
     let requests = ctx.client.next_member_hydration_requests(missing, now);
-    ctx.state.enqueue_guild_member_by_id_requests(requests);
+    ctx.state.enqueue_member_hydration_requests(requests);
 }
 
 fn dispatch_desktop_notification(notification: DesktopNotification, icon: Option<String>) {
@@ -436,11 +437,13 @@ mod tests {
     use crate::discord::ids::Id;
     use crate::discord::test_builders::{
         ForumPostsLoadedFixture, GuildCreateFixture, MessageHistoryLoadedFixture,
-        forum_posts_loaded_event, guild_create_event, message_history_loaded_event,
+        ReactionUsersLoadedFixture, forum_posts_loaded_event, guild_create_event,
+        message_history_loaded_event, reaction_users_loaded_event,
     };
     use crate::discord::{
-        AppCommand, AppEvent, ChannelInfo, ForumPostArchiveState, MemberInfo,
-        MessageHistoryAfterMode, MessageInfo, RoleInfo, VoiceStateInfo,
+        AppCommand, AppEvent, ChannelInfo, ForumPostArchiveState, MemberInfo, MentionInfo,
+        MessageHistoryAfterMode, MessageInfo, MessageUpdateDispatchInfo, MessageUpdateEventFields,
+        ReactionEmoji, ReactionUserInfo, RoleInfo, VoiceStateInfo,
     };
 
     use super::*;
@@ -468,6 +471,13 @@ mod tests {
         // member cache has never seen must ask for that member, or the row
         // renders with a raw id instead of a name.
         let cases = [
+            (
+                "live message",
+                text_channel(),
+                AppEvent::MessageCreate {
+                    message: message_info(guild_id, channel_id, message_id, author_id),
+                },
+            ),
             (
                 "message history",
                 text_channel(),
@@ -521,6 +531,34 @@ mod tests {
                     }],
                     ..ForumPostsLoadedFixture::new()
                 }),
+            ),
+            (
+                "reaction user",
+                text_channel(),
+                reaction_users_loaded_event(ReactionUsersLoadedFixture {
+                    channel_id,
+                    message_id,
+                    emoji: ReactionEmoji::Unicode("👍".to_owned()),
+                    users: vec![ReactionUserInfo::test(author_id, "unknown")],
+                    next_after: None,
+                    after: None,
+                }),
+            ),
+            (
+                "updated message mention",
+                text_channel(),
+                AppEvent::MessageUpdateDispatch {
+                    update: MessageUpdateDispatchInfo {
+                        guild_id: Some(guild_id),
+                        channel_id,
+                        message_id,
+                        fields: MessageUpdateEventFields {
+                            mentions: Some(vec![MentionInfo::test(author_id, "unknown")]),
+                            ..MessageUpdateEventFields::default()
+                        },
+                        extra_fields: Default::default(),
+                    },
+                },
             ),
         ];
 

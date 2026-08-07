@@ -1,5 +1,6 @@
 use super::*;
-use crate::discord::VoiceScope;
+use crate::discord::{GuildVerificationLevel, VoiceScope};
+use chrono::Utc;
 
 #[test]
 fn tracks_members_and_presences() {
@@ -491,14 +492,20 @@ fn dm_voice_uses_ready_user_directory_when_recipients_are_missing() {
 }
 
 #[test]
-fn observed_voice_and_typing_users_request_missing_member_data() {
+fn observed_users_and_current_member_request_missing_member_data() {
     let guild_id = Id::new(1);
     let text_channel = Id::new(2);
     let voice_channel = Id::new(3);
     let voice_user = Id::new(20);
     let typing_user = Id::new(21);
+    let current_user = Id::new(22);
     let mut state = DiscordState::default();
+    state.apply_event(&AppEvent::Ready {
+        user: "Current User".to_owned(),
+        user_id: Some(current_user),
+    });
     state.apply_event(&guild_create_event(GuildCreateFixture {
+        verification_level: GuildVerificationLevel::High,
         channels: vec![
             ChannelInfo {
                 guild_id: Some(guild_id),
@@ -506,6 +513,10 @@ fn observed_voice_and_typing_users_request_missing_member_data() {
             },
             guild_voice_channel(guild_id, voice_channel),
         ],
+        members: vec![MemberInfo {
+            flags: None,
+            ..member_with_roles(current_user, "Current User", Vec::new())
+        }],
         ..GuildCreateFixture::new(guild_id)
     }));
     state.apply_event(&AppEvent::VoiceStateUpdate {
@@ -519,16 +530,20 @@ fn observed_voice_and_typing_users_request_missing_member_data() {
     });
 
     assert_eq!(
-        state.missing_member_hydration_requests(None, std::time::Instant::now()),
-        vec![(guild_id, vec![voice_user, typing_user])]
+        state.missing_member_hydration_requests(Some(guild_id), std::time::Instant::now()),
+        vec![(guild_id, vec![voice_user, typing_user, current_user])]
     );
 
+    let mut hydrated_current = member_with_roles(current_user, "Current User", Vec::new());
+    hydrated_current.flags = Some(0);
+    hydrated_current.joined_at = Some(Utc::now());
     state.apply_event(&AppEvent::GuildMembersChunk {
         chunk: GuildMembersChunkInfo {
             guild_id,
             members: vec![
                 member_with_roles(voice_user, "Voice Nick", vec![Id::new(30)]),
                 member_with_roles(typing_user, "Typing Nick", vec![Id::new(31)]),
+                hydrated_current,
             ],
             presences: Vec::new(),
             chunk_index: Some(0),
@@ -545,7 +560,7 @@ fn observed_voice_and_typing_users_request_missing_member_data() {
     );
     assert!(
         state
-            .missing_member_hydration_requests(None, std::time::Instant::now())
+            .missing_member_hydration_requests(Some(guild_id), std::time::Instant::now())
             .is_empty()
     );
 }
@@ -1011,6 +1026,23 @@ fn message_author_role_color_falls_back_only_while_the_member_is_missing() {
         Some(0xCC0000),
         "history author roles"
     );
+    from_history.apply_event(&latest_history_loaded(
+        channel_id,
+        vec![history_message(Vec::new())],
+    ));
+    assert_eq!(
+        from_history.message_author_role_color(guild_id, channel_id, message_id, user_id),
+        Some(0xCC0000),
+        "thin history payload preserves known author roles"
+    );
+    let mut explicit_no_roles = history_message(Vec::new());
+    explicit_no_roles.author_role_ids_present = true;
+    from_history.apply_event(&latest_history_loaded(channel_id, vec![explicit_no_roles]));
+    assert_eq!(
+        from_history.message_author_role_color(guild_id, channel_id, message_id, user_id),
+        None,
+        "explicit empty author roles clear the cached roles"
+    );
 
     let mut from_live = guild(Vec::new());
     from_live.apply_event(&message_create_event(MessageCreateFixture {
@@ -1036,6 +1068,7 @@ fn message_author_role_color_falls_back_only_while_the_member_is_missing() {
     ));
     let mut profile = profile_info(user_id.get(), Some("test-user"));
     profile.role_ids = vec![role_id];
+    profile.role_ids_present = true;
     from_profile.apply_event(&AppEvent::UserProfileLoaded {
         guild_id: Some(guild_id),
         profile,
@@ -1044,6 +1077,15 @@ fn message_author_role_color_falls_back_only_while_the_member_is_missing() {
         from_profile.message_author_role_color(guild_id, channel_id, message_id, user_id),
         Some(0xCC0000),
         "loaded profile roles"
+    );
+    from_profile.apply_event(&AppEvent::UserProfileLoaded {
+        guild_id: Some(guild_id),
+        profile: profile_info(user_id.get(), Some("test-user")),
+    });
+    assert_eq!(
+        from_profile.message_author_role_color(guild_id, channel_id, message_id, user_id),
+        Some(0xCC0000),
+        "profile payload without guild roles preserves the cached roles"
     );
 
     let mut cached_member = guild(vec![member_info(user_id, "test-user")]);

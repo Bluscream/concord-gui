@@ -380,6 +380,13 @@ fn notification_inbox_loads_forum_post_titles_and_preserves_cached_role_colors()
         requested_channel_ids,
         vec![cached_thread_id, fallback_thread_id]
     );
+    state.push_event(AppEvent::GuildMemberUpsert {
+        guild_id,
+        member: crate::discord::MemberInfo {
+            role_ids: vec![author_role_id],
+            ..member_with_username(Id::new(99), "Guild Alice", "alice")
+        },
+    });
 
     let items = state
         .notification_inbox_items()
@@ -395,7 +402,7 @@ fn notification_inbox_loads_forum_post_titles_and_preserves_cached_role_colors()
         .expect("forum channel should be in the inbox");
     assert_eq!(forum.messages.len(), 2);
     assert!(forum.messages.iter().any(|message| {
-        message.author == "alice"
+        message.author == "Guild Alice"
             && message.content == "cached post"
             && message.author_role_color == Some(author_role_color)
     }));

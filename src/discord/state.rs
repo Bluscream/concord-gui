@@ -1096,6 +1096,7 @@ impl DiscordState {
             message.channel_id,
             message.message_id,
             &message.author_role_ids,
+            message.author_role_ids_present,
         );
         match self.message_create_notification_kind(MessageNotificationInput {
             guild_id,
@@ -1163,7 +1164,9 @@ impl DiscordState {
         profile: &UserProfileInfo,
     ) {
         let mut profile = profile.clone();
-        if let Some(guild_id) = guild_id {
+        if let Some(guild_id) = guild_id
+            && profile.role_ids_present
+        {
             self.profiles_mut()
                 .profile_role_ids
                 .insert((*guild_id, profile.user_id), profile.role_ids.clone());

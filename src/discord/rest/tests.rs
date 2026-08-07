@@ -57,7 +57,9 @@ use super::{
     notification_settings::mute_request_body,
     polls::poll_vote_request_body,
     profile::parse_user_profile_response,
-    reactions::{next_reaction_users_after, reaction_route_component},
+    reactions::{
+        next_reaction_users_after, parse_reaction_users_response, reaction_route_component,
+    },
     search::{
         MessageSearchResponse, message_search_date_snowflake_bounds, message_search_has_more,
         message_search_query_params, message_search_retry_delay,
@@ -1072,6 +1074,15 @@ fn reaction_route_component_formats_unicode_and_custom_reactions() {
 
 #[test]
 fn reaction_user_pagination_continues_only_after_full_pages() {
+    let parsed = parse_reaction_users_response(vec![serde_json::json!({ "id": "1" })]);
+    assert_eq!(
+        parsed.users,
+        vec![crate::discord::ReactionUserInfo::test(
+            Id::new(1),
+            "unknown"
+        )]
+    );
+
     // A full page (100 raw entries) hands back the last entry's id as the cursor
     // for the next page.
     let full: Vec<serde_json::Value> = (1..=100)
@@ -1493,6 +1504,7 @@ fn user_profile_parser_keeps_guild_member_roles() {
     );
 
     assert_eq!(profile.role_ids, vec![Id::new(90), Id::new(91)]);
+    assert!(profile.role_ids_present);
 }
 
 #[test]

@@ -170,19 +170,33 @@ pub struct ChannelRecipientState {
 impl ChannelRecipientState {
     pub(super) fn from_info(
         recipient: &ChannelRecipientInfo,
-        previous_status: Option<PresenceStatus>,
+        previous: Option<&Self>,
+        ready_user: Option<&ChannelRecipientInfo>,
         known_status: Option<PresenceStatus>,
         display_name: String,
     ) -> Self {
         Self {
             user_id: recipient.user_id,
             display_name,
-            username: recipient.username.clone(),
-            is_bot: recipient.is_bot,
-            avatar_url: recipient.avatar_url.clone(),
+            username: recipient
+                .username
+                .clone()
+                .or_else(|| ready_user.and_then(|user| user.username.clone()))
+                .or_else(|| previous.and_then(|user| user.username.clone())),
+            // DM channel recipients are partial user objects and omit `bot`.
+            // Once another source proves the account is a bot, a later
+            // partial channel payload must not turn it back into a user.
+            is_bot: recipient.is_bot
+                || ready_user.is_some_and(|user| user.is_bot)
+                || previous.is_some_and(|user| user.is_bot),
+            avatar_url: recipient
+                .avatar_url
+                .clone()
+                .or_else(|| ready_user.and_then(|user| user.avatar_url.clone()))
+                .or_else(|| previous.and_then(|user| user.avatar_url.clone())),
             status: recipient
                 .status
-                .or(previous_status)
+                .or_else(|| previous.map(|user| user.status))
                 .or(known_status)
                 .unwrap_or(PresenceStatus::Unknown),
         }
@@ -285,27 +299,41 @@ impl DiscordState {
                 recipients
                     .iter()
                     .map(|recipient| {
-                        let previous_status = existing
-                            .and_then(|existing| {
-                                existing
-                                    .recipients
-                                    .iter()
-                                    .find(|existing| existing.user_id == recipient.user_id)
-                            })
-                            .map(|recipient| recipient.status);
+                        let previous = existing.and_then(|existing| {
+                            existing
+                                .recipients
+                                .iter()
+                                .find(|existing| existing.user_id == recipient.user_id)
+                        });
+                        let ready_user = self.session.ready_users.get(&recipient.user_id);
                         let known_status = self
                             .presence
                             .user_presences
                             .get(&recipient.user_id)
                             .copied();
+                        let fallback_display_name = if recipient.username.is_none()
+                            && recipient.display_name == "unknown"
+                        {
+                            ready_user
+                                .map(|user| user.display_name.as_str())
+                                .or_else(|| previous.map(|user| user.display_name.as_str()))
+                                .unwrap_or(recipient.display_name.as_str())
+                        } else {
+                            recipient.display_name.as_str()
+                        };
                         let display_name = self.private_user_display_name(
                             recipient.user_id,
-                            Some(recipient.display_name.as_str()),
-                            recipient.username.as_deref(),
+                            Some(fallback_display_name),
+                            recipient
+                                .username
+                                .as_deref()
+                                .or_else(|| ready_user.and_then(|user| user.username.as_deref()))
+                                .or_else(|| previous.and_then(|user| user.username.as_deref())),
                         );
                         ChannelRecipientState::from_info(
                             recipient,
-                            previous_status,
+                            previous,
+                            ready_user,
                             known_status,
                             display_name,
                         )
