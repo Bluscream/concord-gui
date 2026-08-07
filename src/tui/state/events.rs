@@ -425,6 +425,7 @@ impl DashboardState {
                 offset,
                 next_offset: _,
                 threads,
+                first_messages,
                 has_more,
                 ..
             } => {
@@ -435,6 +436,19 @@ impl DashboardState {
                     threads,
                     *has_more,
                 );
+                if *archive_state == crate::discord::ForumPostArchiveState::Active && *offset == 0 {
+                    self.apply_inbox_forum_posts_loaded(*channel_id, threads, first_messages);
+                }
+            }
+            AppEvent::ForumPostsLoadFailed {
+                channel_id,
+                archive_state,
+                offset,
+                ..
+            } => {
+                if *archive_state == crate::discord::ForumPostArchiveState::Active && *offset == 0 {
+                    self.apply_inbox_forum_posts_load_failed(*channel_id);
+                }
             }
             AppEvent::MessageSearchLoaded { .. } | AppEvent::MessageSearchLoadFailed { .. } => {
                 self.record_search_event(event);

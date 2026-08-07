@@ -326,6 +326,13 @@ fn notification_inbox_card_lines(
             ),
         ]),
         notification_inbox_inner_line(header, inner_width, selected),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                format!("├{}┤", "─".repeat(card_width.saturating_sub(2))),
+                border,
+            ),
+        ]),
     ];
     for content in body {
         lines.push(notification_inbox_inner_line(
@@ -378,6 +385,8 @@ fn notification_inbox_card_content(
                 header,
                 vec![notification_inbox_message_spans(
                     &NotificationInboxMessage {
+                        channel_id: item.channel_id,
+                        message_id: item.message_id,
                         author_id: item.author_id,
                         author: item.author.clone(),
                         author_role_ids: item.author_role_ids.clone(),
@@ -654,6 +663,15 @@ mod tests {
             assert_eq!(has_scrollbar, expected_scrollbar);
 
             if expected_scrollbar {
+                assert!(
+                    terminal
+                        .backend()
+                        .buffer()
+                        .content
+                        .iter()
+                        .any(|cell| cell.symbol() == "├"),
+                    "unread cards should separate the channel header from messages"
+                );
                 let snapshot = state
                     .active_selectable_popup_snapshot()
                     .expect("inbox selection snapshot");
