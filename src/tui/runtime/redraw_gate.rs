@@ -7,12 +7,13 @@
 //! parts of the dashboard that a *background* event can change and only redraw
 //! when that hash moves.
 //!
-//! This deliberately ignores purely input-driven state (scroll offsets,
-//! selection indices, which popup is open, composer text, option values): those
-//! only change in response to a key or mouse event, which already triggers an
-//! immediate redraw. Leaving them out keeps the hash small. Media-cache changes
-//! (an inline preview or avatar finishing or failing to load) live outside the
-//! dashboard state, so they are handled separately by `effect_forces_redraw`.
+//! This deliberately ignores most purely input-driven state (scroll offsets,
+//! popup selection indices, which popup is open, composer text, option values):
+//! those only change in response to a key or mouse event, which already triggers
+//! an immediate redraw. Leaving them out keeps the hash small. Media-cache
+//! changes (an inline preview or avatar finishing or failing to load) live
+//! outside the dashboard state, so they are handled separately by
+//! `effect_forces_redraw`.
 
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::{self, Write as _};
@@ -55,6 +56,14 @@ pub(super) fn view_signature(state: &DashboardState) -> u64 {
 
     // Message pane: the live chat plus its footers.
     hash_dbg(&mut hasher, &state.visible_messages());
+    // Loading history around a referenced message moves the selection from a
+    // background effect. Hash its stable id so that move schedules the frame
+    // which centers the target, even when the currently visible rows did not
+    // change during the cache merge.
+    hash_dbg(
+        &mut hasher,
+        &state.selected_message_state().map(|message| message.id),
+    );
     hash_dbg(&mut hasher, &state.visible_thread_card_items());
     hash_dbg(&mut hasher, &state.typing_footer_for_selected_channel());
     hash_dbg(&mut hasher, &state.composer_lock());
@@ -164,7 +173,7 @@ mod tests {
         MessageHistoryLoadTarget, MessageInfo, MessageSearchPage, PresenceEventFields,
         PresenceStatus, StreamCreateInfo, StreamUpdateInfo, VoiceScope,
     };
-    use crate::tui::state::DashboardState;
+    use crate::tui::state::{DashboardState, FocusPane};
 
     #[test]
     fn view_signature_is_stable_and_tracks_visible_changes() {
@@ -227,6 +236,54 @@ mod tests {
             message: "offline".to_owned(),
         });
         assert_ne!(loaded, view_signature(&state));
+    }
+
+    #[test]
+    fn view_signature_tracks_history_around_selection_changes() {
+        let channel_id = Id::new(20);
+        let mut state = DashboardState::new();
+        state.push_event(AppEvent::ChannelUpsert(ChannelInfo::test(channel_id, "dm")));
+        state.confirm_selected_guild();
+        state.confirm_selected_channel();
+        state.focus_pane(FocusPane::Messages);
+        state.set_message_view_height(1);
+        state.push_event(AppEvent::MessageHistoryLoaded {
+            channel_id,
+            before: None,
+            messages: (1..=10)
+                .map(|message_id| MessageInfo::test(channel_id, Id::new(message_id)))
+                .collect(),
+        });
+        state.clamp_message_viewport_for_image_previews(80, 0, 0);
+
+        let visible_before = state
+            .visible_messages()
+            .into_iter()
+            .map(|message| message.id)
+            .collect::<Vec<_>>();
+        let before = view_signature(&state);
+
+        state.push_event(AppEvent::MessageHistoryAroundLoaded {
+            channel_id,
+            message_id: Id::new(5),
+            messages: (4..=6)
+                .map(|message_id| MessageInfo::test(channel_id, Id::new(message_id)))
+                .collect(),
+        });
+
+        assert_eq!(
+            state.selected_message_state().map(|message| message.id),
+            Some(Id::new(5))
+        );
+        assert_eq!(
+            state
+                .visible_messages()
+                .into_iter()
+                .map(|message| message.id)
+                .collect::<Vec<_>>(),
+            visible_before
+        );
+        assert_ne!(before, view_signature(&state));
     }
 
     #[test]

@@ -655,6 +655,43 @@ fn goto_referenced_message_shortcut_merges_target_window_into_normal_messages() 
 }
 
 #[test]
+fn goto_referenced_message_in_active_channel_keeps_reply_visible_while_loading() {
+    let mut state = state_with_messages(0);
+    state.push_event(message_create_event(MessageCreateFixture {
+        guild_id: Some(Id::new(1)),
+        channel_id: Id::new(2),
+        message_id: Id::new(10),
+        reference: Some(MessageReferenceInfo {
+            guild_id: Some(Id::new(1)),
+            channel_id: Some(Id::new(2)),
+            message_id: Some(Id::new(5)),
+        }),
+        ..guild_message_create_fixture()
+    }));
+    state.push_event(message_create_event(MessageCreateFixture {
+        guild_id: Some(Id::new(1)),
+        channel_id: Id::new(2),
+        message_id: Id::new(11),
+        ..guild_message_create_fixture()
+    }));
+    state.focus_pane(FocusPane::Messages);
+    state.move_up();
+    assert_eq!(state.messages()[state.selected_message()].id, Id::new(10));
+
+    handle_key(&mut state, key(KeyCode::Enter));
+    let command = handle_key(&mut state, char_key('g'));
+
+    assert_eq!(
+        command,
+        Some(AppCommand::LoadMessageHistoryAround {
+            channel_id: Id::new(2),
+            message_id: Id::new(5),
+        })
+    );
+    assert_eq!(state.messages()[state.selected_message()].id, Id::new(10));
+}
+
+#[test]
 fn pinned_and_forum_down_keys_do_not_request_newer_history() {
     let mut pinned_state = state_with_messages(0);
     pinned_state.push_event(message_history_loaded_event(MessageHistoryLoadedFixture {

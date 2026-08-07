@@ -713,16 +713,18 @@ impl DashboardState {
         let target = self
             .selected_message_state()
             .and_then(|message| self.referenced_message_target(message))?;
-        let scope = self
-            .discord
-            .cache
-            .channel(target.channel_id)
-            .map(|channel| match channel.guild_id {
-                Some(guild_id) => ActiveGuildScope::Guild(guild_id),
-                None => ActiveGuildScope::DirectMessages,
-            })?;
-        self.activate_guild(scope);
-        self.activate_channel(target.channel_id);
+        if self.selected_message_history_channel_id() != Some(target.channel_id) {
+            let scope =
+                self.discord
+                    .cache
+                    .channel(target.channel_id)
+                    .map(|channel| match channel.guild_id {
+                        Some(guild_id) => ActiveGuildScope::Guild(guild_id),
+                        None => ActiveGuildScope::DirectMessages,
+                    })?;
+            self.activate_guild(scope);
+            self.activate_channel(target.channel_id);
+        }
         self.focus_pane(FocusPane::Messages);
         Some(AppCommand::LoadMessageHistoryAround {
             channel_id: target.channel_id,
