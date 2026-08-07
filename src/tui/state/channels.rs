@@ -189,6 +189,25 @@ impl DashboardState {
         }
     }
 
+    /// Switch to the normal message history for `channel_id` only when it is
+    /// not already visible. Re-activating the active history resets its cursor
+    /// and viewport to the latest message while an around-message request is
+    /// still loading.
+    pub(super) fn activate_message_history_channel(
+        &mut self,
+        channel_id: Id<ChannelMarker>,
+        scope: Option<ActiveGuildScope>,
+    ) {
+        if self.selected_message_history_channel_id() == Some(channel_id) {
+            return;
+        }
+        if let Some(scope) = scope {
+            self.activate_guild(scope);
+        }
+        self.restore_channel_cursor(Some(channel_id));
+        self.activate_channel(channel_id);
+    }
+
     pub fn selected_message_history_needs_reload(&self) -> bool {
         self.selected_message_history_channel_id()
             .is_some_and(|channel_id| {

@@ -493,14 +493,15 @@ impl DashboardState {
             return None;
         };
         self.close_search_popup();
-        if let Some(channel) = self.discord.cache.channel(result.channel_id) {
-            match channel.guild_id {
-                Some(guild_id) => self.activate_guild(ActiveGuildScope::Guild(guild_id)),
-                None => self.activate_guild(ActiveGuildScope::DirectMessages),
-            }
-        }
-        self.restore_channel_cursor(Some(result.channel_id));
-        self.activate_channel(result.channel_id);
+        let scope = self
+            .discord
+            .cache
+            .channel(result.channel_id)
+            .map(|channel| match channel.guild_id {
+                Some(guild_id) => ActiveGuildScope::Guild(guild_id),
+                None => ActiveGuildScope::DirectMessages,
+            });
+        self.activate_message_history_channel(result.channel_id, scope);
         self.focus_pane(FocusPane::Messages);
         Some(AppCommand::LoadMessageHistoryAround {
             channel_id: result.channel_id,

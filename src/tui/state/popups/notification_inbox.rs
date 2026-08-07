@@ -720,12 +720,11 @@ impl DashboardState {
                 .channel(channel_id)
                 .and_then(|channel| channel.guild_id)
         });
-        match guild_id {
-            Some(guild_id) => self.activate_guild(ActiveGuildScope::Guild(guild_id)),
-            None => self.activate_guild(ActiveGuildScope::DirectMessages),
-        }
-        self.restore_channel_cursor(Some(channel_id));
-        self.activate_channel(channel_id);
+        let scope = match guild_id {
+            Some(guild_id) => ActiveGuildScope::Guild(guild_id),
+            None => ActiveGuildScope::DirectMessages,
+        };
+        self.activate_message_history_channel(channel_id, Some(scope));
         self.focus_pane(FocusPane::Messages);
         Some(AppCommand::LoadMessageHistoryAround {
             channel_id,
