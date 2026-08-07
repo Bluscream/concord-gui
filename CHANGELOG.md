@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.6] - 2026-08-07
+
+### Bug Fixes
+
+- Fix referenced message navigation and redraw by @chojs23
+- Harden background redraw detection and unify redraw tests by @chojs23
+- Capture and classify native stderr by @chojs23
+- Forum previews, author colors, and card separation by @chojs23
+- Fix member identity hydration and cache preservation by @chojs23
+- Avoid repeated bullets on wrapped list items (#295) in [#295](https://github.com/chojs23/concord/pull/295) by @kimbank
+- Remove obsolete user identity paths by @chojs23
+- Clippy by @chojs23
+
+### New Contributors
+
+- @kimbank made their first contribution in [#295](https://github.com/chojs23/concord/pull/295)
+
 ## [2.5.5] - 2026-08-06
 
 ### Bug Fixes
