@@ -23,7 +23,7 @@ static LOGGER: OnceLock<FileLogger> = OnceLock::new();
 static ERROR_LOG: OnceLock<Mutex<VecDeque<ErrorLogEntry>>> = OnceLock::new();
 
 const MAX_ERROR_LOG_ENTRIES: usize = 200;
-#[cfg(all(target_os = "linux", feature = "stream-broadcast"))]
+#[cfg(all(target_os = "linux", feature = "stream-broadcast", not(test)))]
 const NATIVE_STDERR_TARGET: &str = "native-stderr";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -220,7 +220,7 @@ fn classify_native_stderr(message: &str) -> NativeStderrLevel {
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "stream-broadcast"))]
+#[cfg(all(target_os = "linux", feature = "stream-broadcast", not(test)))]
 fn record_native_stderr(message: &str) {
     let message = message.trim_end_matches(['\r', '\n']);
     if message.is_empty() {
