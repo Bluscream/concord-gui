@@ -741,7 +741,7 @@ fn guild_channel_subscribe_payload_matches_shape_and_member_ranges() {
 }
 
 #[test]
-fn subscription_deduper_skips_exact_duplicate_channel_subscriptions() {
+fn subscription_deduper_allows_guild_range_refreshes() {
     let guild_id = Id::<GuildMarker>::new(10);
     let channel_id = Id::<ChannelMarker>::new(20);
     let other_channel_id = Id::<ChannelMarker>::new(30);
@@ -759,12 +759,10 @@ fn subscription_deduper_skips_exact_duplicate_channel_subscriptions() {
         guild_id,
         channel_id,
     }));
-    assert!(
-        !deduper.should_send(&GatewayCommand::SubscribeGuildChannel {
-            guild_id,
-            channel_id,
-        })
-    );
+    assert!(deduper.should_send(&GatewayCommand::SubscribeGuildChannel {
+        guild_id,
+        channel_id,
+    }));
 
     assert!(
         deduper.should_send(&GatewayCommand::UpdateMemberListSubscription {
@@ -774,7 +772,7 @@ fn subscription_deduper_skips_exact_duplicate_channel_subscriptions() {
         })
     );
     assert!(
-        !deduper.should_send(&GatewayCommand::UpdateMemberListSubscription {
+        deduper.should_send(&GatewayCommand::UpdateMemberListSubscription {
             guild_id,
             channel_id,
             ranges: vec![(0, 99), (100, 199)],
@@ -788,7 +786,7 @@ fn subscription_deduper_skips_exact_duplicate_channel_subscriptions() {
         })
     );
     assert!(
-        !deduper.should_send(&GatewayCommand::UpdateMemberListSubscription {
+        deduper.should_send(&GatewayCommand::UpdateMemberListSubscription {
             guild_id,
             channel_id,
             ranges: vec![(0, 99)],

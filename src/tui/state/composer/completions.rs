@@ -253,28 +253,25 @@ pub(super) fn build_mention_candidates(
         .filter_map(|entry| {
             let display_name = entry.display_name();
             let username = entry.username();
+            let search_alias = entry.member_search_alias();
             let lowered_display = display_name.to_lowercase();
             let lowered_username = username.as_deref().map(str::to_lowercase);
+            let lowered_alias = search_alias.as_deref().map(str::to_lowercase);
 
-            // Lower rank wins. We deliberately stagger the ladder so an alias
-            // prefix beats a username prefix and either beats a substring hit
-            // on the other field.
+            // Lower rank wins. These are the two member fields Discord's
+            // Opcode 8 query can match by prefix.
             let rank = if needle.is_empty() {
                 2
-            } else if lowered_display.starts_with(&needle) {
+            } else if lowered_alias
+                .as_deref()
+                .is_some_and(|name| name.starts_with(&needle))
+            {
                 0
             } else if lowered_username
                 .as_deref()
                 .is_some_and(|name| name.starts_with(&needle))
             {
                 1
-            } else if lowered_display.contains(&needle) {
-                2
-            } else if lowered_username
-                .as_deref()
-                .is_some_and(|name| name.contains(&needle))
-            {
-                3
             } else {
                 return None;
             };

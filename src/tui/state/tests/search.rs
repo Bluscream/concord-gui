@@ -252,6 +252,64 @@ fn member_search_filters_loaded_members_and_opens_profile() {
 }
 
 #[test]
+fn member_search_matches_cached_display_names_and_usernames() {
+    let guild_id = Id::new(1);
+    let user_id = Id::new(10);
+    let mut state = DashboardState::new();
+    state.push_event(guild_create_event(GuildCreateFixture {
+        member_count: Some(1),
+        members: vec![member_with_username(user_id, "WonderGlobal", "alicehandle")],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+    state.activate_guild(ActiveGuildScope::Guild(guild_id));
+    state.focus_pane(FocusPane::Members);
+
+    state.open_search_popup_for_focus(FocusPane::Members);
+    type_search_text(&mut state, "wonder");
+    assert_eq!(
+        state
+            .search_popup_view()
+            .expect("member search view")
+            .results
+            .len(),
+        1,
+        "cached global display names remain locally searchable"
+    );
+
+    state.close_search_popup();
+    state.open_search_popup_for_focus(FocusPane::Members);
+    type_search_text(&mut state, "handle");
+    assert_eq!(
+        state
+            .search_popup_view()
+            .expect("member search view")
+            .results
+            .len(),
+        1,
+        "cached usernames support fuzzy local matching"
+    );
+
+    let mut nicknamed = member_with_username(user_id, "WonderNick", "alicehandle");
+    nicknamed.nickname = Some("WonderNick".to_owned());
+    nicknamed.nickname_present = true;
+    state.push_event(AppEvent::GuildMemberUpsert {
+        guild_id,
+        member: nicknamed,
+    });
+    state.close_search_popup();
+    state.open_search_popup_for_focus(FocusPane::Members);
+    type_search_text(&mut state, "nick");
+    assert_eq!(
+        state
+            .search_popup_view()
+            .expect("member search view")
+            .results
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn member_search_preserves_selected_member_across_cache_refresh() {
     let guild_id = Id::new(1);
     let selected_user = Id::new(21);

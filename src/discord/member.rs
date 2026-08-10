@@ -15,6 +15,22 @@ use crate::discord::ids::{
 pub(crate) const MEMBER_FLAG_COMPLETED_ONBOARDING: u64 = 1 << 1;
 pub(crate) const MEMBER_FLAG_BYPASSES_VERIFICATION: u64 = 1 << 2;
 pub(crate) const MEMBER_FLAG_STARTED_ONBOARDING: u64 = 1 << 3;
+pub(crate) const MEMBER_SEARCH_MAX_QUERY_CHARS: usize = 64;
+
+pub(crate) fn normalize_member_search_query(query: &str, min_query_chars: usize) -> Option<String> {
+    let mut normalized = String::new();
+    let mut count = 0usize;
+    for ch in query.trim().chars() {
+        for lowered in ch.to_lowercase() {
+            if count >= MEMBER_SEARCH_MAX_QUERY_CHARS {
+                return (count >= min_query_chars).then_some(normalized);
+            }
+            normalized.push(lowered);
+            count += 1;
+        }
+    }
+    (count >= min_query_chars).then_some(normalized)
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum MemberOnboardingStatus {
@@ -41,6 +57,11 @@ pub struct MemberInfo {
     /// Discord login handle (`User.name`). Same role as in
     /// [`ChannelRecipientInfo::username`].
     pub username: Option<String>,
+    /// Guild-specific nickname. Opcode 8 searches this field and `username`,
+    /// but does not search a user's global display name.
+    pub nickname: Option<String>,
+    /// Distinguishes an omitted nickname from an explicit null that clears it.
+    pub nickname_present: bool,
     pub is_bot: bool,
     /// Whether the source payload included the user's `bot` field. Partial
     /// member payloads often omit the nested user fields, so `false` alone
@@ -77,6 +98,8 @@ impl MemberInfo {
             user_id,
             display_name: display_name.into(),
             username: None,
+            nickname: None,
+            nickname_present: false,
             is_bot: false,
             is_bot_present: true,
             avatar_url: None,

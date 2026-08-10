@@ -27,8 +27,7 @@ use crate::{
 use serde_json::{Value, json};
 
 use super::{
-    DiscordClient, MEMBER_SEARCH_MAX_LIMIT, MEMBER_SEARCH_MAX_QUERY_CHARS,
-    OFFICIAL_WORDLE_APPLICATION_ID, validate_token_header,
+    DiscordClient, MEMBER_SEARCH_MAX_LIMIT, OFFICIAL_WORDLE_APPLICATION_ID, validate_token_header,
 };
 
 #[tokio::test]
@@ -1602,7 +1601,7 @@ async fn user_note_requests_are_gated_by_backend_lifecycle_and_cache() {
 }
 
 #[test]
-fn guild_member_search_validates_query_and_caps_limit() {
+fn guild_member_search_queues_a_bounded_private_request() {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
     let mut gateway_commands = client
@@ -1621,33 +1620,8 @@ fn guild_member_search_validates_query_and_caps_limit() {
     ));
 
     client
-        .search_guild_members(Id::new(1), " a ".to_owned(), 10)
-        .expect("one-character prefix should queue");
-    let one_character_command = gateway_commands
-        .try_recv()
-        .expect("one-character search command should be queued");
-    let GatewayCommand::SearchGuildMembers { query, limit, .. } = one_character_command else {
-        panic!("expected guild member search command");
-    };
-    assert_eq!(query, "a");
-    assert_eq!(limit, 10);
-
-    client
-        .search_guild_members(Id::new(1), "neo".to_owned(), 0)
-        .expect("valid search should queue with a nonzero limit");
-    let minimum_limit_command = gateway_commands
-        .try_recv()
-        .expect("search command should be queued");
-    let GatewayCommand::SearchGuildMembers { limit, .. } = minimum_limit_command else {
-        panic!("expected guild member search command");
-    };
-    assert_eq!(limit, 1);
-
-    let long_query = "İ".repeat(MEMBER_SEARCH_MAX_QUERY_CHARS + 10);
-    client
-        .search_guild_members(Id::new(1), long_query, 101)
-        .expect("valid search should queue");
-
+        .search_guild_members(Id::new(1), " Private-Query ".to_owned(), 101)
+        .expect("valid prefix should queue");
     let command = gateway_commands
         .try_recv()
         .expect("search command should be queued");
@@ -1662,7 +1636,7 @@ fn guild_member_search_validates_query_and_caps_limit() {
         panic!("expected guild member search command");
     };
     assert_eq!(guild_id, Id::new(1));
-    assert_eq!(query.chars().count(), MEMBER_SEARCH_MAX_QUERY_CHARS);
+    assert_eq!(query, "private-query");
     assert_eq!(limit, MEMBER_SEARCH_MAX_LIMIT);
     assert!(presences);
     assert!(nonce.starts_with("member-search-"));

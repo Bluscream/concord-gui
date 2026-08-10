@@ -29,6 +29,18 @@ pub struct RelationshipInfo {
     pub username: Option<String>,
 }
 
+/// Fields carried by `RELATIONSHIP_UPDATE`. Discord documents this dispatch
+/// as a partial relationship object, so every optional field must distinguish
+/// omission from an explicit null that clears the stored value.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RelationshipUpdateInfo {
+    pub user_id: Id<UserMarker>,
+    pub status: Option<FriendStatus>,
+    pub nickname: Option<Option<String>>,
+    pub display_name: Option<Option<String>>,
+    pub username: Option<Option<String>>,
+}
+
 #[cfg(test)]
 #[allow(dead_code)]
 impl RelationshipInfo {

@@ -1,6 +1,20 @@
 use super::*;
 use crate::discord::test_builders::guild_create_event;
 
+fn member_list_event(guild_id: Id<GuildMarker>, ops: Vec<GuildMemberListOperation>) -> AppEvent {
+    AppEvent::GuildMemberListUpdate {
+        update: GuildMemberListUpdateInfo {
+            guild_id,
+            list_id: Some("everyone".to_owned()),
+            member_count: None,
+            online_count: None,
+            groups: Vec::new(),
+            ops,
+            extra_fields: BTreeMap::new(),
+        },
+    }
+}
+
 #[test]
 fn member_groups_use_roles_and_status_sorted_entries() {
     let guild_id = Id::new(1);
@@ -167,42 +181,6 @@ fn message_history_authors_missing_member_roles_are_requested_from_batch() {
 }
 
 #[test]
-fn message_history_author_member_requests_keep_visible_order_when_chunked() {
-    let guild_id = Id::new(1);
-    let channel_id = Id::new(2);
-    let mut state = state_with_writable_channel();
-    state.drain_pending_commands();
-    let author_ids = (1_001..=1_105).rev().map(Id::new).collect::<Vec<_>>();
-    let messages = author_ids
-        .iter()
-        .enumerate()
-        .map(|offset| {
-            let (offset, author_id) = offset;
-            let mut message = message_info(channel_id, 2_000 + offset as u64);
-            message.author_id = *author_id;
-            message
-        })
-        .collect::<Vec<_>>();
-
-    let requests = state.missing_message_author_member_requests(&messages);
-    state.enqueue_member_hydration_requests(requests);
-
-    assert_eq!(
-        state.drain_pending_commands(),
-        vec![
-            AppCommand::LoadGuildMembersByIds {
-                guild_id,
-                user_ids: author_ids[..100].to_vec(),
-            },
-            AppCommand::LoadGuildMembersByIds {
-                guild_id,
-                user_ids: author_ids[100..].to_vec(),
-            },
-        ]
-    );
-}
-
-#[test]
 fn member_groups_show_selected_dm_recipients() {
     let channel_id = Id::new(20);
     // Both DM kinds land in one flat "Members" group, ordered by status.
@@ -277,6 +255,51 @@ fn member_panel_title_shows_online_and_total_when_counts_available() {
     let rendered: String = title.spans.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(rendered, "● 25  ○ 100");
     assert_eq!(state.flattened_members().len(), 1);
+}
+
+#[test]
+fn member_list_loading_tracks_subscription_range_completeness() {
+    let guild_id = Id::new(1);
+    let user_id = Id::new(10);
+    let mut state = DashboardState::new();
+    state.push_event(guild_create_event(GuildCreateFixture {
+        channels: vec![text_channel_info(guild_id, Id::new(2), "general")],
+        member_count: Some(1),
+        members: vec![member_info(user_id, "alice")],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+    state.confirm_selected_guild();
+
+    assert!(state.is_member_list_loading());
+    state.push_event(member_list_event(
+        guild_id,
+        vec![GuildMemberListOperation::Sync {
+            range: (0, 99),
+            items: vec![GuildMemberListItem::Member {
+                member: member_info(user_id, "alice"),
+                presence: None,
+            }],
+        }],
+    ));
+    assert!(!state.is_member_list_loading());
+    assert_eq!(state.flattened_members().len(), 1);
+
+    state.push_event(member_list_event(
+        guild_id,
+        vec![GuildMemberListOperation::Invalidate { range: (0, 99) }],
+    ));
+    assert!(state.is_member_list_loading());
+
+    let voice_channel_id = Id::new(3);
+    let mut voice_only = DashboardState::new();
+    voice_only.push_event(guild_create_event(GuildCreateFixture {
+        channels: vec![voice_channel_info(guild_id, voice_channel_id, "Lobby")],
+        members: vec![member_info(user_id, "alice")],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+    voice_only.confirm_selected_guild();
+    assert_eq!(voice_only.member_list_subscription_target(), None);
+    assert!(!voice_only.is_member_list_loading());
 }
 
 #[test]

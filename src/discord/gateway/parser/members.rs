@@ -2,7 +2,8 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::discord::{
-    GuildMemberListUpdateInfo, GuildMembersChunkInfo, MemberInfo,
+    GuildMemberListItem, GuildMemberListOperation, GuildMemberListUpdateInfo,
+    GuildMembersChunkInfo, MemberInfo,
     avatar::{member_avatar_url, user_avatar_url},
     events::{AppEvent, PresenceEventFields},
     ids::{
@@ -114,11 +115,13 @@ pub(super) fn parse_member_list_update(data: &Value) -> Vec<AppEvent> {
         return Vec::new();
     };
 
-    let mut online_count = None;
-    let mut members = Vec::new();
-    let mut presences = Vec::new();
-
-    if let Some(groups) = data.get("groups").and_then(Value::as_array) {
+    let mut online_count = data
+        .get("online_count")
+        .and_then(Value::as_u64)
+        .map(|count| u32::try_from(count).unwrap_or(u32::MAX));
+    if online_count.is_none()
+        && let Some(groups) = data.get("groups").and_then(Value::as_array)
+    {
         online_count = Some(
             groups
                 .iter()
@@ -129,37 +132,10 @@ pub(super) fn parse_member_list_update(data: &Value) -> Vec<AppEvent> {
         );
     }
 
-    // A single GUILD_MEMBER_LIST_UPDATE event can carry SYNC ops for several
-    // ranges (e.g. `[0,99]` plus `[100,199]`). We previously dropped every
-    // SYNC whose range did not start at zero, which left members past the
-    // first chunk invisible in larger guilds.
-    for op in ops {
-        match op.get("op").and_then(Value::as_str) {
-            Some("SYNC") => {
-                if let Some(items) = op.get("items").and_then(Value::as_array) {
-                    for item in items {
-                        if let Some(item) = parse_member_list_item(guild_id, item) {
-                            members.push(item.member);
-                            if let Some(presence) = item.presence {
-                                presences.push(presence);
-                            }
-                        }
-                    }
-                }
-            }
-            Some("INSERT" | "UPDATE") => {
-                if let Some(item) = op.get("item")
-                    && let Some(item) = parse_member_list_item(guild_id, item)
-                {
-                    members.push(item.member);
-                    if let Some(presence) = item.presence {
-                        presences.push(presence);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
+    let parsed_ops = ops
+        .iter()
+        .map(|op| parse_member_list_operation(guild_id, op))
+        .collect();
 
     vec![AppEvent::GuildMemberListUpdate {
         update: GuildMemberListUpdateInfo {
@@ -167,10 +143,8 @@ pub(super) fn parse_member_list_update(data: &Value) -> Vec<AppEvent> {
             list_id: data.get("id").and_then(Value::as_str).map(str::to_owned),
             member_count: data.get("member_count").and_then(Value::as_u64),
             online_count,
-            members,
-            presences,
             groups: clone_array(data.get("groups")),
-            ops: ops.to_vec(),
+            ops: parsed_ops,
             extra_fields: extra_fields(
                 data,
                 &[
@@ -200,16 +174,75 @@ fn parse_id_array<T>(value: Option<&Value>) -> Vec<Id<T>> {
         .unwrap_or_default()
 }
 
-struct MemberListItemInfo {
-    member: MemberInfo,
-    presence: Option<PresenceEventFields>,
+fn parse_member_list_operation(guild_id: Id<GuildMarker>, op: &Value) -> GuildMemberListOperation {
+    let name = op.get("op").and_then(Value::as_str);
+    let parsed = (|| -> Option<GuildMemberListOperation> {
+        match name {
+            Some("SYNC") => Some(GuildMemberListOperation::Sync {
+                range: parse_member_list_range(op.get("range")?)?,
+                items: op
+                    .get("items")?
+                    .as_array()?
+                    .iter()
+                    .map(|item| parse_member_list_item(guild_id, item))
+                    .collect(),
+            }),
+            Some("INSERT") => Some(GuildMemberListOperation::Insert {
+                index: parse_member_list_index(op.get("index")?)?,
+                item: parse_member_list_item(guild_id, op.get("item")?),
+            }),
+            Some("UPDATE") => Some(GuildMemberListOperation::Update {
+                index: parse_member_list_index(op.get("index")?)?,
+                item: parse_member_list_item(guild_id, op.get("item")?),
+            }),
+            Some("DELETE") => Some(GuildMemberListOperation::Delete {
+                index: parse_member_list_index(op.get("index")?)?,
+            }),
+            Some("INVALIDATE") => Some(GuildMemberListOperation::Invalidate {
+                range: parse_member_list_range(op.get("range")?)?,
+            }),
+            _ => None,
+        }
+    })();
+    parsed.unwrap_or_else(|| GuildMemberListOperation::Unknown {
+        name: name.map(str::to_owned),
+        raw: op.clone(),
+    })
 }
 
-fn parse_member_list_item(guild_id: Id<GuildMarker>, item: &Value) -> Option<MemberListItemInfo> {
-    let member = item
+fn parse_member_list_index(value: &Value) -> Option<u32> {
+    u32::try_from(value.as_u64()?).ok()
+}
+
+fn parse_member_list_range(value: &Value) -> Option<(u32, u32)> {
+    let range = value.as_array()?;
+    let start = parse_member_list_index(range.first()?)?;
+    let end = parse_member_list_index(range.get(1)?)?;
+    (start <= end).then_some((start, end))
+}
+
+fn parse_member_list_item(guild_id: Id<GuildMarker>, item: &Value) -> GuildMemberListItem {
+    if let Some(group) = item.get("group") {
+        if let (Some(id), Some(count)) = (
+            group.get("id").and_then(Value::as_str),
+            group.get("count").and_then(Value::as_u64),
+        ) {
+            return GuildMemberListItem::Group {
+                id: id.to_owned(),
+                count,
+            };
+        }
+        return GuildMemberListItem::Unknown { raw: item.clone() };
+    }
+    let Some(member) = item
         .get("member")
-        .or_else(|| item.get("user").map(|_| item))?;
-    let member_info = parse_member_info(member, Some(guild_id))?;
+        .or_else(|| item.get("user").map(|_| item))
+    else {
+        return GuildMemberListItem::Unknown { raw: item.clone() };
+    };
+    let Some(member_info) = parse_member_info(member, Some(guild_id)) else {
+        return GuildMemberListItem::Unknown { raw: item.clone() };
+    };
     let user_id = member_info.user_id;
     let presence = member.get("presence");
     let status = presence
@@ -223,10 +256,10 @@ fn parse_member_list_item(guild_id: Id<GuildMarker>, item: &Value) -> Option<Mem
         status,
         activities,
     });
-    Some(MemberListItemInfo {
+    GuildMemberListItem::Member {
         member: member_info,
         presence,
-    })
+    }
 }
 
 pub(super) fn parse_member_remove(data: &Value) -> Option<AppEvent> {
@@ -272,6 +305,8 @@ pub(super) fn parse_member_info(
         user_id,
         display_name,
         username: username.map(str::to_owned),
+        nickname: nick.filter(|nick| !nick.is_empty()).map(str::to_owned),
+        nickname_present: value.get("nick").is_some(),
         is_bot,
         is_bot_present,
         avatar_url: member_avatar_url(guild_id, user_id, Some(value), user),

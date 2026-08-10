@@ -12,12 +12,11 @@ use crate::discord::ids::{
 
 use crate::discord::{
     AppEvent, ForumPostArchiveState, MessageHistoryAfterMode, MessageHistoryLoadTarget,
+    member::normalize_member_search_query,
 };
 
 const APPLICATION_COMMAND_REQUEST_TTL: Duration = Duration::from_secs(15 * 60);
 const MAX_APPLICATION_COMMAND_REQUESTS: usize = 1_024;
-const MEMBER_AUTOCOMPLETE_MIN_QUERY_CHARS: usize = 2;
-const MEMBER_POPUP_MIN_QUERY_CHARS: usize = 1;
 
 #[derive(Debug, Default)]
 pub(super) struct HistoryRequests {
@@ -63,6 +62,34 @@ pub(crate) struct GuildMemberSearchTarget {
     pub(crate) query: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GuildMemberSearchSurface {
+    Autocomplete,
+    Popup,
+}
+
+impl GuildMemberSearchSurface {
+    const COUNT: usize = 2;
+
+    const fn index(self) -> usize {
+        self as usize
+    }
+
+    const fn min_query_chars(self) -> usize {
+        match self {
+            Self::Autocomplete => 2,
+            Self::Popup => 1,
+        }
+    }
+
+    pub(crate) const fn result_limit(self) -> u16 {
+        match self {
+            Self::Autocomplete => 10,
+            Self::Popup => 100,
+        }
+    }
+}
+
 /// Batch member fetches deduped per (guild, user) with a TTL so lost
 /// responses eventually retry. Every feature shares this coordinator so a
 /// voice, typing, message, or permission demand cannot issue duplicate work.
@@ -78,6 +105,7 @@ pub(crate) struct MemberListSubscriptionTarget {
     pub(crate) guild_id: Id<GuildMarker>,
     pub(crate) channel_id: Id<ChannelMarker>,
     pub(crate) bucket: u32,
+    pub(crate) refresh_generation: u64,
     pub(crate) ranges: Vec<(u32, u32)>,
 }
 
@@ -149,9 +177,7 @@ pub(crate) struct RequestLifecycle {
     read_acks: ReadAckRequests,
     member_hydration: MemberBatchRequests,
     member_list_subscriptions: MemberListSubscriptionRequests,
-    member_autocomplete_searches: GuildMemberSearchRequests,
-    member_popup_searches: GuildMemberSearchRequests,
-    members: MemberRequests,
+    member_searches: [GuildMemberSearchRequests; GuildMemberSearchSurface::COUNT],
     thread_previews: ThreadPreviewRequests,
     user_profiles: UserProfileRequests,
     user_notes: UserNoteRequests,
@@ -177,9 +203,7 @@ impl RequestLifecycle {
     fn reset_gateway_session(&mut self) {
         self.member_hydration = MemberBatchRequests::default();
         self.member_list_subscriptions = MemberListSubscriptionRequests::default();
-        self.member_autocomplete_searches = GuildMemberSearchRequests::default();
-        self.member_popup_searches = GuildMemberSearchRequests::default();
-        self.members = MemberRequests::default();
+        self.member_searches = Default::default();
         self.pending_application_commands = ApplicationCommandRequests::default();
     }
 
@@ -280,58 +304,28 @@ impl RequestLifecycle {
         self.member_hydration.next(missing, now)
     }
 
-    pub(crate) fn next_member_request(
+    pub(crate) fn set_guild_member_search_target(
         &mut self,
-        guild_id: Option<Id<GuildMarker>>,
-    ) -> Option<Id<GuildMarker>> {
-        self.members.next(guild_id)
-    }
-
-    pub(crate) fn remove_member_request(&mut self, guild_id: Id<GuildMarker>) {
-        self.members.remove(guild_id);
-    }
-
-    pub(crate) fn set_member_autocomplete_search_target(
-        &mut self,
+        surface: GuildMemberSearchSurface,
         target: Option<GuildMemberSearchTarget>,
         now: Instant,
     ) {
-        self.member_autocomplete_searches.set_target(
-            target,
-            MEMBER_AUTOCOMPLETE_MIN_QUERY_CHARS,
-            now,
-        );
+        self.member_searches[surface.index()].set_target(target, surface.min_query_chars(), now);
     }
 
-    pub(crate) fn member_autocomplete_search_deadline(&self) -> Option<Instant> {
-        self.member_autocomplete_searches.pending_deadline()
+    pub(crate) fn guild_member_search_deadline(
+        &self,
+        surface: GuildMemberSearchSurface,
+    ) -> Option<Instant> {
+        self.member_searches[surface.index()].pending_deadline()
     }
 
-    pub(crate) fn next_due_member_autocomplete_search(
+    pub(crate) fn next_due_guild_member_search(
         &mut self,
+        surface: GuildMemberSearchSurface,
         now: Instant,
     ) -> Option<GuildMemberSearchTarget> {
-        self.member_autocomplete_searches.next_due(now)
-    }
-
-    pub(crate) fn set_member_popup_search_target(
-        &mut self,
-        target: Option<GuildMemberSearchTarget>,
-        now: Instant,
-    ) {
-        self.member_popup_searches
-            .set_target(target, MEMBER_POPUP_MIN_QUERY_CHARS, now);
-    }
-
-    pub(crate) fn member_popup_search_deadline(&self) -> Option<Instant> {
-        self.member_popup_searches.pending_deadline()
-    }
-
-    pub(crate) fn next_due_member_popup_search(
-        &mut self,
-        now: Instant,
-    ) -> Option<GuildMemberSearchTarget> {
-        self.member_popup_searches.next_due(now)
+        self.member_searches[surface.index()].next_due(now)
     }
 
     pub(crate) fn set_member_list_subscription_target(
@@ -674,7 +668,12 @@ impl MemberBatchRequests {
                 }
             }
             AppEvent::GuildMemberListUpdate { update } => {
-                for member in &update.members {
+                for (member, _) in update
+                    .ops
+                    .iter()
+                    .flat_map(|operation| operation.items())
+                    .filter_map(|item| item.member())
+                {
                     self.requested.remove(&(update.guild_id, member.user_id));
                 }
             }
@@ -746,12 +745,6 @@ impl MemberListSubscriptionRequests {
         };
         let key = target.key();
 
-        // The initial guild subscription already covers bucket 0. Only send a
-        // bucket-0 update when it resets a previously wider subscription.
-        if self.last_sent.is_none() && key.bucket == 0 {
-            self.pending = None;
-            return;
-        }
         if self.last_sent.as_ref() == Some(&key) {
             self.pending = None;
             return;
@@ -785,25 +778,9 @@ impl MemberListSubscriptionRequests {
 }
 
 #[derive(Debug, Default)]
-pub(super) struct MemberRequests {
-    requests: HashSet<Id<GuildMarker>>,
-}
-
-#[derive(Debug, Default)]
 pub(super) struct ThreadPreviewRequests {
     requested: HashSet<(Id<ChannelMarker>, Id<MessageMarker>)>,
     failed: HashSet<(Id<ChannelMarker>, Id<MessageMarker>)>,
-}
-
-impl MemberRequests {
-    pub(super) fn next(&mut self, guild_id: Option<Id<GuildMarker>>) -> Option<Id<GuildMarker>> {
-        let guild_id = guild_id?;
-        self.requests.insert(guild_id).then_some(guild_id)
-    }
-
-    pub(super) fn remove(&mut self, guild_id: Id<GuildMarker>) {
-        self.requests.remove(&guild_id);
-    }
 }
 
 impl ThreadPreviewRequests {
@@ -848,7 +825,6 @@ impl ThreadPreviewRequests {
 }
 
 impl GuildMemberSearchRequests {
-    const MAX_QUERY_CHARS: usize = 64;
     const DEBOUNCE: Duration = Duration::from_millis(250);
 
     pub(super) fn set_target(
@@ -909,6 +885,7 @@ struct MemberListSubscriptionKey {
     guild_id: Id<GuildMarker>,
     channel_id: Id<ChannelMarker>,
     bucket: u32,
+    refresh_generation: u64,
 }
 
 #[derive(Debug)]
@@ -976,6 +953,7 @@ impl MemberListSubscriptionTarget {
             guild_id: self.guild_id,
             channel_id: self.channel_id,
             bucket: self.bucket,
+            refresh_generation: self.refresh_generation,
         }
     }
 }
@@ -984,26 +962,11 @@ fn normalize_guild_member_search_target(
     target: GuildMemberSearchTarget,
     min_query_chars: usize,
 ) -> Option<GuildMemberSearchTarget> {
-    let query = normalize_guild_member_search_query(&target.query);
-    (query.chars().count() >= min_query_chars).then_some(GuildMemberSearchTarget {
+    let query = normalize_member_search_query(&target.query, min_query_chars)?;
+    Some(GuildMemberSearchTarget {
         guild_id: target.guild_id,
         query,
     })
-}
-
-fn normalize_guild_member_search_query(query: &str) -> String {
-    let mut normalized = String::new();
-    let mut count = 0usize;
-    for ch in query.trim().chars() {
-        for lowered in ch.to_lowercase() {
-            if count >= GuildMemberSearchRequests::MAX_QUERY_CHARS {
-                return normalized;
-            }
-            normalized.push(lowered);
-            count += 1;
-        }
-    }
-    normalized
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

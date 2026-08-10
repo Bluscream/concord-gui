@@ -794,6 +794,37 @@ fn channel_pane_keeps_voice_participant_indicators_visible_after_name_truncation
 }
 
 #[test]
+fn member_pane_keeps_cached_members_visible_while_ranges_refresh() {
+    let guild_id = Id::new(1);
+    let channel_id = Id::new(2);
+    let alice = Id::new(20);
+    let mut state = DashboardState::new();
+    state.push_event(guild_create_event(GuildCreateFixture {
+        channels: vec![ChannelInfo {
+            guild_id: Some(guild_id),
+            name: "general".to_owned(),
+            ..ChannelInfo::test(channel_id, "GuildText")
+        }],
+        members: vec![MemberInfo::test(alice, "Alice")],
+        member_count: Some(100),
+        ..GuildCreateFixture::new(guild_id)
+    }));
+    state.confirm_selected_guild();
+    state.set_member_view_height(6);
+    assert!(state.is_member_list_loading());
+
+    let backend = TestBackend::new(40, 6);
+    let mut terminal = Terminal::new(backend).expect("test terminal should build");
+    terminal
+        .draw(|frame| render_members(frame, frame.area(), &state, &[]))
+        .expect("draw should succeed");
+    let buffer = terminal.backend().buffer();
+
+    assert!(find_cell(buffer, "Alice").is_some());
+    assert!(find_cell(buffer, "Loading...").is_none());
+}
+
+#[test]
 fn member_pane_keeps_normal_style_for_speaking_voice_members() {
     let guild_id = Id::new(1);
     let voice_id = Id::new(10);
@@ -810,6 +841,7 @@ fn member_pane_keeps_normal_style_for_speaking_voice_members() {
             username: Some("alice".to_owned()),
             ..MemberInfo::test(alice, "Alice")
         }],
+        member_count: Some(1),
         presences: vec![(alice, PresenceStatus::Online)],
         ..GuildCreateFixture::new(guild_id)
     }));

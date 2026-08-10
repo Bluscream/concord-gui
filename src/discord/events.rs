@@ -16,10 +16,10 @@ use super::{
     ActivityInfo, AttachmentUpdate, ChannelInfo, ChannelRecipientInfo, CustomEmojiInfo, EmbedInfo,
     GuildBoostTier, GuildNotificationSettingsInfo, GuildOnboardingInfo, GuildVerificationLevel,
     MemberInfo, MentionInfo, MessageInfo, PollInfo, PremiumTier, PresenceStatus, ReactionUserInfo,
-    ReadStateInfo, RelationshipInfo, RoleInfo, SnapshotAreas, StreamCaptureTarget,
-    StreamCreateInfo, StreamDeleteInfo, StreamServerInfo, StreamUpdateInfo, UserProfileInfo,
-    UserSettingsInfo, VoiceConnectionStatus, VoiceScope, VoiceServerInfo, VoiceSoundKind,
-    VoiceStateInfo, is_thread_kind,
+    ReadStateInfo, RelationshipInfo, RelationshipUpdateInfo, RoleInfo, SnapshotAreas,
+    StreamCaptureTarget, StreamCreateInfo, StreamDeleteInfo, StreamServerInfo, StreamUpdateInfo,
+    UserProfileInfo, UserSettingsInfo, VoiceConnectionStatus, VoiceScope, VoiceServerInfo,
+    VoiceSoundKind, VoiceStateInfo, is_thread_kind,
 };
 use super::{ApplicationCommandChoiceInfo, ApplicationCommandInfo};
 
@@ -94,8 +94,10 @@ pub struct UserGuildSettingsInfo {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ThreadListSyncInfo {
-    pub guild_id: Option<Id<GuildMarker>>,
-    pub channel_ids: Vec<Id<ChannelMarker>>,
+    pub guild_id: Id<GuildMarker>,
+    /// `None` means every parent channel in the guild. A present list limits
+    /// replacement to those parents, including parents with no active threads.
+    pub channel_ids: Option<Vec<Id<ChannelMarker>>>,
     pub threads: Vec<ChannelInfo>,
     pub thread_members: Vec<Value>,
     pub extra_fields: BTreeMap<String, Value>,
@@ -121,16 +123,88 @@ pub struct ThreadMembersUpdateInfo {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum GuildMemberListItem {
+    Member {
+        member: MemberInfo,
+        presence: Option<PresenceEventFields>,
+    },
+    Group {
+        id: String,
+        count: u64,
+    },
+    Unknown {
+        raw: Value,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum GuildMemberListOperation {
+    Sync {
+        range: (u32, u32),
+        items: Vec<GuildMemberListItem>,
+    },
+    Insert {
+        index: u32,
+        item: GuildMemberListItem,
+    },
+    Update {
+        index: u32,
+        item: GuildMemberListItem,
+    },
+    Delete {
+        index: u32,
+    },
+    Invalidate {
+        range: (u32, u32),
+    },
+    /// An operation Concord does not understand cannot be treated as a no-op.
+    /// Keeping the raw value lets state invalidate the list conservatively and
+    /// preserves enough data to add support once Discord introduces it.
+    Unknown {
+        name: Option<String>,
+        raw: Value,
+    },
+}
+
+impl GuildMemberListOperation {
+    pub fn items(&self) -> &[GuildMemberListItem] {
+        match self {
+            Self::Sync { items, .. } => items,
+            Self::Insert { item, .. } | Self::Update { item, .. } => std::slice::from_ref(item),
+            Self::Delete { .. } | Self::Invalidate { .. } | Self::Unknown { .. } => &[],
+        }
+    }
+}
+
+impl GuildMemberListItem {
+    pub fn member(&self) -> Option<(&MemberInfo, Option<&PresenceEventFields>)> {
+        match self {
+            Self::Member { member, presence } => Some((member, presence.as_ref())),
+            Self::Group { .. } | Self::Unknown { .. } => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct GuildMemberListUpdateInfo {
     pub guild_id: Id<GuildMarker>,
     pub list_id: Option<String>,
     pub member_count: Option<u64>,
     pub online_count: Option<u32>,
-    pub members: Vec<MemberInfo>,
-    pub presences: Vec<PresenceEventFields>,
     pub groups: Vec<Value>,
-    pub ops: Vec<Value>,
+    pub ops: Vec<GuildMemberListOperation>,
     pub extra_fields: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ReadySnapshotInfo {
+    /// `None` means the source payload omitted the field, so existing state
+    /// must not be reconciled from an incomplete test or future payload.
+    pub guild_ids: Option<Vec<Id<GuildMarker>>>,
+    /// Guild channel collections are authoritative when present in READY.
+    pub guild_channel_ids: BTreeMap<Id<GuildMarker>, Vec<Id<ChannelMarker>>>,
+    /// READY and READY_SUPPLEMENTAL together form the private-channel snapshot.
+    pub private_channel_ids: Option<Vec<Id<ChannelMarker>>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -156,6 +230,17 @@ pub enum AppEvent {
     },
     ReadyUserDirectory {
         users: Vec<ChannelRecipientInfo>,
+    },
+    /// Marks the end of READY parsing. State uses the complete ID sets to
+    /// remove guilds and guild channels that belonged only to an older
+    /// Gateway session. Private channels wait for READY_SUPPLEMENTAL.
+    ReadySnapshotComplete {
+        snapshot: ReadySnapshotInfo,
+    },
+    /// Marks the end of READY_SUPPLEMENTAL private-channel parsing so the
+    /// READY and supplemental ID sets can be reconciled as one snapshot.
+    ReadySupplementalComplete {
+        private_channel_ids: Vec<Id<ChannelMarker>>,
     },
     SignedOut,
     CurrentUserCapabilities {
@@ -265,6 +350,14 @@ pub enum AppEvent {
     LazyPrivateChannelUpsert {
         channel: ChannelInfo,
         recipient_ids: Vec<Id<UserMarker>>,
+    },
+    ChannelRecipientAdd {
+        channel_id: Id<ChannelMarker>,
+        recipient: ChannelRecipientInfo,
+    },
+    ChannelRecipientRemove {
+        channel_id: Id<ChannelMarker>,
+        user_id: Id<UserMarker>,
     },
     ChannelDelete {
         guild_id: Option<Id<GuildMarker>>,
@@ -562,6 +655,11 @@ pub enum AppEvent {
     UserGuildSettingsInit {
         settings: Vec<UserGuildSettingsInfo>,
     },
+    UserGuildSettingsSync {
+        settings: Vec<UserGuildSettingsInfo>,
+        partial: bool,
+        version: Option<i64>,
+    },
     UserGuildSettingsUpdate {
         settings: UserGuildSettingsInfo,
     },
@@ -668,16 +766,21 @@ pub enum AppEvent {
     RelationshipUpsert {
         relationship: RelationshipInfo,
     },
+    RelationshipUpdate {
+        update: RelationshipUpdateInfo,
+    },
     RelationshipRemove {
         user_id: Id<UserMarker>,
     },
-    /// Tells the TUI to switch to a specific channel after a
-    /// REST-side action (e.g. opening a DM) creates or resolves a channel
-    /// outside the gateway flow. The channel itself must already be in
-    /// state (typically because a prior `ChannelUpsert` for the same id
-    /// arrived first).
+    /// Full read-state replacement used by internal and test data sources.
     ReadStateInit {
         entries: Vec<ReadStateInfo>,
+    },
+    /// READY read states with their versioned-array replacement semantics.
+    ReadStateSync {
+        entries: Vec<ReadStateInfo>,
+        partial: bool,
+        version: Option<i64>,
     },
     /// Gateway `MESSAGE_ACK` or a locally synthesized ack on activation.
     MessageAck {
@@ -740,6 +843,8 @@ define_app_event_kinds! {
     GatewayDispatchReceived: AppEvent::GatewayDispatchReceived { .. },
     Ready: AppEvent::Ready { .. },
     ReadyUserDirectory: AppEvent::ReadyUserDirectory { .. },
+    ReadySnapshotComplete: AppEvent::ReadySnapshotComplete { .. },
+    ReadySupplementalComplete: AppEvent::ReadySupplementalComplete { .. },
     SignedOut: AppEvent::SignedOut,
     CurrentUserCapabilities: AppEvent::CurrentUserCapabilities { .. },
     CurrentUserVerification: AppEvent::CurrentUserVerification { .. },
@@ -762,6 +867,8 @@ define_app_event_kinds! {
     SelectedMessageChannelChanged: AppEvent::SelectedMessageChannelChanged { .. },
     ChannelUpsert: AppEvent::ChannelUpsert(_),
     LazyPrivateChannelUpsert: AppEvent::LazyPrivateChannelUpsert { .. },
+    ChannelRecipientAdd: AppEvent::ChannelRecipientAdd { .. },
+    ChannelRecipientRemove: AppEvent::ChannelRecipientRemove { .. },
     ChannelDelete: AppEvent::ChannelDelete { .. },
     ThreadListSync: AppEvent::ThreadListSync { .. },
     ThreadMembersUpdateDispatch: AppEvent::ThreadMembersUpdateDispatch { .. },
@@ -826,6 +933,7 @@ define_app_event_kinds! {
     UserSettingsUpdate: AppEvent::UserSettingsUpdate { .. },
     UserNotificationSettingsUpdate: AppEvent::UserNotificationSettingsUpdate { .. },
     UserGuildSettingsInit: AppEvent::UserGuildSettingsInit { .. },
+    UserGuildSettingsSync: AppEvent::UserGuildSettingsSync { .. },
     UserGuildSettingsUpdate: AppEvent::UserGuildSettingsUpdate { .. },
     GatewayError: AppEvent::GatewayError { .. },
     CaptchaRequired: AppEvent::CaptchaRequired { .. },
@@ -852,8 +960,10 @@ define_app_event_kinds! {
     UserNoteLoaded: AppEvent::UserNoteLoaded { .. },
     RelationshipsLoaded: AppEvent::RelationshipsLoaded { .. },
     RelationshipUpsert: AppEvent::RelationshipUpsert { .. },
+    RelationshipUpdate: AppEvent::RelationshipUpdate { .. },
     RelationshipRemove: AppEvent::RelationshipRemove { .. },
     ReadStateInit: AppEvent::ReadStateInit { .. },
+    ReadStateSync: AppEvent::ReadStateSync { .. },
     MessageAck: AppEvent::MessageAck { .. },
     FeatureReadStateAck: AppEvent::FeatureReadStateAck { .. },
     ChannelPinsAck: AppEvent::ChannelPinsAck { .. },
@@ -1762,6 +1872,8 @@ impl AppEventKind {
             | AppEventKind::ThreadMembersUpdateDispatch
             | AppEventKind::ChannelUpsert
             | AppEventKind::LazyPrivateChannelUpsert
+            | AppEventKind::ChannelRecipientAdd
+            | AppEventKind::ChannelRecipientRemove
             | AppEventKind::Ready => AppEventMetadata::mutating(SnapshotAreas::navigation()),
 
             AppEventKind::ForumPostsLoaded => {
@@ -1810,12 +1922,15 @@ impl AppEventKind {
 
             AppEventKind::GuildDelete
             | AppEventKind::ChannelDelete
+            | AppEventKind::ReadySnapshotComplete
+            | AppEventKind::ReadySupplementalComplete
             | AppEventKind::GuildMemberListUpdate
             | AppEventKind::GuildMembersChunk
             | AppEventKind::GuildMemberAdd
             | AppEventKind::GuildMemberUpsert
             | AppEventKind::RelationshipsLoaded
             | AppEventKind::RelationshipUpsert
+            | AppEventKind::RelationshipUpdate
             | AppEventKind::UserIdentityUpdate
             | AppEventKind::RelationshipRemove
             | AppEventKind::VoiceStateUpdate
@@ -1825,6 +1940,10 @@ impl AppEventKind {
             }
 
             AppEventKind::GuildUnavailable => AppEventMetadata::inert(),
+
+            AppEventKind::GatewayReidentified => {
+                AppEventMetadata::mutating_effect(SnapshotAreas::navigation())
+            }
 
             AppEventKind::SelectedGuildChanged
             | AppEventKind::GuildRolesUpdate
@@ -1840,12 +1959,14 @@ impl AppEventKind {
             | AppEventKind::UserNoteLoaded
             | AppEventKind::CurrentUserVerification
             | AppEventKind::UserGuildSettingsInit
+            | AppEventKind::UserGuildSettingsSync
             | AppEventKind::UserGuildSettingsUpdate
             | AppEventKind::ThreadMemberUpdate => {
                 AppEventMetadata::mutating(SnapshotAreas::navigation())
             }
 
             AppEventKind::ReadStateInit
+            | AppEventKind::ReadStateSync
             | AppEventKind::MessageAck
             | AppEventKind::FeatureReadStateAck
             | AppEventKind::ChannelPinsAck
@@ -1901,7 +2022,6 @@ impl AppEventKind {
             | AppEventKind::VoiceSound
             | AppEventKind::RichPresenceDetected
             | AppEventKind::GatewayResumed
-            | AppEventKind::GatewayReidentified
             | AppEventKind::GatewayClosed => AppEventMetadata::effect_only(),
 
             AppEventKind::StreamCreate

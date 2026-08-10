@@ -43,19 +43,19 @@ impl DashboardState {
         let Some(guild_id) = self.selected_guild_id() else {
             return self.selected_channel_recipient_group();
         };
-        let members = self.discord.cache.members_for_guild(guild_id);
+        let members = self.discord.cache.listed_members_for_guild(guild_id);
         let roles = self.discord.cache.roles_for_guild(guild_id);
         guild_member_groups(members, roles)
     }
 
     pub fn is_member_list_loading(&self) -> bool {
-        let Some(guild_id) = self.selected_guild_id() else {
+        let Some((guild_id, _)) = self.member_list_subscription_target() else {
             return false;
         };
-        self.discord
+        !self
+            .discord
             .cache
-            .guild(guild_id)
-            .is_some_and(|guild| guild.online_count.is_none())
+            .member_list_has_ranges(guild_id, &self.member_subscription_ranges())
     }
 
     pub fn message_author_role_color(&self, message: &MessageState) -> Option<u32> {
@@ -295,6 +295,20 @@ impl DashboardState {
 
     pub fn flattened_members(&self) -> Vec<MemberEntry<'_>> {
         flatten_member_groups(self.members_grouped())
+    }
+
+    /// Members confirmed by the current guild snapshot, including explicit
+    /// Opcode 8 results that are not part of the streamed sidebar ranges.
+    pub(in crate::tui) fn searchable_members(&self) -> Vec<MemberEntry<'_>> {
+        let Some(guild_id) = self.selected_guild_id() else {
+            return flatten_member_groups(self.selected_channel_recipient_group());
+        };
+        self.discord
+            .cache
+            .searchable_members_for_guild(guild_id)
+            .into_iter()
+            .map(MemberEntry::Guild)
+            .collect()
     }
 }
 

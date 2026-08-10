@@ -10,11 +10,7 @@ pub(in crate::tui::ui) fn render_members(
     emoji_images: &[EmojiImage<'_>],
 ) {
     let loading_members = state.is_member_list_loading();
-    let groups = if loading_members {
-        Vec::new()
-    } else {
-        state.members_grouped()
-    };
+    let groups = state.members_grouped();
     let scroll = state.member_scroll();
     let content_height = state.member_content_height();
     let visible_end = scroll.saturating_add(content_height);
@@ -29,7 +25,7 @@ pub(in crate::tui::ui) fn render_members(
     let focused = state.focus() == FocusPane::Members;
     let mut line_index = 0usize;
 
-    if loading_members {
+    if loading_members && groups.is_empty() {
         lines.push(Line::from(Span::styled(
             "Loading...",
             theme::current().style(theme::HighlightGroup::Loading),

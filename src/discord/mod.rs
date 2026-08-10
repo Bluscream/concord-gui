@@ -74,10 +74,11 @@ pub use commands::{
 #[cfg(test)]
 pub(crate) use events::test_builders;
 pub use events::{
-    AppEvent, GatewayDispatchInfo, GuildMemberListUpdateInfo, GuildMembersChunkInfo,
-    MessageHistoryLoadTarget, MessageUpdateDispatchInfo, MessageUpdateEventFields,
-    PresenceEventFields, SequencedAppEvent, ThreadListSyncInfo, ThreadMemberUpdateInfo,
-    ThreadMembersUpdateInfo, UserGuildSettingsInfo,
+    AppEvent, GatewayDispatchInfo, GuildMemberListItem, GuildMemberListOperation,
+    GuildMemberListUpdateInfo, GuildMembersChunkInfo, MessageHistoryLoadTarget,
+    MessageUpdateDispatchInfo, MessageUpdateEventFields, PresenceEventFields, ReadySnapshotInfo,
+    SequencedAppEvent, ThreadListSyncInfo, ThreadMemberUpdateInfo, ThreadMembersUpdateInfo,
+    UserGuildSettingsInfo,
 };
 pub(crate) use fingerprint::load_client_fingerprint_and_http;
 pub use guild::{
@@ -100,8 +101,11 @@ pub use presence::{
     ActivityAssets, ActivityButton, ActivityEmoji, ActivityInfo, ActivityKind, ActivityParty,
     ActivityTimestamps, PresenceStatus,
 };
-pub use profile::{FriendStatus, MutualGuildInfo, RelationshipInfo, UserProfileInfo};
+pub use profile::{
+    FriendStatus, MutualGuildInfo, RelationshipInfo, RelationshipUpdateInfo, UserProfileInfo,
+};
 pub use read::ReadStateInfo;
+pub(crate) use request_lifecycle::GuildMemberSearchSurface;
 pub use rest::{ForumPostPage, ReactionUsersPage};
 pub use state::{
     ChannelRecipientState, ChannelState, ChannelUnreadState, ChannelVisibilityStats,

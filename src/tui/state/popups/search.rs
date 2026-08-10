@@ -830,23 +830,23 @@ impl DashboardState {
             ActiveGuildScope::DirectMessages | ActiveGuildScope::Unset => None,
         };
         let mut scored = self
-            .flattened_members()
+            .searchable_members()
             .into_iter()
             .filter_map(|member| {
                 let display_name = self.member_display_name(member);
                 let username = member.username();
                 let score = if query.trim().is_empty() {
-                    Some(0)
+                    0
                 } else {
                     let mut candidates = vec![display_name.as_str()];
                     if let Some(username) = username.as_deref() {
                         candidates.push(username);
                     }
-                    best_fuzzy_name_match_score(&candidates, query).map(|(_, score)| score.0)
-                }?;
+                    best_fuzzy_name_match_score(&candidates, query).map(|(_, score)| score.0)?
+                };
                 Some((
                     score,
-                    display_name.to_ascii_lowercase(),
+                    display_name.to_lowercase(),
                     SearchResultItem::Member(MemberSearchResultItem {
                         user_id: member.user_id(),
                         guild_id,

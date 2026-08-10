@@ -2,7 +2,7 @@ use crate::discord::ids::Id;
 
 use crate::discord::{
     AppEvent, ChannelInfo, ForumPostArchiveState, MemberInfo, MessageHistoryAfterMode,
-    MessageHistoryLoadTarget, UserProfileInfo,
+    MessageHistoryLoadTarget, UserProfileInfo, member::MEMBER_SEARCH_MAX_QUERY_CHARS,
 };
 
 use crate::discord::test_builders::{
@@ -16,8 +16,8 @@ use crate::discord::test_builders::{
 
 use super::{
     APPLICATION_COMMAND_REQUEST_TTL, ForumPostRequestTarget, ForumPostRequests,
-    GuildMemberSearchRequests, GuildMemberSearchTarget, HistoryRequests, MemberBatchRequests,
-    MemberListSubscriptionRequests, MemberListSubscriptionTarget, MemberRequests,
+    GuildMemberSearchRequests, GuildMemberSearchSurface, GuildMemberSearchTarget, HistoryRequests,
+    MemberBatchRequests, MemberListSubscriptionRequests, MemberListSubscriptionTarget,
     PinnedMessageRequests, RequestLifecycle, ThreadPreviewRequests, UserNoteRequests,
     UserProfileRequests,
 };
@@ -301,6 +301,7 @@ fn subscription_target(bucket: u32) -> MemberListSubscriptionTarget {
         guild_id: Id::new(1),
         channel_id: Id::new(2),
         bucket,
+        refresh_generation: 0,
         ranges,
     }
 }
@@ -310,115 +311,53 @@ fn user_profile(user_id: Id<crate::discord::ids::marker::UserMarker>) -> UserPro
 }
 
 #[test]
-fn member_request_is_sent_once_per_active_guild() {
-    let mut requests = MemberRequests::default();
-    let first = Id::new(1);
-    let second = Id::new(2);
-
-    assert_eq!(requests.next(None), None);
-    assert_eq!(requests.next(Some(first)), Some(first));
-    assert_eq!(requests.next(Some(first)), None);
-    assert_eq!(requests.next(Some(second)), Some(second));
-    assert_eq!(requests.next(Some(first)), None);
-}
-
-#[test]
-fn gateway_member_requests_can_retry_after_remove_or_new_gateway_session() {
-    let mut requests = MemberRequests::default();
+fn gateway_member_work_can_retry_after_a_new_gateway_session() {
     let guild_id = Id::new(1);
-
-    assert_eq!(requests.next(Some(guild_id)), Some(guild_id));
-    requests.remove(guild_id);
-
-    assert_eq!(requests.next(Some(guild_id)), Some(guild_id));
-
     let mut lifecycle = RequestLifecycle::default();
-    assert_eq!(
-        lifecycle.next_member_request(Some(guild_id)),
-        Some(guild_id)
-    );
-    assert_eq!(lifecycle.next_member_request(Some(guild_id)), None);
     let now = std::time::Instant::now();
-    let message_author_user_id = Id::new(10);
-    let initial_unknown_user_id = Id::new(20);
-    let message_author_request = vec![(guild_id, vec![message_author_user_id])];
-    let initial_unknown_request = vec![(guild_id, vec![initial_unknown_user_id])];
-    assert_eq!(
-        lifecycle.next_member_hydration_requests(message_author_request.clone(), now),
-        message_author_request
-    );
-    assert_eq!(
-        lifecycle.next_member_hydration_requests(initial_unknown_request.clone(), now),
-        initial_unknown_request
-    );
+    let message_author_request = vec![(guild_id, vec![Id::new(10)])];
+    let initial_unknown_request = vec![(guild_id, vec![Id::new(20)])];
     let search_target = GuildMemberSearchTarget {
         guild_id,
         query: "neo".to_owned(),
     };
-    lifecycle.set_member_autocomplete_search_target(Some(search_target.clone()), now);
-    let autocomplete_deadline = lifecycle
-        .member_autocomplete_search_deadline()
-        .expect("member autocomplete search should be scheduled");
-    assert_eq!(
-        lifecycle.next_due_member_autocomplete_search(autocomplete_deadline),
-        Some(search_target.clone())
-    );
-    lifecycle.set_member_popup_search_target(Some(search_target.clone()), now);
-    let popup_deadline = lifecycle
-        .member_popup_search_deadline()
-        .expect("member popup search should be scheduled independently");
-    assert_eq!(
-        lifecycle.next_due_member_popup_search(popup_deadline),
-        Some(search_target.clone())
-    );
-    let target = subscription_target(1);
-    lifecycle.set_member_list_subscription_target(Some(target.clone()), now);
-    let deadline = lifecycle
-        .member_list_subscription_deadline()
-        .expect("wider member range should be scheduled");
-    assert_eq!(
-        lifecycle.next_due_member_list_subscription(deadline),
-        Some(target.clone())
-    );
+    let subscription = subscription_target(1);
 
-    lifecycle.record_event(&AppEvent::GatewayReidentified);
+    for pass in 0..2 {
+        if pass == 1 {
+            lifecycle.record_event(&AppEvent::GatewayReidentified);
+        }
 
-    assert_eq!(
-        lifecycle.next_member_request(Some(guild_id)),
-        Some(guild_id)
-    );
-    assert_eq!(
-        lifecycle.next_member_hydration_requests(message_author_request.clone(), now),
-        message_author_request
-    );
-    assert_eq!(
-        lifecycle.next_member_hydration_requests(initial_unknown_request.clone(), now),
-        initial_unknown_request
-    );
-    lifecycle.set_member_autocomplete_search_target(Some(search_target.clone()), now);
-    let autocomplete_deadline = lifecycle
-        .member_autocomplete_search_deadline()
-        .expect("new Gateway session should resend the same member autocomplete search");
-    assert_eq!(
-        lifecycle.next_due_member_autocomplete_search(autocomplete_deadline),
-        Some(search_target.clone())
-    );
-    lifecycle.set_member_popup_search_target(Some(search_target.clone()), now);
-    let popup_deadline = lifecycle
-        .member_popup_search_deadline()
-        .expect("new Gateway session should resend the same member popup search");
-    assert_eq!(
-        lifecycle.next_due_member_popup_search(popup_deadline),
-        Some(search_target)
-    );
-    lifecycle.set_member_list_subscription_target(Some(target.clone()), now);
-    let deadline = lifecycle
-        .member_list_subscription_deadline()
-        .expect("new Gateway session should resend the same member range");
-    assert_eq!(
-        lifecycle.next_due_member_list_subscription(deadline),
-        Some(target)
-    );
+        assert_eq!(
+            lifecycle.next_member_hydration_requests(message_author_request.clone(), now),
+            message_author_request
+        );
+        assert_eq!(
+            lifecycle.next_member_hydration_requests(initial_unknown_request.clone(), now),
+            initial_unknown_request
+        );
+        for surface in [
+            GuildMemberSearchSurface::Autocomplete,
+            GuildMemberSearchSurface::Popup,
+        ] {
+            lifecycle.set_guild_member_search_target(surface, Some(search_target.clone()), now);
+            let deadline = lifecycle
+                .guild_member_search_deadline(surface)
+                .expect("member search should be scheduled");
+            assert_eq!(
+                lifecycle.next_due_guild_member_search(surface, deadline),
+                Some(search_target.clone())
+            );
+        }
+        lifecycle.set_member_list_subscription_target(Some(subscription.clone()), now);
+        let deadline = lifecycle
+            .member_list_subscription_deadline()
+            .expect("member range should be scheduled");
+        assert_eq!(
+            lifecycle.next_due_member_list_subscription(deadline),
+            Some(subscription.clone())
+        );
+    }
 }
 
 #[test]
@@ -512,7 +451,10 @@ fn member_list_subscription_debounces_and_coalesces_bucket_updates() {
     let now = std::time::Instant::now();
 
     requests.set_target(Some(subscription_target(0)), now);
-    assert_eq!(requests.pending_deadline(), None);
+    let initial_deadline = requests
+        .pending_deadline()
+        .expect("bucket zero should no longer rely on an earlier subscription");
+    assert!(requests.next_due(initial_deadline).is_some());
 
     requests.set_target(Some(subscription_target(1)), now);
     let first_deadline = requests
@@ -542,6 +484,14 @@ fn member_list_subscription_debounces_and_coalesces_bucket_updates() {
 
     requests.set_target(Some(subscription_target(0)), second_deadline);
     assert!(requests.pending_deadline().is_some());
+
+    let mut refreshed = subscription_target(0);
+    refreshed.refresh_generation = 1;
+    requests.set_target(Some(refreshed), second_deadline);
+    assert!(
+        requests.pending_deadline().is_some(),
+        "invalidated ranges must resend even when the bucket is unchanged"
+    );
 }
 
 #[test]
@@ -605,7 +555,7 @@ fn guild_member_search_debounces_bounds_and_resets_when_closed() {
     );
     assert!(requests.pending_deadline().is_some());
 
-    let long_query = "A".repeat(GuildMemberSearchRequests::MAX_QUERY_CHARS + 10);
+    let long_query = "A".repeat(MEMBER_SEARCH_MAX_QUERY_CHARS + 10);
     requests.set_target(
         Some(GuildMemberSearchTarget {
             guild_id,
@@ -620,13 +570,10 @@ fn guild_member_search_debounces_bounds_and_resets_when_closed() {
     let target = requests
         .next_due(deadline)
         .expect("capped query should be due");
-    assert_eq!(
-        target.query.chars().count(),
-        GuildMemberSearchRequests::MAX_QUERY_CHARS
-    );
+    assert_eq!(target.query.chars().count(), MEMBER_SEARCH_MAX_QUERY_CHARS);
     assert!(target.query.chars().all(|ch| ch == 'a'));
 
-    let expanding_query = "İ".repeat(GuildMemberSearchRequests::MAX_QUERY_CHARS + 10);
+    let expanding_query = "İ".repeat(MEMBER_SEARCH_MAX_QUERY_CHARS + 10);
     requests.set_target(
         Some(GuildMemberSearchTarget {
             guild_id,
@@ -641,53 +588,7 @@ fn guild_member_search_debounces_bounds_and_resets_when_closed() {
     let target = requests
         .next_due(deadline)
         .expect("expanded lowercase query should be due");
-    assert_eq!(
-        target.query.chars().count(),
-        GuildMemberSearchRequests::MAX_QUERY_CHARS
-    );
-}
-
-#[test]
-fn member_search_surfaces_apply_independent_query_policies() {
-    let mut lifecycle = RequestLifecycle::default();
-    let now = std::time::Instant::now();
-    let target = GuildMemberSearchTarget {
-        guild_id: Id::new(1),
-        query: "a".to_owned(),
-    };
-
-    lifecycle.set_member_autocomplete_search_target(Some(target.clone()), now);
-    assert_eq!(lifecycle.member_autocomplete_search_deadline(), None);
-
-    lifecycle.set_member_popup_search_target(Some(target.clone()), now);
-    let popup_deadline = lifecycle
-        .member_popup_search_deadline()
-        .expect("explicit member search accepts one-character prefixes");
-    assert_eq!(
-        lifecycle.next_due_member_popup_search(popup_deadline),
-        Some(target)
-    );
-
-    let shared_target = GuildMemberSearchTarget {
-        guild_id: Id::new(1),
-        query: "alice".to_owned(),
-    };
-    lifecycle.set_member_autocomplete_search_target(Some(shared_target.clone()), now);
-    lifecycle.set_member_popup_search_target(Some(shared_target.clone()), now);
-    let autocomplete_deadline = lifecycle
-        .member_autocomplete_search_deadline()
-        .expect("autocomplete search should be scheduled");
-    let popup_deadline = lifecycle
-        .member_popup_search_deadline()
-        .expect("popup search should not be suppressed by autocomplete");
-    assert_eq!(
-        lifecycle.next_due_member_autocomplete_search(autocomplete_deadline),
-        Some(shared_target.clone())
-    );
-    assert_eq!(
-        lifecycle.next_due_member_popup_search(popup_deadline),
-        Some(shared_target)
-    );
+    assert_eq!(target.query.chars().count(), MEMBER_SEARCH_MAX_QUERY_CHARS);
 }
 
 #[test]

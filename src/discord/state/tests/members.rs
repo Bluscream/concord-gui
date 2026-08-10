@@ -1,6 +1,241 @@
 use super::*;
 use crate::discord::{GuildVerificationLevel, VoiceScope};
 use chrono::Utc;
+use serde_json::json;
+
+fn listed_member(user_id: Id<UserMarker>, display_name: &str) -> GuildMemberListItem {
+    GuildMemberListItem::Member {
+        member: member_info(user_id, display_name),
+        presence: None,
+    }
+}
+
+fn member_list_update(
+    guild_id: Id<GuildMarker>,
+    member_count: u64,
+    ops: Vec<GuildMemberListOperation>,
+) -> AppEvent {
+    AppEvent::GuildMemberListUpdate {
+        update: GuildMemberListUpdateInfo {
+            guild_id,
+            list_id: Some("everyone".to_owned()),
+            member_count: Some(member_count),
+            online_count: Some(u32::try_from(member_count).unwrap_or(u32::MAX)),
+            groups: vec![json!({ "id": "online", "count": member_count })],
+            ops,
+            extra_fields: BTreeMap::new(),
+        },
+    }
+}
+
+#[test]
+fn member_list_operations_update_index_membership_and_completeness() {
+    let guild_id = Id::new(1);
+    let alice = Id::new(10);
+    let bob = Id::new(20);
+    let carol = Id::new(30);
+    let mut state = DiscordState::default();
+    state.apply_event(&guild_create_event(GuildCreateFixture {
+        member_count: Some(2),
+        members: vec![member_info(alice, "alice"), member_info(bob, "bob")],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+
+    state.apply_event(&member_list_update(
+        guild_id,
+        2,
+        vec![GuildMemberListOperation::Sync {
+            range: (0, 99),
+            items: vec![
+                GuildMemberListItem::Group {
+                    id: "online".to_owned(),
+                    count: 2,
+                },
+                listed_member(alice, "alice"),
+                listed_member(bob, "bob"),
+            ],
+        }],
+    ));
+    assert!(state.member_list_has_ranges(guild_id, &[(0, 99)]));
+    assert_eq!(
+        state
+            .listed_members_for_guild(guild_id)
+            .into_iter()
+            .map(|member| member.user_id)
+            .collect::<Vec<_>>(),
+        vec![alice, bob]
+    );
+
+    let generation = state.member_list_refresh_generation(guild_id);
+    state.apply_event(&member_list_update(
+        guild_id,
+        2,
+        vec![GuildMemberListOperation::Sync {
+            range: (0, 99),
+            items: vec![GuildMemberListItem::Unknown {
+                raw: json!({ "future_item": true }),
+            }],
+        }],
+    ));
+    assert!(!state.member_list_has_ranges(guild_id, &[(0, 99)]));
+    assert!(state.member_list_refresh_generation(guild_id) > generation);
+    state.apply_event(&member_list_update(
+        guild_id,
+        2,
+        vec![GuildMemberListOperation::Sync {
+            range: (0, 99),
+            items: vec![
+                GuildMemberListItem::Group {
+                    id: "online".to_owned(),
+                    count: 2,
+                },
+                listed_member(alice, "alice"),
+                listed_member(bob, "bob"),
+            ],
+        }],
+    ));
+
+    state.apply_event(&member_list_update(
+        guild_id,
+        2,
+        vec![GuildMemberListOperation::Update {
+            index: 1,
+            item: listed_member(carol, "carol"),
+        }],
+    ));
+    assert_eq!(
+        state
+            .listed_members_for_guild(guild_id)
+            .into_iter()
+            .map(|member| member.user_id)
+            .collect::<Vec<_>>(),
+        vec![carol, bob]
+    );
+    assert!(
+        state
+            .members_for_guild(guild_id)
+            .iter()
+            .any(|member| member.user_id == alice)
+    );
+
+    state.apply_event(&member_list_update(
+        guild_id,
+        3,
+        vec![GuildMemberListOperation::Insert {
+            index: 2,
+            item: listed_member(alice, "alice"),
+        }],
+    ));
+    state.apply_event(&member_list_update(
+        guild_id,
+        2,
+        vec![GuildMemberListOperation::Delete { index: 1 }],
+    ));
+    assert_eq!(
+        state
+            .listed_members_for_guild(guild_id)
+            .into_iter()
+            .map(|member| member.user_id)
+            .collect::<Vec<_>>(),
+        vec![alice, bob]
+    );
+
+    let generation = state.member_list_refresh_generation(guild_id);
+    state.apply_event(&member_list_update(
+        guild_id,
+        2,
+        vec![GuildMemberListOperation::Invalidate { range: (0, 99) }],
+    ));
+    assert_eq!(
+        state
+            .listed_members_for_guild(guild_id)
+            .into_iter()
+            .map(|member| member.user_id)
+            .collect::<Vec<_>>(),
+        vec![alice, bob, carol],
+        "known members remain visible while the invalidated range refreshes"
+    );
+    assert!(!state.member_list_has_ranges(guild_id, &[(0, 99)]));
+    assert!(state.member_list_refresh_generation(guild_id) > generation);
+
+    state.apply_event(&member_list_update(
+        guild_id,
+        2,
+        vec![GuildMemberListOperation::Unknown {
+            name: Some("FUTURE_OPERATION".to_owned()),
+            raw: json!({ "op": "FUTURE_OPERATION" }),
+        }],
+    ));
+    assert!(!state.member_list_has_ranges(guild_id, &[(0, 99)]));
+
+    state.apply_event(&member_list_update(
+        guild_id,
+        2,
+        vec![GuildMemberListOperation::Sync {
+            range: (0, 99),
+            items: vec![
+                GuildMemberListItem::Group {
+                    id: "online".to_owned(),
+                    count: 2,
+                },
+                GuildMemberListItem::Unknown {
+                    raw: json!({ "future_item": true }),
+                },
+                listed_member(bob, "bob"),
+            ],
+        }],
+    ));
+    assert!(
+        !state.member_list_has_ranges(guild_id, &[(0, 99)]),
+        "an unknown row must remain missing until Discord refreshes it"
+    );
+}
+
+#[test]
+fn reidentified_gateway_session_invalidates_cached_member_list_ranges() {
+    let guild_id = Id::new(1);
+    let alice = Id::new(10);
+    let mut state = DiscordState::default();
+    state.apply_event(&guild_create_event(GuildCreateFixture {
+        member_count: Some(1),
+        members: vec![member_info(alice, "alice")],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+    state.apply_event(&member_list_update(
+        guild_id,
+        1,
+        vec![GuildMemberListOperation::Sync {
+            range: (0, 99),
+            items: vec![
+                GuildMemberListItem::Group {
+                    id: "online".to_owned(),
+                    count: 1,
+                },
+                listed_member(alice, "alice"),
+            ],
+        }],
+    ));
+    assert!(state.member_list_has_ranges(guild_id, &[(0, 99)]));
+    let generation = state.member_list_refresh_generation(guild_id);
+
+    state.apply_event(&AppEvent::GatewayReidentified);
+
+    assert_eq!(
+        state
+            .listed_members_for_guild(guild_id)
+            .into_iter()
+            .map(|member| member.user_id)
+            .collect::<Vec<_>>(),
+        vec![alice],
+        "the current snapshot remains visible while the new session resubscribes"
+    );
+    assert!(!state.member_list_has_ranges(guild_id, &[(0, 99)]));
+    assert!(state.member_list_refresh_generation(guild_id) > generation);
+    assert_eq!(
+        state.guild(guild_id).and_then(|guild| guild.online_count),
+        None
+    );
+}
 
 #[test]
 fn tracks_members_and_presences() {
@@ -592,6 +827,23 @@ fn member_cache_pruning_keeps_active_voice_participants() {
     state.apply_event(&AppEvent::VoiceStateUpdate {
         state: voice_state(guild_id, Some(voice_channel), active_user),
     });
+    state.apply_event(&member_list_update(
+        guild_id,
+        2,
+        vec![GuildMemberListOperation::Sync {
+            range: (0, 99),
+            items: vec![
+                GuildMemberListItem::Group {
+                    id: "online".to_owned(),
+                    count: 2,
+                },
+                listed_member(active_user, "Active"),
+                listed_member(inactive_user, "Inactive"),
+            ],
+        }],
+    ));
+    assert!(state.member_list_has_ranges(guild_id, &[(0, 99)]));
+    let generation = state.member_list_refresh_generation(guild_id);
 
     for guild_number in 2..=12 {
         let other_guild = Id::new(guild_number);
@@ -614,6 +866,13 @@ fn member_cache_pruning_keeps_active_voice_participants() {
         .map(|member| member.user_id)
         .collect::<Vec<_>>();
     assert_eq!(retained_ids, vec![active_user]);
+    assert!(state.listed_members_for_guild(guild_id).is_empty());
+    assert!(!state.member_list_has_ranges(guild_id, &[(0, 99)]));
+    assert!(state.member_list_refresh_generation(guild_id) > generation);
+    assert_eq!(
+        state.guild(guild_id).and_then(|guild| guild.online_count),
+        None
+    );
 }
 
 #[test]
@@ -865,7 +1124,7 @@ fn presence_update_does_not_create_fallback_member() {
 }
 
 #[test]
-fn real_member_add_and_remove_update_known_member_count() {
+fn limited_member_events_do_not_guess_the_authoritative_member_count() {
     let guild_id = Id::new(1);
     let alice = Id::new(10);
     let bob = Id::new(20);
@@ -893,32 +1152,20 @@ fn real_member_add_and_remove_update_known_member_count() {
         guild_id,
         member: member_info(Id::new(30), "carol"),
     });
-    assert_eq!(state.guild(guild_id).unwrap().member_count, Some(2));
+    assert_eq!(state.guild(guild_id).unwrap().member_count, Some(1));
 
     state.apply_event(&AppEvent::GuildMemberRemove {
         guild_id,
         user_id: Id::new(30),
     });
     assert_eq!(state.guild(guild_id).unwrap().member_count, Some(1));
-}
 
-#[test]
-fn guild_member_remove_decrements_known_count_for_unloaded_member() {
-    let guild_id = Id::new(1);
-    let mut state = DiscordState::default();
-
-    state.apply_event(&guild_create_event(GuildCreateFixture {
-        member_count: Some(3),
-        ..GuildCreateFixture::new(guild_id)
-    }));
-
-    state.apply_event(&AppEvent::GuildMemberRemove {
+    state.apply_event(&member_list_update(
         guild_id,
-        user_id: Id::new(99),
-    });
-
+        2,
+        vec![GuildMemberListOperation::Invalidate { range: (0, 99) }],
+    ));
     assert_eq!(state.guild(guild_id).unwrap().member_count, Some(2));
-    assert!(state.members_for_guild(guild_id).is_empty());
 }
 
 #[test]

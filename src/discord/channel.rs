@@ -1,6 +1,7 @@
 mod state;
 
 pub(crate) use state::is_thread_kind;
+pub(in crate::discord) use state::refresh_private_channel_name_from_recipients;
 pub use state::{ChannelRecipientState, ChannelState, ChannelVisibilityStats};
 
 use crate::discord::ids::{

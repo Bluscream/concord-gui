@@ -1565,7 +1565,7 @@ fn typing_at_sign_after_letter_does_not_trigger_picker() {
 }
 
 #[test]
-fn typing_after_at_filters_candidates_by_substring() {
+fn typing_after_at_filters_member_candidates_by_gateway_prefix() {
     let mut state = state_with_writable_channel_and_members();
     state.start_composer();
     state.push_composer_char('@');
@@ -1578,7 +1578,9 @@ fn typing_after_at_filters_candidates_by_substring() {
         .map(|entry| entry.display_name)
         .collect();
     assert!(
-        names.iter().all(|name| name.to_lowercase().contains('s')),
+        names
+            .iter()
+            .all(|name| name.to_lowercase().starts_with('s')),
         "expected only `s` matches, got {names:?}"
     );
     assert!(names.iter().any(|name| name == "Sally"));
@@ -1593,7 +1595,7 @@ fn typing_after_at_filters_candidates_by_substring() {
         .into_iter()
         .map(|entry| entry.display_name)
         .collect();
-    assert!(names.iter().any(|name| name == "Offline Sally"));
+    assert!(!names.iter().any(|name| name == "Offline Sally"));
 }
 
 #[test]

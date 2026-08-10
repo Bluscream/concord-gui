@@ -36,6 +36,7 @@ use super::{
     events::{AppEvent, SequencedAppEvent},
     fingerprint::{CLIENT_BUILD_NUMBER, ClientFingerprint, discord_http_client},
     gateway::{GatewayCommand, GatewayRuntime, GatewayVoiceStateUpdate, run_gateway},
+    member::normalize_member_search_query,
     request_lifecycle::RequestLifecycle,
     rest::DiscordRest,
     state::{CurrentVoiceConnectionState, DiscordSnapshot, DiscordState, SnapshotRevision},
@@ -45,8 +46,6 @@ use super::{
     },
 };
 
-const MEMBER_SEARCH_MIN_QUERY_CHARS: usize = 1;
-const MEMBER_SEARCH_MAX_QUERY_CHARS: usize = 64;
 const MEMBER_SEARCH_MAX_LIMIT: u16 = 100;
 const OFFICIAL_WORDLE_APPLICATION_ID: u64 = 1_211_781_489_931_452_447;
 const DISCORD_LOCAL_APPLICATION_ID: &str = "-1";
@@ -59,6 +58,7 @@ type MemberListSubscriptionRequest = (
     Id<GuildMarker>,
     Id<ChannelMarker>,
     u32,
+    u64,
     Vec<MemberListRange>,
 );
 type DueMemberListSubscription = (Id<GuildMarker>, Id<ChannelMarker>, Vec<MemberListRange>);
@@ -311,7 +311,7 @@ impl DiscordClient {
         query: String,
         limit: u16,
     ) -> std::result::Result<(), String> {
-        let Some(query) = normalize_member_search_query(&query) else {
+        let Some(query) = normalize_member_search_query(&query, 1) else {
             return Ok(());
         };
         let limit = limit.clamp(1, MEMBER_SEARCH_MAX_LIMIT);
@@ -1135,22 +1135,6 @@ fn voice_state_request_is_duplicate(
         (None, None) => true,
         (None, Some(_)) => false,
     }
-}
-
-fn normalize_member_search_query(query: &str) -> Option<String> {
-    let mut normalized = String::new();
-    let mut count = 0usize;
-    for ch in query.trim().chars() {
-        for lowered in ch.to_lowercase() {
-            if count >= MEMBER_SEARCH_MAX_QUERY_CHARS {
-                return (normalized.chars().count() >= MEMBER_SEARCH_MIN_QUERY_CHARS)
-                    .then_some(normalized);
-            }
-            normalized.push(lowered);
-            count += 1;
-        }
-    }
-    (normalized.chars().count() >= MEMBER_SEARCH_MIN_QUERY_CHARS).then_some(normalized)
 }
 
 fn query_hash(guild_id: Id<GuildMarker>, query: &str, limit: u16) -> u64 {

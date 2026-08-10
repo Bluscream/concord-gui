@@ -168,7 +168,7 @@ pub struct ChannelRecipientState {
 }
 
 impl ChannelRecipientState {
-    pub(super) fn from_info(
+    pub(in crate::discord) fn from_info(
         recipient: &ChannelRecipientInfo,
         previous: Option<&Self>,
         ready_user: Option<&ChannelRecipientInfo>,
@@ -623,7 +623,7 @@ pub(super) fn private_channel_name_follows_recipients(
         || current_name == recipient_names.join(", ")
 }
 
-pub(super) fn refresh_private_channel_name_from_recipients(
+pub(in crate::discord) fn refresh_private_channel_name_from_recipients(
     channel: &mut ChannelState,
     previous_names: &[String],
 ) {
@@ -639,9 +639,11 @@ pub(super) fn refresh_private_channel_name_from_recipients(
         return;
     }
     let new_name = joined_recipient_display_names(&channel.recipients);
-    if !new_name.is_empty() {
-        channel.name = new_name;
-    }
+    channel.name = if new_name.is_empty() {
+        format!("dm-{}", channel.id.get())
+    } else {
+        new_name
+    };
 }
 
 #[cfg(test)]

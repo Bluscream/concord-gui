@@ -1004,10 +1004,9 @@ impl DashboardState {
         )
     }
 
-    /// Builds the full suggestion list for the picker, ordered by best match
-    /// across the member's display name AND username: prefix matches beat
-    /// substring matches, alias matches beat username matches at the same rank,
-    /// and ties are broken alphabetically by display name.
+    /// Builds the full suggestion list for the picker. Member matching uses
+    /// the same username or nickname prefix rule as Gateway Opcode 8 so a
+    /// cached member and a remotely loaded member have the same search meaning.
     pub fn composer_mention_candidates(&self) -> Vec<MentionPickerEntry> {
         let Some(query) = self.composer_mention_query() else {
             return Vec::new();
@@ -1017,7 +1016,7 @@ impl DashboardState {
         } else {
             build_mention_candidates(
                 query,
-                self.flattened_members(),
+                self.searchable_members(),
                 self.composer_role_candidates(),
                 self.composer_everyone_role_id(),
             )
@@ -1687,7 +1686,7 @@ impl DashboardState {
         let query = value_query.trim_start_matches(['@', '#']);
         let mention_candidates = match option.kind {
             APPLICATION_COMMAND_USER_KIND => {
-                build_mention_candidates(query, self.flattened_members(), Vec::new(), None)
+                build_mention_candidates(query, self.searchable_members(), Vec::new(), None)
             }
             APPLICATION_COMMAND_ROLE_KIND => build_mention_candidates(
                 query,
@@ -1700,7 +1699,7 @@ impl DashboardState {
             }
             APPLICATION_COMMAND_MENTIONABLE_KIND => build_mention_candidates(
                 query,
-                self.flattened_members(),
+                self.searchable_members(),
                 self.composer_role_candidates(),
                 self.composer_everyone_role_id(),
             ),

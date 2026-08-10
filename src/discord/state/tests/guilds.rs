@@ -169,3 +169,113 @@ fn guild_update_replaces_custom_emojis_only_when_the_field_is_present() {
     assert_eq!(emojis.len(), 1);
     assert_eq!(emojis[0].name, "party");
 }
+
+#[test]
+fn fresh_ready_reconciles_guild_channel_and_private_channel_snapshots() {
+    let stale_guild = Id::new(1);
+    let current_guild = Id::new(2);
+    let stale_guild_channel = Id::new(10);
+    let stale_current_channel = Id::new(20);
+    let ready_channel = Id::new(21);
+    let stale_dm = Id::new(30);
+    let ready_dm = Id::new(31);
+    let supplemental_dm = Id::new(32);
+    let stale_member = Id::new(40);
+    let ready_member = Id::new(41);
+    let guild_channel = |guild_id, channel_id, name: &str| ChannelInfo {
+        guild_id: Some(guild_id),
+        name: name.to_owned(),
+        ..channel_info(channel_id, "GuildText", Vec::new())
+    };
+    let mut state = DiscordState::default();
+
+    state.apply_event(&guild_create_event(GuildCreateFixture {
+        channels: vec![guild_channel(
+            stale_guild,
+            stale_guild_channel,
+            "stale guild",
+        )],
+        ..GuildCreateFixture::new(stale_guild)
+    }));
+    state.apply_event(&guild_create_event(GuildCreateFixture {
+        channels: vec![guild_channel(
+            current_guild,
+            stale_current_channel,
+            "stale channel",
+        )],
+        members: vec![member_info(stale_member, "stale member")],
+        ..GuildCreateFixture::new(current_guild)
+    }));
+    for (channel_id, name) in [(stale_dm, "stale dm"), (ready_dm, "ready dm")] {
+        state.apply_event(&AppEvent::ChannelUpsert(dm_channel(channel_id, name)));
+    }
+    state.apply_event(&AppEvent::ReadStateInit {
+        entries: vec![
+            read_state_info(stale_guild_channel, None, 0),
+            read_state_info(stale_current_channel, None, 0),
+            read_state_info(stale_dm, None, 0),
+        ],
+    });
+
+    state.apply_event(&guild_create_event(GuildCreateFixture {
+        channels: vec![guild_channel(current_guild, ready_channel, "ready channel")],
+        members: vec![member_info(ready_member, "ready member")],
+        ..GuildCreateFixture::new(current_guild)
+    }));
+    state.apply_event(&AppEvent::ReadySnapshotComplete {
+        snapshot: ReadySnapshotInfo {
+            guild_ids: Some(vec![current_guild]),
+            guild_channel_ids: BTreeMap::from([(current_guild, vec![ready_channel])]),
+            private_channel_ids: Some(vec![ready_dm]),
+        },
+    });
+
+    assert!(state.guild(stale_guild).is_none());
+    assert!(state.channel(stale_guild_channel).is_none());
+    assert!(state.channel(stale_current_channel).is_none());
+    assert!(state.channel(ready_channel).is_some());
+    assert_eq!(
+        state
+            .searchable_members_for_guild(current_guild)
+            .into_iter()
+            .map(|member| member.user_id)
+            .collect::<Vec<_>>(),
+        vec![ready_member]
+    );
+    assert!(
+        state
+            .members_for_guild(current_guild)
+            .into_iter()
+            .any(|member| member.user_id == stale_member),
+        "stale entities may remain available to cached message rows"
+    );
+    assert!(
+        !state
+            .notifications
+            .read_states
+            .contains_key(&stale_guild_channel)
+    );
+    assert!(
+        !state
+            .notifications
+            .read_states
+            .contains_key(&stale_current_channel)
+    );
+    assert!(
+        state.channel(stale_dm).is_some(),
+        "DM reconciliation must wait for READY_SUPPLEMENTAL"
+    );
+
+    state.apply_event(&AppEvent::ChannelUpsert(dm_channel(
+        supplemental_dm,
+        "supplemental dm",
+    )));
+    state.apply_event(&AppEvent::ReadySupplementalComplete {
+        private_channel_ids: vec![supplemental_dm],
+    });
+
+    assert!(state.channel(stale_dm).is_none());
+    assert!(state.channel(ready_dm).is_some());
+    assert!(state.channel(supplemental_dm).is_some());
+    assert!(!state.notifications.read_states.contains_key(&stale_dm));
+}

@@ -24,12 +24,14 @@ use crate::discord::{
     ActivityInfo, ActivityKind, AppEvent, AttachmentUpdate, BASE_ATTACHMENT_LIMIT_BYTES,
     ChannelInfo, ChannelNotificationOverrideInfo, ChannelRecipientInfo, ChannelUnreadState,
     ChannelVisibilityStats, CurrentVoiceConnectionState, CustomEmojiInfo, DiscordState,
-    FriendStatus, GuildBoostTier, GuildMembersChunkInfo, GuildNotificationSettingsInfo, MemberInfo,
+    FriendStatus, GuildBoostTier, GuildMemberListItem, GuildMemberListOperation,
+    GuildMemberListUpdateInfo, GuildMembersChunkInfo, GuildNotificationSettingsInfo, MemberInfo,
     MentionInfo, MessageInfo, MessageKind, MessageReferenceInfo, MessageSnapshotInfo, MessageState,
     MessageUpdateDispatchInfo, MessageUpdateEventFields, NotificationLevel,
     PermissionOverwriteInfo, PermissionOverwriteKind, PollAnswerInfo, PollInfo, PremiumTier,
-    PresenceStatus, ReactionEmoji, ReactionInfo, ReadStateInfo, RelationshipInfo, ReplyInfo,
-    RoleInfo, UserGuildSettingsInfo, UserProfileInfo, VoiceStateInfo,
+    PresenceStatus, ReactionEmoji, ReactionInfo, ReadStateInfo, ReadySnapshotInfo,
+    RelationshipInfo, ReplyInfo, RoleInfo, ThreadListSyncInfo, ThreadMetadataInfo,
+    UserGuildSettingsInfo, UserProfileInfo, VoiceStateInfo,
 };
 
 mod channels;

@@ -12,7 +12,8 @@ use crate::discord::{
         marker::{ChannelMarker, GuildMarker, MessageMarker, UserMarker},
     },
     request_lifecycle::{
-        ForumPostRequestTarget, GuildMemberSearchTarget, MemberListSubscriptionTarget,
+        ForumPostRequestTarget, GuildMemberSearchSurface, GuildMemberSearchTarget,
+        MemberListSubscriptionTarget,
     },
     voice,
 };
@@ -157,25 +158,9 @@ impl DiscordClient {
             .next_member_hydration_requests(missing, now)
     }
 
-    pub(crate) fn next_member_request(
+    pub(crate) fn set_guild_member_search_target(
         &self,
-        guild_id: Option<Id<GuildMarker>>,
-    ) -> Option<Id<GuildMarker>> {
-        self.request_lifecycle
-            .lock()
-            .expect("request lifecycle lock is not poisoned")
-            .next_member_request(guild_id)
-    }
-
-    pub(crate) fn remove_member_request(&self, guild_id: Id<GuildMarker>) {
-        self.request_lifecycle
-            .lock()
-            .expect("request lifecycle lock is not poisoned")
-            .remove_member_request(guild_id);
-    }
-
-    pub(crate) fn set_member_autocomplete_search_target(
-        &self,
+        surface: GuildMemberSearchSurface,
         guild_id: Option<Id<GuildMarker>>,
         query: Option<&str>,
         now: Instant,
@@ -189,60 +174,28 @@ impl DiscordClient {
         self.request_lifecycle
             .lock()
             .expect("request lifecycle lock is not poisoned")
-            .set_member_autocomplete_search_target(target, now);
+            .set_guild_member_search_target(surface, target, now);
     }
 
-    pub(crate) fn member_autocomplete_search_deadline(&self) -> Option<Instant> {
+    pub(crate) fn guild_member_search_deadline(
+        &self,
+        surface: GuildMemberSearchSurface,
+    ) -> Option<Instant> {
         self.request_lifecycle
             .lock()
             .expect("request lifecycle lock is not poisoned")
-            .member_autocomplete_search_deadline()
+            .guild_member_search_deadline(surface)
     }
 
-    pub(crate) fn next_due_member_autocomplete_search(
+    pub(crate) fn next_due_guild_member_search(
         &self,
+        surface: GuildMemberSearchSurface,
         now: Instant,
     ) -> Option<(Id<GuildMarker>, String)> {
         self.request_lifecycle
             .lock()
             .expect("request lifecycle lock is not poisoned")
-            .next_due_member_autocomplete_search(now)
-            .map(|target| (target.guild_id, target.query))
-    }
-
-    pub(crate) fn set_member_popup_search_target(
-        &self,
-        guild_id: Option<Id<GuildMarker>>,
-        query: Option<&str>,
-        now: Instant,
-    ) {
-        let target = guild_id
-            .zip(query)
-            .map(|(guild_id, query)| GuildMemberSearchTarget {
-                guild_id,
-                query: query.to_owned(),
-            });
-        self.request_lifecycle
-            .lock()
-            .expect("request lifecycle lock is not poisoned")
-            .set_member_popup_search_target(target, now);
-    }
-
-    pub(crate) fn member_popup_search_deadline(&self) -> Option<Instant> {
-        self.request_lifecycle
-            .lock()
-            .expect("request lifecycle lock is not poisoned")
-            .member_popup_search_deadline()
-    }
-
-    pub(crate) fn next_due_member_popup_search(
-        &self,
-        now: Instant,
-    ) -> Option<(Id<GuildMarker>, String)> {
-        self.request_lifecycle
-            .lock()
-            .expect("request lifecycle lock is not poisoned")
-            .next_due_member_popup_search(now)
+            .next_due_guild_member_search(surface, now)
             .map(|target| (target.guild_id, target.query))
     }
 
@@ -251,15 +204,17 @@ impl DiscordClient {
         target: Option<MemberListSubscriptionRequest>,
         now: Instant,
     ) {
-        let target =
-            target.map(
-                |(guild_id, channel_id, bucket, ranges)| MemberListSubscriptionTarget {
+        let target = target.map(
+            |(guild_id, channel_id, bucket, refresh_generation, ranges)| {
+                MemberListSubscriptionTarget {
                     guild_id,
                     channel_id,
                     bucket,
+                    refresh_generation,
                     ranges,
-                },
-            );
+                }
+            },
+        );
         self.request_lifecycle
             .lock()
             .expect("request lifecycle lock is not poisoned")

@@ -116,8 +116,6 @@ fn guild_member_list_counts_event(
             list_id: None,
             member_count: None,
             online_count: Some(online),
-            members: Vec::new(),
-            presences: Vec::new(),
             groups: Vec::new(),
             ops: Vec::new(),
             extra_fields: BTreeMap::new(),

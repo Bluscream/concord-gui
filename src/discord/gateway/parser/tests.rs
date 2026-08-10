@@ -8,8 +8,9 @@ use super::{
 };
 use crate::discord::{
     ActivityKind, AppEvent, AttachmentUpdate, ChannelVisibilityStats, DiscordState, FriendStatus,
-    GuildOnboardingMode, GuildVerificationLevel, MentionInfo, MessageKind, NotificationLevel,
-    PollAnswerInfo, PollInfo, PremiumTier, PresenceStatus, ReactionEmoji, ReplyInfo,
+    GuildMemberListItem, GuildMemberListOperation, GuildOnboardingMode, GuildVerificationLevel,
+    MentionInfo, MessageKind, NotificationLevel, PollAnswerInfo, PollInfo, PremiumTier,
+    PresenceStatus, ReactionEmoji, ReplyInfo,
 };
 
 #[test]
@@ -314,50 +315,134 @@ fn raw_dispatch_parser_keeps_original_payload_for_future_fields() {
 }
 
 #[test]
-fn raw_member_list_update_populates_members_and_presence() {
+fn raw_member_list_update_preserves_operations_and_member_data() {
     let events = parse_user_account_event(
         &json!({
             "t": "GUILD_MEMBER_LIST_UPDATE",
             "d": {
                 "guild_id": "10",
-                "ops": [{
-                    "op": "SYNC",
-                    "range": [0, 99],
-                    "items": [{
-                        "member": {
-                            "user": {
-                                "id": "20",
-                                "username": "alice",
-                                "global_name": "Alice",
-                                "avatar": "global_hash"
-                            },
-                            "avatar": "guild_hash",
-                            "nick": "Alice Nick",
-                            "roles": ["30"],
-                            "presence": { "status": "idle" }
+                "ops": [
+                    {
+                        "op": "SYNC",
+                        "range": [0, 99],
+                        "items": [{
+                            "member": {
+                                "user": {
+                                    "id": "20",
+                                    "username": "alice",
+                                    "global_name": "Alice",
+                                    "avatar": "global_hash"
+                                },
+                                "avatar": "guild_hash",
+                                "nick": "Alice Nick",
+                                "roles": ["30"],
+                                "presence": { "status": "idle" }
+                            }
+                        }]
+                    },
+                    {
+                        "op": "SYNC",
+                        "range": [100, 199],
+                        "items": [{
+                            "member": {
+                                "user": { "id": "21", "username": "bob" },
+                                "roles": [],
+                                "presence": { "status": "idle" }
+                            }
+                        }]
+                    },
+                    {
+                        "op": "INSERT",
+                        "index": 200,
+                        "item": {
+                            "member": {
+                                "user": { "id": "22", "username": "carol" },
+                                "roles": [],
+                                "presence": { "status": "online" }
+                            }
                         }
-                    }]
-                }]
+                    },
+                    {
+                        "op": "UPDATE",
+                        "index": 201,
+                        "item": {
+                            "member": {
+                                "user": { "id": "23", "username": "dave" },
+                                "roles": [],
+                                "presence": { "status": "dnd" }
+                            }
+                        }
+                    },
+                    { "op": "DELETE", "index": 12 },
+                    { "op": "INVALIDATE", "range": [200, 299] },
+                    { "op": "FUTURE_OPERATION", "index": 4 }
+                ]
             }
         })
         .to_string(),
     );
 
-    match events.as_slice() {
-        [AppEvent::GuildMemberListUpdate { update }] => {
-            assert_eq!(update.guild_id, Id::new(10));
-            assert_eq!(update.members[0].user_id, Id::new(20));
-            assert_eq!(update.members[0].display_name, "Alice Nick");
-            assert_eq!(
-                update.members[0].avatar_url.as_deref(),
-                Some("https://cdn.discordapp.com/guilds/10/users/20/avatars/guild_hash.png")
-            );
-            assert_eq!(update.members[0].role_ids, vec![Id::new(30)]);
-            assert_eq!(update.presences[0].user_id, Id::new(20));
-            assert_eq!(update.presences[0].status, PresenceStatus::Idle);
-        }
-        other => panic!("expected one GuildMemberListUpdate, got {other:?}"),
-    }
+    let [AppEvent::GuildMemberListUpdate { update }] = events.as_slice() else {
+        panic!("expected one GuildMemberListUpdate");
+    };
+    assert_eq!(update.guild_id, Id::new(10));
+    assert_eq!(update.ops.len(), 7);
+
+    let GuildMemberListOperation::Sync { range, items } = &update.ops[0] else {
+        panic!("expected first sync operation");
+    };
+    assert_eq!(*range, (0, 99));
+    let GuildMemberListItem::Member { member, presence } = &items[0] else {
+        panic!("expected member list item");
+    };
+    assert_eq!(member.user_id, Id::new(20));
+    assert_eq!(member.display_name, "Alice Nick");
+    assert_eq!(member.nickname.as_deref(), Some("Alice Nick"));
+    assert!(member.nickname_present);
+    assert_eq!(
+        member.avatar_url.as_deref(),
+        Some("https://cdn.discordapp.com/guilds/10/users/20/avatars/guild_hash.png")
+    );
+    assert_eq!(member.role_ids, vec![Id::new(30)]);
+    assert_eq!(
+        presence.as_ref().map(|value| (value.user_id, value.status)),
+        Some((Id::new(20), PresenceStatus::Idle))
+    );
+
+    assert!(matches!(
+        &update.ops[1],
+        GuildMemberListOperation::Sync { range: (100, 199), items }
+            if matches!(
+                &items[0],
+                GuildMemberListItem::Member { member, presence: Some(presence) }
+                    if member.user_id == Id::new(21)
+                        && presence.status == PresenceStatus::Idle
+            )
+    ));
+    assert!(matches!(
+        &update.ops[2],
+        GuildMemberListOperation::Insert {
+            index: 200,
+            item: GuildMemberListItem::Member { presence: Some(presence), .. }
+        } if presence.user_id == Id::new(22)
+            && presence.status == PresenceStatus::Online
+    ));
+    assert!(matches!(
+        &update.ops[3],
+        GuildMemberListOperation::Update {
+            index: 201,
+            item: GuildMemberListItem::Member { presence: Some(presence), .. }
+        } if presence.user_id == Id::new(23)
+            && presence.status == PresenceStatus::DoNotDisturb
+    ));
+    assert!(matches!(
+        &update.ops[4..],
+        [
+            GuildMemberListOperation::Delete { index: 12 },
+            GuildMemberListOperation::Invalidate { range: (200, 299) },
+            GuildMemberListOperation::Unknown { name: Some(name), raw }
+        ] if name == "FUTURE_OPERATION" && raw["index"] == json!(4)
+    ));
 }
 
 #[test]
@@ -687,121 +772,6 @@ fn raw_ready_parser_emits_initial_voice_states_from_embedded_guilds() {
 }
 
 #[test]
-fn raw_member_list_update_processes_all_sync_ranges() {
-    // Discord can ship more than one SYNC chunk in a single
-    // GUILD_MEMBER_LIST_UPDATE, such as ranges [0,99] and [100,199]. We
-    // need members from every chunk, not just the first.
-    let events = parse_user_account_event(
-        &json!({
-            "t": "GUILD_MEMBER_LIST_UPDATE",
-            "d": {
-                "guild_id": "10",
-                "ops": [
-                    {
-                        "op": "SYNC",
-                        "range": [0, 99],
-                        "items": [{
-                            "member": {
-                                "user": { "id": "20", "username": "alice" },
-                                "roles": [],
-                                "presence": { "status": "online" }
-                            }
-                        }]
-                    },
-                    {
-                        "op": "SYNC",
-                        "range": [100, 199],
-                        "items": [{
-                            "member": {
-                                "user": { "id": "21", "username": "bob" },
-                                "roles": [],
-                                "presence": { "status": "idle" }
-                            }
-                        }]
-                    }
-                ]
-            }
-        })
-        .to_string(),
-    );
-
-    match events.as_slice() {
-        [AppEvent::GuildMemberListUpdate { update }] => {
-            assert_eq!(update.guild_id, Id::new(10));
-            assert!(
-                update
-                    .members
-                    .iter()
-                    .any(|member| member.user_id == Id::new(20))
-            );
-            assert!(
-                update
-                    .members
-                    .iter()
-                    .any(|member| member.user_id == Id::new(21))
-            );
-            assert!(update.presences.iter().any(|presence| {
-                presence.user_id == Id::new(21) && presence.status == PresenceStatus::Idle
-            }));
-        }
-        other => panic!("expected one GuildMemberListUpdate, got {other:?}"),
-    }
-}
-
-#[test]
-fn raw_member_list_update_handles_insert_and_update_items() {
-    let events = parse_user_account_event(
-        &json!({
-            "t": "GUILD_MEMBER_LIST_UPDATE",
-            "d": {
-                "guild_id": "10",
-                "ops": [
-                    {
-                        "op": "INSERT",
-                        "item": {
-                            "member": {
-                                "user": {
-                                    "id": "20",
-                                    "username": "alice"
-                                },
-                                "roles": [],
-                                "presence": { "status": "online" }
-                            }
-                        }
-                    },
-                    {
-                        "op": "UPDATE",
-                        "item": {
-                            "member": {
-                                "user": {
-                                    "id": "30",
-                                    "username": "bob"
-                                },
-                                "roles": [],
-                                "presence": { "status": "dnd" }
-                            }
-                        }
-                    }
-                ]
-            }
-        })
-        .to_string(),
-    );
-
-    match events.as_slice() {
-        [AppEvent::GuildMemberListUpdate { update }] => {
-            assert!(update.presences.iter().any(|presence| {
-                presence.user_id == Id::new(20) && presence.status == PresenceStatus::Online
-            }));
-            assert!(update.presences.iter().any(|presence| {
-                presence.user_id == Id::new(30) && presence.status == PresenceStatus::DoNotDisturb
-            }));
-        }
-        other => panic!("expected one GuildMemberListUpdate, got {other:?}"),
-    }
-}
-
-#[test]
 fn relationship_payloads_emit_upserts_and_authoritative_empty_lists() {
     let events = parse_user_account_event(
         &json!({
@@ -844,6 +814,30 @@ fn relationship_payloads_emit_upserts_and_authoritative_empty_lists() {
         event,
         AppEvent::RelationshipsLoaded { relationships } if relationships.is_empty()
     )));
+}
+
+#[test]
+fn relationship_update_accepts_a_partial_nickname_patch() {
+    let events = parse_user_account_event(
+        &json!({
+            "t": "RELATIONSHIP_UPDATE",
+            "d": {
+                "id": "20",
+                "nickname": "New nickname"
+            }
+        })
+        .to_string(),
+    );
+
+    assert!(matches!(
+        events.as_slice(),
+        [AppEvent::RelationshipUpdate { update }]
+            if update.user_id == Id::new(20)
+                && update.status.is_none()
+                && update.nickname == Some(Some("New nickname".to_owned()))
+                && update.display_name.is_none()
+                && update.username.is_none()
+    ));
 }
 
 #[test]
@@ -1025,6 +1019,60 @@ fn raw_ready_parser_adds_current_user_to_group_dm_recipients() {
         AppEvent::PresenceUpdate { guild_id: None, presence }
             if presence.user_id == Id::new(99) && presence.status == PresenceStatus::Idle
     )));
+}
+
+#[test]
+fn ready_parsers_emit_authoritative_snapshot_boundaries() {
+    let ready = parse_user_account_event(
+        &json!({
+            "t": "READY",
+            "d": {
+                "user": { "id": "99", "username": "neo" },
+                "guilds": [{
+                    "id": "10",
+                    "name": "guild",
+                    "channels": [{ "id": "20", "type": 0, "name": "general" }],
+                    "threads": [{
+                        "id": "21",
+                        "type": 11,
+                        "name": "thread",
+                        "parent_id": "20",
+                        "thread_metadata": {
+                            "archived": false,
+                            "archive_timestamp": "2026-08-10T00:00:00.000000+00:00",
+                            "auto_archive_duration": 1440,
+                            "locked": false
+                        }
+                    }]
+                }],
+                "private_channels": [{ "id": "30", "type": 1 }]
+            }
+        })
+        .to_string(),
+    );
+    assert!(matches!(
+        ready.last(),
+        Some(AppEvent::ReadySnapshotComplete { snapshot })
+            if snapshot.guild_ids.as_deref() == Some(&[Id::new(10)])
+                && snapshot.guild_channel_ids.get(&Id::new(10)).map(Vec::as_slice)
+                    == Some(&[Id::new(20), Id::new(21)])
+                && snapshot.private_channel_ids.as_deref() == Some(&[Id::new(30)])
+    ));
+
+    let supplemental = parse_user_account_event(
+        &json!({
+            "t": "READY_SUPPLEMENTAL",
+            "d": {
+                "lazy_private_channels": [{ "id": "31", "type": 1 }]
+            }
+        })
+        .to_string(),
+    );
+    assert!(matches!(
+        supplemental.last(),
+        Some(AppEvent::ReadySupplementalComplete { private_channel_ids })
+            if private_channel_ids == &[Id::new(31)]
+    ));
 }
 
 #[test]
@@ -1701,8 +1749,8 @@ fn raw_thread_list_sync_upserts_all_threads() {
 
     match events.as_slice() {
         [AppEvent::ThreadListSync { sync }] => {
-            assert_eq!(sync.guild_id, Some(Id::new(1)));
-            assert_eq!(sync.channel_ids, vec![Id::new(2)]);
+            assert_eq!(sync.guild_id, Id::new(1));
+            assert_eq!(sync.channel_ids, Some(vec![Id::new(2)]));
             assert_eq!(sync.threads.len(), 2);
             assert_eq!(sync.threads[0].channel_id, Id::new(10));
             assert_eq!(sync.threads[0].name, "release notes");
@@ -1719,6 +1767,71 @@ fn raw_thread_list_sync_upserts_all_threads() {
         }
         other => panic!("expected one ThreadListSync, got {other:?}"),
     }
+}
+
+#[test]
+fn raw_empty_thread_list_sync_preserves_the_replacement_scope() {
+    let events = parse_user_account_event(
+        &json!({
+            "t": "THREAD_LIST_SYNC",
+            "d": {
+                "guild_id": "1",
+                "channel_ids": ["2"],
+                "threads": [],
+                "members": []
+            }
+        })
+        .to_string(),
+    );
+
+    assert!(matches!(
+        events.as_slice(),
+        [AppEvent::ThreadListSync { sync }]
+            if sync.guild_id == Id::new(1)
+                && sync.channel_ids == Some(vec![Id::new(2)])
+                && sync.threads.is_empty()
+    ));
+}
+
+#[test]
+fn raw_group_dm_recipient_events_preserve_the_user_delta() {
+    let added = parse_user_account_event(
+        &json!({
+            "t": "CHANNEL_RECIPIENT_ADD",
+            "d": {
+                "channel_id": "10",
+                "user": {
+                    "id": "20",
+                    "username": "alice",
+                    "global_name": "Alice"
+                }
+            }
+        })
+        .to_string(),
+    );
+    let removed = parse_user_account_event(
+        &json!({
+            "t": "CHANNEL_RECIPIENT_REMOVE",
+            "d": {
+                "channel_id": "10",
+                "user": { "id": "20" }
+            }
+        })
+        .to_string(),
+    );
+
+    assert!(matches!(
+        added.as_slice(),
+        [AppEvent::ChannelRecipientAdd { channel_id, recipient }]
+            if *channel_id == Id::new(10)
+                && recipient.user_id == Id::new(20)
+                && recipient.display_name == "Alice"
+    ));
+    assert!(matches!(
+        removed.as_slice(),
+        [AppEvent::ChannelRecipientRemove { channel_id, user_id }]
+            if *channel_id == Id::new(10) && *user_id == Id::new(20)
+    ));
 }
 
 #[test]
@@ -3625,7 +3738,7 @@ fn user_update_refreshes_global_identity() {
 }
 
 #[test]
-fn ready_payload_emits_read_state_init_with_ack_pointers() {
+fn ready_payload_emits_read_state_sync_with_ack_pointers() {
     // Minimal READY: a `user`, an empty guild list (so the test stays
     // light), and a `read_state.entries[]` array with two channels.
     let events = parse_user_account_event(
@@ -3661,10 +3774,14 @@ fn ready_payload_emits_read_state_init_with_ack_pointers() {
     let entries = events
         .iter()
         .find_map(|event| match event {
-            AppEvent::ReadStateInit { entries } => Some(entries.clone()),
+            AppEvent::ReadStateSync {
+                entries,
+                partial,
+                version,
+            } if !partial && version.is_none() => Some(entries.clone()),
             _ => None,
         })
-        .expect("READY should emit a ReadStateInit");
+        .expect("READY should emit a full ReadStateSync");
     assert_eq!(entries.len(), 3);
     assert_eq!(entries[0].channel_id, Id::new(11));
     assert_eq!(entries[0].last_acked_message_id, Some(Id::new(20)));
@@ -3705,10 +3822,10 @@ fn ready_payload_treats_zero_read_state_ack_pointer_as_absent() {
     let entries = events
         .iter()
         .find_map(|event| match event {
-            AppEvent::ReadStateInit { entries } => Some(entries.clone()),
+            AppEvent::ReadStateSync { entries, .. } => Some(entries.clone()),
             _ => None,
         })
-        .expect("READY should emit a ReadStateInit");
+        .expect("READY should emit a ReadStateSync");
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].channel_id, Id::new(11));
     assert_eq!(entries[0].last_acked_message_id, None);
@@ -3716,6 +3833,44 @@ fn ready_payload_treats_zero_read_state_ack_pointer_as_absent() {
     assert_eq!(entries[1].channel_id, Id::new(12));
     assert_eq!(entries[1].last_acked_message_id, None);
     assert_eq!(entries[1].mention_count, 1);
+}
+
+#[test]
+fn ready_preserves_empty_and_partial_versioned_snapshots() {
+    let events = parse_user_account_event(
+        &json!({
+            "t": "READY",
+            "d": {
+                "user": { "id": "1", "username": "neo" },
+                "guilds": [],
+                "read_state": {
+                    "entries": [],
+                    "partial": false,
+                    "version": 12
+                },
+                "user_guild_settings": {
+                    "entries": [],
+                    "partial": true,
+                    "version": 13
+                }
+            }
+        })
+        .to_string(),
+    );
+
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AppEvent::ReadStateSync { entries, partial: false, version: Some(12) }
+            if entries.is_empty()
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AppEvent::UserGuildSettingsSync {
+            settings,
+            partial: true,
+            version: Some(13),
+        } if settings.is_empty()
+    )));
 }
 
 #[test]
@@ -3758,7 +3913,7 @@ fn notification_settings_are_preserved_from_ready_and_updates() {
     let settings = events
         .iter()
         .find_map(|event| match event {
-            AppEvent::UserGuildSettingsInit { settings } => Some(settings),
+            AppEvent::UserGuildSettingsSync { settings, .. } => Some(settings),
             _ => None,
         })
         .expect("READY should emit user guild settings");
@@ -3953,7 +4108,7 @@ fn ready_payload_parses_private_channel_notification_settings() {
     let settings = events
         .iter()
         .find_map(|event| match event {
-            AppEvent::UserGuildSettingsInit { settings } => Some(settings),
+            AppEvent::UserGuildSettingsSync { settings, .. } => Some(settings),
             _ => None,
         })
         .expect("READY should emit private channel guild settings");

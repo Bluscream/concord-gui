@@ -56,6 +56,133 @@ fn stores_channel_parent_and_position() {
 }
 
 #[test]
+fn thread_list_sync_replaces_only_its_parent_scope() {
+    let guild_id = Id::new(1);
+    let synced_parent = Id::new(2);
+    let other_parent = Id::new(3);
+    let stale_thread = Id::new(10);
+    let retained_thread = Id::new(11);
+    let replacement_thread = Id::new(12);
+    let archived_thread = Id::new(13);
+    let mut state = DiscordState::default();
+
+    for (channel_id, parent_id) in [
+        (stale_thread, synced_parent),
+        (retained_thread, other_parent),
+    ] {
+        state.apply_event(&AppEvent::ChannelUpsert(ChannelInfo {
+            guild_id: Some(guild_id),
+            parent_id: Some(parent_id),
+            kind: "GuildPublicThread".to_owned(),
+            ..channel_info(channel_id, "GuildPublicThread", Vec::new())
+        }));
+    }
+    state.apply_event(&AppEvent::ChannelUpsert(ChannelInfo {
+        guild_id: Some(guild_id),
+        parent_id: Some(synced_parent),
+        kind: "GuildPublicThread".to_owned(),
+        thread_metadata: Some(ThreadMetadataInfo {
+            archived: true,
+            auto_archive_duration: Some(1_440),
+            archive_timestamp: None,
+            locked: false,
+            invitable: None,
+            create_timestamp: None,
+        }),
+        ..channel_info(archived_thread, "GuildPublicThread", Vec::new())
+    }));
+
+    state.apply_event(&AppEvent::ThreadListSync {
+        sync: ThreadListSyncInfo {
+            guild_id,
+            channel_ids: Some(vec![synced_parent]),
+            threads: vec![ChannelInfo {
+                guild_id: Some(guild_id),
+                parent_id: Some(synced_parent),
+                kind: "GuildPublicThread".to_owned(),
+                ..channel_info(replacement_thread, "GuildPublicThread", Vec::new())
+            }],
+            thread_members: Vec::new(),
+            extra_fields: BTreeMap::new(),
+        },
+    });
+
+    assert!(state.channel(stale_thread).is_none());
+    assert!(state.channel(retained_thread).is_some());
+    assert!(state.channel(replacement_thread).is_some());
+    assert!(state.channel(archived_thread).is_some());
+
+    state.apply_event(&AppEvent::ThreadListSync {
+        sync: ThreadListSyncInfo {
+            guild_id,
+            channel_ids: Some(vec![synced_parent]),
+            threads: Vec::new(),
+            thread_members: Vec::new(),
+            extra_fields: BTreeMap::new(),
+        },
+    });
+
+    assert!(state.channel(replacement_thread).is_none());
+    assert!(state.channel(retained_thread).is_some());
+    assert!(state.channel(archived_thread).is_some());
+
+    state.apply_event(&AppEvent::ThreadListSync {
+        sync: ThreadListSyncInfo {
+            guild_id,
+            channel_ids: None,
+            threads: Vec::new(),
+            thread_members: Vec::new(),
+            extra_fields: BTreeMap::new(),
+        },
+    });
+
+    assert!(state.channel(retained_thread).is_none());
+    assert!(state.channel(archived_thread).is_some());
+}
+
+#[test]
+fn group_dm_recipient_deltas_update_members_and_generated_name() {
+    let channel_id = Id::new(10);
+    let alice = Id::new(20);
+    let bob = Id::new(30);
+    let mut state = DiscordState::default();
+    state.apply_event(&AppEvent::ChannelUpsert(dm_channel_with_recipients(
+        channel_id,
+        "Alice",
+        "group-dm",
+        vec![ChannelRecipientInfo::test(alice, "Alice")],
+    )));
+
+    state.apply_event(&AppEvent::ChannelRecipientAdd {
+        channel_id,
+        recipient: ChannelRecipientInfo::test(bob, "Bob"),
+    });
+    let channel = state
+        .channel(channel_id)
+        .expect("group DM should remain cached");
+    assert_eq!(
+        channel
+            .recipients
+            .iter()
+            .map(|recipient| recipient.user_id)
+            .collect::<Vec<_>>(),
+        vec![alice, bob]
+    );
+    assert_eq!(channel.name, "Alice, Bob");
+
+    state.apply_event(&AppEvent::ChannelRecipientRemove {
+        channel_id,
+        user_id: alice,
+    });
+    let channel = state
+        .channel(channel_id)
+        .expect("group DM should remain cached");
+    assert_eq!(channel.recipients.len(), 1);
+    assert_eq!(channel.recipients[0].user_id, bob);
+    assert_eq!(channel.name, "Bob");
+}
+
+#[test]
 fn channel_upsert_stores_and_preserves_recipients() {
     let channel_id: Id<ChannelMarker> = Id::new(10);
     let user_id = Id::new(20);
@@ -134,6 +261,59 @@ fn dm_channel_upsert_prefers_friend_nickname() {
     let channel = state.channel(channel_id).expect("channel should be stored");
     assert_eq!(channel.name, "Bestie");
     assert_eq!(channel.recipients[0].display_name, "Bestie");
+}
+
+#[test]
+fn partial_relationship_update_changes_and_clears_friend_nickname() {
+    let channel_id: Id<ChannelMarker> = Id::new(10);
+    let user_id = Id::new(20);
+    let mut state = DiscordState::default();
+    state.apply_event(&AppEvent::RelationshipsLoaded {
+        relationships: vec![relationship_info(
+            user_id.get(),
+            FriendStatus::Friend,
+            Some("Bestie"),
+            Some("Alice Global"),
+            Some("alice"),
+        )],
+    });
+    state.apply_event(&AppEvent::ChannelUpsert(dm_channel_with_recipients(
+        channel_id,
+        "Alice Global",
+        "dm",
+        vec![ChannelRecipientInfo {
+            username: Some("alice".to_owned()),
+            ..ChannelRecipientInfo::test(user_id, "Alice Global")
+        }],
+    )));
+
+    state.apply_event(&AppEvent::RelationshipUpdate {
+        update: crate::discord::RelationshipUpdateInfo {
+            user_id,
+            status: None,
+            nickname: Some(Some("Pal".to_owned())),
+            display_name: None,
+            username: None,
+        },
+    });
+    assert_eq!(
+        state.channel(channel_id).expect("DM should exist").name,
+        "Pal"
+    );
+
+    state.apply_event(&AppEvent::RelationshipUpdate {
+        update: crate::discord::RelationshipUpdateInfo {
+            user_id,
+            status: None,
+            nickname: Some(None),
+            display_name: None,
+            username: None,
+        },
+    });
+    assert_eq!(
+        state.channel(channel_id).expect("DM should exist").name,
+        "Alice Global"
+    );
 }
 
 #[test]

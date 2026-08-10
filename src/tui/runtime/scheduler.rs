@@ -4,12 +4,12 @@ use crate::discord::ids::{
     Id,
     marker::{ChannelMarker, GuildMarker},
 };
-use crate::{DiscordClient, discord::AppCommand};
+use crate::{
+    DiscordClient,
+    discord::{AppCommand, GuildMemberSearchSurface},
+};
 
 use super::super::{commands::send_or_record_closed as send_command, state::DashboardState};
-
-const MEMBER_AUTOCOMPLETE_SEARCH_LIMIT: u16 = 10;
-const MEMBER_POPUP_SEARCH_LIMIT: u16 = 100;
 
 #[derive(Default)]
 pub(super) struct DashboardCommandScheduler {
@@ -29,9 +29,30 @@ impl DashboardCommandScheduler {
 
         self.report_active_selection(state, commands, &mut dirty)
             .await;
-        self.schedule_member_autocomplete_search(state, client, commands, now, &mut dirty)
+        let autocomplete_query = state
+            .composer_mention_query()
+            .or_else(|| state.message_search_member_query())
+            .map(str::to_owned);
+        dirty |= self
+            .schedule_member_search(
+                state,
+                client,
+                commands,
+                GuildMemberSearchSurface::Autocomplete,
+                autocomplete_query.as_deref(),
+                now,
+            )
             .await;
-        self.schedule_member_popup_search(state, client, commands, now, &mut dirty)
+        let popup_query = state.member_search_popup_query().map(str::to_owned);
+        dirty |= self
+            .schedule_member_search(
+                state,
+                client,
+                commands,
+                GuildMemberSearchSurface::Popup,
+                popup_query.as_deref(),
+                now,
+            )
             .await;
         self.schedule_message_history(state, client, commands, &mut dirty)
             .await;
@@ -39,7 +60,7 @@ impl DashboardCommandScheduler {
             .await;
         self.schedule_forum_posts(state, client, commands, &mut dirty)
             .await;
-        self.schedule_member_requests(state, client, commands, now, &mut dirty)
+        self.schedule_member_requests(state, client, now, &mut dirty)
             .await;
         self.schedule_thread_previews(state, client, commands, &mut dirty)
             .await;
@@ -49,66 +70,30 @@ impl DashboardCommandScheduler {
         dirty
     }
 
-    async fn schedule_member_autocomplete_search(
-        &mut self,
+    async fn schedule_member_search(
+        &self,
         state: &mut DashboardState,
         client: &DiscordClient,
         commands: &mpsc::Sender<AppCommand>,
+        surface: GuildMemberSearchSurface,
+        query: Option<&str>,
         now: std::time::Instant,
-        dirty: &mut bool,
-    ) {
-        client.set_member_autocomplete_search_target(
-            state.selected_guild_id(),
-            state
-                .composer_mention_query()
-                .or_else(|| state.message_search_member_query()),
-            now,
-        );
-        if let Some((guild_id, query)) = client.next_due_member_autocomplete_search(now)
-            && send_command(
-                state,
-                commands,
-                AppCommand::SearchGuildMembers {
-                    guild_id,
-                    query,
-                    limit: MEMBER_AUTOCOMPLETE_SEARCH_LIMIT,
-                },
-            )
-            .await
-            .is_channel_closed()
-        {
-            *dirty = true;
-        }
-    }
-
-    async fn schedule_member_popup_search(
-        &mut self,
-        state: &mut DashboardState,
-        client: &DiscordClient,
-        commands: &mpsc::Sender<AppCommand>,
-        now: std::time::Instant,
-        dirty: &mut bool,
-    ) {
-        client.set_member_popup_search_target(
-            state.selected_guild_id(),
-            state.member_search_popup_query(),
-            now,
-        );
-        if let Some((guild_id, query)) = client.next_due_member_popup_search(now)
-            && send_command(
-                state,
-                commands,
-                AppCommand::SearchGuildMembers {
-                    guild_id,
-                    query,
-                    limit: MEMBER_POPUP_SEARCH_LIMIT,
-                },
-            )
-            .await
-            .is_channel_closed()
-        {
-            *dirty = true;
-        }
+    ) -> bool {
+        client.set_guild_member_search_target(surface, state.selected_guild_id(), query, now);
+        let Some((guild_id, query)) = client.next_due_guild_member_search(surface, now) else {
+            return false;
+        };
+        send_command(
+            state,
+            commands,
+            AppCommand::SearchGuildMembers {
+                guild_id,
+                query,
+                limit: surface.result_limit(),
+            },
+        )
+        .await
+        .is_channel_closed()
     }
 
     async fn schedule_message_history(
@@ -235,35 +220,9 @@ impl DashboardCommandScheduler {
         &mut self,
         state: &mut DashboardState,
         client: &DiscordClient,
-        commands: &mpsc::Sender<AppCommand>,
         now: std::time::Instant,
         dirty: &mut bool,
     ) {
-        if let Some(guild_id) = client.next_member_request(state.selected_guild_id()) {
-            // User accounts may request the complete guild member list only
-            // with moderation permissions. The normal web client uses an
-            // op-37 channel subscription for member-list streaming instead.
-            match state.guild_member_list_channel(guild_id) {
-                Some(channel_id) => {
-                    if send_command(
-                        state,
-                        commands,
-                        AppCommand::SubscribeGuildChannel {
-                            guild_id,
-                            channel_id,
-                        },
-                    )
-                    .await
-                    .is_channel_closed()
-                    {
-                        client.remove_member_request(guild_id);
-                        *dirty = true;
-                    }
-                }
-                None => client.remove_member_request(guild_id),
-            }
-        }
-
         let hydration_requests = client
             .next_member_hydration_requests(state.observed_member_hydration_requests(now), now);
         if state.enqueue_guild_member_by_id_requests(hydration_requests) {
@@ -313,6 +272,7 @@ impl DashboardCommandScheduler {
                     guild_id,
                     channel_id,
                     state.member_subscription_top_bucket(),
+                    state.member_list_refresh_generation(guild_id),
                     state.member_subscription_ranges(),
                 )
             });
@@ -349,54 +309,49 @@ mod tests {
         assert!(state.confirm_selected_guild());
         let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
         let (commands, mut command_rx) = mpsc::channel(4);
-        let mut scheduler = DashboardCommandScheduler::default();
-        let mut dirty = false;
+        let scheduler = DashboardCommandScheduler::default();
+        let mut now = std::time::Instant::now();
 
-        for ch in "@alice".chars() {
-            state.push_composer_char(ch);
+        for (surface, query) in [
+            (GuildMemberSearchSurface::Autocomplete, "alice"),
+            (GuildMemberSearchSurface::Popup, "a"),
+        ] {
+            assert!(
+                !scheduler
+                    .schedule_member_search(
+                        &mut state,
+                        &client,
+                        &commands,
+                        surface,
+                        Some(query),
+                        now,
+                    )
+                    .await
+            );
+            let deadline = client
+                .guild_member_search_deadline(surface)
+                .expect("member search should be debounced");
+            assert!(
+                !scheduler
+                    .schedule_member_search(
+                        &mut state,
+                        &client,
+                        &commands,
+                        surface,
+                        Some(query),
+                        deadline,
+                    )
+                    .await
+            );
+            assert_eq!(
+                command_rx.try_recv(),
+                Ok(AppCommand::SearchGuildMembers {
+                    guild_id,
+                    query: query.to_owned(),
+                    limit: surface.result_limit(),
+                })
+            );
+            now = deadline + std::time::Duration::from_millis(1);
         }
-        let now = std::time::Instant::now();
-        scheduler
-            .schedule_member_autocomplete_search(&mut state, &client, &commands, now, &mut dirty)
-            .await;
-        let deadline = client
-            .member_autocomplete_search_deadline()
-            .expect("autocomplete search should be debounced");
-        scheduler
-            .schedule_member_autocomplete_search(
-                &mut state, &client, &commands, deadline, &mut dirty,
-            )
-            .await;
-        assert_eq!(
-            command_rx.try_recv(),
-            Ok(AppCommand::SearchGuildMembers {
-                guild_id,
-                query: "alice".to_owned(),
-                limit: MEMBER_AUTOCOMPLETE_SEARCH_LIMIT,
-            })
-        );
-
-        state.cancel_composer();
-        state.open_member_search_popup();
-        state.push_search_char('a');
-        let now = deadline + std::time::Duration::from_millis(1);
-        scheduler
-            .schedule_member_popup_search(&mut state, &client, &commands, now, &mut dirty)
-            .await;
-        let deadline = client
-            .member_popup_search_deadline()
-            .expect("member popup search should be debounced");
-        scheduler
-            .schedule_member_popup_search(&mut state, &client, &commands, deadline, &mut dirty)
-            .await;
-        assert_eq!(
-            command_rx.try_recv(),
-            Ok(AppCommand::SearchGuildMembers {
-                guild_id,
-                query: "a".to_owned(),
-                limit: MEMBER_POPUP_SEARCH_LIMIT,
-            })
-        );
-        assert!(!dirty);
     }
 }

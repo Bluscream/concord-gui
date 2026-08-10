@@ -117,26 +117,4 @@ impl DiscordState {
             .map(Vec::as_slice)
             .unwrap_or_default()
     }
-
-    pub(in crate::discord) fn increment_guild_member_count(&mut self, guild_id: Id<GuildMarker>) {
-        if let Some(count) = self
-            .navigation_mut()
-            .guilds
-            .get_mut(&guild_id)
-            .and_then(|guild| guild.member_count.as_mut())
-        {
-            *count = count.saturating_add(1);
-        }
-    }
-
-    pub(in crate::discord) fn decrement_guild_member_count(&mut self, guild_id: Id<GuildMarker>) {
-        if let Some(count) = self
-            .navigation_mut()
-            .guilds
-            .get_mut(&guild_id)
-            .and_then(|guild| guild.member_count.as_mut())
-        {
-            *count = count.saturating_sub(1);
-        }
-    }
 }

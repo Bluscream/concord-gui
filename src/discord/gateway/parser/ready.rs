@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::discord::{
     ChannelInfo, ChannelRecipientInfo, PresenceStatus, ReadStateInfo, RelationshipInfo, RoleInfo,
-    events::{AppEvent, PresenceEventFields},
+    events::{AppEvent, PresenceEventFields, ReadySnapshotInfo},
     ids::{
         Id,
         marker::{ChannelMarker, GuildMarker, MessageMarker, UserMarker},
@@ -62,6 +62,12 @@ pub(super) fn parse_ready(data: &Value) -> Vec<AppEvent> {
 
     if let Some(guilds) = data.get("guilds").and_then(Value::as_array) {
         for guild in guilds {
+            if guild.get("unavailable").and_then(Value::as_bool) == Some(true) {
+                if let Some(guild_id) = guild.get("id").and_then(parse_id::<GuildMarker>) {
+                    events.push(AppEvent::GuildUnavailable { guild_id });
+                }
+                continue;
+            }
             if let Some(event) = parse_guild_create(guild) {
                 events.push(event);
             }
@@ -162,13 +168,21 @@ pub(super) fn parse_ready(data: &Value) -> Vec<AppEvent> {
     {
         let parsed: Vec<ReadStateInfo> =
             entries.iter().filter_map(parse_read_state_entry).collect();
-        if !parsed.is_empty() {
-            events.push(AppEvent::ReadStateInit { entries: parsed });
-        }
+        let (partial, version) = versioned_array_metadata(data.get("read_state"));
+        events.push(AppEvent::ReadStateSync {
+            entries: parsed,
+            partial,
+            version,
+        });
     }
 
     if let Some(settings) = parse_user_guild_settings_entries(data.get("user_guild_settings")) {
-        events.push(AppEvent::UserGuildSettingsInit { settings });
+        let (partial, version) = versioned_array_metadata(data.get("user_guild_settings"));
+        events.push(AppEvent::UserGuildSettingsSync {
+            settings,
+            partial,
+            version,
+        });
     }
     if let Some(flags) = data
         .get("notification_settings")
@@ -186,7 +200,27 @@ pub(super) fn parse_ready(data: &Value) -> Vec<AppEvent> {
         events.push(AppEvent::UserSettingsUpdate { settings });
     }
 
+    if let Some(snapshot) = parse_ready_snapshot(data) {
+        events.push(AppEvent::ReadySnapshotComplete { snapshot });
+    }
+
     events
+}
+
+fn versioned_array_metadata(value: Option<&Value>) -> (bool, Option<i64>) {
+    let Some(value) = value.filter(|value| value.is_object()) else {
+        return (false, None);
+    };
+    let partial = value
+        .get("partial")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let version = value.get("version").and_then(|version| {
+        version
+            .as_i64()
+            .or_else(|| version.as_u64().and_then(|value| i64::try_from(value).ok()))
+    });
+    (partial, version)
 }
 
 pub(super) fn parse_ready_supplemental(data: &Value) -> Vec<AppEvent> {
@@ -221,8 +255,64 @@ pub(super) fn parse_ready_supplemental(data: &Value) -> Vec<AppEvent> {
                 });
             }
         }
+        events.push(AppEvent::ReadySupplementalComplete {
+            private_channel_ids: channels
+                .iter()
+                .filter_map(|channel| channel.get("id").and_then(parse_id::<ChannelMarker>))
+                .collect(),
+        });
     }
     events
+}
+
+fn parse_ready_snapshot(data: &Value) -> Option<ReadySnapshotInfo> {
+    let guilds = data.get("guilds").and_then(Value::as_array);
+    let guild_ids = guilds.map(|guilds| {
+        guilds
+            .iter()
+            .filter_map(|guild| guild.get("id").and_then(parse_id::<GuildMarker>))
+            .collect()
+    });
+    let mut guild_channel_ids = BTreeMap::new();
+    if let Some(guilds) = guilds {
+        for guild in guilds {
+            let Some(guild_id) = guild.get("id").and_then(parse_id::<GuildMarker>) else {
+                continue;
+            };
+            // An unavailable guild omits `channels`. Its old channel state is
+            // retained until Discord sends an available snapshot.
+            let Some(channels) = guild.get("channels").and_then(Value::as_array) else {
+                continue;
+            };
+            let mut channel_ids = channels
+                .iter()
+                .filter_map(|channel| channel.get("id").and_then(parse_id::<ChannelMarker>))
+                .collect::<Vec<_>>();
+            if let Some(threads) = guild.get("threads").and_then(Value::as_array) {
+                channel_ids.extend(
+                    threads
+                        .iter()
+                        .filter_map(|thread| thread.get("id").and_then(parse_id::<ChannelMarker>)),
+                );
+            }
+            guild_channel_ids.insert(guild_id, channel_ids);
+        }
+    }
+    let private_channel_ids =
+        data.get("private_channels")
+            .and_then(Value::as_array)
+            .map(|channels| {
+                channels
+                    .iter()
+                    .filter_map(|channel| channel.get("id").and_then(parse_id::<ChannelMarker>))
+                    .collect()
+            });
+
+    (guild_ids.is_some() || private_channel_ids.is_some()).then_some(ReadySnapshotInfo {
+        guild_ids,
+        guild_channel_ids,
+        private_channel_ids,
+    })
 }
 
 fn parse_merged_member_events(data: &Value) -> Vec<AppEvent> {

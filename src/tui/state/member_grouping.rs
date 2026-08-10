@@ -49,6 +49,15 @@ impl MemberEntry<'_> {
         }
     }
 
+    pub fn member_search_alias(self) -> Option<String> {
+        match self {
+            Self::Guild(member) => member.nickname.clone(),
+            // Private-channel recipients are local-only candidates. Their
+            // display name remains searchable even though Opcode 8 is not used.
+            Self::Recipient(recipient) => Some(recipient.display_name.clone()),
+        }
+    }
+
     pub fn has_fallback_identity(self) -> bool {
         match self {
             Self::Guild(member) => member.username.is_none() && member.display_name == "unknown",

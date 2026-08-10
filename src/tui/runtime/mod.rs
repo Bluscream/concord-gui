@@ -11,7 +11,10 @@ use tokio::sync::{mpsc, watch};
 
 use crate::{
     Result, config,
-    discord::{AppCommand, AppEvent, DiscordClient, SequencedAppEvent, SnapshotRevision},
+    discord::{
+        AppCommand, AppEvent, DiscordClient, GuildMemberSearchSurface, SequencedAppEvent,
+        SnapshotRevision,
+    },
     logging,
 };
 
@@ -207,8 +210,8 @@ pub(super) async fn run_dashboard(
         let pending_read_ack_deadline = client.next_read_ack_deadline();
         let pending_toast_deadline = state.next_toast_deadline();
         let pending_member_search_deadline = [
-            client.member_autocomplete_search_deadline(),
-            client.member_popup_search_deadline(),
+            client.guild_member_search_deadline(GuildMemberSearchSurface::Autocomplete),
+            client.guild_member_search_deadline(GuildMemberSearchSurface::Popup),
         ]
         .into_iter()
         .flatten()

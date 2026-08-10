@@ -19,7 +19,8 @@ mod voice;
 
 pub(crate) use channels::parse_channel_info;
 use channels::{
-    parse_channel_delete, parse_channel_upsert, parse_thread_list_sync, parse_thread_member_update,
+    parse_channel_delete, parse_channel_recipient_add, parse_channel_recipient_remove,
+    parse_channel_upsert, parse_thread_list_sync, parse_thread_member_update,
     parse_thread_members_update,
 };
 use guilds::{
@@ -123,6 +124,8 @@ fn parse_user_account_event_data(event_type: &str, data: &Value) -> Vec<AppEvent
             parse_channel_upsert(data).into_iter().collect()
         }
         "CHANNEL_DELETE" | "THREAD_DELETE" => parse_channel_delete(data).into_iter().collect(),
+        "CHANNEL_RECIPIENT_ADD" => parse_channel_recipient_add(data).into_iter().collect(),
+        "CHANNEL_RECIPIENT_REMOVE" => parse_channel_recipient_remove(data).into_iter().collect(),
         "THREAD_LIST_SYNC" => parse_thread_list_sync(data),
         "THREAD_MEMBERS_UPDATE" => parse_thread_members_update(data),
         "THREAD_MEMBER_UPDATE" => parse_thread_member_update(data),

@@ -361,7 +361,7 @@ pub(super) fn parse_user_guild_settings_entries(
         .iter()
         .filter_map(parse_user_guild_settings_info)
         .collect();
-    (!settings.is_empty()).then_some(settings)
+    Some(settings)
 }
 
 fn parse_user_guild_settings_info(value: &Value) -> Option<UserGuildSettingsInfo> {

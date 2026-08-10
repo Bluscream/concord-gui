@@ -40,6 +40,34 @@ fn channel_unread_state_follows_ack_pointer() {
 }
 
 #[test]
+fn versioned_read_state_sync_merges_partial_and_clears_full_empty_snapshots() {
+    let first = Id::new(7);
+    let second = Id::new(8);
+    let mut state = DiscordState::default();
+    state.apply_event(&AppEvent::ReadStateInit {
+        entries: vec![read_state_info(first, Some(Id::new(10)), 1)],
+    });
+
+    state.apply_event(&AppEvent::ReadStateSync {
+        entries: vec![read_state_info(second, Some(Id::new(20)), 2)],
+        partial: true,
+        version: Some(4),
+    });
+    assert!(state.notifications.read_states.contains_key(&first));
+    assert!(state.notifications.read_states.contains_key(&second));
+    assert_eq!(state.notifications.read_state_version, Some(4));
+
+    state.apply_event(&AppEvent::ReadStateSync {
+        entries: Vec::new(),
+        partial: false,
+        version: Some(5),
+    });
+    assert!(state.notifications.read_states.is_empty());
+    assert!(state.notifications.non_channel_read_states.is_empty());
+    assert_eq!(state.notifications.read_state_version, Some(5));
+}
+
+#[test]
 fn typed_read_states_and_ack_metadata_remain_distinct_across_snapshots() {
     let guild_id = Id::new(1);
     let channel_id = Id::new(7);

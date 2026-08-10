@@ -39,6 +39,10 @@ impl DashboardState {
         scroll.saturating_add(view) / 100
     }
 
+    pub(in crate::tui) fn member_list_refresh_generation(&self, guild_id: Id<GuildMarker>) -> u64 {
+        self.discord.cache.member_list_refresh_generation(guild_id)
+    }
+
     /// op-37 channel ranges that cover the member viewport plus a small
     /// trailing window. We anchor `[0, 99]` so the top of the sidebar always
     /// stays populated, then add up to two more buckets near the visible end

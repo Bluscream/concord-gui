@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap, HashSet, VecDeque},
+    collections::{BTreeSet, HashSet, VecDeque},
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -178,7 +178,6 @@ struct GatewaySendWindow {
 #[derive(Default)]
 struct SubscriptionDeduper {
     direct_messages: HashSet<Id<ChannelMarker>>,
-    guild_channels: HashMap<GuildChannelSubscriptionKey, Vec<(u32, u32)>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -675,44 +674,13 @@ impl SubscriptionDeduper {
                 self.direct_messages.insert(*channel_id)
             }
             GatewayCommand::SubscribeGuildChannel {
-                guild_id,
-                channel_id,
-            } => self.should_send_guild_channel(*guild_id, *channel_id, &[(0, 99)]),
-            GatewayCommand::UpdateMemberListSubscription {
-                guild_id,
-                channel_id,
-                ranges,
-            } => self.should_send_guild_channel(*guild_id, *channel_id, ranges),
+                guild_id: _,
+                channel_id: _,
+            }
+            | GatewayCommand::UpdateMemberListSubscription { .. } => true,
             _ => true,
         }
     }
-
-    fn should_send_guild_channel(
-        &mut self,
-        guild_id: Id<GuildMarker>,
-        channel_id: Id<ChannelMarker>,
-        ranges: &[(u32, u32)],
-    ) -> bool {
-        let key = GuildChannelSubscriptionKey {
-            guild_id,
-            channel_id,
-        };
-        if self
-            .guild_channels
-            .get(&key)
-            .is_some_and(|last_ranges| last_ranges == ranges)
-        {
-            return false;
-        }
-        self.guild_channels.insert(key, ranges.to_vec());
-        true
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct GuildChannelSubscriptionKey {
-    guild_id: Id<GuildMarker>,
-    channel_id: Id<ChannelMarker>,
 }
 
 #[derive(Clone, Copy)]

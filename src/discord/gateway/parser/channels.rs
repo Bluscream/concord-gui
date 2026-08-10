@@ -305,8 +305,52 @@ pub(super) fn parse_channel_delete(data: &Value) -> Option<AppEvent> {
     })
 }
 
+pub(super) fn parse_channel_recipient_add(data: &Value) -> Option<AppEvent> {
+    let channel_id = data.get("channel_id").and_then(parse_id::<ChannelMarker>)?;
+    let recipient = parse_channel_recipient_info(data.get("user").unwrap_or(data))?;
+    Some(AppEvent::ChannelRecipientAdd {
+        channel_id,
+        recipient,
+    })
+}
+
+pub(super) fn parse_channel_recipient_remove(data: &Value) -> Option<AppEvent> {
+    let channel_id = data.get("channel_id").and_then(parse_id::<ChannelMarker>)?;
+    let user_id = data
+        .get("user_id")
+        .and_then(parse_id::<UserMarker>)
+        .or_else(|| {
+            data.get("user")
+                .and_then(|user| user.get("id"))
+                .and_then(parse_id::<UserMarker>)
+        })?;
+    Some(AppEvent::ChannelRecipientRemove {
+        channel_id,
+        user_id,
+    })
+}
+
 pub(super) fn parse_thread_list_sync(data: &Value) -> Vec<AppEvent> {
-    let guild_id = data.get("guild_id").and_then(parse_id::<GuildMarker>);
+    let Some(guild_id) = data.get("guild_id").and_then(parse_id::<GuildMarker>) else {
+        return Vec::new();
+    };
+    let channel_ids = match data.get("channel_ids") {
+        Some(value) => {
+            let Some(values) = value.as_array() else {
+                return Vec::new();
+            };
+            Some(
+                values
+                    .iter()
+                    .filter_map(parse_id::<ChannelMarker>)
+                    .collect(),
+            )
+        }
+        None => None,
+    };
+    let Some(raw_threads) = data.get("threads").and_then(Value::as_array) else {
+        return Vec::new();
+    };
     let thread_members = clone_array(data.get("members"));
     let current_user_members: BTreeMap<Id<ChannelMarker>, ParsedThreadMemberSettings> =
         thread_members
@@ -316,16 +360,10 @@ pub(super) fn parse_thread_list_sync(data: &Value) -> Vec<AppEvent> {
                 Some((channel_id, parse_thread_member_settings(member)))
             })
             .collect();
-    let mut threads: Vec<ChannelInfo> = data
-        .get("threads")
-        .and_then(Value::as_array)
-        .map(|threads| {
-            threads
-                .iter()
-                .filter_map(|thread| parse_channel_info(thread, guild_id))
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut threads: Vec<ChannelInfo> = raw_threads
+        .iter()
+        .filter_map(|thread| parse_channel_info(thread, Some(guild_id)))
+        .collect();
     for thread in &mut threads {
         if let Some(settings) = current_user_members.get(&thread.channel_id) {
             thread.current_user_joined_thread = Some(true);
@@ -336,13 +374,10 @@ pub(super) fn parse_thread_list_sync(data: &Value) -> Vec<AppEvent> {
             thread.current_user_thread_mute_end_time = settings.mute_end_time.clone();
         }
     }
-    if threads.is_empty() {
-        return Vec::new();
-    }
     vec![AppEvent::ThreadListSync {
         sync: ThreadListSyncInfo {
             guild_id,
-            channel_ids: parse_id_array(data.get("channel_ids")),
+            channel_ids,
             threads,
             thread_members,
             extra_fields: extra_fields(data, &["guild_id", "channel_ids", "threads", "members"]),

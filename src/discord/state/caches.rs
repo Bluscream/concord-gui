@@ -91,9 +91,25 @@ pub(in crate::discord) enum MessageTimelineFocus {
 pub(in crate::discord) struct GuildDetailCache {
     pub(in crate::discord) members:
         BTreeMap<Id<GuildMarker>, BTreeMap<Id<UserMarker>, GuildMemberState>>,
+    /// Users confirmed as guild members during the current guild snapshot.
+    /// The entity cache may retain older message authors after re-identify.
+    pub(in crate::discord) current_member_ids: BTreeMap<Id<GuildMarker>, BTreeSet<Id<UserMarker>>>,
+    pub(in crate::discord) member_lists: BTreeMap<Id<GuildMarker>, GuildMemberListState>,
     pub(in crate::discord) member_cache_guild_order: VecDeque<Id<GuildMarker>>,
     pub(in crate::discord) roles: BTreeMap<Id<GuildMarker>, BTreeMap<Id<RoleMarker>, RoleState>>,
     pub(in crate::discord) current_user_role_ids: BTreeMap<Id<GuildMarker>, Vec<Id<RoleMarker>>>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(in crate::discord) struct GuildMemberListState {
+    pub(in crate::discord) list_id: Option<String>,
+    /// A present key is a valid list position. `None` is a Discord group row.
+    pub(in crate::discord) entries: BTreeMap<u32, Option<Id<UserMarker>>>,
+    /// Ranges confirmed by SYNC operations. A SYNC is authoritative even when
+    /// the event omits `member_count` or contains fewer rows than requested.
+    pub(in crate::discord) synced_ranges: Vec<(u32, u32)>,
+    pub(in crate::discord) total_items: Option<u32>,
+    pub(in crate::discord) refresh_generation: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -158,14 +174,19 @@ pub(in crate::discord) struct SessionState {
     pub(in crate::discord) selected_message_channel_id: Option<Id<ChannelMarker>>,
     pub(in crate::discord) ready_users:
         BTreeMap<Id<UserMarker>, crate::discord::ChannelRecipientInfo>,
+    /// READY's private channels are partial with PRIORITIZED_READY_PAYLOAD.
+    /// Hold them until READY_SUPPLEMENTAL supplies the remaining cached DMs.
+    pub(in crate::discord) pending_ready_private_channel_ids: Option<BTreeSet<Id<ChannelMarker>>>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub(in crate::discord) struct NotificationCache {
     pub(in crate::discord) read_states: BTreeMap<Id<ChannelMarker>, ChannelReadState>,
     pub(in crate::discord) non_channel_read_states: BTreeMap<(u8, u64), NonChannelReadState>,
+    pub(in crate::discord) read_state_version: Option<i64>,
     pub(in crate::discord) user_notification_flags: u64,
     pub(in crate::discord) notification_settings:
         BTreeMap<Id<GuildMarker>, GuildNotificationSettingsState>,
     pub(in crate::discord) private_notification_settings: Option<GuildNotificationSettingsState>,
+    pub(in crate::discord) user_guild_settings_version: Option<i64>,
 }

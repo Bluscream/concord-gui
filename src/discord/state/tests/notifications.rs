@@ -856,3 +856,45 @@ fn notification_settings_init_replaces_private_settings() {
         ChannelUnreadState::Notified(1)
     );
 }
+
+#[test]
+fn versioned_notification_settings_merge_partial_and_clear_full_empty_snapshots() {
+    let first = Id::new(1);
+    let second = Id::new(2);
+    let mut state = DiscordState::default();
+    state.apply_event(&user_guild_settings_init(vec![notification_settings(
+        first,
+        NotificationLevel::AllMessages,
+    )]));
+
+    state.apply_event(&AppEvent::UserGuildSettingsSync {
+        settings: vec![UserGuildSettingsInfo {
+            notification_settings: notification_settings(second, NotificationLevel::OnlyMentions),
+            extra_fields: BTreeMap::new(),
+        }],
+        partial: true,
+        version: Some(7),
+    });
+    assert!(
+        state
+            .notifications
+            .notification_settings
+            .contains_key(&first)
+    );
+    assert!(
+        state
+            .notifications
+            .notification_settings
+            .contains_key(&second)
+    );
+    assert_eq!(state.notifications.user_guild_settings_version, Some(7));
+
+    state.apply_event(&AppEvent::UserGuildSettingsSync {
+        settings: Vec::new(),
+        partial: false,
+        version: Some(8),
+    });
+    assert!(state.notifications.notification_settings.is_empty());
+    assert!(state.notifications.private_notification_settings.is_none());
+    assert_eq!(state.notifications.user_guild_settings_version, Some(8));
+}
