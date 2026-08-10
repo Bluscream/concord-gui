@@ -133,7 +133,7 @@ fn message_search_suggestions_show_names_and_use_selected_ids() {
         let view = state.search_popup_view().expect("search popup view");
         assert_eq!(view.fields[1].value, "Sally");
         assert!(view.suggestions.is_empty());
-        assert_eq!(state.search_popup_member_query(), None);
+        assert_eq!(state.message_search_member_query(), None);
 
         let AppCommand::SearchMessages { query } = run_search(&mut state) else {
             panic!("expected search command");
@@ -158,7 +158,7 @@ fn message_search_suggestions_show_names_and_use_selected_ids() {
         assert_eq!(state.activate_search_popup(), None);
         let view = state.search_popup_view().expect("search popup view");
         assert_eq!(view.fields[4].value, "Sammy");
-        assert_eq!(state.search_popup_member_query(), None);
+        assert_eq!(state.message_search_member_query(), None);
 
         let AppCommand::SearchMessages { query } = run_search(&mut state) else {
             panic!("expected search command");
@@ -191,20 +191,23 @@ fn message_search_suggestions_show_names_and_use_selected_ids() {
 }
 
 #[test]
-fn search_popup_member_query_uses_member_and_message_user_fields() {
+fn member_popup_and_message_member_queries_are_exposed_separately() {
     let mut state = state_with_writable_channel_and_members();
     state.focus_pane(FocusPane::Members);
     state.open_search_popup_for_focus(FocusPane::Members);
     type_search_text(&mut state, "alice");
-    assert_eq!(state.search_popup_member_query(), Some("alice"));
+    assert_eq!(state.member_search_popup_query(), Some("alice"));
+    assert_eq!(state.message_search_member_query(), None);
 
     state.open_search_popup_for_focus(FocusPane::Messages);
     type_search_text(&mut state, "hello");
-    assert_eq!(state.search_popup_member_query(), None);
+    assert_eq!(state.member_search_popup_query(), None);
+    assert_eq!(state.message_search_member_query(), None);
 
     state.cycle_search_field_next();
     type_search_text(&mut state, "sally");
-    assert_eq!(state.search_popup_member_query(), Some("sally"));
+    assert_eq!(state.member_search_popup_query(), None);
+    assert_eq!(state.message_search_member_query(), Some("sally"));
 }
 
 #[test]

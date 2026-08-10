@@ -45,9 +45,9 @@ use super::{
     },
 };
 
-const MEMBER_SEARCH_MIN_QUERY_CHARS: usize = 2;
+const MEMBER_SEARCH_MIN_QUERY_CHARS: usize = 1;
 const MEMBER_SEARCH_MAX_QUERY_CHARS: usize = 64;
-const MEMBER_SEARCH_MAX_LIMIT: u16 = 10;
+const MEMBER_SEARCH_MAX_LIMIT: u16 = 100;
 const OFFICIAL_WORDLE_APPLICATION_ID: u64 = 1_211_781_489_931_452_447;
 const DISCORD_LOCAL_APPLICATION_ID: &str = "-1";
 const GATEWAY_COMMAND_CHANNEL_CLOSED: &str = "gateway command channel closed";
@@ -315,7 +315,7 @@ impl DiscordClient {
             return Ok(());
         };
         let limit = limit.clamp(1, MEMBER_SEARCH_MAX_LIMIT);
-        let nonce = format!("mention-ac-{:016x}", query_hash(guild_id, &query));
+        let nonce = format!("member-search-{:016x}", query_hash(guild_id, &query, limit));
         self.send_gateway_command(GatewayCommand::SearchGuildMembers {
             guild_id,
             query,
@@ -1153,10 +1153,11 @@ fn normalize_member_search_query(query: &str) -> Option<String> {
     (normalized.chars().count() >= MEMBER_SEARCH_MIN_QUERY_CHARS).then_some(normalized)
 }
 
-fn query_hash(guild_id: Id<GuildMarker>, query: &str) -> u64 {
+fn query_hash(guild_id: Id<GuildMarker>, query: &str, limit: u16) -> u64 {
     let mut hasher = DefaultHasher::new();
     guild_id.hash(&mut hasher);
     query.hash(&mut hasher);
+    limit.hash(&mut hasher);
     hasher.finish()
 }
 

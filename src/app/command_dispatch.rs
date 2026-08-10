@@ -155,8 +155,12 @@ impl CommandDispatcher {
                 gateway_commands::load_members_by_ids(self.client.clone(), guild_id, user_ids)
                     .await;
             }
-            AppCommand::SearchGuildMembers { guild_id, query } => {
-                gateway_commands::search_members(self.client.clone(), guild_id, query).await;
+            AppCommand::SearchGuildMembers {
+                guild_id,
+                query,
+                limit,
+            } => {
+                gateway_commands::search_members(self.client.clone(), guild_id, query, limit).await;
             }
             AppCommand::SetSelectedGuild { guild_id } => {
                 gateway_commands::set_selected_guild(self.client.clone(), guild_id).await;

@@ -628,7 +628,7 @@ fn guild_member_search_payload_matches_the_user_gateway_shape() {
         "alic",
         10,
         false,
-        "mention-ac-10-alic",
+        "member-search-10-alic",
     ))
     .expect("payload should be valid json");
 
@@ -641,7 +641,7 @@ fn guild_member_search_payload_matches_the_user_gateway_shape() {
                 "query": "alic",
                 "limit": 10,
                 "presences": false,
-                "nonce": "mention-ac-10-alic"
+                "nonce": "member-search-10-alic"
             }
         })
     );

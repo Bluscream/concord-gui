@@ -488,6 +488,7 @@ pub enum AppCommand {
     SearchGuildMembers {
         guild_id: Id<GuildMarker>,
         query: String,
+        limit: u16,
     },
     SetSelectedGuild {
         guild_id: Option<Id<GuildMarker>>,

@@ -4,8 +4,6 @@ use crate::discord::ids::{
 };
 use crate::{DiscordClient, discord::AppEvent, logging};
 
-const MENTION_MEMBER_SEARCH_LIMIT: u16 = 10;
-
 pub(super) async fn load_members_by_ids(
     client: DiscordClient,
     guild_id: Id<GuildMarker>,
@@ -22,12 +20,9 @@ pub(super) async fn search_members(
     client: DiscordClient,
     guild_id: Id<GuildMarker>,
     query: String,
+    limit: u16,
 ) {
-    publish_gateway_result(
-        &client,
-        client.search_guild_members(guild_id, query, MENTION_MEMBER_SEARCH_LIMIT),
-    )
-    .await;
+    publish_gateway_result(&client, client.search_guild_members(guild_id, query, limit)).await;
 }
 
 pub(super) async fn set_selected_guild(client: DiscordClient, guild_id: Option<Id<GuildMarker>>) {

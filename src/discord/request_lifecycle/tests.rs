@@ -15,10 +15,11 @@ use crate::discord::test_builders::{
 };
 
 use super::{
-    APPLICATION_COMMAND_REQUEST_TTL, ForumPostRequestTarget, ForumPostRequests, HistoryRequests,
-    MemberBatchRequests, MemberListSubscriptionRequests, MemberListSubscriptionTarget,
-    MemberRequests, MentionMemberSearchRequests, MentionMemberSearchTarget, PinnedMessageRequests,
-    RequestLifecycle, ThreadPreviewRequests, UserNoteRequests, UserProfileRequests,
+    APPLICATION_COMMAND_REQUEST_TTL, ForumPostRequestTarget, ForumPostRequests,
+    GuildMemberSearchRequests, GuildMemberSearchTarget, HistoryRequests, MemberBatchRequests,
+    MemberListSubscriptionRequests, MemberListSubscriptionTarget, MemberRequests,
+    PinnedMessageRequests, RequestLifecycle, ThreadPreviewRequests, UserNoteRequests,
+    UserProfileRequests,
 };
 
 #[test]
@@ -350,17 +351,25 @@ fn gateway_member_requests_can_retry_after_remove_or_new_gateway_session() {
         lifecycle.next_member_hydration_requests(initial_unknown_request.clone(), now),
         initial_unknown_request
     );
-    let mention_target = MentionMemberSearchTarget {
+    let search_target = GuildMemberSearchTarget {
         guild_id,
         query: "neo".to_owned(),
     };
-    lifecycle.set_mention_member_search_target(Some(mention_target.clone()), now);
-    let mention_deadline = lifecycle
-        .mention_member_search_deadline()
-        .expect("mention member search should be scheduled");
+    lifecycle.set_member_autocomplete_search_target(Some(search_target.clone()), now);
+    let autocomplete_deadline = lifecycle
+        .member_autocomplete_search_deadline()
+        .expect("member autocomplete search should be scheduled");
     assert_eq!(
-        lifecycle.next_due_mention_member_search(mention_deadline),
-        Some(mention_target.clone())
+        lifecycle.next_due_member_autocomplete_search(autocomplete_deadline),
+        Some(search_target.clone())
+    );
+    lifecycle.set_member_popup_search_target(Some(search_target.clone()), now);
+    let popup_deadline = lifecycle
+        .member_popup_search_deadline()
+        .expect("member popup search should be scheduled independently");
+    assert_eq!(
+        lifecycle.next_due_member_popup_search(popup_deadline),
+        Some(search_target.clone())
     );
     let target = subscription_target(1);
     lifecycle.set_member_list_subscription_target(Some(target.clone()), now);
@@ -386,13 +395,21 @@ fn gateway_member_requests_can_retry_after_remove_or_new_gateway_session() {
         lifecycle.next_member_hydration_requests(initial_unknown_request.clone(), now),
         initial_unknown_request
     );
-    lifecycle.set_mention_member_search_target(Some(mention_target.clone()), now);
-    let mention_deadline = lifecycle
-        .mention_member_search_deadline()
-        .expect("new Gateway session should resend the same mention member search");
+    lifecycle.set_member_autocomplete_search_target(Some(search_target.clone()), now);
+    let autocomplete_deadline = lifecycle
+        .member_autocomplete_search_deadline()
+        .expect("new Gateway session should resend the same member autocomplete search");
     assert_eq!(
-        lifecycle.next_due_mention_member_search(mention_deadline),
-        Some(mention_target)
+        lifecycle.next_due_member_autocomplete_search(autocomplete_deadline),
+        Some(search_target.clone())
+    );
+    lifecycle.set_member_popup_search_target(Some(search_target.clone()), now);
+    let popup_deadline = lifecycle
+        .member_popup_search_deadline()
+        .expect("new Gateway session should resend the same member popup search");
+    assert_eq!(
+        lifecycle.next_due_member_popup_search(popup_deadline),
+        Some(search_target)
     );
     lifecycle.set_member_list_subscription_target(Some(target.clone()), now);
     let deadline = lifecycle
@@ -528,25 +545,27 @@ fn member_list_subscription_debounces_and_coalesces_bucket_updates() {
 }
 
 #[test]
-fn mention_member_search_debounces_bounds_and_retries_queries() {
-    let mut requests = MentionMemberSearchRequests::default();
+fn guild_member_search_debounces_bounds_and_resets_when_closed() {
+    let mut requests = GuildMemberSearchRequests::default();
     let guild_id = Id::new(1);
     let now = std::time::Instant::now();
 
     requests.set_target(
-        Some(MentionMemberSearchTarget {
+        Some(GuildMemberSearchTarget {
             guild_id,
             query: "A".to_owned(),
         }),
+        2,
         now,
     );
     assert_eq!(requests.pending_deadline(), None);
 
     requests.set_target(
-        Some(MentionMemberSearchTarget {
+        Some(GuildMemberSearchTarget {
             guild_id,
             query: " Alice ".to_owned(),
         }),
+        2,
         now,
     );
     let deadline = requests
@@ -558,39 +577,42 @@ fn mention_member_search_debounces_bounds_and_retries_queries() {
     );
     assert_eq!(
         requests.next_due(deadline),
-        Some(MentionMemberSearchTarget {
+        Some(GuildMemberSearchTarget {
             guild_id,
             query: "alice".to_owned(),
         })
     );
 
     requests.set_target(
-        Some(MentionMemberSearchTarget {
+        Some(GuildMemberSearchTarget {
             guild_id,
             query: "ALICE".to_owned(),
         }),
+        2,
         now + std::time::Duration::from_secs(1),
     );
     assert_eq!(requests.pending_deadline(), None);
 
-    let retry_at =
-        deadline + MentionMemberSearchRequests::REQUEST_TTL + std::time::Duration::from_millis(1);
+    requests.set_target(None, 2, now + std::time::Duration::from_secs(1));
+    let reopened_at = now + std::time::Duration::from_secs(2);
     requests.set_target(
-        Some(MentionMemberSearchTarget {
+        Some(GuildMemberSearchTarget {
             guild_id,
             query: "alice".to_owned(),
         }),
-        retry_at,
+        2,
+        reopened_at,
     );
     assert!(requests.pending_deadline().is_some());
 
-    let long_query = "A".repeat(MentionMemberSearchRequests::MAX_QUERY_CHARS + 10);
+    let long_query = "A".repeat(GuildMemberSearchRequests::MAX_QUERY_CHARS + 10);
     requests.set_target(
-        Some(MentionMemberSearchTarget {
+        Some(GuildMemberSearchTarget {
             guild_id,
             query: long_query,
         }),
-        retry_at + std::time::Duration::from_millis(1),
+        2,
+        reopened_at + std::time::Duration::from_millis(1),
     );
     let deadline = requests
         .pending_deadline()
@@ -600,17 +622,18 @@ fn mention_member_search_debounces_bounds_and_retries_queries() {
         .expect("capped query should be due");
     assert_eq!(
         target.query.chars().count(),
-        MentionMemberSearchRequests::MAX_QUERY_CHARS
+        GuildMemberSearchRequests::MAX_QUERY_CHARS
     );
     assert!(target.query.chars().all(|ch| ch == 'a'));
 
-    let expanding_query = "İ".repeat(MentionMemberSearchRequests::MAX_QUERY_CHARS + 10);
+    let expanding_query = "İ".repeat(GuildMemberSearchRequests::MAX_QUERY_CHARS + 10);
     requests.set_target(
-        Some(MentionMemberSearchTarget {
+        Some(GuildMemberSearchTarget {
             guild_id,
             query: expanding_query,
         }),
-        retry_at + std::time::Duration::from_millis(2),
+        2,
+        reopened_at + std::time::Duration::from_millis(2),
     );
     let deadline = requests
         .pending_deadline()
@@ -620,7 +643,50 @@ fn mention_member_search_debounces_bounds_and_retries_queries() {
         .expect("expanded lowercase query should be due");
     assert_eq!(
         target.query.chars().count(),
-        MentionMemberSearchRequests::MAX_QUERY_CHARS
+        GuildMemberSearchRequests::MAX_QUERY_CHARS
+    );
+}
+
+#[test]
+fn member_search_surfaces_apply_independent_query_policies() {
+    let mut lifecycle = RequestLifecycle::default();
+    let now = std::time::Instant::now();
+    let target = GuildMemberSearchTarget {
+        guild_id: Id::new(1),
+        query: "a".to_owned(),
+    };
+
+    lifecycle.set_member_autocomplete_search_target(Some(target.clone()), now);
+    assert_eq!(lifecycle.member_autocomplete_search_deadline(), None);
+
+    lifecycle.set_member_popup_search_target(Some(target.clone()), now);
+    let popup_deadline = lifecycle
+        .member_popup_search_deadline()
+        .expect("explicit member search accepts one-character prefixes");
+    assert_eq!(
+        lifecycle.next_due_member_popup_search(popup_deadline),
+        Some(target)
+    );
+
+    let shared_target = GuildMemberSearchTarget {
+        guild_id: Id::new(1),
+        query: "alice".to_owned(),
+    };
+    lifecycle.set_member_autocomplete_search_target(Some(shared_target.clone()), now);
+    lifecycle.set_member_popup_search_target(Some(shared_target.clone()), now);
+    let autocomplete_deadline = lifecycle
+        .member_autocomplete_search_deadline()
+        .expect("autocomplete search should be scheduled");
+    let popup_deadline = lifecycle
+        .member_popup_search_deadline()
+        .expect("popup search should not be suppressed by autocomplete");
+    assert_eq!(
+        lifecycle.next_due_member_autocomplete_search(autocomplete_deadline),
+        Some(shared_target.clone())
+    );
+    assert_eq!(
+        lifecycle.next_due_member_popup_search(popup_deadline),
+        Some(shared_target)
     );
 }
 

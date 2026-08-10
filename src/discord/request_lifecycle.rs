@@ -16,6 +16,8 @@ use crate::discord::{
 
 const APPLICATION_COMMAND_REQUEST_TTL: Duration = Duration::from_secs(15 * 60);
 const MAX_APPLICATION_COMMAND_REQUESTS: usize = 1_024;
+const MEMBER_AUTOCOMPLETE_MIN_QUERY_CHARS: usize = 2;
+const MEMBER_POPUP_MIN_QUERY_CHARS: usize = 1;
 
 #[derive(Debug, Default)]
 pub(super) struct HistoryRequests {
@@ -56,7 +58,7 @@ pub(crate) struct ForumPostRequestTarget {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MentionMemberSearchTarget {
+pub(crate) struct GuildMemberSearchTarget {
     pub(crate) guild_id: Id<GuildMarker>,
     pub(crate) query: String,
 }
@@ -85,10 +87,10 @@ pub(super) struct MemberListSubscriptionRequests {
     pending: Option<PendingMemberListSubscription>,
 }
 
-#[derive(Debug)]
-pub(super) struct MentionMemberSearchRequests {
-    requested: TimedRequestSet<MentionMemberSearchKey>,
-    pending: Option<PendingMentionMemberSearch>,
+#[derive(Debug, Default)]
+pub(super) struct GuildMemberSearchRequests {
+    active_key: Option<GuildMemberSearchKey>,
+    pending: Option<PendingGuildMemberSearch>,
 }
 
 #[derive(Debug, Default)]
@@ -147,7 +149,8 @@ pub(crate) struct RequestLifecycle {
     read_acks: ReadAckRequests,
     member_hydration: MemberBatchRequests,
     member_list_subscriptions: MemberListSubscriptionRequests,
-    mention_member_searches: MentionMemberSearchRequests,
+    member_autocomplete_searches: GuildMemberSearchRequests,
+    member_popup_searches: GuildMemberSearchRequests,
     members: MemberRequests,
     thread_previews: ThreadPreviewRequests,
     user_profiles: UserProfileRequests,
@@ -174,7 +177,8 @@ impl RequestLifecycle {
     fn reset_gateway_session(&mut self) {
         self.member_hydration = MemberBatchRequests::default();
         self.member_list_subscriptions = MemberListSubscriptionRequests::default();
-        self.mention_member_searches = MentionMemberSearchRequests::default();
+        self.member_autocomplete_searches = GuildMemberSearchRequests::default();
+        self.member_popup_searches = GuildMemberSearchRequests::default();
         self.members = MemberRequests::default();
         self.pending_application_commands = ApplicationCommandRequests::default();
     }
@@ -287,23 +291,47 @@ impl RequestLifecycle {
         self.members.remove(guild_id);
     }
 
-    pub(crate) fn set_mention_member_search_target(
+    pub(crate) fn set_member_autocomplete_search_target(
         &mut self,
-        target: Option<MentionMemberSearchTarget>,
+        target: Option<GuildMemberSearchTarget>,
         now: Instant,
     ) {
-        self.mention_member_searches.set_target(target, now);
+        self.member_autocomplete_searches.set_target(
+            target,
+            MEMBER_AUTOCOMPLETE_MIN_QUERY_CHARS,
+            now,
+        );
     }
 
-    pub(crate) fn mention_member_search_deadline(&self) -> Option<Instant> {
-        self.mention_member_searches.pending_deadline()
+    pub(crate) fn member_autocomplete_search_deadline(&self) -> Option<Instant> {
+        self.member_autocomplete_searches.pending_deadline()
     }
 
-    pub(crate) fn next_due_mention_member_search(
+    pub(crate) fn next_due_member_autocomplete_search(
         &mut self,
         now: Instant,
-    ) -> Option<MentionMemberSearchTarget> {
-        self.mention_member_searches.next_due(now)
+    ) -> Option<GuildMemberSearchTarget> {
+        self.member_autocomplete_searches.next_due(now)
+    }
+
+    pub(crate) fn set_member_popup_search_target(
+        &mut self,
+        target: Option<GuildMemberSearchTarget>,
+        now: Instant,
+    ) {
+        self.member_popup_searches
+            .set_target(target, MEMBER_POPUP_MIN_QUERY_CHARS, now);
+    }
+
+    pub(crate) fn member_popup_search_deadline(&self) -> Option<Instant> {
+        self.member_popup_searches.pending_deadline()
+    }
+
+    pub(crate) fn next_due_member_popup_search(
+        &mut self,
+        now: Instant,
+    ) -> Option<GuildMemberSearchTarget> {
+        self.member_popup_searches.next_due(now)
     }
 
     pub(crate) fn set_member_list_subscription_target(
@@ -819,32 +847,29 @@ impl ThreadPreviewRequests {
     }
 }
 
-impl MentionMemberSearchRequests {
-    const MIN_QUERY_CHARS: usize = 2;
+impl GuildMemberSearchRequests {
     const MAX_QUERY_CHARS: usize = 64;
     const DEBOUNCE: Duration = Duration::from_millis(250);
-    const REQUEST_TTL: Duration = Duration::from_secs(30);
-    const MAX_REQUESTED: usize = 128;
 
-    pub(super) fn set_target(&mut self, target: Option<MentionMemberSearchTarget>, now: Instant) {
-        self.requested.prune(now);
-        let Some(target) = target.and_then(normalize_mention_member_search_target) else {
+    pub(super) fn set_target(
+        &mut self,
+        target: Option<GuildMemberSearchTarget>,
+        min_query_chars: usize,
+        now: Instant,
+    ) {
+        let Some(target) =
+            target.and_then(|target| normalize_guild_member_search_target(target, min_query_chars))
+        else {
+            self.active_key = None;
             self.pending = None;
             return;
         };
         let key = target.key();
-        if self.requested.contains(&key) {
-            self.pending = None;
+        if self.active_key.as_ref() == Some(&key) {
             return;
         }
-        if self
-            .pending
-            .as_ref()
-            .is_some_and(|pending| pending.target.key() == key)
-        {
-            return;
-        }
-        self.pending = Some(PendingMentionMemberSearch {
+        self.active_key = Some(key);
+        self.pending = Some(PendingGuildMemberSearch {
             target,
             ready_at: now + Self::DEBOUNCE,
         });
@@ -854,31 +879,16 @@ impl MentionMemberSearchRequests {
         self.pending.as_ref().map(|pending| pending.ready_at)
     }
 
-    pub(super) fn next_due(&mut self, now: Instant) -> Option<MentionMemberSearchTarget> {
-        self.requested.prune(now);
+    pub(super) fn next_due(&mut self, now: Instant) -> Option<GuildMemberSearchTarget> {
         let pending = self.pending.as_ref()?;
         if pending.ready_at > now {
             return None;
         }
-        let pending = self.pending.take()?;
-        let key = pending.target.key();
-        if !self.requested.insert(key, now) {
-            return None;
-        }
-        Some(pending.target)
+        self.pending.take().map(|pending| pending.target)
     }
 }
 
-impl Default for MentionMemberSearchRequests {
-    fn default() -> Self {
-        Self {
-            requested: TimedRequestSet::new(Self::REQUEST_TTL, Self::MAX_REQUESTED),
-            pending: None,
-        }
-    }
-}
-
-type MentionMemberSearchKey = (Id<GuildMarker>, String);
+type GuildMemberSearchKey = (Id<GuildMarker>, String);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct UserProfileRequestKey {
@@ -902,8 +912,8 @@ struct MemberListSubscriptionKey {
 }
 
 #[derive(Debug)]
-struct PendingMentionMemberSearch {
-    target: MentionMemberSearchTarget,
+struct PendingGuildMemberSearch {
+    target: GuildMemberSearchTarget,
     ready_at: Instant,
 }
 
@@ -954,8 +964,8 @@ impl ReadAckRequests {
     }
 }
 
-impl MentionMemberSearchTarget {
-    fn key(&self) -> MentionMemberSearchKey {
+impl GuildMemberSearchTarget {
+    fn key(&self) -> GuildMemberSearchKey {
         (self.guild_id, self.query.clone())
     }
 }
@@ -970,24 +980,23 @@ impl MemberListSubscriptionTarget {
     }
 }
 
-fn normalize_mention_member_search_target(
-    target: MentionMemberSearchTarget,
-) -> Option<MentionMemberSearchTarget> {
-    let query = normalize_mention_member_search_query(&target.query);
-    (query.chars().count() >= MentionMemberSearchRequests::MIN_QUERY_CHARS).then_some(
-        MentionMemberSearchTarget {
-            guild_id: target.guild_id,
-            query,
-        },
-    )
+fn normalize_guild_member_search_target(
+    target: GuildMemberSearchTarget,
+    min_query_chars: usize,
+) -> Option<GuildMemberSearchTarget> {
+    let query = normalize_guild_member_search_query(&target.query);
+    (query.chars().count() >= min_query_chars).then_some(GuildMemberSearchTarget {
+        guild_id: target.guild_id,
+        query,
+    })
 }
 
-fn normalize_mention_member_search_query(query: &str) -> String {
+fn normalize_guild_member_search_query(query: &str) -> String {
     let mut normalized = String::new();
     let mut count = 0usize;
     for ch in query.trim().chars() {
         for lowered in ch.to_lowercase() {
-            if count >= MentionMemberSearchRequests::MAX_QUERY_CHARS {
+            if count >= GuildMemberSearchRequests::MAX_QUERY_CHARS {
                 return normalized;
             }
             normalized.push(lowered);

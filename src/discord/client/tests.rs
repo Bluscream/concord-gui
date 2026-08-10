@@ -1613,12 +1613,24 @@ fn guild_member_search_validates_query_and_caps_limit() {
         .expect("gateway commands can be taken once");
 
     client
-        .search_guild_members(Id::new(1), " a ".to_owned(), 10)
-        .expect("short search is ignored without closing channel");
+        .search_guild_members(Id::new(1), "   ".to_owned(), 10)
+        .expect("blank search is ignored without closing channel");
     assert!(matches!(
         gateway_commands.try_recv(),
         Err(tokio::sync::mpsc::error::TryRecvError::Empty)
     ));
+
+    client
+        .search_guild_members(Id::new(1), " a ".to_owned(), 10)
+        .expect("one-character prefix should queue");
+    let one_character_command = gateway_commands
+        .try_recv()
+        .expect("one-character search command should be queued");
+    let GatewayCommand::SearchGuildMembers { query, limit, .. } = one_character_command else {
+        panic!("expected guild member search command");
+    };
+    assert_eq!(query, "a");
+    assert_eq!(limit, 10);
 
     client
         .search_guild_members(Id::new(1), "neo".to_owned(), 0)
@@ -1633,7 +1645,7 @@ fn guild_member_search_validates_query_and_caps_limit() {
 
     let long_query = "İ".repeat(MEMBER_SEARCH_MAX_QUERY_CHARS + 10);
     client
-        .search_guild_members(Id::new(1), long_query, 99)
+        .search_guild_members(Id::new(1), long_query, 101)
         .expect("valid search should queue");
 
     let command = gateway_commands
@@ -1653,7 +1665,7 @@ fn guild_member_search_validates_query_and_caps_limit() {
     assert_eq!(query.chars().count(), MEMBER_SEARCH_MAX_QUERY_CHARS);
     assert_eq!(limit, MEMBER_SEARCH_MAX_LIMIT);
     assert!(presences);
-    assert!(nonce.starts_with("mention-ac-"));
+    assert!(nonce.starts_with("member-search-"));
     assert!(nonce.len() <= 32);
     assert!(!nonce.contains(&query));
 }

@@ -12,7 +12,7 @@ use crate::discord::{
         marker::{ChannelMarker, GuildMarker, MessageMarker, UserMarker},
     },
     request_lifecycle::{
-        ForumPostRequestTarget, MemberListSubscriptionTarget, MentionMemberSearchTarget,
+        ForumPostRequestTarget, GuildMemberSearchTarget, MemberListSubscriptionTarget,
     },
     voice,
 };
@@ -174,7 +174,7 @@ impl DiscordClient {
             .remove_member_request(guild_id);
     }
 
-    pub(crate) fn set_mention_member_search_target(
+    pub(crate) fn set_member_autocomplete_search_target(
         &self,
         guild_id: Option<Id<GuildMarker>>,
         query: Option<&str>,
@@ -182,31 +182,67 @@ impl DiscordClient {
     ) {
         let target = guild_id
             .zip(query)
-            .map(|(guild_id, query)| MentionMemberSearchTarget {
+            .map(|(guild_id, query)| GuildMemberSearchTarget {
                 guild_id,
                 query: query.to_owned(),
             });
         self.request_lifecycle
             .lock()
             .expect("request lifecycle lock is not poisoned")
-            .set_mention_member_search_target(target, now);
+            .set_member_autocomplete_search_target(target, now);
     }
 
-    pub(crate) fn mention_member_search_deadline(&self) -> Option<Instant> {
+    pub(crate) fn member_autocomplete_search_deadline(&self) -> Option<Instant> {
         self.request_lifecycle
             .lock()
             .expect("request lifecycle lock is not poisoned")
-            .mention_member_search_deadline()
+            .member_autocomplete_search_deadline()
     }
 
-    pub(crate) fn next_due_mention_member_search(
+    pub(crate) fn next_due_member_autocomplete_search(
         &self,
         now: Instant,
     ) -> Option<(Id<GuildMarker>, String)> {
         self.request_lifecycle
             .lock()
             .expect("request lifecycle lock is not poisoned")
-            .next_due_mention_member_search(now)
+            .next_due_member_autocomplete_search(now)
+            .map(|target| (target.guild_id, target.query))
+    }
+
+    pub(crate) fn set_member_popup_search_target(
+        &self,
+        guild_id: Option<Id<GuildMarker>>,
+        query: Option<&str>,
+        now: Instant,
+    ) {
+        let target = guild_id
+            .zip(query)
+            .map(|(guild_id, query)| GuildMemberSearchTarget {
+                guild_id,
+                query: query.to_owned(),
+            });
+        self.request_lifecycle
+            .lock()
+            .expect("request lifecycle lock is not poisoned")
+            .set_member_popup_search_target(target, now);
+    }
+
+    pub(crate) fn member_popup_search_deadline(&self) -> Option<Instant> {
+        self.request_lifecycle
+            .lock()
+            .expect("request lifecycle lock is not poisoned")
+            .member_popup_search_deadline()
+    }
+
+    pub(crate) fn next_due_member_popup_search(
+        &self,
+        now: Instant,
+    ) -> Option<(Id<GuildMarker>, String)> {
+        self.request_lifecycle
+            .lock()
+            .expect("request lifecycle lock is not poisoned")
+            .next_due_member_popup_search(now)
             .map(|target| (target.guild_id, target.query))
     }
 

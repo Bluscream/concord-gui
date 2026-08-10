@@ -459,20 +459,26 @@ impl DashboardState {
         }
     }
 
-    pub fn search_popup_member_query(&self) -> Option<&str> {
+    pub fn member_search_popup_query(&self) -> Option<&str> {
         let search = self.popups.search_popup()?;
-        match search.mode {
-            SearchPopupMode::Member => search.field_value("member"),
-            SearchPopupMode::Message => {
-                let field = search.fields.get(search.active_field)?;
-                let value = field.value().trim();
-                (matches!(field.label, "from" | "mentions")
-                    && !value.is_empty()
-                    && field.selection.is_none()
-                    && parse_search_id(value).is_none())
-                .then_some(value)
-            }
+        if !matches!(search.mode, SearchPopupMode::Member) {
+            return None;
         }
+        search.field_value("member")
+    }
+
+    pub fn message_search_member_query(&self) -> Option<&str> {
+        let search = self.popups.search_popup()?;
+        if !matches!(search.mode, SearchPopupMode::Message) {
+            return None;
+        }
+        let field = search.fields.get(search.active_field)?;
+        let value = field.value().trim();
+        (matches!(field.label, "from" | "mentions")
+            && !value.is_empty()
+            && field.selection.is_none()
+            && parse_search_id(value).is_none())
+        .then_some(value)
     }
 
     pub(in crate::tui::state) fn refresh_search_popup_after_member_cache_update(&mut self) {

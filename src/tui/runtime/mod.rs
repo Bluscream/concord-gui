@@ -206,7 +206,13 @@ pub(super) async fn run_dashboard(
 
         let pending_read_ack_deadline = client.next_read_ack_deadline();
         let pending_toast_deadline = state.next_toast_deadline();
-        let pending_mention_member_search_deadline = client.mention_member_search_deadline();
+        let pending_member_search_deadline = [
+            client.member_autocomplete_search_deadline(),
+            client.member_popup_search_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         let pending_member_list_subscription_deadline = client.member_list_subscription_deadline();
         let pending_composer_lock_refresh_deadline = state.next_composer_lock_refresh_deadline();
         // Keep the dashboard idle when no animation is visible. A persistent
@@ -526,7 +532,7 @@ pub(super) async fn run_dashboard(
                 dirty = true;
             }
             _ = async {
-                match pending_mention_member_search_deadline {
+                match pending_member_search_deadline {
                     Some(deadline) => tokio::time::sleep_until(
                         tokio::time::Instant::from_std(deadline),
                     )
