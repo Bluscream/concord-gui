@@ -145,12 +145,12 @@ fn message_history_authors_missing_member_roles_are_requested_from_batch() {
         vec![(
             guild_id,
             vec![
+                author_id,
                 Id::new(94),
-                Id::new(95),
-                Id::new(96),
-                Id::new(97),
                 Id::new(98),
-                author_id
+                Id::new(97),
+                Id::new(96),
+                Id::new(95),
             ]
         )]
     );
@@ -167,15 +167,19 @@ fn message_history_authors_missing_member_roles_are_requested_from_batch() {
 }
 
 #[test]
-fn message_history_author_member_requests_chunk_at_gateway_limit() {
+fn message_history_author_member_requests_keep_visible_order_when_chunked() {
     let guild_id = Id::new(1);
     let channel_id = Id::new(2);
     let mut state = state_with_writable_channel();
     state.drain_pending_commands();
-    let messages = (1..=105)
+    let author_ids = (1_001..=1_105).rev().map(Id::new).collect::<Vec<_>>();
+    let messages = author_ids
+        .iter()
+        .enumerate()
         .map(|offset| {
-            let mut message = message_info(channel_id, 1_000 + offset);
-            message.author_id = Id::new(1_000 + offset);
+            let (offset, author_id) = offset;
+            let mut message = message_info(channel_id, 2_000 + offset as u64);
+            message.author_id = *author_id;
             message
         })
         .collect::<Vec<_>>();
@@ -188,11 +192,11 @@ fn message_history_author_member_requests_chunk_at_gateway_limit() {
         vec![
             AppCommand::LoadGuildMembersByIds {
                 guild_id,
-                user_ids: (1_001..=1_100).map(Id::new).collect(),
+                user_ids: author_ids[..100].to_vec(),
             },
             AppCommand::LoadGuildMembersByIds {
                 guild_id,
-                user_ids: (1_101..=1_105).map(Id::new).collect(),
+                user_ids: author_ids[100..].to_vec(),
             },
         ]
     );

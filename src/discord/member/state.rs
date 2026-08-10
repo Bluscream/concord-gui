@@ -20,6 +20,8 @@ use crate::discord::state::{
     touch_recent,
 };
 
+type OrderedUserIds = (BTreeSet<Id<UserMarker>>, Vec<Id<UserMarker>>);
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TypingUserState {
     pub user_id: Id<UserMarker>,
@@ -266,37 +268,38 @@ impl DiscordState {
         selected_guild_id: Option<Id<GuildMarker>>,
         now: Instant,
     ) -> Vec<(Id<GuildMarker>, Vec<Id<UserMarker>>)> {
-        let mut by_guild: BTreeMap<Id<GuildMarker>, BTreeSet<Id<UserMarker>>> = BTreeMap::new();
+        let mut by_guild: BTreeMap<Id<GuildMarker>, OrderedUserIds> = BTreeMap::new();
+
+        let mut insert = |guild_id: Id<GuildMarker>, user_id: Id<UserMarker>| {
+            let (seen, ordered) = by_guild.entry(guild_id).or_default();
+            if seen.insert(user_id) {
+                ordered.push(user_id);
+            }
+        };
 
         if let Some(guild_id) = selected_guild_id
             && let Some(current_user_id) = self.session.current_user_id
             && self.current_member_participation_needs_hydration(guild_id, current_user_id)
         {
-            by_guild
-                .entry(guild_id)
-                .or_default()
-                .insert(current_user_id);
+            insert(guild_id, current_user_id);
         }
 
         let mut require = |guild_id: Id<GuildMarker>, user_id: Id<UserMarker>| {
             if self.member_needs_hydration(guild_id, user_id) {
-                by_guild.entry(guild_id).or_default().insert(user_id);
+                insert(guild_id, user_id);
             }
         };
 
-        if let Some(guild_id) = selected_guild_id {
-            if let Some(current_user_id) = self.session.current_user_id {
-                require(guild_id, current_user_id);
-            }
-            if let Some(members) = self.guild_details.members.get(&guild_id) {
-                for member in members.values().filter(|member| {
-                    is_fallback_identity(member.username.as_deref(), &member.display_name)
-                        || !member.role_ids_known
-                }) {
-                    require(guild_id, member.user_id);
-                }
-            }
+        if let Some(guild_id) = selected_guild_id
+            && let Some(current_user_id) = self.session.current_user_id
+        {
+            require(guild_id, current_user_id);
         }
+
+        // Do not sweep every incomplete member cached for the selected guild.
+        // The channel subscription owns member-list backfill. Sending that
+        // whole cache through Opcode 8 creates unnecessary traffic and can
+        // crowd out message authors and other visible participants.
 
         for (scope, user_id) in self.voice.states.keys() {
             if let VoiceScope::Guild(guild_id) = scope {
@@ -334,7 +337,7 @@ impl DiscordState {
 
         by_guild
             .into_iter()
-            .map(|(guild_id, user_ids)| (guild_id, user_ids.into_iter().collect()))
+            .map(|(guild_id, (_, user_ids))| (guild_id, user_ids))
             .collect()
     }
 

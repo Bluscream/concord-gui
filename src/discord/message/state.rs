@@ -806,6 +806,7 @@ impl DiscordState {
             .members
             .get(&guild_id)
             .and_then(|members| members.get(&user_id))
+            && member.role_ids_known
         {
             return selected_member_role_color(member, roles);
         }
@@ -832,6 +833,7 @@ impl DiscordState {
             .members
             .get(&guild_id)
             .and_then(|members| members.get(&user_id))
+            && member.role_ids_known
         {
             return selected_member_role_color(member, roles);
         }

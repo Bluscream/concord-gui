@@ -69,6 +69,8 @@ pub(super) struct MemberBatchRequests {
     requested: TimedRequestSet<(Id<GuildMarker>, Id<UserMarker>)>,
 }
 
+type OrderedUserIds = (BTreeSet<Id<UserMarker>>, Vec<Id<UserMarker>>);
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MemberListSubscriptionTarget {
     pub(crate) guild_id: Id<GuildMarker>,
@@ -671,16 +673,19 @@ impl MemberBatchRequests {
     ) -> Vec<(Id<GuildMarker>, Vec<Id<UserMarker>>)> {
         self.requested.prune(now);
 
-        let mut by_guild: BTreeMap<Id<GuildMarker>, BTreeSet<Id<UserMarker>>> = BTreeMap::new();
+        let mut by_guild: BTreeMap<Id<GuildMarker>, OrderedUserIds> = BTreeMap::new();
         for (guild_id, user_ids) in missing {
             for user_id in user_ids {
-                by_guild.entry(guild_id).or_default().insert(user_id);
+                let (seen, ordered) = by_guild.entry(guild_id).or_default();
+                if seen.insert(user_id) {
+                    ordered.push(user_id);
+                }
             }
         }
         by_guild
             .into_iter()
-            .filter_map(|(guild_id, user_ids)| {
-                let fresh_user_ids = user_ids
+            .filter_map(|(guild_id, (_, ordered_user_ids))| {
+                let fresh_user_ids = ordered_user_ids
                     .into_iter()
                     .filter(|user_id| self.requested.insert((guild_id, *user_id), now))
                     .collect::<Vec<_>>();

@@ -499,6 +499,7 @@ fn observed_users_and_current_member_request_missing_member_data() {
     let voice_user = Id::new(20);
     let typing_user = Id::new(21);
     let current_user = Id::new(22);
+    let unrelated_user = Id::new(23);
     let mut state = DiscordState::default();
     state.apply_event(&AppEvent::Ready {
         user: "Current User".to_owned(),
@@ -513,10 +514,17 @@ fn observed_users_and_current_member_request_missing_member_data() {
             },
             guild_voice_channel(guild_id, voice_channel),
         ],
-        members: vec![MemberInfo {
-            flags: None,
-            ..member_with_roles(current_user, "Current User", Vec::new())
-        }],
+        members: vec![
+            MemberInfo {
+                flags: None,
+                ..member_with_roles(current_user, "Current User", Vec::new())
+            },
+            MemberInfo {
+                username: Some("unrelated".to_owned()),
+                role_ids_present: false,
+                ..MemberInfo::test(unrelated_user, "Unrelated")
+            },
+        ],
         ..GuildCreateFixture::new(guild_id)
     }));
     state.apply_event(&AppEvent::VoiceStateUpdate {
@@ -531,7 +539,7 @@ fn observed_users_and_current_member_request_missing_member_data() {
 
     assert_eq!(
         state.missing_member_hydration_requests(Some(guild_id), std::time::Instant::now()),
-        vec![(guild_id, vec![voice_user, typing_user, current_user])]
+        vec![(guild_id, vec![current_user, voice_user, typing_user])]
     );
 
     let mut hydrated_current = member_with_roles(current_user, "Current User", Vec::new());
@@ -984,7 +992,7 @@ fn guild_role_events_patch_cached_roles() {
 }
 
 #[test]
-fn message_author_role_color_falls_back_only_while_the_member_is_missing() {
+fn message_author_role_color_uses_the_best_complete_role_source() {
     let guild_id = Id::new(1);
     let channel_id = Id::new(2);
     let message_id = Id::new(3);
@@ -1013,9 +1021,8 @@ fn message_author_role_color_falls_back_only_while_the_member_is_missing() {
         message
     };
 
-    // Until the member list arrives the message's own role ids, and then the
-    // loaded profile, stand in. Once the member is cached it is authoritative,
-    // so the message's (possibly stale) role ids must be ignored entirely.
+    // Message and profile roles provide an immediate color until a complete
+    // member arrives. A partial member must not hide those stronger sources.
     let mut from_history = guild(Vec::new());
     from_history.apply_event(&latest_history_loaded(
         channel_id,
@@ -1088,15 +1095,29 @@ fn message_author_role_color_falls_back_only_while_the_member_is_missing() {
         "profile payload without guild roles preserves the cached roles"
     );
 
-    let mut cached_member = guild(vec![member_info(user_id, "test-user")]);
-    cached_member.apply_event(&latest_history_loaded(
+    let mut incomplete_member = guild(vec![MemberInfo {
+        role_ids_present: false,
+        ..member_info(user_id, "test-user")
+    }]);
+    incomplete_member.apply_event(&latest_history_loaded(
         channel_id,
         vec![history_message(vec![role_id])],
     ));
     assert_eq!(
-        cached_member.message_author_role_color(guild_id, channel_id, message_id, user_id),
+        incomplete_member.message_author_role_color(guild_id, channel_id, message_id, user_id),
+        Some(0xCC0000),
+        "partial member preserves message role fallback"
+    );
+
+    let mut complete_member = guild(vec![member_info(user_id, "test-user")]);
+    complete_member.apply_event(&latest_history_loaded(
+        channel_id,
+        vec![history_message(vec![role_id])],
+    ));
+    assert_eq!(
+        complete_member.message_author_role_color(guild_id, channel_id, message_id, user_id),
         None,
-        "cached member wins over stale message roles"
+        "complete member wins over stale message roles"
     );
 }
 

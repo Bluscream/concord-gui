@@ -314,14 +314,14 @@ impl DiscordClient {
         let Some(query) = normalize_member_search_query(&query) else {
             return Ok(());
         };
-        let limit = limit.min(MEMBER_SEARCH_MAX_LIMIT);
+        let limit = limit.clamp(1, MEMBER_SEARCH_MAX_LIMIT);
         let nonce = format!("mention-ac-{:016x}", query_hash(guild_id, &query));
-        self.send_gateway_command(GatewayCommand::RequestGuildMembers {
+        self.send_gateway_command(GatewayCommand::SearchGuildMembers {
             guild_id,
             query,
             limit,
             presences: true,
-            nonce: Some(nonce),
+            nonce,
         })
     }
 

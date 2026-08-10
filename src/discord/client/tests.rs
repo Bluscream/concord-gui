@@ -1620,6 +1620,17 @@ fn guild_member_search_validates_query_and_caps_limit() {
         Err(tokio::sync::mpsc::error::TryRecvError::Empty)
     ));
 
+    client
+        .search_guild_members(Id::new(1), "neo".to_owned(), 0)
+        .expect("valid search should queue with a nonzero limit");
+    let minimum_limit_command = gateway_commands
+        .try_recv()
+        .expect("search command should be queued");
+    let GatewayCommand::SearchGuildMembers { limit, .. } = minimum_limit_command else {
+        panic!("expected guild member search command");
+    };
+    assert_eq!(limit, 1);
+
     let long_query = "İ".repeat(MEMBER_SEARCH_MAX_QUERY_CHARS + 10);
     client
         .search_guild_members(Id::new(1), long_query, 99)
@@ -1628,7 +1639,7 @@ fn guild_member_search_validates_query_and_caps_limit() {
     let command = gateway_commands
         .try_recv()
         .expect("search command should be queued");
-    let GatewayCommand::RequestGuildMembers {
+    let GatewayCommand::SearchGuildMembers {
         guild_id,
         query,
         limit,
@@ -1642,7 +1653,6 @@ fn guild_member_search_validates_query_and_caps_limit() {
     assert_eq!(query.chars().count(), MEMBER_SEARCH_MAX_QUERY_CHARS);
     assert_eq!(limit, MEMBER_SEARCH_MAX_LIMIT);
     assert!(presences);
-    let nonce = nonce.expect("member search should include nonce");
     assert!(nonce.starts_with("mention-ac-"));
     assert!(nonce.len() <= 32);
     assert!(!nonce.contains(&query));

@@ -105,7 +105,7 @@ fn missing_members_for_effect(
     state: &DashboardState,
     now: std::time::Instant,
 ) -> Vec<(Id<GuildMarker>, Vec<Id<UserMarker>>)> {
-    let mut missing = state.observed_member_hydration_requests(now);
+    let mut missing = Vec::new();
     let messages = match event {
         AppEvent::MessageCreate { message } => Some(std::slice::from_ref(message)),
         AppEvent::MessageHistoryLoaded { messages, .. }
@@ -149,6 +149,10 @@ fn missing_members_for_effect(
             users.iter().map(|user| user.user_id),
         ));
     }
+    // Persistent voice, typing, thread, and permission demands are retryable
+    // background work. Append them only after users surfaced by this event so
+    // the first 100-ID Gateway request resolves the active view.
+    missing.extend(state.observed_member_hydration_requests(now));
     missing
 }
 
@@ -577,6 +581,64 @@ mod tests {
                 "{label}"
             );
         }
+    }
+
+    #[test]
+    fn visible_message_authors_take_the_first_member_hydration_batch() {
+        let guild_id = Id::new(1);
+        let text_channel_id = Id::new(2);
+        let voice_channel_id = Id::new(3);
+        let author_id = Id::new(9_999);
+        let mut state = DashboardState::new();
+        state.push_event(guild_create_event(GuildCreateFixture {
+            channels: vec![
+                channel_info(guild_id, text_channel_id, None, "general", "GuildText"),
+                channel_info(guild_id, voice_channel_id, None, "Lobby", "GuildVoice"),
+            ],
+            roles: vec![RoleInfo::test(Id::new(guild_id.get()), "@everyone")],
+            ..GuildCreateFixture::new(guild_id)
+        }));
+
+        let background_user_ids = (1_000..1_100).map(Id::new).collect::<Vec<_>>();
+        for user_id in &background_user_ids {
+            state.push_event(AppEvent::VoiceStateUpdate {
+                state: VoiceStateInfo::test(guild_id, Some(voice_channel_id), *user_id),
+            });
+        }
+
+        process_effect_in_default_context(
+            &mut state,
+            AppEvent::MessageHistoryLoaded {
+                channel_id: text_channel_id,
+                before: None,
+                messages: vec![message_info(
+                    guild_id,
+                    text_channel_id,
+                    Id::new(20),
+                    author_id,
+                )],
+            },
+        );
+
+        let commands = state.drain_pending_commands();
+        let [
+            AppCommand::LoadGuildMembersByIds {
+                guild_id: first_guild_id,
+                user_ids: first_user_ids,
+            },
+            AppCommand::LoadGuildMembersByIds {
+                guild_id: second_guild_id,
+                user_ids: second_user_ids,
+            },
+        ] = commands.as_slice()
+        else {
+            panic!("expected two member hydration batches, got {commands:?}");
+        };
+        assert_eq!(*first_guild_id, guild_id);
+        assert_eq!(*second_guild_id, guild_id);
+        assert_eq!(first_user_ids.first(), Some(&author_id));
+        assert_eq!(first_user_ids.len(), 100);
+        assert_eq!(second_user_ids, &background_user_ids[99..]);
     }
 
     #[test]

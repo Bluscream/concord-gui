@@ -61,7 +61,12 @@ pub(super) fn view_signature(state: &DashboardState) -> u64 {
     hash_dbg(&mut hasher, &state.stream_info_sections());
 
     // Message pane: the live chat plus its footers.
-    hash_dbg(&mut hasher, &state.visible_messages());
+    let visible_messages = state.visible_messages();
+    visible_messages.len().hash(&mut hasher);
+    for message in visible_messages {
+        hash_dbg(&mut hasher, message);
+        hash_dbg(&mut hasher, &state.message_author_role_color(message));
+    }
     // Loading history around a referenced message moves the selection from a
     // background effect. Hash its stable id so that move schedules the frame
     // which centers the target, even when the currently visible rows did not
@@ -124,6 +129,7 @@ pub(super) fn view_signature(state: &DashboardState) -> u64 {
                 entry.username(),
                 entry.is_bot(),
                 entry.status(),
+                state.member_role_color(entry),
             ),
         );
     }
@@ -181,10 +187,11 @@ pub(super) fn view_signature(state: &DashboardState) -> u64 {
 mod tests {
     use super::view_signature;
     use crate::discord::ids::Id;
+    use crate::discord::test_builders::{GuildCreateFixture, guild_create_event};
     use crate::discord::{
         ActivityInfo, ActivityKind, AppCommand, AppEvent, ChannelInfo, ChannelRecipientInfo,
-        MessageHistoryLoadTarget, MessageInfo, MessageSearchPage, PresenceEventFields,
-        PresenceStatus, StreamCreateInfo, StreamUpdateInfo, VoiceScope,
+        MemberInfo, MessageHistoryLoadTarget, MessageInfo, MessageSearchPage, PresenceEventFields,
+        PresenceStatus, RoleInfo, StreamCreateInfo, StreamUpdateInfo, VoiceScope,
     };
     use crate::tui::keybindings::OptionsCategoryShortcut;
     use crate::tui::state::{DashboardState, FocusPane};
@@ -396,5 +403,68 @@ mod tests {
                 });
             });
         }
+    }
+
+    #[test]
+    fn view_signature_tracks_visible_role_color_dependencies() {
+        let guild_id = Id::new(1);
+        let channel_id = Id::new(2);
+        let author_id = Id::new(99);
+        let role_id = Id::new(100);
+        let mut state = DashboardState::new();
+        state.push_event(guild_create_event(GuildCreateFixture {
+            channels: vec![ChannelInfo {
+                guild_id: Some(guild_id),
+                position: Some(0),
+                name: "general".to_owned(),
+                ..ChannelInfo::test(channel_id, "GuildText")
+            }],
+            roles: vec![RoleInfo {
+                color: Some(0x11_22_33),
+                ..RoleInfo::test(role_id, "Colored")
+            }],
+            ..GuildCreateFixture::new(guild_id)
+        }));
+        state.confirm_selected_guild();
+        state.confirm_selected_channel();
+        state.set_message_view_height(10);
+        state.push_event(AppEvent::MessageHistoryLoaded {
+            channel_id,
+            before: None,
+            messages: vec![MessageInfo {
+                guild_id: Some(guild_id),
+                author_id,
+                author: "Alice".to_owned(),
+                content: Some("hello".to_owned()),
+                ..MessageInfo::test(channel_id, Id::new(20))
+            }],
+        });
+
+        let message = state.visible_messages()[0];
+        assert_eq!(state.message_author_role_color(message), None);
+        assert_signature_changes("message author member roles", &mut state, |state| {
+            state.push_event(AppEvent::GuildMemberUpsert {
+                guild_id,
+                member: MemberInfo {
+                    username: Some("alice".to_owned()),
+                    role_ids: vec![role_id],
+                    ..MemberInfo::test(author_id, "Alice")
+                },
+            });
+        });
+        let message = state.visible_messages()[0];
+        assert_eq!(state.message_author_role_color(message), Some(0x11_22_33));
+
+        assert_signature_changes("guild role color", &mut state, |state| {
+            state.push_event(AppEvent::GuildRoleUpsert {
+                guild_id,
+                role: RoleInfo {
+                    color: Some(0x44_55_66),
+                    ..RoleInfo::test(role_id, "Colored")
+                },
+            });
+        });
+        let message = state.visible_messages()[0];
+        assert_eq!(state.message_author_role_color(message), Some(0x44_55_66));
     }
 }

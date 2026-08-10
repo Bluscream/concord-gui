@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeSet, HashMap, HashSet, VecDeque},
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -43,12 +43,12 @@ pub(crate) use parser::{parse_channel_info, parse_message_info};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GatewayCommand {
-    RequestGuildMembers {
+    SearchGuildMembers {
         guild_id: Id<GuildMarker>,
         query: String,
         limit: u16,
         presences: bool,
-        nonce: Option<String>,
+        nonce: String,
     },
     RequestGuildMembersByIds {
         guild_id: Id<GuildMarker>,
@@ -144,7 +144,6 @@ const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(30);
 const GATEWAY_SEND_LIMIT: usize = 120;
 const GATEWAY_SEND_WINDOW: Duration = Duration::from_secs(60);
 const GATEWAY_SHUTDOWN_LEAVE_TIMEOUT: Duration = Duration::from_millis(1_500);
-const GUILD_MEMBER_REQUEST_INTERVAL: Duration = Duration::from_secs(30);
 const GUILD_MEMBER_REQUEST_RESPONSE_TTL: Duration = Duration::from_secs(2 * 60);
 const MAX_PENDING_GUILD_MEMBER_REQUESTS: usize = 512;
 const MAX_SENT_GUILD_MEMBER_REQUESTS: usize = 512;
@@ -180,11 +179,6 @@ struct GatewaySendWindow {
 struct SubscriptionDeduper {
     direct_messages: HashSet<Id<ChannelMarker>>,
     guild_channels: HashMap<GuildChannelSubscriptionKey, Vec<(u32, u32)>>,
-}
-
-#[derive(Default)]
-struct GuildMemberRequestLimiter {
-    next_available: HashMap<Id<GuildMarker>, Instant>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -229,7 +223,6 @@ struct SentGuildMemberRequest {
 }
 
 struct GuildMemberRequestScheduler {
-    limiter: GuildMemberRequestLimiter,
     pending: VecDeque<PendingGuildMemberRequest>,
     in_flight: Option<ScheduledGuildMemberRequest>,
     awaiting_response: VecDeque<SentGuildMemberRequest>,
@@ -247,24 +240,9 @@ struct GatewayPresence {
     activities: Vec<ActivityInfo>,
 }
 
-impl GuildMemberRequestLimiter {
-    fn reserve(&mut self, guild_id: Id<GuildMarker>, now: Instant) -> Duration {
-        let send_at = self
-            .next_available
-            .get(&guild_id)
-            .copied()
-            .filter(|next| *next > now)
-            .unwrap_or(now);
-        self.next_available
-            .insert(guild_id, send_at + GUILD_MEMBER_REQUEST_INTERVAL);
-        send_at.saturating_duration_since(now)
-    }
-}
-
 impl Default for GuildMemberRequestScheduler {
     fn default() -> Self {
         Self {
-            limiter: GuildMemberRequestLimiter::default(),
             pending: VecDeque::new(),
             in_flight: None,
             awaiting_response: VecDeque::new(),
@@ -280,13 +258,9 @@ impl GuildMemberRequest {
                 query,
                 limit,
                 presences,
-            } => request_guild_members_payload(
-                self.guild_id,
-                query,
-                *limit,
-                *presences,
-                Some(&self.nonce),
-            ),
+            } => {
+                search_guild_members_payload(self.guild_id, query, *limit, *presences, &self.nonce)
+            }
             GuildMemberRequestKind::ByIds {
                 user_ids,
                 presences,
@@ -299,12 +273,8 @@ impl GuildMemberRequest {
         }
     }
 
-    fn is_coalescible_search(&self) -> bool {
-        matches!(
-            &self.kind,
-            GuildMemberRequestKind::Search { query, limit, .. }
-                if !query.is_empty() || *limit > 0
-        )
+    fn is_search(&self) -> bool {
+        matches!(&self.kind, GuildMemberRequestKind::Search { .. })
     }
 }
 
@@ -315,13 +285,13 @@ impl GuildMemberRequestScheduler {
         query: String,
         limit: u16,
         presences: bool,
-        nonce: Option<String>,
+        nonce: String,
         now: Instant,
     ) -> bool {
         self.prune_awaiting(now);
         let request = GuildMemberRequest {
             guild_id,
-            nonce: nonce.unwrap_or_else(|| self.next_nonce()),
+            nonce,
             kind: GuildMemberRequestKind::Search {
                 query,
                 limit,
@@ -331,10 +301,11 @@ impl GuildMemberRequestScheduler {
         self.awaiting_response
             .retain(|sent| sent.request.nonce != request.nonce);
 
-        if request.is_coalescible_search()
-            && let Some(pending) = self.pending.iter_mut().rev().find(|pending| {
-                pending.request.guild_id == guild_id && pending.request.is_coalescible_search()
-            })
+        if let Some(pending) = self
+            .pending
+            .iter_mut()
+            .rev()
+            .find(|pending| pending.request.guild_id == guild_id && pending.request.is_search())
         {
             pending.request = request;
             return true;
@@ -344,7 +315,7 @@ impl GuildMemberRequestScheduler {
             let Some(position) = self
                 .pending
                 .iter()
-                .position(|pending| pending.request.is_coalescible_search())
+                .position(|pending| pending.request.is_search())
             else {
                 return false;
             };
@@ -362,9 +333,11 @@ impl GuildMemberRequestScheduler {
         now: Instant,
     ) {
         self.prune_awaiting(now);
-        let mut remaining = user_ids;
-        remaining.sort_unstable();
-        remaining.dedup();
+        let mut seen = BTreeSet::new();
+        let mut remaining = user_ids
+            .into_iter()
+            .filter(|user_id| seen.insert(*user_id))
+            .collect::<Vec<_>>();
 
         let compatible_requests = self.pending.iter().filter(|pending| {
             pending.request.guild_id == guild_id
@@ -435,7 +408,7 @@ impl GuildMemberRequestScheduler {
             .pending
             .iter()
             .enumerate()
-            .filter_map(|(index, pending)| pending.request.is_coalescible_search().then_some(index))
+            .filter_map(|(index, pending)| pending.request.is_search().then_some(index))
             .take(overflow)
             .collect::<Vec<_>>();
         for position in positions.into_iter().rev() {
@@ -447,10 +420,10 @@ impl GuildMemberRequestScheduler {
         if self.pending.len() >= MAX_PENDING_GUILD_MEMBER_REQUESTS {
             return false;
         }
-        let guild_id = request.guild_id;
-        let send_at = now + self.limiter.reserve(guild_id, now);
-        self.pending
-            .push_back(PendingGuildMemberRequest { request, send_at });
+        self.pending.push_back(PendingGuildMemberRequest {
+            request,
+            send_at: now,
+        });
         true
     }
 
@@ -458,11 +431,13 @@ impl GuildMemberRequestScheduler {
         // Hydration requests resolve concrete users already visible in the UI,
         // so losing them is worse than briefly exceeding the search queue's
         // soft memory bound. IDs are deduplicated and grouped into 100-member
-        // payloads here, while the per-guild limiter still controls sends.
-        let guild_id = request.guild_id;
-        let send_at = now + self.limiter.reserve(guild_id, now);
-        self.pending
-            .push_back(PendingGuildMemberRequest { request, send_at });
+        // payloads here. The shared Gateway writer enforces the connection-wide
+        // send budget, while RATE_LIMITED dispatches provide any request-specific
+        // delay that Discord requires.
+        self.pending.push_back(PendingGuildMemberRequest {
+            request,
+            send_at: now,
+        });
     }
 
     fn next_nonce(&mut self) -> String {
@@ -507,17 +482,16 @@ impl GuildMemberRequestScheduler {
             .in_flight
             .take()
             .expect("sent guild member request exists");
-        let guild_id = completed.request.guild_id;
         if let Some(retry_at) = completed.retry_at {
+            let guild_id = completed.request.guild_id;
             self.pending.push_front(PendingGuildMemberRequest {
                 request: completed.request,
                 send_at: retry_at,
             });
-            self.reschedule_guild(guild_id, retry_at);
+            self.delay_guild_until(guild_id, retry_at);
             return;
         }
 
-        self.reschedule_guild(guild_id, sent_at + GUILD_MEMBER_REQUEST_INTERVAL);
         if completed.accepted {
             return;
         }
@@ -539,15 +513,11 @@ impl GuildMemberRequestScheduler {
         if in_flight.accepted {
             return;
         }
-        let guild_id = in_flight.request.guild_id;
-        let send_at = in_flight
-            .retry_at
-            .unwrap_or(now + GUILD_MEMBER_REQUEST_INTERVAL);
+        let send_at = in_flight.retry_at.unwrap_or(now);
         self.pending.push_front(PendingGuildMemberRequest {
             request: in_flight.request,
             send_at,
         });
-        self.reschedule_guild(guild_id, send_at);
     }
 
     fn apply_rate_limit(
@@ -559,9 +529,10 @@ impl GuildMemberRequestScheduler {
     ) {
         self.prune_awaiting(now);
         let retry_at = now + retry_after;
-        let has_newer_search = self.pending.iter().any(|pending| {
-            pending.request.guild_id == guild_id && pending.request.is_coalescible_search()
-        });
+        let has_newer_search = self
+            .pending
+            .iter()
+            .any(|pending| pending.request.guild_id == guild_id && pending.request.is_search());
 
         let in_flight_matches = self.in_flight.as_ref().is_some_and(|in_flight| {
             in_flight.request.guild_id == guild_id
@@ -572,14 +543,14 @@ impl GuildMemberRequestScheduler {
                 .in_flight
                 .as_mut()
                 .expect("matching guild member request is in flight");
-            if in_flight.request.is_coalescible_search() && has_newer_search {
+            if in_flight.request.is_search() && has_newer_search {
                 in_flight.accepted = true;
                 in_flight.retry_at = None;
-                self.reschedule_guild(guild_id, retry_at);
             } else {
                 in_flight.retry_at = Some(retry_at);
                 in_flight.accepted = false;
             }
+            self.delay_guild_until(guild_id, retry_at);
             return;
         }
 
@@ -598,14 +569,14 @@ impl GuildMemberRequestScheduler {
                 .awaiting_response
                 .remove(position)
                 .expect("rate-limited guild member request exists");
-            if !sent.request.is_coalescible_search() || !has_newer_search {
+            if !sent.request.is_search() || !has_newer_search {
                 self.pending.push_front(PendingGuildMemberRequest {
                     request: sent.request,
                     send_at: retry_at,
                 });
             }
         }
-        self.reschedule_guild(guild_id, retry_at);
+        self.delay_guild_until(guild_id, retry_at);
     }
 
     fn acknowledge(&mut self, nonce: &str) {
@@ -632,17 +603,14 @@ impl GuildMemberRequestScheduler {
         }
     }
 
-    fn reschedule_guild(&mut self, guild_id: Id<GuildMarker>, earliest: Instant) {
-        let mut next_available = earliest;
+    fn delay_guild_until(&mut self, guild_id: Id<GuildMarker>, earliest: Instant) {
         for pending in self
             .pending
             .iter_mut()
             .filter(|pending| pending.request.guild_id == guild_id)
         {
-            pending.send_at = pending.send_at.max(next_available);
-            next_available = pending.send_at + GUILD_MEMBER_REQUEST_INTERVAL;
+            pending.send_at = pending.send_at.max(earliest);
         }
-        self.limiter.next_available.insert(guild_id, next_available);
     }
 
     fn prune_awaiting(&mut self, now: Instant) {
@@ -656,17 +624,16 @@ impl GuildMemberRequestScheduler {
     fn prepare_reconnect(&mut self, now: Instant) {
         self.prune_awaiting(now);
         self.cancel_in_flight(now);
-        self.recover_awaiting(now + GUILD_MEMBER_REQUEST_INTERVAL);
+        self.recover_awaiting(now);
     }
 
     fn recover_awaiting(&mut self, earliest: Instant) {
         let mut recovered = VecDeque::new();
         let mut recovered_guilds = HashSet::new();
         while let Some(sent) = self.awaiting_response.pop_back() {
-            let superseded_search = sent.request.is_coalescible_search()
+            let superseded_search = sent.request.is_search()
                 && self.pending.iter().chain(recovered.iter()).any(|pending| {
-                    pending.request.guild_id == sent.request.guild_id
-                        && pending.request.is_coalescible_search()
+                    pending.request.guild_id == sent.request.guild_id && pending.request.is_search()
                 });
             if !superseded_search {
                 recovered_guilds.insert(sent.request.guild_id);
@@ -679,7 +646,7 @@ impl GuildMemberRequestScheduler {
         recovered.append(&mut self.pending);
         self.pending = recovered;
         for guild_id in recovered_guilds {
-            self.reschedule_guild(guild_id, earliest);
+            self.delay_guild_until(guild_id, earliest);
         }
     }
 
@@ -687,9 +654,8 @@ impl GuildMemberRequestScheduler {
         self.prune_awaiting(now);
         self.cancel_in_flight(now);
         self.recover_awaiting(now);
-        self.limiter = GuildMemberRequestLimiter::default();
         for pending in &mut self.pending {
-            pending.send_at = now + self.limiter.reserve(pending.request.guild_id, now);
+            pending.send_at = pending.send_at.max(now);
         }
     }
 }
@@ -1455,7 +1421,7 @@ fn dispatch_command(
             | GatewayCommand::DeleteStream { .. }
     );
     let payload = match command {
-        GatewayCommand::RequestGuildMembers {
+        GatewayCommand::SearchGuildMembers {
             guild_id,
             query,
             limit,
@@ -1898,25 +1864,22 @@ fn build_resume_payload(token: &str, session: &SessionState) -> String {
     .to_string()
 }
 
-fn request_guild_members_payload(
+fn search_guild_members_payload(
     guild_id: Id<GuildMarker>,
     query: &str,
     limit: u16,
     presences: bool,
-    nonce: Option<&str>,
+    nonce: &str,
 ) -> String {
-    let mut data = json!({
-        "guild_id": guild_id.to_string(),
-        "query": query,
-        "limit": limit,
-        "presences": presences,
-    });
-    if let Some(nonce) = nonce {
-        data["nonce"] = json!(nonce);
-    }
     json!({
         "op": 8,
-        "d": data,
+        "d": {
+            "guild_id": [guild_id.to_string()],
+            "query": query,
+            "limit": limit,
+            "presences": presences,
+            "nonce": nonce,
+        },
     })
     .to_string()
 }
@@ -1935,7 +1898,7 @@ fn request_guild_members_by_ids_payload(
     json!({
         "op": 8,
         "d": {
-            "guild_id": guild_id.to_string(),
+            "guild_id": [guild_id.to_string()],
             "user_ids": user_ids,
             "presences": presences,
             "nonce": nonce,

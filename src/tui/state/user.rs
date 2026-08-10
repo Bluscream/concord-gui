@@ -18,6 +18,7 @@ use super::member_grouping::{
 };
 
 const MAX_GUILD_MEMBER_BY_ID_REQUEST_USERS: usize = 100;
+type OrderedUserIds = (BTreeSet<Id<UserMarker>>, Vec<Id<UserMarker>>);
 
 impl DashboardState {
     pub fn user_activities(&self, user_id: Id<UserMarker>) -> &[ActivityInfo] {
@@ -86,16 +87,32 @@ impl DashboardState {
         &self,
         messages: &[MessageInfo],
     ) -> Vec<(Id<GuildMarker>, Vec<Id<UserMarker>>)> {
+        let guild_ids = messages
+            .iter()
+            .map(|message| {
+                message.guild_id.or_else(|| {
+                    self.discord
+                        .cache
+                        .channel(message.channel_id)
+                        .and_then(|channel| channel.guild_id)
+                })
+            })
+            .collect::<Vec<_>>();
         let mut users = Vec::new();
-        for message in messages {
-            let channel = self.discord.cache.channel(message.channel_id);
-            let Some(guild_id) = message
-                .guild_id
-                .or_else(|| channel.and_then(|channel| channel.guild_id))
-            else {
+        for (message, guild_id) in messages.iter().zip(&guild_ids) {
+            let Some(guild_id) = guild_id else {
                 continue;
             };
-            users.push((guild_id, message.author_id));
+            users.push((*guild_id, message.author_id));
+        }
+
+        // The first Gateway batch must contain the names painted in the
+        // message rows. Related users still need hydration, but they cannot
+        // displace authors when one history page contains over 100 user IDs.
+        for (message, guild_id) in messages.iter().zip(guild_ids) {
+            let Some(guild_id) = guild_id else {
+                continue;
+            };
             users.extend(
                 message
                     .interaction
@@ -208,15 +225,18 @@ impl DashboardState {
         &self,
         users: impl IntoIterator<Item = (Id<GuildMarker>, Id<UserMarker>)>,
     ) -> Vec<(Id<GuildMarker>, Vec<Id<UserMarker>>)> {
-        let mut by_guild: BTreeMap<Id<GuildMarker>, BTreeSet<Id<UserMarker>>> = BTreeMap::new();
+        let mut by_guild: BTreeMap<Id<GuildMarker>, OrderedUserIds> = BTreeMap::new();
         for (guild_id, user_id) in users {
             if self.discord.cache.member_needs_hydration(guild_id, user_id) {
-                by_guild.entry(guild_id).or_default().insert(user_id);
+                let (seen, ordered) = by_guild.entry(guild_id).or_default();
+                if seen.insert(user_id) {
+                    ordered.push(user_id);
+                }
             }
         }
         by_guild
             .into_iter()
-            .map(|(guild_id, user_ids)| (guild_id, user_ids.into_iter().collect()))
+            .map(|(guild_id, (_, user_ids))| (guild_id, user_ids))
             .collect()
     }
 

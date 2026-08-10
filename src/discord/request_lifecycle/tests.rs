@@ -448,7 +448,7 @@ fn user_note_request_dedupes_until_success_or_failure() {
 }
 
 #[test]
-fn member_hydration_dedupes_across_sources_until_member_arrives_or_ttl_expires() {
+fn member_hydration_preserves_priority_order_until_member_arrives_or_ttl_expires() {
     let mut requests = MemberBatchRequests::default();
     let guild_id = Id::new(1);
     let user_id = Id::new(10);
@@ -458,12 +458,12 @@ fn member_hydration_dedupes_across_sources_until_member_arrives_or_ttl_expires()
     assert_eq!(
         requests.next(
             vec![
-                (guild_id, vec![user_id]),
+                (guild_id, vec![other_user_id]),
                 (guild_id, vec![user_id, other_user_id]),
             ],
             now,
         ),
-        vec![(guild_id, vec![user_id, other_user_id])]
+        vec![(guild_id, vec![other_user_id, user_id])]
     );
     assert_eq!(
         requests.next(vec![(guild_id, vec![user_id, other_user_id])], now),
