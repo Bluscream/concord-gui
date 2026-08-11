@@ -85,16 +85,8 @@ fn rest_headers_and_persisted_identifiers_match_web_fingerprint_plan() {
             .and_then(|value| value.to_str().ok()),
         Some("installation-id")
     );
-    assert_eq!(
-        headers
-            .get(CACHE_CONTROL)
-            .and_then(|value| value.to_str().ok()),
-        Some("no-cache")
-    );
-    assert_eq!(
-        headers.get(PRAGMA).and_then(|value| value.to_str().ok()),
-        Some("no-cache")
-    );
+    assert!(headers.get(CACHE_CONTROL).is_none());
+    assert!(headers.get(PRAGMA).is_none());
     assert_eq!(
         headers
             .get("Priority")
@@ -156,12 +148,7 @@ fn rest_headers_and_persisted_identifiers_match_web_fingerprint_plan() {
             .and_then(|value| value.to_str().ok()),
         Some(fingerprint.timezone.as_str())
     );
-    assert_eq!(
-        headers
-            .get("X-Debug-Options")
-            .and_then(|value| value.to_str().ok()),
-        Some("bugReporterEnabled")
-    );
+    assert!(headers.get("X-Debug-Options").is_none());
     assert!(headers.get("X-Super-Properties").is_some());
     assert!(headers.get("X-Fingerprint").is_none());
     assert_eq!(

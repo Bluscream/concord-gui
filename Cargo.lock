@@ -929,6 +929,7 @@ dependencies = [
  "dispatch2",
  "emojis",
  "fast_image_resize",
+ "flate2",
  "futures",
  "global-hotkey",
  "glow",

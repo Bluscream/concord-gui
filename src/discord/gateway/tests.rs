@@ -1,13 +1,14 @@
 use super::{
-    ConnectionOutcome, GATEWAY_SEND_LIMIT, GATEWAY_SEND_WINDOW, GatewayCommand, GatewayPresence,
-    GatewaySendWindow, GatewaySender, GatewaySessionResources, GuildMemberRequestKind,
-    GuildMemberRequestScheduler, HeartbeatAckState, MAX_PENDING_GUILD_MEMBER_REQUESTS,
-    SessionState, SubscriptionDeduper, USER_ACCOUNT_CAPABILITIES, build_identify_payload,
-    build_resume_payload, close_code_outcome, create_stream_payload, delete_stream_payload,
-    direct_message_subscribe_payload, dispatch_command, gateway_guild_member_rate_limit,
-    gateway_request, guild_channel_subscribe_payload, presence_update_payload,
-    ready_installation_id, request_guild_members_by_ids_payload, search_guild_members_payload,
-    voice_state_update_payload, watch_stream_payload,
+    ConnectionOutcome, GATEWAY_SEND_LIMIT, GATEWAY_SEND_WINDOW, GATEWAY_URL, GatewayClientState,
+    GatewayCommand, GatewayPresence, GatewaySendWindow, GatewaySender, GatewaySessionResources,
+    GatewayZlibDecoder, GuildMemberRequestKind, GuildMemberRequestScheduler, HeartbeatAckState,
+    MAX_PENDING_GUILD_MEMBER_REQUESTS, SessionState, SubscriptionDeduper,
+    USER_ACCOUNT_CAPABILITIES, build_identify_payload, build_resume_payload, close_code_outcome,
+    create_stream_payload, delete_stream_payload, direct_message_subscribe_payload,
+    dispatch_command, gateway_guild_member_rate_limit, gateway_request,
+    guild_channel_subscribe_payload, presence_update_payload, ready_installation_id,
+    request_guild_members_by_ids_payload, search_guild_members_payload, voice_state_update_payload,
+    watch_stream_payload,
 };
 use crate::discord::fingerprint::{
     CLIENT_BROWSER, CLIENT_BROWSER_VERSION, CLIENT_BUILD_NUMBER, ClientFingerprint,
@@ -17,9 +18,11 @@ use crate::discord::ids::{
     Id,
     marker::{ChannelMarker, EmojiMarker, GuildMarker, UserMarker},
 };
+use crate::discord::state::DiscordState;
 use crate::discord::{ActivityEmoji, ActivityInfo, ActivityKind, PresenceStatus, VoiceScope};
+use flate2::{Compression, write::ZlibEncoder};
 use serde_json::json;
-use std::time::Duration;
+use std::{io::Write, time::Duration};
 use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::http::header::{
     ACCEPT_LANGUAGE, CACHE_CONTROL, ORIGIN, PRAGMA, USER_AGENT,
@@ -389,12 +392,104 @@ fn gateway_handshake_headers_match_shared_fingerprint() {
 }
 
 #[test]
+fn gateway_urls_request_zlib_stream_compression() {
+    assert_eq!(
+        GATEWAY_URL,
+        "wss://gateway.discord.gg/?v=9&encoding=json&compress=zlib-stream"
+    );
+
+    let session = SessionState {
+        resume_url: Some("wss://gateway-us-east1-b.discord.gg".to_owned()),
+        ..SessionState::default()
+    };
+    assert_eq!(
+        session.next_url(),
+        "wss://gateway-us-east1-b.discord.gg/?v=9&encoding=json&compress=zlib-stream"
+    );
+}
+
+#[test]
+fn gateway_zlib_decoder_keeps_stream_state_across_fragmented_payloads() {
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    let mut decoder = GatewayZlibDecoder::default();
+
+    encoder
+        .write_all(br#"{"op":10,"d":{"heartbeat_interval":41250}}"#)
+        .expect("first gateway payload should be compressed");
+    encoder
+        .flush()
+        .expect("first gateway payload should be sync-flushed");
+    let first = encoder.get_ref().clone();
+    let split_at = first.len() / 2;
+
+    assert_eq!(
+        decoder
+            .decode(&first[..split_at])
+            .expect("first compressed fragment should be accepted"),
+        None
+    );
+    assert_eq!(
+        decoder
+            .decode(&first[split_at..])
+            .expect("second compressed fragment should complete the payload")
+            .as_deref(),
+        Some(r#"{"op":10,"d":{"heartbeat_interval":41250}}"#)
+    );
+
+    let second_start = encoder.get_ref().len();
+    encoder
+        .write_all(br#"{"op":11}"#)
+        .expect("second gateway payload should be compressed");
+    encoder
+        .flush()
+        .expect("second gateway payload should be sync-flushed");
+    assert_eq!(
+        decoder
+            .decode(&encoder.get_ref()[second_start..])
+            .expect("the existing zlib stream should decode another payload")
+            .as_deref(),
+        Some(r#"{"op":11}"#)
+    );
+}
+
+#[test]
+fn gateway_client_state_uses_versions_and_message_ids_concord_tracks() {
+    let mut state = DiscordState::default();
+    let notifications = state.notifications_mut();
+    notifications.read_state_version = Some(12);
+    notifications.user_guild_settings_version = Some(34);
+    notifications
+        .read_states
+        .entry(Id::new(1))
+        .or_default()
+        .last_acked_message_id = Some(Id::new(56));
+
+    assert_eq!(
+        GatewayClientState::from_discord_state(&state),
+        GatewayClientState {
+            highest_last_message_id: 56,
+            read_state_version: 12,
+            user_guild_settings_version: 34,
+        }
+    );
+}
+
+#[test]
 fn identify_payload_carries_user_account_capabilities() {
     let fingerprint = ClientFingerprint::new(CLIENT_BUILD_NUMBER);
     fingerprint.set_installation_id_for_test("installation-id");
-    let payload: serde_json::Value =
-        serde_json::from_str(&build_identify_payload("dummy-token", &fingerprint, None))
-            .expect("identify payload should be valid json");
+    let client_state = GatewayClientState {
+        highest_last_message_id: 123,
+        read_state_version: 4,
+        user_guild_settings_version: 5,
+    };
+    let payload: serde_json::Value = serde_json::from_str(&build_identify_payload(
+        "dummy-token",
+        &fingerprint,
+        None,
+        client_state,
+    ))
+    .expect("identify payload should be valid json");
     assert_eq!(payload["op"].as_u64(), Some(2));
     assert_eq!(
         payload["d"]["capabilities"].as_u64(),
@@ -441,6 +536,18 @@ fn identify_payload_carries_user_account_capabilities() {
         Some("installation-id")
     );
     assert_eq!(payload["d"]["compress"].as_bool(), Some(false));
+    assert_eq!(
+        payload["d"]["client_state"]["highest_last_message_id"].as_str(),
+        Some("123")
+    );
+    assert_eq!(
+        payload["d"]["client_state"]["read_state_version"].as_i64(),
+        Some(4)
+    );
+    assert_eq!(
+        payload["d"]["client_state"]["user_guild_settings_version"].as_i64(),
+        Some(5)
+    );
     assert_eq!(payload["d"]["presence"]["status"].as_str(), Some("unknown"));
     assert_eq!(
         ready_installation_id(&json!({
@@ -464,6 +571,7 @@ fn reidentify_payload_uses_the_last_requested_presence() {
         "dummy-token",
         &fingerprint,
         Some(&presence),
+        GatewayClientState::default(),
     ))
     .expect("reidentify payload should be valid json");
 

@@ -8,6 +8,7 @@ use crate::discord::ids::{
     Id,
     marker::{ChannelMarker, GuildMarker, UserMarker},
 };
+use flate2::{Decompress, FlushDecompress, Status};
 use futures::{SinkExt, StreamExt};
 use rand::Rng;
 use serde_json::{Value, json};
@@ -112,9 +113,9 @@ pub(crate) struct GatewayRuntime {
 
 /// Discord user-account gateway endpoint. We pin to `v=9` because the v9
 /// dispatch shapes line up with everything `parse_user_account_event` already
-/// understands. `compress=false` keeps the wire human-readable. Switching to
-/// `zlib-stream` is a follow-up.
-const GATEWAY_URL: &str = "wss://gateway.discord.gg/?v=9&encoding=json";
+/// understands. Discord's browser client uses the stateful `zlib-stream`
+/// transport mode, which keeps large READY payloads bounded on the wire.
+const GATEWAY_URL: &str = "wss://gateway.discord.gg/?v=9&encoding=json&compress=zlib-stream";
 
 /// Bitmask Discord checks before delivering user-account-only payloads such as
 /// `READY_SUPPLEMENTAL.merged_presences.friends` and per-friend
@@ -132,10 +133,11 @@ const GATEWAY_URL: &str = "wss://gateway.discord.gg/?v=9&encoding=json";
 const USER_ACCOUNT_CAPABILITIES: u64 = 253;
 
 // Some user-account READY payloads exceed tungstenite's default 16 MiB frame
-// cap before Discord has a chance to split the initial state across follow-up
-// dispatches. Keep the limit bounded, but large enough for accounts with many
-// guilds and channels until gateway compression is implemented.
+// cap. Keep both compressed input and decompressed output bounded while still
+// allowing large accounts to finish their initial sync.
 const GATEWAY_WEBSOCKET_LIMIT: usize = 64 << 20;
+const ZLIB_STREAM_SUFFIX: [u8; 4] = [0x00, 0x00, 0xff, 0xff];
+const ZLIB_OUTPUT_CHUNK_SIZE: usize = 8 << 10;
 
 const RECONNECT_BASE_DELAY: Duration = Duration::from_millis(500);
 const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(30);
@@ -151,6 +153,143 @@ const MAX_GATEWAY_RETRY_DELAY: Duration = Duration::from_secs(30 * 60);
 
 type GatewayStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// Discord uses one zlib stream for the lifetime of a Gateway connection.
+/// Individual JSON payloads end with a sync-flush marker and may span several
+/// WebSocket binary messages, so neither the input buffer nor the inflater can
+/// be recreated for each frame.
+struct GatewayZlibDecoder {
+    inflater: Decompress,
+    pending: Vec<u8>,
+}
+
+impl Default for GatewayZlibDecoder {
+    fn default() -> Self {
+        Self {
+            inflater: Decompress::new(true),
+            pending: Vec::new(),
+        }
+    }
+}
+
+impl GatewayZlibDecoder {
+    fn decode(&mut self, chunk: &[u8]) -> Result<Option<String>, String> {
+        let pending_len = self
+            .pending
+            .len()
+            .checked_add(chunk.len())
+            .ok_or_else(|| "compressed gateway payload size overflow".to_owned())?;
+        if pending_len > GATEWAY_WEBSOCKET_LIMIT {
+            return Err(format!(
+                "compressed gateway payload exceeds {GATEWAY_WEBSOCKET_LIMIT} bytes"
+            ));
+        }
+        self.pending.extend_from_slice(chunk);
+        if !self.pending.ends_with(&ZLIB_STREAM_SUFFIX) {
+            return Ok(None);
+        }
+
+        let compressed = std::mem::take(&mut self.pending);
+        let mut input_offset = 0;
+        let mut output = Vec::new();
+        loop {
+            let mut buffer = [0; ZLIB_OUTPUT_CHUNK_SIZE];
+            let input_before = self.inflater.total_in();
+            let output_before = self.inflater.total_out();
+            let status = self
+                .inflater
+                .decompress(
+                    &compressed[input_offset..],
+                    &mut buffer,
+                    FlushDecompress::Sync,
+                )
+                .map_err(|error| format!("gateway zlib decode failed: {error}"))?;
+            let consumed = usize::try_from(self.inflater.total_in() - input_before)
+                .map_err(|_| "gateway zlib input count exceeds platform size".to_owned())?;
+            let produced = usize::try_from(self.inflater.total_out() - output_before)
+                .map_err(|_| "gateway zlib output count exceeds platform size".to_owned())?;
+            input_offset += consumed;
+            output.extend_from_slice(&buffer[..produced]);
+
+            if output.len() > GATEWAY_WEBSOCKET_LIMIT {
+                return Err(format!(
+                    "decompressed gateway payload exceeds {GATEWAY_WEBSOCKET_LIMIT} bytes"
+                ));
+            }
+            if matches!(status, Status::StreamEnd) {
+                if input_offset != compressed.len() {
+                    return Err(
+                        "gateway zlib stream ended before the input was consumed".to_owned()
+                    );
+                }
+                self.inflater = Decompress::new(true);
+                break;
+            }
+            if input_offset == compressed.len() && produced < buffer.len() {
+                break;
+            }
+            if consumed == 0 && produced == 0 {
+                if input_offset == compressed.len() {
+                    break;
+                }
+                return Err("gateway zlib decoder made no progress".to_owned());
+            }
+        }
+
+        String::from_utf8(output)
+            .map(Some)
+            .map_err(|error| format!("gateway payload is not valid UTF-8: {error}"))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GatewayClientState {
+    highest_last_message_id: u64,
+    read_state_version: i64,
+    user_guild_settings_version: i64,
+}
+
+impl Default for GatewayClientState {
+    fn default() -> Self {
+        Self {
+            highest_last_message_id: 0,
+            read_state_version: 0,
+            user_guild_settings_version: -1,
+        }
+    }
+}
+
+impl GatewayClientState {
+    fn from_discord_state(state: &DiscordState) -> Self {
+        let cached_message_id = state
+            .message_cache
+            .timelines
+            .values()
+            .flat_map(|timeline| &timeline.messages)
+            .map(|message| message.id.get())
+            .max();
+        let acknowledged_message_id = state
+            .notifications
+            .read_states
+            .values()
+            .filter_map(|read_state| read_state.last_acked_message_id)
+            .map(Id::get)
+            .max();
+
+        Self {
+            highest_last_message_id: cached_message_id
+                .into_iter()
+                .chain(acknowledged_message_id)
+                .max()
+                .unwrap_or_default(),
+            read_state_version: state.notifications.read_state_version.unwrap_or_default(),
+            user_guild_settings_version: state
+                .notifications
+                .user_guild_settings_version
+                .unwrap_or(-1),
+        }
+    }
+}
 
 /// Shared, lockable WebSocket sink. Both the heartbeat task and the main
 /// dispatch loop need to send over the same connection, so the sink lives
@@ -763,9 +902,10 @@ impl SessionState {
 
     fn next_url(&self) -> String {
         match self.resume_url.as_deref() {
-            // Discord embeds `?v=...&encoding=...` already, but it costs
-            // nothing to append our own and helps when the resume URL is bare.
-            Some(url) if !url.is_empty() => format!("{url}/?v=9&encoding=json"),
+            Some(url) if !url.is_empty() => format!(
+                "{}/?v=9&encoding=json&compress=zlib-stream",
+                url.trim_end_matches('/')
+            ),
             _ => GATEWAY_URL.to_owned(),
         }
     }
@@ -878,20 +1018,28 @@ async fn connect_and_run(
     let (sender, mut gateway_send_error_rx, gateway_writer_task) =
         spawn_gateway_sender(Arc::clone(&writer));
     let mut subscription_deduper = SubscriptionDeduper::default();
+    let mut zlib_decoder = GatewayZlibDecoder::default();
 
     // Discord must speak first with op-10 HELLO carrying heartbeat_interval.
     // If the first frame is anything else, fail fast and try a clean
     // re-identify.
-    let hello_frame = match reader.next().await {
-        Some(Ok(WsMessage::Text(text))) => text,
-        Some(Ok(WsMessage::Close(frame))) => {
-            let message = websocket_close_message("websocket closed before HELLO", frame.as_ref());
-            log_and_publish_gateway_error(publish, message).await;
-            return Ok(ConnectionOutcome::Reidentify);
+    let hello_frame = loop {
+        match reader.next().await {
+            Some(Ok(WsMessage::Text(text))) => break text.to_string(),
+            Some(Ok(WsMessage::Binary(chunk))) => match zlib_decoder.decode(&chunk)? {
+                Some(text) => break text,
+                None => continue,
+            },
+            Some(Ok(WsMessage::Close(frame))) => {
+                let message =
+                    websocket_close_message("websocket closed before HELLO", frame.as_ref());
+                log_and_publish_gateway_error(publish, message).await;
+                return Ok(ConnectionOutcome::Reidentify);
+            }
+            Some(Ok(_)) => return Err("unexpected control frame before HELLO".to_owned()),
+            Some(Err(error)) => return Err(format!("read HELLO failed: {error}")),
+            None => return Err("connection closed before HELLO".to_owned()),
         }
-        Some(Ok(_)) => return Err("unexpected non-text frame before HELLO".to_owned()),
-        Some(Err(error)) => return Err(format!("read HELLO failed: {error}")),
-        None => return Err("connection closed before HELLO".to_owned()),
     };
     let hello: Value =
         serde_json::from_str(&hello_frame).map_err(|error| format!("HELLO parse: {error}"))?;
@@ -919,18 +1067,21 @@ async fn connect_and_run(
         resources
             .guild_member_requests
             .start_new_session(Instant::now());
-        if session.has_received_ready && resources.last_presence.is_none() {
+        let client_state = {
             let state = publish
                 .state
                 .read()
                 .expect("discord state lock is not poisoned");
-            resources.last_presence = current_gateway_presence(&state);
-        }
+            if session.has_received_ready && resources.last_presence.is_none() {
+                resources.last_presence = current_gateway_presence(&state);
+            }
+            GatewayClientState::from_discord_state(&state)
+        };
         let reidentify_presence = session
             .has_received_ready
             .then_some(resources.last_presence.as_ref())
             .flatten();
-        let payload = build_identify_payload(token, fingerprint, reidentify_presence);
+        let payload = build_identify_payload(token, fingerprint, reidentify_presence, client_state);
         send_text(&sender, payload).await?;
         logging::debug("gateway", "IDENTIFY sent");
     }
@@ -1036,14 +1187,31 @@ async fn connect_and_run(
             frame = reader.next() => {
                 match frame {
                     Some(Ok(WsMessage::Text(text))) => {
-                        let value: Value = match serde_json::from_str(&text) {
-                            Ok(value) => value,
+                        let frame_context = FrameContext {
+                            sequence_cell: &sequence_cell,
+                            heartbeat_ack: &heartbeat_ack,
+                            sender: &sender,
+                            fingerprint,
+                            publish,
+                        };
+                        match handle_json_frame(
+                            &text,
+                            session,
+                            resources,
+                            frame_context,
+                        ).await {
+                            FrameOutcome::Continue => {}
+                            FrameOutcome::Resume => break ConnectionOutcome::Resume,
+                            FrameOutcome::Reidentify => break ConnectionOutcome::Reidentify,
+                        }
+                    }
+                    Some(Ok(WsMessage::Binary(chunk))) => {
+                        let text = match zlib_decoder.decode(&chunk) {
+                            Ok(Some(text)) => text,
+                            Ok(None) => continue,
                             Err(error) => {
-                                logging::debug(
-                                    "gateway",
-                                    format!("ignoring non-JSON frame: {error}"),
-                                );
-                                continue;
+                                log_and_publish_gateway_error(publish, error).await;
+                                break ConnectionOutcome::Resume;
                             }
                         };
                         let frame_context = FrameContext {
@@ -1053,22 +1221,16 @@ async fn connect_and_run(
                             fingerprint,
                             publish,
                         };
-                        match handle_frame(
-                            value,
+                        match handle_json_frame(
+                            &text,
                             session,
-                            frame_context,
                             resources,
+                            frame_context,
                         ).await {
                             FrameOutcome::Continue => {}
                             FrameOutcome::Resume => break ConnectionOutcome::Resume,
                             FrameOutcome::Reidentify => break ConnectionOutcome::Reidentify,
                         }
-                    }
-                    Some(Ok(WsMessage::Binary(_))) => {
-                        // Compression isn't enabled in the IDENTIFY, so binary
-                        // frames are unexpected. Log and ignore rather than
-                        // panic on bad input.
-                        logging::debug("gateway", "ignoring unexpected binary frame");
                     }
                     Some(Ok(WsMessage::Ping(payload))) => {
                         let mut writer = writer.lock().await;
@@ -1158,6 +1320,22 @@ async fn connect_and_run(
     heartbeat_task.abort();
     gateway_writer_task.abort();
     Ok(outcome)
+}
+
+async fn handle_json_frame(
+    text: &str,
+    session: &mut SessionState,
+    resources: &mut GatewaySessionResources,
+    frame_context: FrameContext<'_>,
+) -> FrameOutcome {
+    let value: Value = match serde_json::from_str(text) {
+        Ok(value) => value,
+        Err(error) => {
+            logging::debug("gateway", format!("ignoring non-JSON frame: {error}"));
+            return FrameOutcome::Continue;
+        }
+    };
+    handle_frame(value, session, frame_context, resources).await
 }
 
 fn gateway_websocket_config() -> WebSocketConfig {
@@ -1773,6 +1951,7 @@ fn build_identify_payload(
     token: &str,
     fingerprint: &ClientFingerprint,
     presence: Option<&GatewayPresence>,
+    client_state: GatewayClientState,
 ) -> String {
     let mut properties = json!({
         "os": fingerprint.os,
@@ -1798,6 +1977,8 @@ fn build_identify_payload(
         .map(|presence| gateway_presence_payload(&presence.status, &presence.activities))
         .unwrap_or_else(|| gateway_presence_payload(&PresenceStatus::Unknown, &[]));
 
+    // Only reuse versions Concord actually tracks. The remaining conservative
+    // defaults avoid claiming cache state that this process cannot verify.
     json!({
         "op": 2,
         "d": {
@@ -1805,12 +1986,14 @@ fn build_identify_payload(
             "capabilities": USER_ACCOUNT_CAPABILITIES,
             "properties": properties,
             "presence": presence,
+            // `zlib-stream` is selected in the Gateway URL. The browser keeps
+            // this separate Identify compression mode disabled.
             "compress": false,
             "client_state": {
                 "guild_versions": {},
-                "highest_last_message_id": "0",
-                "read_state_version": 0,
-                "user_guild_settings_version": -1,
+                "highest_last_message_id": client_state.highest_last_message_id.to_string(),
+                "read_state_version": client_state.read_state_version,
+                "user_guild_settings_version": client_state.user_guild_settings_version,
                 "user_settings_version": -1,
                 "private_channels_version": "0",
                 "api_code_version": 0,

@@ -561,8 +561,6 @@ pub(super) fn discord_rest_headers(fingerprint: &ClientFingerprint) -> HeaderMap
             .expect("system locale is a valid header value"),
     );
     headers.insert(REFERER, HeaderValue::from_static(DISCORD_CHANNELS_REFERER));
-    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-    headers.insert(PRAGMA, HeaderValue::from_static("no-cache"));
     headers.insert("Priority", HeaderValue::from_static("u=1, i"));
     headers.insert("Sec-Fetch-Dest", HeaderValue::from_static("empty"));
     headers.insert("Sec-Fetch-Mode", HeaderValue::from_static("cors"));
@@ -571,10 +569,6 @@ pub(super) fn discord_rest_headers(fingerprint: &ClientFingerprint) -> HeaderMap
     headers.insert(
         "X-Discord-Timezone",
         HeaderValue::from_str(&fingerprint.timezone).expect("timezone is a valid header value"),
-    );
-    headers.insert(
-        "X-Debug-Options",
-        HeaderValue::from_static("bugReporterEnabled"),
     );
     headers.insert(
         "X-Super-Properties",
