@@ -181,6 +181,18 @@ impl SessionIdentifiers {
     }
 }
 
+#[derive(Debug, Default)]
+struct SessionIdentifierFetchOutcome {
+    identifiers: SessionIdentifiers,
+    failures: Vec<SessionIdentifierFetchFailure>,
+}
+
+#[derive(Debug)]
+struct SessionIdentifierFetchFailure {
+    endpoint: &'static str,
+    reason: String,
+}
+
 /// Creates the login-session fingerprint after reading Discord's current web
 /// build. The returned HTTP client retains the cookies from that bootstrap
 /// request and is reused for authentication and REST.
@@ -201,20 +213,44 @@ pub(crate) async fn load_client_fingerprint_and_http() -> (Arc<ClientFingerprint
     let mut fingerprint = ClientFingerprint::new(client_build_number);
     let mut identifiers = load_session_identifiers().unwrap_or_default();
     fingerprint.apply_session_identifiers(identifiers.clone());
-    match fetch_session_identifiers(&client, &fingerprint).await {
-        Some(fetched) => {
-            identifiers.merge_fetched(fetched);
-            fingerprint.apply_session_identifiers(identifiers.clone());
-            if let Err(error) = save_session_identifiers(&identifiers) {
-                crate::logging::debug(
-                    "fingerprint",
-                    format!("could not persist Discord session identifiers: {error}"),
-                );
-            }
+    let fetched = fetch_session_identifiers(&client, &fingerprint).await;
+    for failure in &fetched.failures {
+        crate::logging::debug(
+            "fingerprint",
+            format!(
+                "Discord session identifier request failed endpoint={:?} error={:?}",
+                failure.endpoint, failure.reason
+            ),
+        );
+    }
+    if let Some(summary) = session_identifier_fetch_summary(&identifiers, &fetched) {
+        crate::logging::debug("fingerprint", summary);
+    }
+    if !fetched.identifiers.is_empty() {
+        identifiers.merge_fetched(fetched.identifiers);
+        fingerprint.apply_session_identifiers(identifiers.clone());
+        if let Err(error) = save_session_identifiers(&identifiers) {
+            crate::logging::debug(
+                "fingerprint",
+                format!("could not persist Discord session identifiers: {error}"),
+            );
         }
-        None => crate::logging::debug("fingerprint", "could not fetch Discord session identifiers"),
     }
     (Arc::new(fingerprint), client)
+}
+
+fn session_identifier_fetch_summary(
+    persisted: &SessionIdentifiers,
+    fetched: &SessionIdentifierFetchOutcome,
+) -> Option<&'static str> {
+    if !fetched.failures.is_empty() || !fetched.identifiers.is_empty() {
+        return None;
+    }
+    if persisted.is_empty() {
+        Some("Discord returned no usable fingerprint or installation id")
+    } else {
+        Some("Discord returned no new fingerprint or installation id. Keeping persisted values")
+    }
 }
 
 pub(super) fn discord_channel_referer(
@@ -651,37 +687,63 @@ async fn fetch_client_build_number(client: &reqwest::Client) -> Option<u64> {
 async fn fetch_session_identifiers(
     client: &reqwest::Client,
     fingerprint: &ClientFingerprint,
-) -> Option<SessionIdentifiers> {
+) -> SessionIdentifierFetchOutcome {
     let headers = discord_experiments_headers(fingerprint);
     let (legacy, apex) = tokio::join!(
         fetch_session_identifier(client, DISCORD_EXPERIMENTS_URL, headers.clone()),
         fetch_session_identifier(client, DISCORD_APEX_EXPERIMENTS_URL, headers),
     );
-    let identifiers = SessionIdentifiers {
-        fingerprint: legacy.and_then(|response| response.fingerprint),
-        installation: apex.and_then(|response| response.installation),
+    let mut failures = Vec::new();
+    let fingerprint = match legacy {
+        Ok(response) => response.fingerprint,
+        Err(reason) => {
+            failures.push(SessionIdentifierFetchFailure {
+                endpoint: DISCORD_EXPERIMENTS_URL,
+                reason,
+            });
+            None
+        }
+    };
+    let installation = match apex {
+        Ok(response) => response.installation,
+        Err(reason) => {
+            failures.push(SessionIdentifierFetchFailure {
+                endpoint: DISCORD_APEX_EXPERIMENTS_URL,
+                reason,
+            });
+            None
+        }
+    };
+    SessionIdentifierFetchOutcome {
+        identifiers: SessionIdentifiers {
+            fingerprint,
+            installation,
+        }
+        .sanitized(),
+        failures,
     }
-    .sanitized();
-    (!identifiers.is_empty()).then_some(identifiers)
 }
 
 async fn fetch_session_identifier(
     client: &reqwest::Client,
     url: &str,
     headers: HeaderMap,
-) -> Option<SessionIdentifiers> {
-    client
+) -> std::result::Result<SessionIdentifiers, String> {
+    let response = client
         .get(url)
         .headers(headers)
         .timeout(Duration::from_secs(5))
         .send()
         .await
-        .ok()?
-        .error_for_status()
-        .ok()?
+        .map_err(|error| format!("request failed: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("HTTP status {}", status.as_u16()));
+    }
+    response
         .json()
         .await
-        .ok()
+        .map_err(|error| format!("invalid JSON response: {error}"))
 }
 
 fn discord_experiments_headers(fingerprint: &ClientFingerprint) -> HeaderMap {

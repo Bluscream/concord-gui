@@ -1,7 +1,8 @@
 use super::*;
 use crate::discord::auth_http::DiscordAuthSession;
 use reqwest::header::{
-    ACCEPT, ACCEPT_ENCODING, ACCEPT_LANGUAGE, CACHE_CONTROL, ORIGIN, PRAGMA, REFERER, USER_AGENT,
+    ACCEPT, ACCEPT_ENCODING, ACCEPT_LANGUAGE, CACHE_CONTROL, HeaderMap, ORIGIN, PRAGMA, REFERER,
+    USER_AGENT,
 };
 use serde_json::Value;
 use std::{
@@ -437,6 +438,111 @@ fn shared_auth_session_sends_web_headers_and_persists_server_cookies() {
             .expect("restored local request should succeed")
             .error_for_status()
             .expect("restored local response should be successful");
+    });
+    server.join().expect("test server should finish");
+}
+
+#[test]
+fn session_identifier_fetch_summary_distinguishes_no_update_from_unavailable() {
+    let persisted = SessionIdentifiers {
+        fingerprint: Some("persisted-fingerprint".to_owned()),
+        installation: None,
+    };
+    let no_update = SessionIdentifierFetchOutcome::default();
+    assert_eq!(
+        session_identifier_fetch_summary(&persisted, &no_update),
+        Some("Discord returned no new fingerprint or installation id. Keeping persisted values")
+    );
+
+    assert_eq!(
+        session_identifier_fetch_summary(&SessionIdentifiers::default(), &no_update),
+        Some("Discord returned no usable fingerprint or installation id")
+    );
+
+    let updated = SessionIdentifierFetchOutcome {
+        identifiers: SessionIdentifiers {
+            fingerprint: None,
+            installation: Some("fresh-installation".to_owned()),
+        },
+        failures: Vec::new(),
+    };
+    assert_eq!(session_identifier_fetch_summary(&persisted, &updated), None);
+
+    let failed = SessionIdentifierFetchOutcome {
+        identifiers: SessionIdentifiers::default(),
+        failures: vec![SessionIdentifierFetchFailure {
+            endpoint: DISCORD_APEX_EXPERIMENTS_URL,
+            reason: "HTTP status 500".to_owned(),
+        }],
+    };
+    assert_eq!(session_identifier_fetch_summary(&persisted, &failed), None);
+}
+
+#[test]
+fn session_identifier_fetch_preserves_http_and_json_failures() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("test server should bind");
+    let address = listener
+        .local_addr()
+        .expect("test server should have an address");
+    let server = thread::spawn(move || {
+        let success = accept_request(&listener);
+        let (success, _headers) = read_headers(success);
+        let body = r#"{"fingerprint":"fresh-fingerprint"}"#;
+        respond(
+            success,
+            &format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+
+        let status_failure = accept_request(&listener);
+        let (status_failure, _headers) = read_headers(status_failure);
+        respond(
+            status_failure,
+            "HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+        );
+
+        let json_failure = accept_request(&listener);
+        let (json_failure, _headers) = read_headers(json_failure);
+        let body = "not-json";
+        respond(
+            json_failure,
+            &format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+    });
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should start");
+    runtime.block_on(async {
+        let client = reqwest::Client::new();
+        let headers = HeaderMap::new();
+        let fetched = fetch_session_identifier(
+            &client,
+            &format!("http://{address}/success"),
+            headers.clone(),
+        )
+        .await
+        .expect("valid identifier response should parse");
+        assert_eq!(fetched.fingerprint.as_deref(), Some("fresh-fingerprint"));
+
+        let status_error = fetch_session_identifier(
+            &client,
+            &format!("http://{address}/status"),
+            headers.clone(),
+        )
+        .await
+        .expect_err("error status should be preserved");
+        assert!(status_error.contains("HTTP status 500"));
+
+        let json_error =
+            fetch_session_identifier(&client, &format!("http://{address}/json"), headers)
+                .await
+                .expect_err("invalid JSON should be preserved");
+        assert!(json_error.contains("invalid JSON response"));
     });
     server.join().expect("test server should finish");
 }
