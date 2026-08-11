@@ -43,9 +43,12 @@ impl DashboardState {
         let Some(guild_id) = self.selected_guild_id() else {
             return self.selected_channel_recipient_group();
         };
-        let members = self.discord.cache.listed_members_for_guild(guild_id);
-        let roles = self.discord.cache.roles_for_guild(guild_id);
-        guild_member_groups(members, roles)
+        let entries = self.discord.cache.member_list_entries_for_guild(guild_id);
+        guild_member_groups(
+            entries,
+            |user_id| self.discord.cache.member_for_guild(guild_id, user_id),
+            |role_id| self.discord.cache.role_for_guild(guild_id, role_id),
+        )
     }
 
     pub fn is_member_list_loading(&self) -> bool {

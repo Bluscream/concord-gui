@@ -109,9 +109,9 @@ pub(crate) use request_lifecycle::GuildMemberSearchSurface;
 pub use rest::{ForumPostPage, ReactionUsersPage};
 pub use state::{
     ChannelRecipientState, ChannelState, ChannelUnreadState, ChannelVisibilityStats,
-    CurrentVoiceConnectionState, DiscordSnapshot, DiscordState, GuildMemberState, GuildState,
-    MessageCapabilities, MessageState, RoleState, SnapshotAreas, SnapshotRevision, TypingUserState,
-    VoiceParticipantState,
+    CurrentVoiceConnectionState, DiscordSnapshot, DiscordState, GuildMemberListEntry,
+    GuildMemberState, GuildState, MessageCapabilities, MessageState, RoleState, SnapshotAreas,
+    SnapshotRevision, TypingUserState, VoiceParticipantState,
 };
 pub(crate) use upload::read_profile_avatar_image;
 pub use user_settings::{UserCustomStatusInfo, UserFriendSourceFlagsInfo, UserSettingsInfo};

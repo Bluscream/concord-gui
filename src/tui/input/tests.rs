@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs,
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
@@ -25,11 +26,12 @@ use crate::{
     discord::{
         ActivityInfo, AppEvent, ApplicationCommandInfo, ApplicationCommandOptionInfo,
         AttachmentDownloadId, ChannelInfo, ChannelNotificationOverrideInfo, ChannelRecipientInfo,
-        CustomEmojiInfo, DownloadAttachmentSource, EmbedInfo, GuildFolder,
-        GuildNotificationSettingsInfo, MemberInfo, MessageInfo, MessageReferenceInfo,
-        MessageSnapshotInfo, MicrophoneSensitivityDb, NotificationLevel, PollAnswerInfo, PollInfo,
-        PresenceStatus, ReactionEmoji, ReactionUserInfo, ReadStateInfo, RoleInfo,
-        UserGuildSettingsInfo, UserSettingsInfo, VoiceConnectionStatus, VoiceVolumePercent,
+        CustomEmojiInfo, DownloadAttachmentSource, EmbedInfo, GuildFolder, GuildMemberListItem,
+        GuildMemberListOperation, GuildMemberListUpdateInfo, GuildNotificationSettingsInfo,
+        MemberInfo, MessageInfo, MessageReferenceInfo, MessageSnapshotInfo,
+        MicrophoneSensitivityDb, NotificationLevel, PollAnswerInfo, PollInfo, PresenceStatus,
+        ReactionEmoji, ReactionUserInfo, ReadStateInfo, RoleInfo, UserGuildSettingsInfo,
+        UserSettingsInfo, VoiceConnectionStatus, VoiceVolumePercent,
     },
     tui::state::{
         ChannelPaneEntry, DashboardState, FocusPane, GuildPaneEntry, MessageActionKind,
@@ -383,6 +385,28 @@ fn state_with_members(count: u64) -> DashboardState {
         presences,
         ..GuildCreateFixture::new(guild_id)
     }));
+    state.push_event(AppEvent::GuildMemberListUpdate {
+        update: GuildMemberListUpdateInfo {
+            guild_id,
+            list_id: Some("everyone".to_owned()),
+            member_count: None,
+            online_count: None,
+            groups: Vec::new(),
+            ops: vec![GuildMemberListOperation::Sync {
+                range: (0, 99),
+                items: std::iter::once(GuildMemberListItem::Group {
+                    id: "online".to_owned(),
+                    count,
+                })
+                .chain((1..=count).map(|id| GuildMemberListItem::Member {
+                    member: MemberInfo::test(Id::new(id), format!("member {id}")),
+                    presence: None,
+                }))
+                .collect(),
+            }],
+            extra_fields: BTreeMap::new(),
+        },
+    });
     state.confirm_selected_guild();
     state
 }

@@ -12,8 +12,8 @@ pub(in crate::discord) const TYPING_INDICATOR_TTL: Duration = Duration::from_sec
 
 pub use super::channel::{ChannelRecipientState, ChannelState, ChannelVisibilityStats};
 pub use super::guild::GuildState;
-pub use super::member::{GuildMemberState, RoleState, TypingUserState};
-use super::member::{role_map, role_state};
+pub use super::member::{GuildMemberListEntry, GuildMemberState, RoleState, TypingUserState};
+use super::member::{GuildMemberListState, role_map, role_state};
 use super::message::{MessageAuthorRoleIds, MessageUpdateFields};
 pub use super::message::{MessageCapabilities, MessageState};
 pub use super::notification::ChannelUnreadState;

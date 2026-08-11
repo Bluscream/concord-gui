@@ -1,5 +1,5 @@
 use super::*;
-use crate::discord::{GuildVerificationLevel, VoiceScope};
+use crate::discord::{GuildMemberListEntry, GuildVerificationLevel, VoiceScope};
 use chrono::Utc;
 use serde_json::json;
 
@@ -15,10 +15,19 @@ fn member_list_update(
     member_count: u64,
     ops: Vec<GuildMemberListOperation>,
 ) -> AppEvent {
+    member_list_update_with_id(guild_id, "everyone", member_count, ops)
+}
+
+fn member_list_update_with_id(
+    guild_id: Id<GuildMarker>,
+    list_id: &str,
+    member_count: u64,
+    ops: Vec<GuildMemberListOperation>,
+) -> AppEvent {
     AppEvent::GuildMemberListUpdate {
         update: GuildMemberListUpdateInfo {
             guild_id,
-            list_id: Some("everyone".to_owned()),
+            list_id: Some(list_id.to_owned()),
             member_count: Some(member_count),
             online_count: Some(u32::try_from(member_count).unwrap_or(u32::MAX)),
             groups: vec![json!({ "id": "online", "count": member_count })],
@@ -28,8 +37,19 @@ fn member_list_update(
     }
 }
 
+fn member_list_entries(
+    state: &DiscordState,
+    guild_id: Id<GuildMarker>,
+) -> Vec<GuildMemberListEntry> {
+    state
+        .member_list_entries_for_guild(guild_id)
+        .into_iter()
+        .map(|(_, entry)| entry.clone())
+        .collect()
+}
+
 #[test]
-fn member_list_operations_update_index_membership_and_completeness() {
+fn member_list_preserves_gateway_rows_and_operation_order() {
     let guild_id = Id::new(1);
     let alice = Id::new(10);
     let bob = Id::new(20);
@@ -58,41 +78,21 @@ fn member_list_operations_update_index_membership_and_completeness() {
     ));
     assert!(state.member_list_has_ranges(guild_id, &[(0, 99)]));
     assert_eq!(
-        state
-            .listed_members_for_guild(guild_id)
-            .into_iter()
-            .map(|member| member.user_id)
-            .collect::<Vec<_>>(),
-        vec![alice, bob]
+        member_list_entries(&state, guild_id),
+        vec![
+            GuildMemberListEntry::Group {
+                id: "online".to_owned(),
+                count: 2,
+            },
+            GuildMemberListEntry::Member { user_id: alice },
+            GuildMemberListEntry::Member { user_id: bob },
+        ]
     );
 
-    let generation = state.member_list_refresh_generation(guild_id);
-    state.apply_event(&member_list_update(
-        guild_id,
-        2,
-        vec![GuildMemberListOperation::Sync {
-            range: (0, 99),
-            items: vec![GuildMemberListItem::Unknown {
-                raw: json!({ "future_item": true }),
-            }],
-        }],
-    ));
-    assert!(!state.member_list_has_ranges(guild_id, &[(0, 99)]));
-    assert!(state.member_list_refresh_generation(guild_id) > generation);
-    state.apply_event(&member_list_update(
-        guild_id,
-        2,
-        vec![GuildMemberListOperation::Sync {
-            range: (0, 99),
-            items: vec![
-                GuildMemberListItem::Group {
-                    id: "online".to_owned(),
-                    count: 2,
-                },
-                listed_member(alice, "alice"),
-                listed_member(bob, "bob"),
-            ],
-        }],
+    state.apply_event(&member_list_update(guild_id, 5, Vec::new()));
+    assert!(matches!(
+        member_list_entries(&state, guild_id).first(),
+        Some(GuildMemberListEntry::Group { count: 5, .. })
     ));
 
     state.apply_event(&member_list_update(
@@ -104,12 +104,15 @@ fn member_list_operations_update_index_membership_and_completeness() {
         }],
     ));
     assert_eq!(
-        state
-            .listed_members_for_guild(guild_id)
-            .into_iter()
-            .map(|member| member.user_id)
-            .collect::<Vec<_>>(),
-        vec![carol, bob]
+        member_list_entries(&state, guild_id),
+        vec![
+            GuildMemberListEntry::Group {
+                id: "online".to_owned(),
+                count: 2,
+            },
+            GuildMemberListEntry::Member { user_id: carol },
+            GuildMemberListEntry::Member { user_id: bob },
+        ]
     );
     assert!(
         state
@@ -132,44 +135,73 @@ fn member_list_operations_update_index_membership_and_completeness() {
         vec![GuildMemberListOperation::Delete { index: 1 }],
     ));
     assert_eq!(
-        state
-            .listed_members_for_guild(guild_id)
-            .into_iter()
-            .map(|member| member.user_id)
-            .collect::<Vec<_>>(),
-        vec![alice, bob]
+        member_list_entries(&state, guild_id),
+        vec![
+            GuildMemberListEntry::Group {
+                id: "online".to_owned(),
+                count: 2,
+            },
+            GuildMemberListEntry::Member { user_id: alice },
+            GuildMemberListEntry::Member { user_id: bob },
+        ]
     );
 
-    let generation = state.member_list_refresh_generation(guild_id);
+    // Positional deltas must move range coverage with the rows. Otherwise a
+    // later sparse range can be reported as loaded at indexes it no longer owns.
     state.apply_event(&member_list_update(
         guild_id,
-        2,
-        vec![GuildMemberListOperation::Invalidate { range: (0, 99) }],
-    ));
-    assert_eq!(
-        state
-            .listed_members_for_guild(guild_id)
-            .into_iter()
-            .map(|member| member.user_id)
-            .collect::<Vec<_>>(),
-        vec![alice, bob, carol],
-        "known members remain visible while the invalidated range refreshes"
-    );
-    assert!(!state.member_list_has_ranges(guild_id, &[(0, 99)]));
-    assert!(state.member_list_refresh_generation(guild_id) > generation);
-
-    state.apply_event(&member_list_update(
-        guild_id,
-        2,
-        vec![GuildMemberListOperation::Unknown {
-            name: Some("FUTURE_OPERATION".to_owned()),
-            raw: json!({ "op": "FUTURE_OPERATION" }),
+        500,
+        vec![GuildMemberListOperation::Sync {
+            range: (200, 202),
+            items: vec![
+                listed_member(alice, "alice"),
+                listed_member(bob, "bob"),
+                listed_member(carol, "carol"),
+            ],
         }],
     ));
-    assert!(!state.member_list_has_ranges(guild_id, &[(0, 99)]));
+    assert!(state.member_list_has_ranges(guild_id, &[(200, 202)]));
 
     state.apply_event(&member_list_update(
         guild_id,
+        501,
+        vec![GuildMemberListOperation::Insert {
+            index: 150,
+            item: listed_member(alice, "alice"),
+        }],
+    ));
+    assert!(!state.member_list_has_ranges(guild_id, &[(200, 202)]));
+    assert!(state.member_list_has_ranges(guild_id, &[(201, 203)]));
+
+    state.apply_event(&member_list_update(
+        guild_id,
+        500,
+        vec![GuildMemberListOperation::Delete { index: 202 }],
+    ));
+    assert!(!state.member_list_has_ranges(guild_id, &[(201, 203)]));
+}
+
+#[test]
+fn member_list_keeps_stable_rows_until_replacement_ranges_are_complete() {
+    let guild_id = Id::new(1);
+    let alice = Id::new(10);
+    let bob = Id::new(20);
+    let carol = Id::new(30);
+    let mut state = DiscordState::default();
+    state.apply_event(&guild_create_event(GuildCreateFixture {
+        member_count: Some(3),
+        members: vec![
+            member_info(alice, "alice"),
+            member_info(bob, "bob"),
+            member_info(carol, "carol"),
+        ],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+    state.prepare_member_list_subscription(guild_id, Id::new(2), vec![(0, 99)]);
+    let generation = state.member_list_refresh_generation(guild_id);
+    state.apply_event(&member_list_update_with_id(
+        guild_id,
+        "everyone",
         2,
         vec![GuildMemberListOperation::Sync {
             range: (0, 99),
@@ -178,17 +210,80 @@ fn member_list_operations_update_index_membership_and_completeness() {
                     id: "online".to_owned(),
                     count: 2,
                 },
-                GuildMemberListItem::Unknown {
-                    raw: json!({ "future_item": true }),
-                },
+                listed_member(alice, "alice"),
                 listed_member(bob, "bob"),
             ],
         }],
     ));
-    assert!(
-        !state.member_list_has_ranges(guild_id, &[(0, 99)]),
-        "an unknown row must remain missing until Discord refreshes it"
+    let stable = member_list_entries(&state, guild_id);
+
+    state.apply_event(&member_list_update_with_id(
+        guild_id,
+        "everyone",
+        2,
+        vec![GuildMemberListOperation::Invalidate { range: (0, 99) }],
+    ));
+    assert_eq!(member_list_entries(&state, guild_id), stable);
+    assert!(!state.member_list_has_ranges(guild_id, &[(0, 99)]));
+    assert!(state.member_list_refresh_generation(guild_id) > generation);
+    state.apply_event(&member_list_update_with_id(
+        guild_id,
+        "everyone",
+        2,
+        vec![GuildMemberListOperation::Sync {
+            range: (0, 99),
+            items: vec![
+                GuildMemberListItem::Group {
+                    id: "online".to_owned(),
+                    count: 2,
+                },
+                listed_member(alice, "alice"),
+                listed_member(bob, "bob"),
+            ],
+        }],
+    ));
+
+    let generation = state.member_list_refresh_generation(guild_id);
+    state.prepare_member_list_subscription(guild_id, Id::new(3), vec![(0, 99)]);
+    state.apply_event(&member_list_update_with_id(
+        guild_id,
+        "everyone",
+        1,
+        vec![GuildMemberListOperation::Insert {
+            index: 0,
+            item: listed_member(carol, "carol"),
+        }],
+    ));
+    assert_eq!(member_list_entries(&state, guild_id), stable);
+    assert!(!state.member_list_has_ranges(guild_id, &[(0, 99)]));
+    assert_eq!(state.member_list_refresh_generation(guild_id), generation);
+
+    state.apply_event(&member_list_update_with_id(
+        guild_id,
+        "everyone",
+        1,
+        vec![GuildMemberListOperation::Sync {
+            range: (0, 99),
+            items: vec![
+                GuildMemberListItem::Group {
+                    id: "offline".to_owned(),
+                    count: 1,
+                },
+                listed_member(carol, "carol"),
+            ],
+        }],
+    ));
+    assert_eq!(
+        member_list_entries(&state, guild_id),
+        vec![
+            GuildMemberListEntry::Group {
+                id: "offline".to_owned(),
+                count: 1,
+            },
+            GuildMemberListEntry::Member { user_id: carol },
+        ]
     );
+    assert!(state.member_list_has_ranges(guild_id, &[(0, 99)]));
 }
 
 #[test]
@@ -221,12 +316,14 @@ fn reidentified_gateway_session_invalidates_cached_member_list_ranges() {
     state.apply_event(&AppEvent::GatewayReidentified);
 
     assert_eq!(
-        state
-            .listed_members_for_guild(guild_id)
-            .into_iter()
-            .map(|member| member.user_id)
-            .collect::<Vec<_>>(),
-        vec![alice],
+        member_list_entries(&state, guild_id),
+        vec![
+            GuildMemberListEntry::Group {
+                id: "online".to_owned(),
+                count: 1,
+            },
+            GuildMemberListEntry::Member { user_id: alice },
+        ],
         "the current snapshot remains visible while the new session resubscribes"
     );
     assert!(!state.member_list_has_ranges(guild_id, &[(0, 99)]));
@@ -866,7 +963,7 @@ fn member_cache_pruning_keeps_active_voice_participants() {
         .map(|member| member.user_id)
         .collect::<Vec<_>>();
     assert_eq!(retained_ids, vec![active_user]);
-    assert!(state.listed_members_for_guild(guild_id).is_empty());
+    assert!(state.member_list_entries_for_guild(guild_id).is_empty());
     assert!(!state.member_list_has_ranges(guild_id, &[(0, 99)]));
     assert!(state.member_list_refresh_generation(guild_id) > generation);
     assert_eq!(

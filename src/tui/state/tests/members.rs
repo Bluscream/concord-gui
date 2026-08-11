@@ -16,33 +16,57 @@ fn member_list_event(guild_id: Id<GuildMarker>, ops: Vec<GuildMemberListOperatio
 }
 
 #[test]
-fn member_groups_use_roles_and_status_sorted_entries() {
+fn member_groups_follow_gateway_order_and_counts() {
     let guild_id = Id::new(1);
-    let alice: Id<UserMarker> = Id::new(10);
-    let bob: Id<UserMarker> = Id::new(20);
-    let admin_role = Id::new(100);
+    let role_id = Id::new(100);
+    let alice = Id::new(10);
+    let bob = Id::new(20);
+    let carol = Id::new(30);
+    let dave = Id::new(40);
     let mut state = DashboardState::new();
-
     state.push_event(guild_create_event(GuildCreateFixture {
-        channels: vec![text_channel_info(guild_id, Id::new(2), "general")],
         members: vec![
-            member_with_roles(bob, "bob", vec![admin_role]),
-            member_with_roles(alice, "alice", vec![admin_role]),
+            member_info(alice, "alice"),
+            member_info(bob, "bob"),
+            member_info(carol, "carol"),
+            member_info(dave, "dave"),
         ],
-        presences: vec![(alice, PresenceStatus::Online), (bob, PresenceStatus::Idle)],
         roles: vec![RoleInfo {
             color: Some(0xFFAA00),
-            position: 10,
-            hoist: true,
-            ..RoleInfo::test(admin_role, "Admin")
+            ..RoleInfo::test(role_id, "Admin")
         }],
         ..GuildCreateFixture::new(guild_id)
     }));
+    state.push_event(guild_member_list_event(
+        guild_id,
+        vec![
+            GuildMemberListItem::Group {
+                id: role_id.get().to_string(),
+                count: 8,
+            },
+            GuildMemberListItem::Member {
+                member: member_info(bob, "bob"),
+                presence: None,
+            },
+            GuildMemberListItem::Member {
+                member: member_info(alice, "alice"),
+                presence: None,
+            },
+            GuildMemberListItem::Group {
+                id: "offline".to_owned(),
+                count: 9,
+            },
+            GuildMemberListItem::Member {
+                member: member_info(carol, "carol"),
+                presence: None,
+            },
+        ],
+    ));
     state.confirm_selected_guild();
 
     let groups = state.members_grouped();
-    assert_eq!(groups.len(), 1);
-    assert_eq!(groups[0].label, "Admin");
+    assert_eq!(groups.len(), 2);
+    assert_eq!((groups[0].label.as_str(), groups[0].count), ("Admin", 8));
     assert_eq!(groups[0].color, Some(0xFFAA00));
     assert_eq!(
         groups[0]
@@ -50,8 +74,25 @@ fn member_groups_use_roles_and_status_sorted_entries() {
             .iter()
             .map(|member| member.display_name())
             .collect::<Vec<_>>(),
-        vec!["alice".to_owned(), "bob".to_owned()],
+        vec!["bob".to_owned(), "alice".to_owned()]
     );
+    assert_eq!((groups[1].label.as_str(), groups[1].count), ("Offline", 9));
+
+    state.push_event(member_list_event(
+        guild_id,
+        vec![GuildMemberListOperation::Sync {
+            range: (200, 299),
+            items: vec![GuildMemberListItem::Member {
+                member: member_info(dave, "dave"),
+                presence: None,
+            }],
+        }],
+    ));
+
+    let groups = state.members_grouped();
+    assert_eq!(groups.len(), 3);
+    assert_eq!((groups[2].label.as_str(), groups[2].count), ("Members", 1));
+    assert_eq!(groups[2].entries[0].display_name(), "dave");
 }
 
 #[test]
@@ -98,15 +139,28 @@ fn member_role_color_picks_the_winning_coloured_role() {
             0x445566,
         ),
     ] {
-        let role_ids = roles.iter().map(|role| role.id).collect();
+        let role_ids: Vec<_> = roles.iter().map(|role| role.id).collect();
         let mut state = DashboardState::new();
 
         state.push_event(guild_create_event(GuildCreateFixture {
-            members: vec![member_with_roles(user_id, "alice", role_ids)],
+            members: vec![member_with_roles(user_id, "alice", role_ids.clone())],
             presences: vec![(user_id, PresenceStatus::Online)],
             roles,
             ..GuildCreateFixture::new(guild_id)
         }));
+        state.push_event(guild_member_list_event(
+            guild_id,
+            vec![
+                GuildMemberListItem::Group {
+                    id: "online".to_owned(),
+                    count: 1,
+                },
+                GuildMemberListItem::Member {
+                    member: member_with_roles(user_id, "alice", role_ids),
+                    presence: None,
+                },
+            ],
+        ));
         state.confirm_selected_guild();
 
         let member = state.flattened_members()[0];
@@ -254,7 +308,6 @@ fn member_panel_title_shows_online_and_total_when_counts_available() {
     let title = state.member_panel_title();
     let rendered: String = title.spans.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(rendered, "● 25  ○ 100");
-    assert_eq!(state.flattened_members().len(), 1);
 }
 
 #[test]
@@ -316,107 +369,6 @@ fn member_panel_title_stays_plain_without_guild_total_or_in_direct_messages() {
     )));
     dm_state.confirm_selected_guild();
     assert_eq!(dm_state.member_panel_title(), Line::from(" Members "));
-}
-
-#[test]
-fn member_groups_keep_offline_hoisted_members_in_role_buckets() {
-    let guild_id = Id::new(1);
-    let admin_role = Id::new(100);
-    let mut state = DashboardState::new();
-
-    state.push_event(guild_create_event(GuildCreateFixture {
-        channels: vec![text_channel_info(guild_id, Id::new(2), "general")],
-        members: vec![
-            member_with_roles(Id::new(10), "alice", vec![admin_role]),
-            member_with_roles(Id::new(11), "amy", vec![admin_role]),
-            member_info(Id::new(20), "bob"),
-            member_info(Id::new(21), "ben"),
-        ],
-        presences: vec![
-            // Admin online, admin offline, no-role online, no-role offline
-            (Id::new(10), PresenceStatus::Online),
-            (Id::new(11), PresenceStatus::Offline),
-            (Id::new(20), PresenceStatus::Idle),
-            (Id::new(21), PresenceStatus::Offline),
-        ],
-        roles: vec![RoleInfo {
-            color: Some(0xFFAA00),
-            position: 10,
-            hoist: true,
-            ..RoleInfo::test(admin_role, "Admin")
-        }],
-        ..GuildCreateFixture::new(guild_id)
-    }));
-    state.confirm_selected_guild();
-
-    let groups = state.members_grouped();
-    assert_eq!(
-        groups
-            .iter()
-            .map(|group| group.label.clone())
-            .collect::<Vec<_>>(),
-        vec![
-            "Admin".to_owned(),
-            "Online".to_owned(),
-            "Offline".to_owned()
-        ]
-    );
-
-    // Hoisted role groups include both online and offline members.
-    let admin_names: Vec<_> = groups[0]
-        .entries
-        .iter()
-        .map(|m| m.display_name().to_owned())
-        .collect();
-    assert_eq!(admin_names, vec!["alice".to_owned(), "amy".to_owned()]);
-
-    // Online group lists members with no hoisted role who aren't offline.
-    let online_names: Vec<_> = groups[1]
-        .entries
-        .iter()
-        .map(|m| m.display_name().to_owned())
-        .collect();
-    assert_eq!(online_names, vec!["bob".to_owned()]);
-
-    // Offline group lists only offline members that did not enter a role group.
-    let offline_names: Vec<_> = groups[2]
-        .entries
-        .iter()
-        .map(|m| m.display_name().to_owned())
-        .collect();
-    assert_eq!(offline_names, vec!["ben".to_owned()]);
-}
-
-#[test]
-fn member_groups_treat_idle_and_dnd_as_online() {
-    let guild_id = Id::new(1);
-    let mut state = DashboardState::new();
-
-    state.push_event(guild_create_event(GuildCreateFixture {
-        channels: vec![text_channel_info(guild_id, Id::new(2), "general")],
-        members: vec![
-            member_info(Id::new(10), "idle"),
-            member_info(Id::new(11), "dnd"),
-            member_info(Id::new(12), "unknown"),
-        ],
-        presences: vec![
-            (Id::new(10), PresenceStatus::Idle),
-            (Id::new(11), PresenceStatus::DoNotDisturb),
-            // Unknown is treated as offline (Discord defaults to offline
-            // when the gateway has not delivered a presence yet).
-            (Id::new(12), PresenceStatus::Unknown),
-        ],
-        ..GuildCreateFixture::new(guild_id)
-    }));
-    state.confirm_selected_guild();
-
-    let groups = state.members_grouped();
-    assert_eq!(groups.len(), 2);
-    assert_eq!(groups[0].label, "Online");
-    assert_eq!(groups[0].entries.len(), 2);
-    assert_eq!(groups[1].label, "Offline");
-    assert_eq!(groups[1].entries.len(), 1);
-    assert_eq!(groups[1].entries[0].display_name(), "unknown");
 }
 
 #[test]

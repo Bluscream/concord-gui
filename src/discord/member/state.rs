@@ -11,15 +11,16 @@ use crate::discord::ids::{
 };
 use crate::discord::member::onboarding_status_from_flags;
 use crate::discord::{
-    ActivityInfo, GuildMemberListItem, GuildMemberListOperation, GuildMemberListUpdateInfo,
-    GuildVerificationLevel, MemberInfo, MemberOnboardingStatus, PresenceStatus, RoleInfo,
-    VoiceScope,
+    ActivityInfo, GuildMemberListUpdateInfo, GuildVerificationLevel, MemberInfo,
+    MemberOnboardingStatus, PresenceStatus, RoleInfo, VoiceScope,
 };
 
 use crate::discord::state::{
-    DiscordState, GuildMemberListState, MAX_RECENT_MEMBER_GUILDS, TYPING_INDICATOR_TTL,
-    is_fallback_identity, touch_recent,
+    DiscordState, MAX_RECENT_MEMBER_GUILDS, TYPING_INDICATOR_TTL, is_fallback_identity,
+    touch_recent,
 };
+
+use super::list::{GuildMemberListEntry, GuildMemberListState};
 
 type OrderedUserIds = (BTreeSet<Id<UserMarker>>, Vec<Id<UserMarker>>);
 
@@ -159,6 +160,14 @@ impl DiscordState {
             .unwrap_or_default()
     }
 
+    pub fn member_for_guild(
+        &self,
+        guild_id: Id<GuildMarker>,
+        user_id: Id<UserMarker>,
+    ) -> Option<&GuildMemberState> {
+        self.guild_details.members.get(&guild_id)?.get(&user_id)
+    }
+
     /// Cached entities that Discord has confirmed belong to the guild during
     /// its current snapshot. Older entities can remain cached for messages,
     /// but must not appear as current Opcode 8 search results.
@@ -178,26 +187,15 @@ impl DiscordState {
             .collect()
     }
 
-    /// Members currently occupying valid positions in Discord's streamed
-    /// member list. Other cached members remain available for messages,
-    /// profiles, permissions, and explicit Opcode 8 search results.
-    pub fn listed_members_for_guild(&self, guild_id: Id<GuildMarker>) -> Vec<&GuildMemberState> {
-        let Some(list) = self.guild_details.member_lists.get(&guild_id) else {
-            return self.searchable_members_for_guild(guild_id);
-        };
-        let Some(members) = self.guild_details.members.get(&guild_id) else {
-            return Vec::new();
-        };
-        let listed = list
-            .entries
-            .values()
-            .filter_map(|user_id| user_id.and_then(|user_id| members.get(&user_id)))
-            .collect::<Vec<_>>();
-        if listed.is_empty() {
-            self.searchable_members_for_guild(guild_id)
-        } else {
-            listed
-        }
+    pub fn member_list_entries_for_guild(
+        &self,
+        guild_id: Id<GuildMarker>,
+    ) -> Vec<(u32, &GuildMemberListEntry)> {
+        self.guild_details
+            .member_lists
+            .get(&guild_id)
+            .map(GuildMemberListState::entries)
+            .unwrap_or_default()
     }
 
     pub fn member_list_has_ranges(&self, guild_id: Id<GuildMarker>, ranges: &[(u32, u32)]) -> bool {
@@ -211,8 +209,21 @@ impl DiscordState {
         self.guild_details
             .member_lists
             .get(&guild_id)
-            .map(|list| list.refresh_generation)
+            .map(GuildMemberListState::refresh_generation)
             .unwrap_or_default()
+    }
+
+    pub(crate) fn prepare_member_list_subscription(
+        &mut self,
+        guild_id: Id<GuildMarker>,
+        channel_id: Id<ChannelMarker>,
+        ranges: Vec<(u32, u32)>,
+    ) {
+        self.guild_details_mut()
+            .member_lists
+            .entry(guild_id)
+            .or_default()
+            .prepare_subscription(channel_id, ranges);
     }
 
     pub(in crate::discord) fn apply_member_list_update(
@@ -242,7 +253,7 @@ impl DiscordState {
 
     fn invalidate_member_list_for_eviction(&mut self, guild_id: Id<GuildMarker>) {
         if let Some(list) = self.guild_details_mut().member_lists.get_mut(&guild_id) {
-            list.invalidate_cached_ranges();
+            list.clear();
         }
         if let Some(guild) = self.navigation_mut().guilds.get_mut(&guild_id) {
             guild.online_count = None;
@@ -251,7 +262,7 @@ impl DiscordState {
 
     pub(in crate::discord) fn invalidate_member_lists_for_new_session(&mut self) {
         for list in self.guild_details_mut().member_lists.values_mut() {
-            list.invalidate_cached_ranges();
+            list.begin_full_refresh();
         }
         for guild in self.navigation_mut().guilds.values_mut() {
             guild.online_count = None;
@@ -729,234 +740,6 @@ impl DiscordState {
             retained.extend(members.keys().map(|user_id| (*guild_id, *user_id)));
         }
         retained
-    }
-}
-
-impl GuildMemberListState {
-    fn apply(&mut self, update: &GuildMemberListUpdateInfo) {
-        if update.list_id.is_some() && self.list_id != update.list_id {
-            let replaced_existing_list = self.list_id.is_some();
-            self.entries.clear();
-            self.synced_ranges.clear();
-            self.total_items = None;
-            if replaced_existing_list {
-                self.require_refresh();
-            }
-            self.list_id = update.list_id.clone();
-        }
-
-        let total_is_authoritative = update.member_count.is_some();
-        if let Some(member_count) = update.member_count {
-            let member_count = u32::try_from(member_count).unwrap_or(u32::MAX);
-            let group_count = u32::try_from(update.groups.len()).unwrap_or(u32::MAX);
-            self.total_items = Some(member_count.saturating_add(group_count));
-        }
-
-        for operation in &update.ops {
-            match operation {
-                GuildMemberListOperation::Sync { range, items } => {
-                    self.sync_range(*range, items);
-                }
-                GuildMemberListOperation::Insert { index, item } => {
-                    let Some(entry) = item_entry(item) else {
-                        self.invalidate_all();
-                        continue;
-                    };
-                    self.insert(*index, entry);
-                    if !total_is_authoritative {
-                        self.total_items = self.total_items.map(|total| total.saturating_add(1));
-                    }
-                }
-                GuildMemberListOperation::Update { index, item } => {
-                    let Some(entry) = item_entry(item) else {
-                        self.invalidate_all();
-                        continue;
-                    };
-                    self.entries.insert(*index, entry);
-                }
-                GuildMemberListOperation::Delete { index } => {
-                    self.delete(*index);
-                    if !total_is_authoritative {
-                        self.total_items = self.total_items.map(|total| total.saturating_sub(1));
-                    }
-                }
-                GuildMemberListOperation::Invalidate { range } => {
-                    self.invalidate_range(*range);
-                }
-                GuildMemberListOperation::Unknown { .. } => self.invalidate_all(),
-            }
-        }
-    }
-
-    fn reset_from_snapshot(&mut self, member_count: Option<u64>) {
-        if !self.entries.is_empty() || !self.synced_ranges.is_empty() || self.total_items.is_some()
-        {
-            self.require_refresh();
-        }
-        self.list_id = None;
-        self.entries.clear();
-        self.synced_ranges.clear();
-        self.total_items = member_count.map(|count| u32::try_from(count).unwrap_or(u32::MAX));
-    }
-
-    fn sync_range(&mut self, (start, end): (u32, u32), items: &[GuildMemberListItem]) {
-        self.entries
-            .retain(|index, _| *index < start || *index > end);
-        self.remove_synced_range((start, end));
-        let mut understood = true;
-        for (offset, item) in items.iter().enumerate() {
-            let Ok(offset) = u32::try_from(offset) else {
-                break;
-            };
-            let index = start.saturating_add(offset);
-            if index > end {
-                break;
-            }
-            if let Some(entry) = item_entry(item) {
-                self.entries.insert(index, entry);
-            } else {
-                understood = false;
-            }
-        }
-        if understood {
-            self.mark_range_synced((start, end));
-        } else {
-            self.require_refresh();
-        }
-    }
-
-    fn insert(&mut self, index: u32, entry: Option<Id<UserMarker>>) {
-        let previous = std::mem::take(&mut self.entries);
-        self.entries = previous
-            .into_iter()
-            .map(|(current, item)| {
-                let shifted = if current >= index {
-                    current.saturating_add(1)
-                } else {
-                    current
-                };
-                (shifted, item)
-            })
-            .collect();
-        self.entries.insert(index, entry);
-    }
-
-    fn delete(&mut self, index: u32) {
-        let previous = std::mem::take(&mut self.entries);
-        self.entries = previous
-            .into_iter()
-            .filter_map(|(current, item)| {
-                if current == index {
-                    None
-                } else {
-                    Some((
-                        if current > index {
-                            current - 1
-                        } else {
-                            current
-                        },
-                        item,
-                    ))
-                }
-            })
-            .collect();
-    }
-
-    fn invalidate_range(&mut self, (start, end): (u32, u32)) {
-        self.entries
-            .retain(|index, _| *index < start || *index > end);
-        self.remove_synced_range((start, end));
-        self.require_refresh();
-    }
-
-    fn remove_synced_range(&mut self, (start, end): (u32, u32)) {
-        self.synced_ranges = self
-            .synced_ranges
-            .iter()
-            .flat_map(|(synced_start, synced_end)| {
-                let mut retained = Vec::with_capacity(2);
-                if *synced_end < start || *synced_start > end {
-                    retained.push((*synced_start, *synced_end));
-                } else {
-                    if *synced_start < start {
-                        retained.push((*synced_start, start - 1));
-                    }
-                    if *synced_end > end {
-                        retained.push((end.saturating_add(1), *synced_end));
-                    }
-                }
-                retained
-            })
-            .collect();
-    }
-
-    fn invalidate_all(&mut self) {
-        self.entries.clear();
-        self.synced_ranges.clear();
-        self.require_refresh();
-    }
-
-    fn invalidate_cached_ranges(&mut self) {
-        if self.entries.is_empty() && self.synced_ranges.is_empty() {
-            return;
-        }
-        self.entries.clear();
-        self.synced_ranges.clear();
-        self.require_refresh();
-    }
-
-    fn remove_user(&mut self, user_id: Id<UserMarker>) {
-        let index = self
-            .entries
-            .iter()
-            .find_map(|(index, entry)| (*entry == Some(user_id)).then_some(*index));
-        if let Some(index) = index {
-            self.delete(index);
-            self.require_refresh();
-        }
-    }
-
-    fn require_refresh(&mut self) {
-        self.refresh_generation = self.refresh_generation.wrapping_add(1);
-    }
-
-    fn has_ranges(&self, ranges: &[(u32, u32)]) -> bool {
-        ranges.iter().all(|(start, end)| {
-            if start > end || self.total_items.is_some_and(|total| *start >= total) {
-                return true;
-            }
-            let required_end = self
-                .total_items
-                .map(|total| (*end).min(total.saturating_sub(1)))
-                .unwrap_or(*end);
-            self.synced_ranges.iter().any(|(synced_start, synced_end)| {
-                *synced_start <= *start && *synced_end >= required_end
-            })
-        })
-    }
-
-    fn mark_range_synced(&mut self, range: (u32, u32)) {
-        self.synced_ranges.push(range);
-        self.synced_ranges.sort_unstable();
-        let mut merged: Vec<(u32, u32)> = Vec::with_capacity(self.synced_ranges.len());
-        for (start, end) in self.synced_ranges.drain(..) {
-            if let Some((_, merged_end)) = merged.last_mut()
-                && start <= merged_end.saturating_add(1)
-            {
-                *merged_end = (*merged_end).max(end);
-            } else {
-                merged.push((start, end));
-            }
-        }
-        self.synced_ranges = merged;
-    }
-}
-
-fn item_entry(item: &GuildMemberListItem) -> Option<Option<Id<UserMarker>>> {
-    match item {
-        GuildMemberListItem::Member { member, .. } => Some(Some(member.user_id)),
-        GuildMemberListItem::Group { .. } => Some(None),
-        GuildMemberListItem::Unknown { .. } => None,
     }
 }
 

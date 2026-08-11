@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::discord::ids::{
     Id,
     marker::{ChannelMarker, GuildMarker, MessageMarker, RoleMarker, UserMarker},
@@ -11,10 +13,10 @@ pub(super) use crate::discord::test_builders::{
 };
 use crate::discord::{
     AppEvent, AttachmentInfo, ChannelInfo, CustomEmojiInfo, EmbedInfo, GuildFolder,
-    GuildOnboardingInfo, MemberInfo, MessageInfo, MessageKind, MessageReferenceInfo,
-    MessageSnapshotInfo, MessageState, PermissionOverwriteInfo, PermissionOverwriteKind,
-    PollAnswerInfo, PollInfo, PresenceStatus, ReactionEmoji, ReactionInfo, ReadStateInfo, RoleInfo,
-    ThreadMetadataInfo, VoiceStateInfo,
+    GuildMemberListItem, GuildMemberListOperation, GuildMemberListUpdateInfo, GuildOnboardingInfo,
+    MemberInfo, MessageInfo, MessageKind, MessageReferenceInfo, MessageSnapshotInfo, MessageState,
+    PermissionOverwriteInfo, PermissionOverwriteKind, PollAnswerInfo, PollInfo, PresenceStatus,
+    ReactionEmoji, ReactionInfo, ReadStateInfo, RoleInfo, ThreadMetadataInfo, VoiceStateInfo,
 };
 
 pub(super) const PERM_ADD_REACTIONS: u64 = 0x0000_0000_0000_0040;
@@ -185,6 +187,26 @@ pub(super) fn member_with_roles(
     MemberInfo {
         role_ids,
         ..member_info(user_id, display_name)
+    }
+}
+
+pub(super) fn guild_member_list_event(
+    guild_id: Id<GuildMarker>,
+    items: Vec<GuildMemberListItem>,
+) -> AppEvent {
+    AppEvent::GuildMemberListUpdate {
+        update: GuildMemberListUpdateInfo {
+            guild_id,
+            list_id: Some("everyone".to_owned()),
+            member_count: None,
+            online_count: None,
+            groups: Vec::new(),
+            ops: vec![GuildMemberListOperation::Sync {
+                range: (0, 99),
+                items,
+            }],
+            extra_fields: BTreeMap::new(),
+        },
     }
 }
 
@@ -522,6 +544,18 @@ pub(super) fn state_with_members(count: u64) -> DashboardState {
             ..GuildCreateFixture::new(guild_id)
         },
     ));
+    state.push_event(guild_member_list_event(
+        guild_id,
+        std::iter::once(GuildMemberListItem::Group {
+            id: "online".to_owned(),
+            count,
+        })
+        .chain((1..=count).map(|id| GuildMemberListItem::Member {
+            member: member_info(Id::new(id), format!("member {id}")),
+            presence: None,
+        }))
+        .collect(),
+    ));
     state.confirm_selected_guild();
     state
 }
@@ -558,6 +592,35 @@ pub(super) fn state_with_grouped_members() -> DashboardState {
             }],
             ..GuildCreateFixture::new(guild_id)
         },
+    ));
+    state.push_event(guild_member_list_event(
+        guild_id,
+        vec![
+            GuildMemberListItem::Group {
+                id: role_id.get().to_string(),
+                count: 2,
+            },
+            GuildMemberListItem::Member {
+                member: member_with_roles(Id::new(1), "member 1", vec![role_id]),
+                presence: None,
+            },
+            GuildMemberListItem::Member {
+                member: member_with_roles(Id::new(2), "member 2", vec![role_id]),
+                presence: None,
+            },
+            GuildMemberListItem::Group {
+                id: "offline".to_owned(),
+                count: 2,
+            },
+            GuildMemberListItem::Member {
+                member: member_info(Id::new(3), "member 3"),
+                presence: None,
+            },
+            GuildMemberListItem::Member {
+                member: member_info(Id::new(4), "member 4"),
+                presence: None,
+            },
+        ],
     ));
     state.confirm_selected_guild();
     state

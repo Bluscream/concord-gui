@@ -1,8 +1,7 @@
 use ratatui::style::{Color, Style};
 
 use crate::discord::{
-    ActivityInfo, ActivityKind, ChannelRecipientState, ChannelState, GuildMemberState,
-    PresenceStatus, RoleState,
+    ActivityInfo, ActivityKind, ChannelRecipientState, ChannelState, PresenceStatus,
 };
 use crate::tui::theme;
 
@@ -72,13 +71,6 @@ pub fn presence_style(status: PresenceStatus) -> Style {
     }
 }
 
-pub(super) fn is_online_status(status: PresenceStatus) -> bool {
-    matches!(
-        status,
-        PresenceStatus::Online | PresenceStatus::Idle | PresenceStatus::DoNotDisturb
-    )
-}
-
 /// Selects the single activity used by compact member and DM sidebar rows.
 ///
 /// The predicate is media-independent so loading an emoji image can change the
@@ -124,28 +116,6 @@ fn compact_activity_priority(kind: ActivityKind) -> u8 {
         ActivityKind::Custom => 5,
         ActivityKind::Unknown => 6,
     }
-}
-
-pub(super) fn sorted_hoisted_roles<'a>(roles: &'a [&'a RoleState]) -> Vec<&'a RoleState> {
-    let mut roles: Vec<&RoleState> = roles.iter().copied().filter(|role| role.hoist).collect();
-    roles.sort_by(|left, right| role_display_order(left, right));
-    roles
-}
-
-fn role_display_order(left: &RoleState, right: &RoleState) -> std::cmp::Ordering {
-    right
-        .position
-        .cmp(&left.position)
-        .then(left.id.get().cmp(&right.id.get()))
-}
-
-pub(super) fn sort_member_entries(entries: &mut [&GuildMemberState]) {
-    entries.sort_by_cached_key(|member| {
-        (
-            member_status_rank(member.status),
-            member.display_name.to_lowercase(),
-        )
-    });
 }
 
 pub(super) fn sort_recipient_entries(entries: &mut [&ChannelRecipientState]) {

@@ -321,24 +321,28 @@ fn raw_member_list_update_preserves_operations_and_member_data() {
             "t": "GUILD_MEMBER_LIST_UPDATE",
             "d": {
                 "guild_id": "10",
+                "groups": [{ "id": "admin", "count": 4 }],
                 "ops": [
                     {
                         "op": "SYNC",
                         "range": [0, 99],
-                        "items": [{
-                            "member": {
-                                "user": {
-                                    "id": "20",
-                                    "username": "alice",
-                                    "global_name": "Alice",
-                                    "avatar": "global_hash"
+                        "items": [
+                            { "group": { "id": "admin" } },
+                            {
+                                "member": {
+                                    "user": {
+                                        "id": "20",
+                                        "username": "alice",
+                                        "global_name": "Alice",
+                                        "avatar": "global_hash"
+                                    },
+                                    "avatar": "guild_hash",
+                                    "nick": "Alice Nick",
+                                    "roles": ["30"]
                                 },
-                                "avatar": "guild_hash",
-                                "nick": "Alice Nick",
-                                "roles": ["30"],
                                 "presence": { "status": "idle" }
                             }
-                        }]
+                        ]
                     },
                     {
                         "op": "SYNC",
@@ -346,9 +350,9 @@ fn raw_member_list_update_preserves_operations_and_member_data() {
                         "items": [{
                             "member": {
                                 "user": { "id": "21", "username": "bob" },
-                                "roles": [],
-                                "presence": { "status": "idle" }
-                            }
+                                "roles": []
+                            },
+                            "presence": { "status": "idle" }
                         }]
                     },
                     {
@@ -357,9 +361,9 @@ fn raw_member_list_update_preserves_operations_and_member_data() {
                         "item": {
                             "member": {
                                 "user": { "id": "22", "username": "carol" },
-                                "roles": [],
-                                "presence": { "status": "online" }
-                            }
+                                "roles": []
+                            },
+                            "presence": { "status": "online" }
                         }
                     },
                     {
@@ -368,9 +372,9 @@ fn raw_member_list_update_preserves_operations_and_member_data() {
                         "item": {
                             "member": {
                                 "user": { "id": "23", "username": "dave" },
-                                "roles": [],
-                                "presence": { "status": "dnd" }
-                            }
+                                "roles": []
+                            },
+                            "presence": { "status": "dnd" }
                         }
                     },
                     { "op": "DELETE", "index": 12 },
@@ -392,7 +396,11 @@ fn raw_member_list_update_preserves_operations_and_member_data() {
         panic!("expected first sync operation");
     };
     assert_eq!(*range, (0, 99));
-    let GuildMemberListItem::Member { member, presence } = &items[0] else {
+    assert!(matches!(
+        &items[0],
+        GuildMemberListItem::Group { id, count } if id == "admin" && *count == 4
+    ));
+    let GuildMemberListItem::Member { member, presence } = &items[1] else {
         panic!("expected member list item");
     };
     assert_eq!(member.user_id, Id::new(20));

@@ -59,13 +59,13 @@ use crate::{
         ApplicationCommandOptionInfo, AttachmentDownloadId, AttachmentInfo, ChannelInfo,
         ChannelNotificationOverrideInfo, ChannelRecipientInfo, ChannelRecipientState, ChannelState,
         ChannelUnreadState, ChannelVisibilityStats, CustomEmojiInfo, EmbedInfo, GuildBoostTier,
-        GuildFolder, GuildMemberListUpdateInfo, GuildMemberState, GuildNotificationSettingsInfo,
-        MemberInfo, MentionInfo, MessageAttachmentUpload, MessageInfo, MessageInteractionInfo,
-        MessageKind, MessageSearchPage, MessageSearchQuery, MessageSnapshotInfo, MessageState,
-        MutualGuildInfo, NotificationLevel, PollAnswerInfo, PollInfo, PresenceStatus,
-        ReactionEmoji, ReactionInfo, ReactionUserInfo, ReadStateInfo, ReplyInfo, RoleInfo,
-        UserGuildSettingsInfo, UserProfileInfo, UserSettingsInfo, VoiceConnectionStatus,
-        VoiceStateInfo,
+        GuildFolder, GuildMemberListItem, GuildMemberListOperation, GuildMemberListUpdateInfo,
+        GuildMemberState, GuildNotificationSettingsInfo, MemberInfo, MentionInfo,
+        MessageAttachmentUpload, MessageInfo, MessageInteractionInfo, MessageKind,
+        MessageSearchPage, MessageSearchQuery, MessageSnapshotInfo, MessageState, MutualGuildInfo,
+        NotificationLevel, PollAnswerInfo, PollInfo, PresenceStatus, ReactionEmoji, ReactionInfo,
+        ReactionUserInfo, ReadStateInfo, ReplyInfo, RoleInfo, UserGuildSettingsInfo,
+        UserProfileInfo, UserSettingsInfo, VoiceConnectionStatus, VoiceStateInfo,
     },
     tui::{
         message::format::{
@@ -118,6 +118,24 @@ fn guild_member_list_counts_event(
             online_count: Some(online),
             groups: Vec::new(),
             ops: Vec::new(),
+            extra_fields: BTreeMap::new(),
+        },
+    }
+}
+
+fn guild_member_list_event(
+    guild_id: Id<crate::discord::ids::marker::GuildMarker>,
+    list_id: &str,
+    ops: Vec<GuildMemberListOperation>,
+) -> AppEvent {
+    AppEvent::GuildMemberListUpdate {
+        update: GuildMemberListUpdateInfo {
+            guild_id,
+            list_id: Some(list_id.to_owned()),
+            member_count: None,
+            online_count: None,
+            groups: Vec::new(),
+            ops,
             extra_fields: BTreeMap::new(),
         },
     }
@@ -502,12 +520,30 @@ fn forwarded_snapshot(
 }
 
 fn state_with_member(user_id: u64, display_name: &str) -> DashboardState {
+    let guild_id = Id::new(1);
     let mut state = DashboardState::new();
     state.push_event(guild_create_event(GuildCreateFixture {
         members: vec![member_info(user_id, display_name)],
         presences: vec![(Id::new(user_id), PresenceStatus::Online)],
-        ..GuildCreateFixture::new(Id::new(1))
+        ..GuildCreateFixture::new(guild_id)
     }));
+    state.push_event(guild_member_list_event(
+        guild_id,
+        "everyone",
+        vec![GuildMemberListOperation::Sync {
+            range: (0, 99),
+            items: vec![
+                GuildMemberListItem::Group {
+                    id: "online".to_owned(),
+                    count: 1,
+                },
+                GuildMemberListItem::Member {
+                    member: member_info(user_id, display_name),
+                    presence: None,
+                },
+            ],
+        }],
+    ));
     state
 }
 

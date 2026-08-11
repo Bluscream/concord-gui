@@ -349,6 +349,10 @@ impl DiscordClient {
         channel_id: Id<ChannelMarker>,
         ranges: Vec<(u32, u32)>,
     ) -> std::result::Result<(), String> {
+        self.state
+            .write()
+            .expect("discord state lock is not poisoned")
+            .prepare_member_list_subscription(guild_id, channel_id, ranges.clone());
         self.send_gateway_command(GatewayCommand::UpdateMemberListSubscription {
             guild_id,
             channel_id,

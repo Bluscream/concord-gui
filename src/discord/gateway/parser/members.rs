@@ -132,9 +132,10 @@ pub(super) fn parse_member_list_update(data: &Value) -> Vec<AppEvent> {
         );
     }
 
+    let groups = clone_array(data.get("groups"));
     let parsed_ops = ops
         .iter()
-        .map(|op| parse_member_list_operation(guild_id, op))
+        .map(|op| parse_member_list_operation(guild_id, op, &groups))
         .collect();
 
     vec![AppEvent::GuildMemberListUpdate {
@@ -143,7 +144,7 @@ pub(super) fn parse_member_list_update(data: &Value) -> Vec<AppEvent> {
             list_id: data.get("id").and_then(Value::as_str).map(str::to_owned),
             member_count: data.get("member_count").and_then(Value::as_u64),
             online_count,
-            groups: clone_array(data.get("groups")),
+            groups,
             ops: parsed_ops,
             extra_fields: extra_fields(
                 data,
@@ -174,7 +175,11 @@ fn parse_id_array<T>(value: Option<&Value>) -> Vec<Id<T>> {
         .unwrap_or_default()
 }
 
-fn parse_member_list_operation(guild_id: Id<GuildMarker>, op: &Value) -> GuildMemberListOperation {
+fn parse_member_list_operation(
+    guild_id: Id<GuildMarker>,
+    op: &Value,
+    groups: &[Value],
+) -> GuildMemberListOperation {
     let name = op.get("op").and_then(Value::as_str);
     let parsed = (|| -> Option<GuildMemberListOperation> {
         match name {
@@ -184,16 +189,16 @@ fn parse_member_list_operation(guild_id: Id<GuildMarker>, op: &Value) -> GuildMe
                     .get("items")?
                     .as_array()?
                     .iter()
-                    .map(|item| parse_member_list_item(guild_id, item))
+                    .map(|item| parse_member_list_item(guild_id, item, groups))
                     .collect(),
             }),
             Some("INSERT") => Some(GuildMemberListOperation::Insert {
                 index: parse_member_list_index(op.get("index")?)?,
-                item: parse_member_list_item(guild_id, op.get("item")?),
+                item: parse_member_list_item(guild_id, op.get("item")?, groups),
             }),
             Some("UPDATE") => Some(GuildMemberListOperation::Update {
                 index: parse_member_list_index(op.get("index")?)?,
-                item: parse_member_list_item(guild_id, op.get("item")?),
+                item: parse_member_list_item(guild_id, op.get("item")?, groups),
             }),
             Some("DELETE") => Some(GuildMemberListOperation::Delete {
                 index: parse_member_list_index(op.get("index")?)?,
@@ -221,12 +226,18 @@ fn parse_member_list_range(value: &Value) -> Option<(u32, u32)> {
     (start <= end).then_some((start, end))
 }
 
-fn parse_member_list_item(guild_id: Id<GuildMarker>, item: &Value) -> GuildMemberListItem {
+fn parse_member_list_item(
+    guild_id: Id<GuildMarker>,
+    item: &Value,
+    groups: &[Value],
+) -> GuildMemberListItem {
     if let Some(group) = item.get("group") {
-        if let (Some(id), Some(count)) = (
-            group.get("id").and_then(Value::as_str),
-            group.get("count").and_then(Value::as_u64),
-        ) {
+        if let Some(id) = group.get("id").and_then(Value::as_str)
+            && let Some(count) = group
+                .get("count")
+                .and_then(Value::as_u64)
+                .or_else(|| member_list_group_count(groups, id))
+        {
             return GuildMemberListItem::Group {
                 id: id.to_owned(),
                 count,
@@ -244,7 +255,7 @@ fn parse_member_list_item(guild_id: Id<GuildMarker>, item: &Value) -> GuildMembe
         return GuildMemberListItem::Unknown { raw: item.clone() };
     };
     let user_id = member_info.user_id;
-    let presence = member.get("presence");
+    let presence = item.get("presence").or_else(|| member.get("presence"));
     let status = presence
         .and_then(|presence| presence.get("status"))
         .and_then(Value::as_str)
@@ -260,6 +271,14 @@ fn parse_member_list_item(guild_id: Id<GuildMarker>, item: &Value) -> GuildMembe
         member: member_info,
         presence,
     }
+}
+
+fn member_list_group_count(groups: &[Value], id: &str) -> Option<u64> {
+    groups
+        .iter()
+        .find(|group| group.get("id").and_then(Value::as_str) == Some(id))
+        .and_then(|group| group.get("count"))
+        .and_then(Value::as_u64)
 }
 
 pub(super) fn parse_member_remove(data: &Value) -> Option<AppEvent> {

@@ -794,10 +794,12 @@ fn channel_pane_keeps_voice_participant_indicators_visible_after_name_truncation
 }
 
 #[test]
-fn member_pane_keeps_cached_members_visible_while_ranges_refresh() {
+fn member_pane_keeps_stable_gateway_rows_during_partial_replacement() {
     let guild_id = Id::new(1);
     let channel_id = Id::new(2);
     let alice = Id::new(20);
+    let bob = Id::new(21);
+    let carol = Id::new(22);
     let mut state = DashboardState::new();
     state.push_event(guild_create_event(GuildCreateFixture {
         channels: vec![ChannelInfo {
@@ -805,12 +807,50 @@ fn member_pane_keeps_cached_members_visible_while_ranges_refresh() {
             name: "general".to_owned(),
             ..ChannelInfo::test(channel_id, "GuildText")
         }],
-        members: vec![MemberInfo::test(alice, "Alice")],
-        member_count: Some(100),
+        members: vec![
+            MemberInfo::test(alice, "Alice"),
+            MemberInfo::test(bob, "Bob"),
+            MemberInfo::test(carol, "Carol"),
+        ],
+        member_count: Some(3),
         ..GuildCreateFixture::new(guild_id)
     }));
+    state.push_event(guild_member_list_event(
+        guild_id,
+        "first",
+        vec![GuildMemberListOperation::Sync {
+            range: (0, 99),
+            items: vec![
+                GuildMemberListItem::Group {
+                    id: "online".to_owned(),
+                    count: 2,
+                },
+                GuildMemberListItem::Member {
+                    member: MemberInfo::test(alice, "Alice"),
+                    presence: None,
+                },
+                GuildMemberListItem::Member {
+                    member: MemberInfo::test(bob, "Bob"),
+                    presence: None,
+                },
+            ],
+        }],
+    ));
     state.confirm_selected_guild();
     state.set_member_view_height(6);
+    assert!(!state.is_member_list_loading());
+
+    state.push_event(guild_member_list_event(
+        guild_id,
+        "second",
+        vec![GuildMemberListOperation::Insert {
+            index: 0,
+            item: GuildMemberListItem::Member {
+                member: MemberInfo::test(carol, "Carol"),
+                presence: None,
+            },
+        }],
+    ));
     assert!(state.is_member_list_loading());
 
     let backend = TestBackend::new(40, 6);
@@ -821,6 +861,8 @@ fn member_pane_keeps_cached_members_visible_while_ranges_refresh() {
     let buffer = terminal.backend().buffer();
 
     assert!(find_cell(buffer, "Alice").is_some());
+    assert!(find_cell(buffer, "Bob").is_some());
+    assert!(find_cell(buffer, "Carol").is_none());
     assert!(find_cell(buffer, "Loading...").is_none());
 }
 
@@ -847,6 +889,26 @@ fn member_pane_keeps_normal_style_for_speaking_voice_members() {
     }));
     state.confirm_selected_guild();
     state.push_event(guild_member_list_counts_event(guild_id, 1));
+    state.push_event(guild_member_list_event(
+        guild_id,
+        "everyone",
+        vec![GuildMemberListOperation::Sync {
+            range: (0, 99),
+            items: vec![
+                GuildMemberListItem::Group {
+                    id: "online".to_owned(),
+                    count: 1,
+                },
+                GuildMemberListItem::Member {
+                    member: MemberInfo {
+                        username: Some("alice".to_owned()),
+                        ..MemberInfo::test(alice, "Alice")
+                    },
+                    presence: None,
+                },
+            ],
+        }],
+    ));
     state.push_event(AppEvent::VoiceStateUpdate {
         state: VoiceStateInfo::test(guild_id, Some(voice_id), alice),
     });

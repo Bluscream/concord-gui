@@ -101,18 +101,6 @@ pub(in crate::discord) struct GuildDetailCache {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(in crate::discord) struct GuildMemberListState {
-    pub(in crate::discord) list_id: Option<String>,
-    /// A present key is a valid list position. `None` is a Discord group row.
-    pub(in crate::discord) entries: BTreeMap<u32, Option<Id<UserMarker>>>,
-    /// Ranges confirmed by SYNC operations. A SYNC is authoritative even when
-    /// the event omits `member_count` or contains fewer rows than requested.
-    pub(in crate::discord) synced_ranges: Vec<(u32, u32)>,
-    pub(in crate::discord) total_items: Option<u32>,
-    pub(in crate::discord) refresh_generation: u64,
-}
-
-#[derive(Clone, Debug, Default)]
 pub(in crate::discord) struct ProfileCache {
     pub(in crate::discord) profile_role_ids: ProfileRoleIds,
     /// Cached profile lookups so the profile popup can render instantly when
