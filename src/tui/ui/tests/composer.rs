@@ -84,6 +84,21 @@ fn sync_view_heights_reserves_space_for_composer_height() {
 }
 
 #[test]
+fn composer_height_is_capped_at_half_the_message_panel() {
+    let mut state = state_with_message();
+    state.start_composer();
+    state.insert_composer_text_at_cursor(&("line\n".repeat(20)));
+
+    let areas = message_areas(Rect::new(0, 0, 80, 20), &state);
+
+    assert_eq!(areas.composer.height, 10);
+    assert_eq!(areas.list.height, 10);
+
+    let short_areas = message_areas(Rect::new(0, 0, 80, 5), &DashboardState::new());
+    assert_eq!(short_areas.composer.height, 3);
+}
+
+#[test]
 fn composer_prompt_line_count_matches_prefixed_multiline_rendering() {
     let mut state = state_with_message();
     state.start_composer();
@@ -305,6 +320,39 @@ fn composer_border_title_tracks_message_mode() {
 }
 
 #[test]
+fn composer_title_shows_the_account_limit_and_marks_overflow_in_red() {
+    for (premium_tier, expected) in [
+        (crate::discord::PremiumTier::None, "0 / 2000"),
+        (crate::discord::PremiumTier::Nitro, "0 / 4000"),
+    ] {
+        let mut state = state_with_message();
+        state.push_event(AppEvent::CurrentUserCapabilities { premium_tier });
+        state.start_composer();
+        let rendered = render_dashboard_dump(80, 16, &mut state).join("\n");
+        assert!(rendered.contains(expected), "{rendered}");
+    }
+
+    let mut base = state_with_message();
+    base.start_composer();
+    base.insert_composer_text_at_cursor(&"x".repeat(2_001));
+    let backend = TestBackend::new(40, 4);
+    let mut terminal = Terminal::new(backend).expect("test terminal should build");
+    terminal
+        .draw(|frame| render_composer(frame, frame.area(), &base, &[]))
+        .expect("composer should render");
+    let buffer = terminal.backend().buffer();
+    let (start_x, row) = find_cell(buffer, "2001 / 2000")
+        .expect("character indicator should be visible in the composer title");
+    let error_color = theme::current()
+        .style(theme::HighlightGroup::Error)
+        .fg
+        .expect("error theme should define a foreground color");
+    for column in start_x..start_x + "2001 / 2000".len() as u16 {
+        assert_eq!(buffer[(column, row)].fg, error_color);
+    }
+}
+
+#[test]
 fn composer_lines_show_pending_upload_rows_above_input() {
     let mut state = state_with_message();
     state.start_composer();
@@ -411,6 +459,101 @@ fn composer_cursor_position_accounts_for_upload_and_reply_rows() {
     assert_eq!(
         composer_cursor_position(Rect::new(10, 20, 20, 14), &state),
         Some(Position { x: 15, y: 31 })
+    );
+}
+
+#[test]
+fn overflowing_pasted_composer_scrolls_naturally_and_shows_the_shared_scrollbar() {
+    fn visible_composer_rows(area: Rect, state: &DashboardState) -> Vec<String> {
+        let backend = TestBackend::new(area.width, area.height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should build");
+        terminal
+            .draw(|frame| render_composer(frame, area, state, &[]))
+            .expect("composer should render");
+        let buffer = terminal.backend().buffer();
+        (1..area.height - 1)
+            .map(|row| {
+                (1..area.width - 2)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    fn composer_scrollbar_symbols(area: Rect, state: &DashboardState) -> Vec<String> {
+        let backend = TestBackend::new(area.width, area.height);
+        let mut terminal = Terminal::new(backend).expect("test terminal should build");
+        terminal
+            .draw(|frame| render_composer(frame, area, state, &[]))
+            .expect("composer should render");
+        let buffer = terminal.backend().buffer();
+        let column = area.width.saturating_sub(2);
+        (1..area.height - 1)
+            .map(|row| buffer[(column, row)].symbol().to_owned())
+            .collect()
+    }
+
+    let mut short = state_with_message();
+    short.start_composer();
+    short.insert_composer_text_at_cursor("short");
+    let area = Rect::new(0, 0, 20, 5);
+    assert!(
+        composer_scrollbar_symbols(area, &short)
+            .iter()
+            .all(|symbol| symbol == " ")
+    );
+
+    let mut state = state_with_message();
+    state.start_composer();
+    state.insert_composer_text_at_cursor("first\nsecond\nthird\nfourth");
+    sync_composer_viewport(area, &mut state);
+
+    assert!(
+        composer_scrollbar_symbols(area, &state)
+            .iter()
+            .any(|symbol| symbol == "┃")
+    );
+    assert_eq!(
+        visible_composer_rows(area, &state),
+        vec!["  second", "  third", "  fourth"]
+    );
+    assert_eq!(
+        composer_cursor_position(area, &state),
+        Some(Position { x: 9, y: 3 })
+    );
+
+    state.move_composer_cursor_up();
+    sync_composer_viewport(area, &mut state);
+
+    assert_eq!(
+        visible_composer_rows(area, &state),
+        vec!["  second", "  third", "  fourth"]
+    );
+    assert_eq!(
+        composer_cursor_position(area, &state),
+        Some(Position { x: 8, y: 2 })
+    );
+
+    state.move_composer_cursor_up();
+    sync_composer_viewport(area, &mut state);
+
+    assert_eq!(
+        visible_composer_rows(area, &state),
+        vec!["  second", "  third", "  fourth"]
+    );
+
+    state.move_composer_cursor_up();
+    sync_composer_viewport(area, &mut state);
+
+    assert_eq!(
+        visible_composer_rows(area, &state),
+        vec!["> first", "  second", "  third"]
+    );
+    assert_eq!(
+        composer_cursor_position(area, &state),
+        Some(Position { x: 8, y: 1 })
     );
 }
 

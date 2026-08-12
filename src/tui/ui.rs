@@ -51,14 +51,16 @@ mod popups;
 mod types;
 
 pub(crate) use self::hit_test::{focus_pane_at, mouse_target_at};
+#[cfg(test)]
+use self::layout::composer_prompt_line_count;
 use self::layout::{
-    attachment_viewer_image_area, attachment_viewer_popup, centered_rect, dashboard_areas,
-    inline_image_preview_area, inline_image_preview_height, inline_image_preview_width,
-    message_areas, message_list_area, panel_scrollbar_area, reaction_users_visible_line_count,
+    attachment_viewer_image_area, attachment_viewer_popup, centered_rect,
+    composer_content_line_count, composer_content_width, composer_prompt_cursor_position,
+    composer_rows_before_input, dashboard_areas, inline_image_preview_area,
+    inline_image_preview_height, inline_image_preview_width, message_areas, message_composer_area,
+    message_list_area, panel_scrollbar_area, reaction_users_visible_line_count,
     vertical_scrollbar_visible,
 };
-#[cfg(test)]
-use self::layout::{composer_content_line_count, composer_prompt_line_count};
 use self::message::list::{MessageMedia, render_messages};
 use self::panes::{
     channel_pane_header_height, render_channels, render_guilds, render_header, render_members,
@@ -77,10 +79,11 @@ use self::popups::{
     render_downloads_popup, render_emoji_reaction_picker, render_folder_settings_popup,
     render_forum_post_composer, render_forum_post_tag_picker, render_guild_action_menu,
     render_guild_leave_confirmation, render_key_sequence_hint, render_keymap_help_popup,
-    render_member_action_menu, render_message_action_menu, render_message_confirmation,
-    render_message_url_picker, render_notification_inbox_mark_all_confirmation,
-    render_notification_inbox_popup, render_options_popup, render_poll_vote_picker,
-    render_quit_confirmation, render_reaction_users_popup, render_search_popup, render_stream_info,
+    render_long_message_confirmation, render_member_action_menu, render_message_action_menu,
+    render_message_confirmation, render_message_url_picker,
+    render_notification_inbox_mark_all_confirmation, render_notification_inbox_popup,
+    render_options_popup, render_poll_vote_picker, render_quit_confirmation,
+    render_reaction_users_popup, render_search_popup, render_stream_info,
     render_thread_action_menu, render_thread_delete_confirmation, render_thread_edit,
     render_thread_edit_tag_picker, render_toast, render_user_profile_popup,
     render_voice_participant_audio_popup, thread_edit_metrics, thread_edit_popup_area,
@@ -109,7 +112,8 @@ use self::{
         channel_switcher_cursor_position, channel_switcher_lines, debug_log_popup_lines,
         emoji_reaction_picker_lines, emoji_reaction_picker_lines_for_width,
         emoji_reaction_picker_lines_with_own_reactions, filtered_emoji_reaction_picker_lines,
-        folder_settings_input_line_for_test, keymap_help_popup_lines, message_action_menu_lines,
+        folder_settings_input_line_for_test, keymap_help_popup_lines,
+        long_message_confirmation_lines_for_test, message_action_menu_lines,
         message_action_menu_lines_with_keymap_options, message_delete_confirmation_lines,
         message_pin_confirmation_lines, message_remove_embeds_confirmation_lines,
         message_url_picker_lines_for_width, options_popup_lines, poll_vote_picker_lines,
@@ -125,6 +129,7 @@ pub(in crate::tui) use self::popups::user_profile_popup_area;
 pub(in crate::tui::ui) use self::popups::{downloads_popup_area, downloads_popup_lines};
 pub fn sync_view_heights(area: Rect, state: &mut DashboardState) {
     let areas = dashboard_areas(area, state);
+    sync_composer_viewport(message_composer_area(areas.messages, state), state);
     let guild_filter_row = usize::from(
         state.is_guild_pane_filter_active() && state.is_pane_visible(FocusPane::Guilds),
     );
@@ -211,6 +216,25 @@ pub fn sync_view_heights(area: Rect, state: &mut DashboardState) {
     if let Some(layout) = active_selectable_popup_layout(area, state) {
         state.set_active_popup_list_layout(layout.target, layout.scroll, layout.visible_items());
     }
+}
+
+fn sync_composer_viewport(area: Rect, state: &mut DashboardState) {
+    let view_height = usize::from(area.height.saturating_sub(2));
+    if !state.is_composing() || state.composer_lock().is_some() {
+        state.sync_composer_scroll(view_height, 0, 0);
+        return;
+    }
+
+    let inner_width = composer_content_width(area.width);
+    let (prompt_row, _) = composer_prompt_cursor_position(
+        state.composer_input(),
+        state.composer_cursor_byte_index(),
+        inner_width,
+    );
+    let cursor_row = composer_rows_before_input(state).saturating_add(prompt_row);
+    let total_lines = usize::from(composer_content_line_count(state, inner_width))
+        .max(cursor_row.saturating_add(1));
+    state.sync_composer_scroll(view_height, total_lines, cursor_row);
 }
 
 pub fn image_preview_layout(area: Rect, state: &DashboardState) -> ImagePreviewLayout {
@@ -307,6 +331,7 @@ pub(in crate::tui) fn render_with_message_viewport_plan(
     render_message_action_menu(frame, popup_area, state);
     render_thread_action_menu(frame, popup_area, state);
     render_message_url_picker(frame, popup_area, state);
+    render_long_message_confirmation(frame, popup_area, state);
     render_message_confirmation(frame, popup_area, state);
     render_quit_confirmation(frame, popup_area, state);
     render_guild_leave_confirmation(frame, popup_area, state);

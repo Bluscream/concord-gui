@@ -42,7 +42,7 @@ use voice_participant_audio::{
     VOICE_PARTICIPANT_AUDIO_FIELD_COUNT, VoiceParticipantAudioPopupState,
 };
 
-use super::scroll::clamp_list_scroll;
+use super::scroll::{VerticalScrollState, clamp_list_scroll};
 use super::{
     DashboardState, EmojiReactionItem, FocusPane, MessageUrlItem, PollVotePickerItem,
     ThreadEditField,
@@ -114,6 +114,7 @@ define_modal_popups! {
     ChannelActionMenu(ChannelActionMenuState),
     MemberActionMenu(MemberActionMenuState),
     MessageUrlPicker(MessageUrlPickerState),
+    LongMessageConfirmation(LongMessageConfirmationState),
     MessageConfirmation(MessageConfirmationState),
     QuitConfirmation,
     GuildLeaveConfirmation(GuildLeaveConfirmationState),
@@ -494,80 +495,7 @@ impl SelectablePopupState {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(super) struct ScrollablePopupState {
-    scroll: usize,
-    view_height: usize,
-    total_lines: usize,
-}
-
-impl ScrollablePopupState {
-    pub(super) fn scroll(&self) -> usize {
-        self.scroll
-    }
-
-    pub(super) fn set_view_height(&mut self, height: usize) {
-        self.view_height = height;
-        self.clamp_scroll();
-    }
-
-    pub(super) fn set_total_lines(&mut self, total_lines: usize) {
-        self.total_lines = total_lines;
-        self.clamp_scroll();
-    }
-
-    pub(super) fn scroll_down(&mut self) {
-        self.scroll = self.scroll.saturating_add(1);
-        self.clamp_scroll();
-    }
-
-    pub(super) fn scroll_up(&mut self) {
-        self.scroll = self.scroll.saturating_sub(1);
-    }
-
-    pub(super) fn page_down(&mut self) {
-        self.scroll = self.scroll.saturating_add((self.view_height / 2).max(1));
-        self.clamp_scroll();
-    }
-
-    pub(super) fn page_up(&mut self) {
-        self.scroll = self.scroll.saturating_sub((self.view_height / 2).max(1));
-    }
-
-    pub(super) fn page(&mut self, action: SelectionAction) {
-        match action {
-            SelectionAction::Next => self.page_down(),
-            SelectionAction::Previous => self.page_up(),
-        }
-    }
-
-    /// Adjust the scroll offset just enough to bring rows `[start, end)` into
-    /// the viewport, without recentering when the range is already visible.
-    pub(super) fn reveal(&mut self, start: usize, end: usize) {
-        if start < self.scroll {
-            self.scroll = start;
-        } else if self.view_height > 0 && end > self.scroll + self.view_height {
-            self.scroll = end.saturating_sub(self.view_height);
-        }
-        self.clamp_scroll();
-    }
-
-    fn clamp_scroll(&mut self) {
-        let visible = self.view_height.min(self.total_lines);
-        self.scroll = self.scroll.min(self.total_lines.saturating_sub(visible));
-    }
-
-    pub(super) fn scroll_to_top(&mut self) {
-        self.scroll = 0;
-    }
-
-    pub(super) fn is_near_bottom(&self, threshold: usize) -> bool {
-        self.scroll
-            .saturating_add(self.view_height)
-            .saturating_add(threshold)
-            >= self.total_lines
-    }
-}
+type ScrollablePopupState = VerticalScrollState;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MessageActionMenuState {
@@ -599,6 +527,30 @@ pub(super) struct MessageConfirmationState {
     pub(super) message_id: Id<MessageMarker>,
     pub(super) author: String,
     pub(super) content: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct LongMessageConfirmationState {
+    pub(super) channel_id: Id<ChannelMarker>,
+    pub(super) file_content: String,
+    pub(super) character_count: usize,
+    pub(super) character_limit: usize,
+}
+
+impl LongMessageConfirmationState {
+    pub(super) fn new(
+        channel_id: Id<ChannelMarker>,
+        file_content: String,
+        character_count: usize,
+        character_limit: usize,
+    ) -> Self {
+        Self {
+            channel_id,
+            file_content,
+            character_count,
+            character_limit,
+        }
+    }
 }
 
 impl MessageConfirmationState {
@@ -1358,6 +1310,19 @@ impl PopupUiState {
         }
     }
 
+    pub(super) fn long_message_confirmation(&self) -> Option<&LongMessageConfirmationState> {
+        match &self.modal {
+            Some(ModalPopup::LongMessageConfirmation(confirmation)) => Some(confirmation),
+            _ => None,
+        }
+    }
+
+    pub(super) fn take_long_message_confirmation(
+        &mut self,
+    ) -> Option<LongMessageConfirmationState> {
+        take_modal_state!(self, LongMessageConfirmation, confirmation)
+    }
+
     pub(super) fn take_message_confirmation(&mut self) -> Option<MessageConfirmationState> {
         take_modal_state!(self, MessageConfirmation, confirmation)
     }
@@ -1696,6 +1661,9 @@ impl DashboardState {
             }
             ActiveModalPopupKind::MemberActionMenu => self.close_member_action_menu(),
             ActiveModalPopupKind::MessageUrlPicker => self.close_message_url_picker(),
+            ActiveModalPopupKind::LongMessageConfirmation => {
+                self.close_long_message_confirmation();
+            }
             ActiveModalPopupKind::MessageConfirmation => self.close_message_confirmation(),
             ActiveModalPopupKind::QuitConfirmation => self.close_quit_confirmation(),
             ActiveModalPopupKind::GuildLeaveConfirmation => {
@@ -1913,6 +1881,7 @@ impl DashboardState {
             ModalPopup::MessageUrlPicker(_) => {
                 ActivePopupPolicy::selectable(kind, SelectablePopupTarget::MessageUrls)
             }
+            ModalPopup::LongMessageConfirmation(_) => ActivePopupPolicy::confirmation(kind),
             ModalPopup::Options(popup) if popup.capturing_push_to_talk_shortcut => {
                 ActivePopupPolicy::exclusive(kind)
             }

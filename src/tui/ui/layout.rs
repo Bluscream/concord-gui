@@ -119,6 +119,11 @@ pub(super) fn message_list_area(area: Rect, state: &DashboardState) -> Rect {
     message_areas(inner, state).list
 }
 
+pub(super) fn message_composer_area(area: Rect, state: &DashboardState) -> Rect {
+    let inner = Block::default().borders(Borders::ALL).inner(area);
+    message_areas(inner, state).composer
+}
+
 pub(super) fn message_areas(area: Rect, state: &DashboardState) -> MessageAreas {
     let composer_height = composer_height(area, state);
     let typing_height: u16 = state.typing_footer_for_selected_channel().is_some().into();
@@ -211,11 +216,16 @@ pub(super) fn composer_height(area: Rect, state: &DashboardState) -> u16 {
             || !state.pending_composer_attachments().is_empty()
             || state.clipboard_paste_pending())
     {
-        composer_content_line_count(state, composer_inner_width(area.width))
+        composer_content_line_count(state, composer_content_width(area.width))
     } else {
-        composer_placeholder_line_count(state, composer_inner_width(area.width))
+        composer_placeholder_line_count(state, composer_content_width(area.width))
     };
-    MIN_MESSAGE_INPUT_HEIGHT.max(content_lines.saturating_add(2))
+    let desired_height = MIN_MESSAGE_INPUT_HEIGHT.max(content_lines.saturating_add(2));
+    // Keep enough message history visible while large drafts use the composer
+    // viewport's internal scrolling. Very short layouts still need one input
+    // row plus the top and bottom borders.
+    let maximum_height = MIN_MESSAGE_INPUT_HEIGHT.max(area.height / 2);
+    desired_height.min(maximum_height)
 }
 
 fn composer_placeholder_line_count(state: &DashboardState, width: u16) -> u16 {
@@ -223,8 +233,10 @@ fn composer_placeholder_line_count(state: &DashboardState, width: u16) -> u16 {
     (wrap_text_lines(&text, usize::from(width.max(1))).len() as u16).max(1)
 }
 
-pub(super) fn composer_inner_width(width: u16) -> u16 {
-    width.saturating_sub(2).max(1)
+/// Keep the rightmost inner column free for the shared vertical scrollbar.
+/// Reserving it at every height avoids rewrapping the draft when overflow starts.
+pub(super) fn composer_content_width(width: u16) -> u16 {
+    width.saturating_sub(3).max(1)
 }
 
 pub(super) fn composer_content_line_count(state: &DashboardState, width: u16) -> u16 {
@@ -258,6 +270,24 @@ pub(super) fn composer_prompt_line_count(input: &str, width: u16) -> u16 {
     let width = usize::from(width.max(1));
     let prompt = prefixed_composer_input(input);
     wrap_text_lines(&prompt, width).len() as u16
+}
+
+pub(super) fn composer_prompt_cursor_position(
+    input: &str,
+    cursor: usize,
+    width: u16,
+) -> (usize, usize) {
+    let width = usize::from(width.max(1));
+    let cursor = cursor.min(input.len());
+    let prompt = prefixed_composer_input(&input[..cursor]);
+    let wrapped = wrap_text_lines(&prompt, width);
+    let mut row = wrapped.len().saturating_sub(1);
+    let mut column = wrapped.last().map(|line| line.width()).unwrap_or_default();
+    if column >= width {
+        row = row.saturating_add(1);
+        column = 0;
+    }
+    (row, column)
 }
 
 pub(super) fn prefixed_composer_input(input: &str) -> String {
