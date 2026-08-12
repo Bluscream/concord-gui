@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.7] - 2026-08-12
+
+### Bug Fixes
+
+- Fix targeted guild member hydration by @chojs23
+- Separate member pane search from member autocomplete by @chojs23
+- Fix member hydration, search, refresh by @chojs23
+- _(discord)_ Distinguish identifier no-update from fetch failures by @chojs23
+- Preserve Discord list order across refreshes by @chojs23
+- _(discord)_ Align gateway recovery and client state by @chojs23
+- Fix forwarded timestamps to honor the configured hour format by @chojs23
+- Composer input (#307) in [#307](https://github.com/chojs23/concord/pull/307) by @chojs23
+- Fix empty panel titles breaking top borders by @chojs23
+
+### Features
+
+- Align Gateway compression, client state, and REST headers by @chojs23
+- Add config option for 12-hour time format (#306) in [#306](https://github.com/chojs23/concord/pull/306) by @NotNoss
+- Enhance thread create ui by @chojs23
+
+### Miscellaneous Tasks
+
+- Remove mark read hint by @chojs23
+
+### New Contributors
+
+- @NotNoss made their first contribution in [#306](https://github.com/chojs23/concord/pull/306)
+
 ## [2.5.6] - 2026-08-07
 
 ### Bug Fixes
