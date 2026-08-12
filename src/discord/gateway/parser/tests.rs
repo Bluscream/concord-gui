@@ -3516,6 +3516,7 @@ fn message_ack_preserves_optional_read_state_fields() {
                 "mention_count": 2,
                 "flags": 5,
                 "last_viewed": 20_000,
+                "version": 6,
             }
         })
         .to_string(),
@@ -3529,6 +3530,7 @@ fn message_ack_preserves_optional_read_state_fields() {
                 mention_count,
                 flags,
                 last_viewed,
+                version,
             },
         ] => {
             assert_eq!(*channel_id, Id::new(42));
@@ -3536,6 +3538,7 @@ fn message_ack_preserves_optional_read_state_fields() {
             assert_eq!(*mention_count, Some(2));
             assert_eq!(*flags, Some(5));
             assert_eq!(*last_viewed, Some(20_000));
+            assert_eq!(*version, Some(6));
         }
         other => panic!("expected one MessageAck, got {other:?}"),
     }
@@ -3545,7 +3548,8 @@ fn message_ack_preserves_optional_read_state_fields() {
             "t": "MESSAGE_ACK",
             "d": {
                 "channel_id": "42",
-                "message_id": "100"
+                "message_id": "100",
+                "version": 7
             }
         }),
         json!({
@@ -3553,7 +3557,8 @@ fn message_ack_preserves_optional_read_state_fields() {
             "d": {
                 "channel_id": "42",
                 "message_id": "101",
-                "mention_count": null
+                "mention_count": null,
+                "version": 8
             }
         }),
     ] {
@@ -3563,10 +3568,20 @@ fn message_ack_preserves_optional_read_state_fields() {
                 mention_count: None,
                 flags: None,
                 last_viewed: None,
+                version: Some(_),
                 ..
             }]
         ));
     }
+
+    let missing_version = json!({
+        "t": "MESSAGE_ACK",
+        "d": {
+            "channel_id": "42",
+            "message_id": "102"
+        }
+    });
+    assert!(parse_user_account_event(&missing_version.to_string()).is_empty());
 }
 
 #[test]
@@ -3980,7 +3995,8 @@ fn user_guild_settings_update_emits_single_update_event() {
                 "message_notifications": 2,
                 "muted": true,
                 "mute_config": { "end_time": "2099-01-01T00:00:00.000Z" },
-                "channel_overrides": []
+                "channel_overrides": [],
+                "version": 11
             }
         })
         .to_string(),
@@ -3995,9 +4011,20 @@ fn user_guild_settings_update_emits_single_update_event() {
                 Some(NotificationLevel::NoMessages)
             );
             assert!(notification_settings.muted);
+            assert_eq!(notification_settings.version, 11);
         }
         other => panic!("expected one UserGuildSettingsUpdate, got {other:?}"),
     }
+
+    let missing_version = json!({
+        "t": "USER_GUILD_SETTINGS_UPDATE",
+        "d": {
+            "guild_id": "10",
+            "message_notifications": 2,
+            "channel_overrides": []
+        }
+    });
+    assert!(parse_user_account_event(&missing_version.to_string()).is_empty());
 }
 
 #[test]

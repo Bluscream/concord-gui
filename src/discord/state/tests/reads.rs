@@ -68,6 +68,48 @@ fn versioned_read_state_sync_merges_partial_and_clears_full_empty_snapshots() {
 }
 
 #[test]
+fn acknowledgement_events_advance_the_gateway_version_but_local_ack_does_not() {
+    let channel_id = Id::new(7);
+    let mut state = DiscordState::default();
+    state.apply_event(&AppEvent::ReadStateSync {
+        entries: Vec::new(),
+        partial: false,
+        version: Some(10),
+    });
+
+    state.apply_event(&AppEvent::MessageAck {
+        channel_id,
+        message_id: Id::new(100),
+        mention_count: Some(0),
+        flags: None,
+        last_viewed: None,
+        version: Some(11),
+    });
+    state.apply_event(&AppEvent::FeatureReadStateAck {
+        read_state_type: 2,
+        resource_id: 1,
+        entity_id: 20,
+        version: 12,
+    });
+    assert_eq!(state.notifications.read_state_version, Some(12));
+
+    state.apply_event(&AppEvent::ChannelPinsAck {
+        channel_id,
+        timestamp: "2026-08-12T00:00:00.000Z".to_owned(),
+        version: 13,
+    });
+    state.apply_event(&AppEvent::MessageAck {
+        channel_id,
+        message_id: Id::new(101),
+        mention_count: Some(0),
+        flags: None,
+        last_viewed: None,
+        version: None,
+    });
+    assert_eq!(state.notifications.read_state_version, Some(13));
+}
+
+#[test]
 fn typed_read_states_and_ack_metadata_remain_distinct_across_snapshots() {
     let guild_id = Id::new(1);
     let channel_id = Id::new(7);
@@ -196,6 +238,7 @@ fn message_ack_without_mention_count_retains_mentions_and_flags() {
         mention_count: None,
         flags: None,
         last_viewed: None,
+        version: None,
     });
 
     let read = state

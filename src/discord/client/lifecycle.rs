@@ -323,6 +323,7 @@ impl DiscordClient {
             mention_count: Some(0),
             flags,
             last_viewed: Some(last_viewed),
+            version: None,
         })
         .await;
     }

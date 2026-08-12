@@ -789,17 +789,20 @@ pub enum AppEvent {
         mention_count: Option<u32>,
         flags: Option<u64>,
         last_viewed: Option<u64>,
+        /// Gateway acknowledgements carry the aggregate read-state version.
+        /// Locally synthesized optimistic acknowledgements leave it unknown.
+        version: Option<i64>,
     },
     FeatureReadStateAck {
         read_state_type: u8,
         resource_id: u64,
         entity_id: u64,
-        version: u64,
+        version: i64,
     },
     ChannelPinsAck {
         channel_id: Id<ChannelMarker>,
         timestamp: String,
-        version: u64,
+        version: i64,
     },
     ChannelUnreadUpdate {
         guild_id: Id<GuildMarker>,
@@ -1424,6 +1427,7 @@ pub(crate) mod test_builders {
             mention_count: Some(f.mention_count),
             flags: None,
             last_viewed: None,
+            version: None,
         }
     }
 

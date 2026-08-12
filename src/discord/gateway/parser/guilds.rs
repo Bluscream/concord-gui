@@ -13,8 +13,10 @@ use crate::discord::{
 };
 
 use super::{
-    channels::parse_channel_info, members::parse_member_info, presence::parse_presence_entry,
-    shared::parse_id,
+    channels::parse_channel_info,
+    members::parse_member_info,
+    presence::parse_presence_entry,
+    shared::{parse_id, parse_nonnegative_i64},
 };
 
 pub(super) fn parse_guild_create(data: &Value) -> Option<AppEvent> {
@@ -347,8 +349,9 @@ pub(super) fn parse_guild_delete(data: &Value) -> Option<AppEvent> {
 }
 
 pub(super) fn parse_user_guild_settings_update(data: &Value) -> Option<AppEvent> {
-    parse_user_guild_settings_info(data)
-        .map(|settings| AppEvent::UserGuildSettingsUpdate { settings })
+    let settings = parse_user_guild_settings_info(data)?;
+    parse_nonnegative_i64(data.get("version")?)?;
+    Some(AppEvent::UserGuildSettingsUpdate { settings })
 }
 
 pub(super) fn parse_user_guild_settings_entries(

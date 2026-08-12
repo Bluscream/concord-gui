@@ -24,3 +24,7 @@ pub(super) fn parse_id<M>(value: &Value) -> Option<Id<M>> {
         .or_else(|| value.as_u64())
         .and_then(Id::new_checked)
 }
+
+pub(super) fn parse_nonnegative_i64(value: &Value) -> Option<i64> {
+    value.as_u64().and_then(|value| i64::try_from(value).ok())
+}

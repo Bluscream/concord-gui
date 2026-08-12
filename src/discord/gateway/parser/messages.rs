@@ -19,7 +19,9 @@ use crate::{
     logging,
 };
 
-use super::shared::{display_name_from_parts_or_unknown, extra_fields, parse_id};
+use super::shared::{
+    display_name_from_parts_or_unknown, extra_fields, parse_id, parse_nonnegative_i64,
+};
 
 pub(crate) fn parse_message_info(data: &Value) -> Option<MessageInfo> {
     let channel_id = parse_id::<ChannelMarker>(data.get("channel_id")?)?;
@@ -756,6 +758,7 @@ pub(super) fn parse_message_ack(data: &Value) -> Option<AppEvent> {
             .and_then(|count| u32::try_from(count).ok()),
         flags: data.get("flags").and_then(Value::as_u64),
         last_viewed: data.get("last_viewed").and_then(Value::as_u64),
+        version: Some(parse_nonnegative_i64(data.get("version")?)?),
     })
 }
 

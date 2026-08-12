@@ -898,3 +898,40 @@ fn versioned_notification_settings_merge_partial_and_clear_full_empty_snapshots(
     assert!(state.notifications.private_notification_settings.is_none());
     assert_eq!(state.notifications.user_guild_settings_version, Some(8));
 }
+
+#[test]
+fn user_guild_settings_updates_advance_the_cached_version() {
+    let guild_id = Id::new(1);
+    let mut state = DiscordState::default();
+    state.apply_event(&AppEvent::UserGuildSettingsSync {
+        settings: Vec::new(),
+        partial: false,
+        version: Some(7),
+    });
+
+    let mut first = notification_settings(guild_id, NotificationLevel::AllMessages);
+    first.version = 8;
+    state.apply_event(&AppEvent::UserGuildSettingsUpdate {
+        settings: UserGuildSettingsInfo {
+            notification_settings: first,
+            extra_fields: BTreeMap::new(),
+        },
+    });
+
+    let mut newer = notification_settings(guild_id, NotificationLevel::OnlyMentions);
+    newer.version = 9;
+    state.apply_event(&AppEvent::UserGuildSettingsUpdate {
+        settings: UserGuildSettingsInfo {
+            notification_settings: newer,
+            extra_fields: BTreeMap::new(),
+        },
+    });
+
+    assert_eq!(state.notifications.user_guild_settings_version, Some(9));
+    assert_eq!(
+        state
+            .guild_notification_settings_info(Some(guild_id))
+            .message_notifications,
+        Some(NotificationLevel::OnlyMentions)
+    );
+}

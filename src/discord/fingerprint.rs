@@ -27,7 +27,6 @@ use uuid::Uuid;
 
 use crate::{paths, support::private_file};
 
-use super::auth_http::DISCORD_ORIGIN;
 use super::ids::{
     Id,
     marker::{ChannelMarker, GuildMarker},
@@ -37,6 +36,7 @@ use super::ids::{
 pub(super) const CLIENT_BUILD_NUMBER: u64 = 580_004;
 pub(super) const CLIENT_BROWSER: &str = "Chrome";
 pub(super) const CLIENT_BROWSER_VERSION: &str = "150.0.0.0";
+pub(super) const DISCORD_ORIGIN: &str = "https://discord.com";
 
 const DISCORD_CHANNELS_REFERER: &str = "https://discord.com/channels/@me";
 const DISCORD_ROOT_REFERER: &str = "https://discord.com/";
@@ -545,22 +545,25 @@ fn discord_browser_headers(fingerprint: &ClientFingerprint) -> HeaderMap {
 }
 
 pub(super) fn discord_rest_headers(fingerprint: &ClientFingerprint) -> HeaderMap {
+    discord_api_request_headers(fingerprint, DISCORD_CHANNELS_REFERER)
+}
+
+/// Headers shared by browser-style Discord API requests.
+///
+/// Endpoint builders call this directly instead of inheriting from another
+/// endpoint profile. The caller must choose its own referer and add any
+/// authentication, cache, or bootstrap-only headers explicitly.
+pub(super) fn discord_api_request_headers(
+    fingerprint: &ClientFingerprint,
+    referer: &'static str,
+) -> HeaderMap {
     let mut headers = discord_browser_headers(fingerprint);
-    headers.insert(
-        USER_AGENT,
-        HeaderValue::from_str(&fingerprint.user_agent).expect("web user agent is valid"),
-    );
     headers.insert(ACCEPT, HeaderValue::from_static("*/*"));
     headers.insert(
         ACCEPT_ENCODING,
         HeaderValue::from_static("gzip, deflate, br, zstd"),
     );
-    headers.insert(
-        ACCEPT_LANGUAGE,
-        HeaderValue::from_str(&accept_language(&fingerprint.system_locale))
-            .expect("system locale is a valid header value"),
-    );
-    headers.insert(REFERER, HeaderValue::from_static(DISCORD_CHANNELS_REFERER));
+    headers.insert(REFERER, HeaderValue::from_static(referer));
     headers.insert("Priority", HeaderValue::from_static("u=1, i"));
     headers.insert("Sec-Fetch-Dest", HeaderValue::from_static("empty"));
     headers.insert("Sec-Fetch-Mode", HeaderValue::from_static("cors"));
@@ -584,14 +587,12 @@ pub(super) fn discord_rest_headers(fingerprint: &ClientFingerprint) -> HeaderMap
     headers
 }
 
-pub(super) fn insert_session_headers(headers: &mut HeaderMap, fingerprint: &ClientFingerprint) {
-    let installation_id = fingerprint.installation_id();
+pub(super) fn insert_fingerprint_header(headers: &mut HeaderMap, fingerprint: &ClientFingerprint) {
     insert_session_header(
         headers,
         "X-Fingerprint",
         fingerprint.anonymous_fingerprint.as_deref(),
     );
-    insert_session_header(headers, "X-Installation-ID", installation_id.as_deref());
 }
 
 fn insert_chrome_client_hints(headers: &mut HeaderMap, os: &str) {
@@ -741,9 +742,8 @@ async fn fetch_session_identifier(
 }
 
 fn discord_experiments_headers(fingerprint: &ClientFingerprint) -> HeaderMap {
-    let mut headers = discord_rest_headers(fingerprint);
-    headers.insert(REFERER, HeaderValue::from_static(DISCORD_ROOT_REFERER));
-    insert_session_headers(&mut headers, fingerprint);
+    let mut headers = discord_api_request_headers(fingerprint, DISCORD_ROOT_REFERER);
+    insert_fingerprint_header(&mut headers, fingerprint);
     headers
 }
 

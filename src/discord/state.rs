@@ -68,6 +68,19 @@ pub struct DiscordState {
     pub(in crate::discord) notifications: Arc<NotificationCache>,
 }
 
+/// Durable cache facts that Discord can use to reduce a later READY payload.
+///
+/// This type deliberately contains no wire defaults or string conversions.
+/// `DiscordState` owns the facts it has observed, while the Gateway layer owns
+/// how missing values are represented in an IDENTIFY payload.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::discord) struct ClientCacheState {
+    pub(in crate::discord) highest_guild_message_id: Option<Id<MessageMarker>>,
+    pub(in crate::discord) highest_private_message_id: Option<Id<MessageMarker>>,
+    pub(in crate::discord) read_state_version: Option<i64>,
+    pub(in crate::discord) user_guild_settings_version: Option<i64>,
+}
+
 impl Default for DiscordState {
     fn default() -> Self {
         Self::new(DEFAULT_MAX_MESSAGES_PER_CHANNEL)
@@ -118,6 +131,33 @@ impl DiscordState {
 
     pub(in crate::discord) fn notifications_mut(&mut self) -> &mut NotificationCache {
         Arc::make_mut(&mut self.notifications)
+    }
+
+    pub(in crate::discord) fn client_cache_state(&self) -> ClientCacheState {
+        let mut cache = ClientCacheState {
+            read_state_version: self.notifications.read_state_version,
+            user_guild_settings_version: self.notifications.user_guild_settings_version,
+            ..ClientCacheState::default()
+        };
+
+        // Discord defines both message cursors from channel `last_message_id`.
+        // Read acknowledgements are intentionally excluded because they track
+        // what the user has seen, not the latest message in the channel.
+        for channel in self.navigation.channels.values() {
+            let Some(last_message_id) = channel.last_message_id else {
+                continue;
+            };
+
+            if channel.guild_id.is_some() {
+                cache.highest_guild_message_id =
+                    cache.highest_guild_message_id.max(Some(last_message_id));
+            } else {
+                cache.highest_private_message_id =
+                    cache.highest_private_message_id.max(Some(last_message_id));
+            }
+        }
+
+        cache
     }
 
     pub fn thread_creator(&self, thread_id: Id<ChannelMarker>) -> Option<ThreadCreatorState> {
@@ -859,12 +899,20 @@ impl DiscordState {
                 mention_count,
                 flags,
                 last_viewed,
-            } => self.apply_message_ack(channel_id, message_id, mention_count, flags, last_viewed),
+                version,
+            } => self.apply_message_ack(
+                channel_id,
+                message_id,
+                mention_count,
+                flags,
+                last_viewed,
+                *version,
+            ),
             AppEvent::FeatureReadStateAck {
                 read_state_type,
                 resource_id,
                 entity_id,
-                ..
+                version,
             } => {
                 let entry = self
                     .notifications_mut()
@@ -873,17 +921,19 @@ impl DiscordState {
                     .or_default();
                 entry.last_acked_id = Some(*entity_id);
                 entry.badge_count = 0;
+                self.advance_read_state_version(*version);
             }
             AppEvent::ChannelPinsAck {
                 channel_id,
                 timestamp,
-                ..
+                version,
             } => {
                 self.notifications_mut()
                     .read_states
                     .entry(*channel_id)
                     .or_default()
                     .last_pin_timestamp = Some(timestamp.clone());
+                self.advance_read_state_version(*version);
             }
             AppEvent::ChannelUnreadUpdate { channels, .. } => {
                 for update in channels {
@@ -912,6 +962,9 @@ impl DiscordState {
             } => self.apply_user_guild_settings_sync(settings, *partial, *version),
             AppEvent::UserGuildSettingsUpdate { settings } => {
                 self.upsert_notification_settings(&settings.notification_settings);
+                if let Ok(version) = i64::try_from(settings.notification_settings.version) {
+                    self.advance_user_guild_settings_version(version);
+                }
             }
             AppEvent::ThreadNotificationLevelUpdate { channel_id, flags } => {
                 self.set_thread_notification_level(*channel_id, *flags);
@@ -1603,6 +1656,7 @@ impl DiscordState {
         mention_count: &Option<u32>,
         flags: &Option<u64>,
         last_viewed: &Option<u64>,
+        version: Option<i64>,
     ) {
         let entry = self
             .notifications_mut()
@@ -1610,6 +1664,23 @@ impl DiscordState {
             .entry(*channel_id)
             .or_default();
         entry.apply_server_ack(*message_id, *mention_count, *flags, *last_viewed);
+        if let Some(version) = version {
+            self.advance_read_state_version(version);
+        }
+    }
+
+    fn advance_read_state_version(&mut self, version: i64) {
+        let current = &mut self.notifications_mut().read_state_version;
+        if current.is_none_or(|current| version > current) {
+            *current = Some(version);
+        }
+    }
+
+    fn advance_user_guild_settings_version(&mut self, version: i64) {
+        let current = &mut self.notifications_mut().user_guild_settings_version;
+        if current.is_none_or(|current| version > current) {
+            *current = Some(version);
+        }
     }
 
     pub(in crate::discord) fn private_user_display_name(

@@ -1,14 +1,14 @@
 use super::{
-    ConnectionOutcome, GATEWAY_SEND_LIMIT, GATEWAY_SEND_WINDOW, GATEWAY_URL, GatewayClientState,
-    GatewayCommand, GatewayPresence, GatewaySendWindow, GatewaySender, GatewaySessionResources,
+    ConnectionOutcome, GATEWAY_SEND_LIMIT, GATEWAY_SEND_WINDOW, GATEWAY_URL, GatewayCommand,
+    GatewayHandshake, GatewayPresence, GatewaySendWindow, GatewaySender, GatewaySessionResources,
     GatewayZlibDecoder, GuildMemberRequestKind, GuildMemberRequestScheduler, HeartbeatAckState,
     MAX_PENDING_GUILD_MEMBER_REQUESTS, SessionState, SubscriptionDeduper,
     USER_ACCOUNT_CAPABILITIES, build_identify_payload, build_resume_payload, close_code_outcome,
     create_stream_payload, delete_stream_payload, direct_message_subscribe_payload,
     dispatch_command, gateway_guild_member_rate_limit, gateway_request,
-    guild_channel_subscribe_payload, presence_update_payload, ready_installation_id,
-    request_guild_members_by_ids_payload, search_guild_members_payload, voice_state_update_payload,
-    watch_stream_payload,
+    guild_channel_subscribe_payload, parse_gateway_frame, presence_update_payload,
+    ready_installation_id, request_guild_members_by_ids_payload, search_guild_members_payload,
+    voice_state_update_payload, watch_stream_payload,
 };
 use crate::discord::fingerprint::{
     CLIENT_BROWSER, CLIENT_BROWSER_VERSION, CLIENT_BUILD_NUMBER, ClientFingerprint,
@@ -16,9 +16,9 @@ use crate::discord::fingerprint::{
 };
 use crate::discord::ids::{
     Id,
-    marker::{ChannelMarker, EmojiMarker, GuildMarker, UserMarker},
+    marker::{ChannelMarker, EmojiMarker, GuildMarker, MessageMarker, UserMarker},
 };
-use crate::discord::state::DiscordState;
+use crate::discord::state::ClientCacheState;
 use crate::discord::{ActivityEmoji, ActivityInfo, ActivityKind, PresenceStatus, VoiceScope};
 use flate2::{Compression, write::ZlibEncoder};
 use serde_json::json;
@@ -392,20 +392,82 @@ fn gateway_handshake_headers_match_shared_fingerprint() {
 }
 
 #[test]
-fn gateway_urls_request_zlib_stream_compression() {
-    assert_eq!(
-        GATEWAY_URL,
-        "wss://gateway.discord.gg/?v=9&encoding=json&compress=zlib-stream"
-    );
+fn gateway_connection_plan_pairs_the_endpoint_with_the_required_handshake() {
+    let mut initial = SessionState::default();
+    let initial_plan = initial.next_connection();
+    assert_eq!(initial_plan.url, GATEWAY_URL);
+    assert_eq!(initial_plan.handshake, GatewayHandshake::Identify);
+    assert!(initial_plan.recovery_warning.is_none());
 
-    let session = SessionState {
-        resume_url: Some("wss://gateway-us-east1-b.discord.gg".to_owned()),
+    let mut resumable = SessionState {
+        session_id: Some("session".to_owned()),
+        resume_url: Some(
+            "wss://gateway-us-east1-b.discord.gg/resume?region=us-east&encoding=etf".to_owned(),
+        ),
+        last_sequence: Some(42),
         ..SessionState::default()
     };
+    let resume_plan = resumable.next_connection();
     assert_eq!(
-        session.next_url(),
-        "wss://gateway-us-east1-b.discord.gg/?v=9&encoding=json&compress=zlib-stream"
+        resume_plan.url,
+        "wss://gateway-us-east1-b.discord.gg/resume?region=us-east&v=9&encoding=json&compress=zlib-stream"
     );
+    assert_eq!(
+        resume_plan.handshake,
+        GatewayHandshake::Resume {
+            session_id: "session".to_owned(),
+            sequence: 42,
+        }
+    );
+    assert!(resume_plan.recovery_warning.is_none());
+
+    assert!(resumable.abandon_failed_resume(&resume_plan.handshake));
+    assert!(!resumable.can_resume());
+    assert_eq!(
+        resumable.next_connection().handshake,
+        GatewayHandshake::Identify
+    );
+}
+
+#[test]
+fn invalid_resume_endpoints_clear_the_session_and_reidentify() {
+    for invalid_url in [
+        "not a URL",
+        "https://gateway.discord.gg",
+        "ws://gateway.discord.gg",
+        "ftp://gateway.discord.gg",
+        "wss://",
+        "wss://user:password@gateway.discord.gg",
+        "wss://gateway.discord.gg/#fragment",
+    ] {
+        let mut session = SessionState {
+            session_id: Some("session".to_owned()),
+            resume_url: Some(invalid_url.to_owned()),
+            last_sequence: Some(42),
+            ..SessionState::default()
+        };
+
+        let plan = session.next_connection();
+
+        assert_eq!(plan.url, GATEWAY_URL, "{invalid_url}");
+        assert_eq!(plan.handshake, GatewayHandshake::Identify, "{invalid_url}");
+        assert!(plan.recovery_warning.is_some(), "{invalid_url}");
+        assert!(!session.can_resume(), "{invalid_url}");
+        assert_eq!(session.session_id, None, "{invalid_url}");
+        assert_eq!(session.resume_url, None, "{invalid_url}");
+        assert_eq!(session.last_sequence, None, "{invalid_url}");
+    }
+
+    let mut incomplete = SessionState {
+        session_id: Some("session".to_owned()),
+        resume_url: Some("wss://gateway.discord.gg".to_owned()),
+        last_sequence: None,
+        ..SessionState::default()
+    };
+    let plan = incomplete.next_connection();
+    assert_eq!(plan.handshake, GatewayHandshake::Identify);
+    assert!(plan.recovery_warning.is_some());
+    assert!(!incomplete.can_resume());
 }
 
 #[test]
@@ -453,35 +515,39 @@ fn gateway_zlib_decoder_keeps_stream_state_across_fragmented_payloads() {
 }
 
 #[test]
-fn gateway_client_state_uses_versions_and_message_ids_concord_tracks() {
-    let mut state = DiscordState::default();
-    let notifications = state.notifications_mut();
-    notifications.read_state_version = Some(12);
-    notifications.user_guild_settings_version = Some(34);
-    notifications
-        .read_states
-        .entry(Id::new(1))
-        .or_default()
-        .last_acked_message_id = Some(Id::new(56));
+fn repeated_malformed_gateway_frame_escalates_from_resume_to_reidentify() {
+    let mut session = SessionState {
+        session_id: Some("session".to_owned()),
+        resume_url: Some("wss://gateway.discord.gg".to_owned()),
+        last_sequence: Some(40),
+        ..SessionState::default()
+    };
 
-    assert_eq!(
-        GatewayClientState::from_discord_state(&state),
-        GatewayClientState {
-            highest_last_message_id: 56,
-            read_state_version: 12,
-            user_guild_settings_version: 34,
-        }
-    );
+    let first = parse_gateway_frame(r#"{"op":0,"s":41,"d":}"#, &mut session)
+        .expect_err("the first malformed frame should require recovery");
+    assert_eq!(first.outcome, super::FrameOutcome::Resume);
+    assert_eq!(session.last_sequence, Some(40));
+
+    let replay = parse_gateway_frame(r#"{"op":0,"s":41,"d":}"#, &mut session)
+        .expect_err("a repeated malformed frame should abandon the replay buffer");
+    assert_eq!(replay.outcome, super::FrameOutcome::Reidentify);
+    assert_eq!(session.last_sequence, Some(40));
+
+    let mut unidentified = SessionState::default();
+    let without_session = parse_gateway_frame("not JSON", &mut unidentified)
+        .expect_err("a malformed frame without a resumable session must re-identify");
+    assert_eq!(without_session.outcome, super::FrameOutcome::Reidentify);
 }
 
 #[test]
 fn identify_payload_carries_user_account_capabilities() {
     let fingerprint = ClientFingerprint::new(CLIENT_BUILD_NUMBER);
     fingerprint.set_installation_id_for_test("installation-id");
-    let client_state = GatewayClientState {
-        highest_last_message_id: 123,
-        read_state_version: 4,
-        user_guild_settings_version: 5,
+    let client_state = ClientCacheState {
+        highest_guild_message_id: Some(Id::<MessageMarker>::new(123)),
+        highest_private_message_id: Some(Id::<MessageMarker>::new(456)),
+        read_state_version: Some(4),
+        user_guild_settings_version: Some(5),
     };
     let payload: serde_json::Value = serde_json::from_str(&build_identify_payload(
         "dummy-token",
@@ -548,6 +614,10 @@ fn identify_payload_carries_user_account_capabilities() {
         payload["d"]["client_state"]["user_guild_settings_version"].as_i64(),
         Some(5)
     );
+    assert_eq!(
+        payload["d"]["client_state"]["private_channels_version"].as_str(),
+        Some("456")
+    );
     assert_eq!(payload["d"]["presence"]["status"].as_str(), Some("unknown"));
     assert_eq!(
         ready_installation_id(&json!({
@@ -571,7 +641,7 @@ fn reidentify_payload_uses_the_last_requested_presence() {
         "dummy-token",
         &fingerprint,
         Some(&presence),
-        GatewayClientState::default(),
+        ClientCacheState::default(),
     ))
     .expect("reidentify payload should be valid json");
 
@@ -706,13 +776,8 @@ fn fatal_gateway_close_codes_do_not_retry_identify() {
 
 #[test]
 fn resume_payload_uses_saved_session_id_and_seq() {
-    let session = SessionState {
-        session_id: Some("sess-123".to_owned()),
-        last_sequence: Some(42),
-        ..SessionState::default()
-    };
     let payload: serde_json::Value =
-        serde_json::from_str(&build_resume_payload("dummy-token", &session))
+        serde_json::from_str(&build_resume_payload("dummy-token", "sess-123", 42))
             .expect("resume payload should be valid json");
     assert_eq!(payload["op"].as_u64(), Some(6));
     assert_eq!(payload["d"]["session_id"].as_str(), Some("sess-123"));

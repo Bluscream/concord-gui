@@ -5,14 +5,14 @@ use crate::discord::{
     ids::marker::{ChannelMarker, GuildMarker, MessageMarker},
 };
 
-use super::shared::parse_id;
+use super::shared::{parse_id, parse_nonnegative_i64};
 
 pub(super) fn parse_feature_read_state_ack(data: &Value) -> Option<AppEvent> {
     Some(AppEvent::FeatureReadStateAck {
         read_state_type: u8::try_from(data.get("ack_type")?.as_u64()?).ok()?,
         resource_id: parse_snowflake(data.get("resource_id")?)?,
         entity_id: parse_snowflake(data.get("entity_id")?)?,
-        version: data.get("version")?.as_u64()?,
+        version: parse_nonnegative_i64(data.get("version")?)?,
     })
 }
 
@@ -20,7 +20,7 @@ pub(super) fn parse_channel_pins_ack(data: &Value) -> Option<AppEvent> {
     Some(AppEvent::ChannelPinsAck {
         channel_id: parse_id::<ChannelMarker>(data.get("channel_id")?)?,
         timestamp: data.get("timestamp")?.as_str()?.to_owned(),
-        version: data.get("version")?.as_u64()?,
+        version: parse_nonnegative_i64(data.get("version")?)?,
     })
 }
 

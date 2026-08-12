@@ -85,6 +85,10 @@ fn rest_headers_and_persisted_identifiers_match_web_fingerprint_plan() {
             .and_then(|value| value.to_str().ok()),
         Some("installation-id")
     );
+    let experiments_headers = discord_experiments_headers(&fingerprint);
+    assert!(experiments_headers.get(ORIGIN).is_none());
+    assert!(experiments_headers.get(CACHE_CONTROL).is_none());
+    assert!(experiments_headers.get(PRAGMA).is_none());
     assert!(headers.get(CACHE_CONTROL).is_none());
     assert!(headers.get(PRAGMA).is_none());
     assert_eq!(

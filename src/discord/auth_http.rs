@@ -1,11 +1,10 @@
 use std::sync::Arc;
 
 use super::fingerprint::{
-    CLIENT_BUILD_NUMBER, ClientFingerprint, discord_http_client, discord_rest_headers,
-    insert_session_headers,
+    CLIENT_BUILD_NUMBER, ClientFingerprint, DISCORD_ORIGIN, discord_api_request_headers,
+    discord_http_client, insert_fingerprint_header,
 };
 
-pub(super) const DISCORD_ORIGIN: &str = "https://discord.com";
 pub(super) const DISCORD_LOGIN_REFERER: &str = "https://discord.com/login";
 
 #[derive(Clone)]
@@ -42,14 +41,13 @@ impl DiscordAuthSession {
 }
 
 pub(super) fn discord_login_headers(fingerprint: &ClientFingerprint) -> reqwest::header::HeaderMap {
-    use reqwest::header::{CACHE_CONTROL, HeaderValue, ORIGIN, PRAGMA, REFERER};
+    use reqwest::header::{CACHE_CONTROL, HeaderValue, ORIGIN, PRAGMA};
 
-    let mut headers = discord_rest_headers(fingerprint);
+    let mut headers = discord_api_request_headers(fingerprint, DISCORD_LOGIN_REFERER);
     headers.insert(ORIGIN, HeaderValue::from_static(DISCORD_ORIGIN));
-    headers.insert(REFERER, HeaderValue::from_static(DISCORD_LOGIN_REFERER));
     headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     headers.insert(PRAGMA, HeaderValue::from_static("no-cache"));
-    insert_session_headers(&mut headers, fingerprint);
+    insert_fingerprint_header(&mut headers, fingerprint);
     headers
 }
 
@@ -61,7 +59,7 @@ mod tests {
     use crate::discord::fingerprint::{CLIENT_BUILD_NUMBER, discord_rest_headers};
 
     #[test]
-    fn login_headers_share_the_rest_fingerprint() {
+    fn login_headers_keep_the_explicit_auth_policy() {
         let fingerprint = ClientFingerprint::new(CLIENT_BUILD_NUMBER);
         let login = discord_login_headers(&fingerprint);
         let rest = discord_rest_headers(&fingerprint);

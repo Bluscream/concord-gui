@@ -11,6 +11,7 @@ use crate::discord::ids::{
 use flate2::{Decompress, FlushDecompress, Status};
 use futures::{SinkExt, StreamExt};
 use rand::Rng;
+use reqwest::Url;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::time::{Instant, sleep, timeout};
@@ -32,7 +33,7 @@ use super::{
         CLIENT_BROWSER, CLIENT_BROWSER_VERSION, ClientFingerprint, DISCORD_REFERRER_CURRENT,
         DISCORD_REFERRING_DOMAIN_CURRENT, discord_gateway_headers,
     },
-    state::DiscordState,
+    state::{ClientCacheState, DiscordState},
 };
 use crate::logging;
 
@@ -239,55 +240,6 @@ impl GatewayZlibDecoder {
         String::from_utf8(output)
             .map(Some)
             .map_err(|error| format!("gateway payload is not valid UTF-8: {error}"))
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct GatewayClientState {
-    highest_last_message_id: u64,
-    read_state_version: i64,
-    user_guild_settings_version: i64,
-}
-
-impl Default for GatewayClientState {
-    fn default() -> Self {
-        Self {
-            highest_last_message_id: 0,
-            read_state_version: 0,
-            user_guild_settings_version: -1,
-        }
-    }
-}
-
-impl GatewayClientState {
-    fn from_discord_state(state: &DiscordState) -> Self {
-        let cached_message_id = state
-            .message_cache
-            .timelines
-            .values()
-            .flat_map(|timeline| &timeline.messages)
-            .map(|message| message.id.get())
-            .max();
-        let acknowledged_message_id = state
-            .notifications
-            .read_states
-            .values()
-            .filter_map(|read_state| read_state.last_acked_message_id)
-            .map(Id::get)
-            .max();
-
-        Self {
-            highest_last_message_id: cached_message_id
-                .into_iter()
-                .chain(acknowledged_message_id)
-                .max()
-                .unwrap_or_default(),
-            read_state_version: state.notifications.read_state_version.unwrap_or_default(),
-            user_guild_settings_version: state
-                .notifications
-                .user_guild_settings_version
-                .unwrap_or(-1),
-        }
     }
 }
 
@@ -874,9 +826,31 @@ enum ConnectionOutcome {
     Fatal,
 }
 
-/// Mutable session bookkeeping that survives reconnects. We only persist what
-/// op-6 RESUME needs (session_id + last seq) plus the resume URL Discord
-/// hands us in READY.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum GatewayHandshake {
+    Identify,
+    Resume { session_id: String, sequence: u64 },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct GatewayConnectionPlan {
+    url: String,
+    handshake: GatewayHandshake,
+    recovery_warning: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum MalformedFrameRecovery {
+    #[default]
+    None,
+    ResumeAttempted {
+        after_sequence: Option<u64>,
+    },
+}
+
+/// Mutable Gateway bookkeeping that survives reconnects. The session cursor
+/// supports op-6 RESUME, while the recovery marker prevents a malformed replay
+/// from reconnecting forever at the same confirmed sequence.
 #[derive(Default)]
 struct SessionState {
     session_id: Option<String>,
@@ -887,6 +861,7 @@ struct SessionState {
     /// cleared by the reconnect loop to reset the backoff after a healthy
     /// session.
     established: bool,
+    malformed_frame_recovery: MalformedFrameRecovery,
 }
 
 impl SessionState {
@@ -894,21 +869,115 @@ impl SessionState {
         self.session_id = None;
         self.resume_url = None;
         self.last_sequence = None;
+        self.malformed_frame_recovery = MalformedFrameRecovery::None;
     }
 
     fn can_resume(&self) -> bool {
-        self.session_id.is_some()
+        self.session_id.is_some() && self.resume_url.is_some() && self.last_sequence.is_some()
     }
 
-    fn next_url(&self) -> String {
-        match self.resume_url.as_deref() {
-            Some(url) if !url.is_empty() => format!(
-                "{}/?v=9&encoding=json&compress=zlib-stream",
-                url.trim_end_matches('/')
-            ),
-            _ => GATEWAY_URL.to_owned(),
+    fn next_connection(&mut self) -> GatewayConnectionPlan {
+        if !self.can_resume() {
+            let had_partial_resume_state = self.session_id.is_some()
+                || self.resume_url.is_some()
+                || self.last_sequence.is_some();
+            self.clear();
+            return GatewayConnectionPlan {
+                url: GATEWAY_URL.to_owned(),
+                handshake: GatewayHandshake::Identify,
+                recovery_warning: had_partial_resume_state.then(|| {
+                    "Gateway resume state is incomplete; starting a new session".to_owned()
+                }),
+            };
+        }
+
+        let resume_url = self
+            .resume_url
+            .as_deref()
+            .expect("resume eligibility requires a resume URL");
+        match normalized_resume_url(resume_url) {
+            Ok(url) => GatewayConnectionPlan {
+                url,
+                handshake: GatewayHandshake::Resume {
+                    session_id: self
+                        .session_id
+                        .clone()
+                        .expect("resume eligibility requires a session id"),
+                    sequence: self
+                        .last_sequence
+                        .expect("resume eligibility requires a sequence"),
+                },
+                recovery_warning: None,
+            },
+            Err(error) => {
+                self.clear();
+                GatewayConnectionPlan {
+                    url: GATEWAY_URL.to_owned(),
+                    handshake: GatewayHandshake::Identify,
+                    recovery_warning: Some(error),
+                }
+            }
         }
     }
+
+    fn malformed_frame_outcome(&mut self) -> FrameOutcome {
+        if !self.can_resume() {
+            return FrameOutcome::Reidentify;
+        }
+        let after_sequence = self.last_sequence;
+        if self.malformed_frame_recovery
+            == (MalformedFrameRecovery::ResumeAttempted { after_sequence })
+        {
+            return FrameOutcome::Reidentify;
+        }
+        self.malformed_frame_recovery = MalformedFrameRecovery::ResumeAttempted { after_sequence };
+        FrameOutcome::Resume
+    }
+
+    fn record_sequence(&mut self, sequence: u64) {
+        self.last_sequence = Some(sequence);
+        self.malformed_frame_recovery = MalformedFrameRecovery::None;
+    }
+
+    fn abandon_failed_resume(&mut self, handshake: &GatewayHandshake) -> bool {
+        if !matches!(handshake, GatewayHandshake::Resume { .. }) {
+            return false;
+        }
+        self.clear();
+        true
+    }
+}
+
+fn normalized_resume_url(resume_url: &str) -> Result<String, String> {
+    let mut url =
+        Url::parse(resume_url).map_err(|error| format!("invalid Gateway resume URL: {error}"))?;
+    if url.scheme() != "wss" {
+        return Err("invalid Gateway resume URL: scheme must be wss".to_owned());
+    }
+    if url.host_str().is_none() {
+        return Err("invalid Gateway resume URL: host is missing".to_owned());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("invalid Gateway resume URL: credentials are not allowed".to_owned());
+    }
+    if url.fragment().is_some() {
+        return Err("invalid Gateway resume URL: fragments are not allowed".to_owned());
+    }
+    let retained_query = url
+        .query_pairs()
+        .filter(|(name, _)| !matches!(name.as_ref(), "v" | "encoding" | "compress"))
+        .map(|(name, value)| (name.into_owned(), value.into_owned()))
+        .collect::<Vec<_>>();
+
+    url.set_query(None);
+    {
+        let mut query = url.query_pairs_mut();
+        query.extend_pairs(retained_query);
+        query.append_pair("v", "9");
+        query.append_pair("encoding", "json");
+        query.append_pair("compress", "zlib-stream");
+    }
+    Ok(url.to_string())
 }
 
 pub async fn run_gateway(
@@ -953,17 +1022,10 @@ pub async fn run_gateway(
 
         match outcome {
             ConnectionOutcome::Stop => break,
-            ConnectionOutcome::Resume => {
-                if !session.can_resume() {
-                    // No saved session, fall through to a clean IDENTIFY.
-                }
-            }
+            ConnectionOutcome::Resume => {}
             ConnectionOutcome::Reidentify => {
                 session.clear();
-                *runtime
-                    .gateway_session_id
-                    .write()
-                    .expect("gateway session id lock is not poisoned") = None;
+                clear_published_gateway_session(publish);
             }
             ConnectionOutcome::Fatal => {
                 publish_gateway_closed = false;
@@ -1005,14 +1067,26 @@ async fn connect_and_run(
     fingerprint: &ClientFingerprint,
     publish: GatewayPublishContext<'_>,
 ) -> Result<ConnectionOutcome, String> {
-    let url = session.next_url();
-    logging::debug("gateway", format!("connecting to {url}"));
+    let connection = session.next_connection();
+    if let Some(error) = connection.recovery_warning.as_ref() {
+        log_and_publish_gateway_error(publish, error.clone()).await;
+        clear_published_gateway_session(publish);
+    }
+    logging::debug("gateway", format!("connecting to {}", connection.url));
 
-    let request = gateway_request(&url, fingerprint)?;
+    let request = gateway_request(&connection.url, fingerprint)
+        .map_err(|error| gateway_setup_failure(session, &connection.handshake, publish, error))?;
     let (ws, _response) =
         connect_async_with_config(request, Some(gateway_websocket_config()), false)
             .await
-            .map_err(|error| format!("websocket connect failed: {error}"))?;
+            .map_err(|error| {
+                gateway_setup_failure(
+                    session,
+                    &connection.handshake,
+                    publish,
+                    format!("websocket connect failed: {error}"),
+                )
+            })?;
     let (writer, mut reader) = ws.split();
     let writer = Arc::new(Mutex::new(writer));
     let (sender, mut gateway_send_error_rx, gateway_writer_task) =
@@ -1026,27 +1100,63 @@ async fn connect_and_run(
     let hello_frame = loop {
         match reader.next().await {
             Some(Ok(WsMessage::Text(text))) => break text.to_string(),
-            Some(Ok(WsMessage::Binary(chunk))) => match zlib_decoder.decode(&chunk)? {
-                Some(text) => break text,
-                None => continue,
-            },
+            Some(Ok(WsMessage::Binary(chunk))) => {
+                match zlib_decoder.decode(&chunk).map_err(|error| {
+                    gateway_setup_failure(session, &connection.handshake, publish, error)
+                })? {
+                    Some(text) => break text,
+                    None => continue,
+                }
+            }
             Some(Ok(WsMessage::Close(frame))) => {
                 let message =
                     websocket_close_message("websocket closed before HELLO", frame.as_ref());
                 log_and_publish_gateway_error(publish, message).await;
                 return Ok(ConnectionOutcome::Reidentify);
             }
-            Some(Ok(_)) => return Err("unexpected control frame before HELLO".to_owned()),
-            Some(Err(error)) => return Err(format!("read HELLO failed: {error}")),
-            None => return Err("connection closed before HELLO".to_owned()),
+            Some(Ok(_)) => {
+                return Err(gateway_setup_failure(
+                    session,
+                    &connection.handshake,
+                    publish,
+                    "unexpected control frame before HELLO",
+                ));
+            }
+            Some(Err(error)) => {
+                return Err(gateway_setup_failure(
+                    session,
+                    &connection.handshake,
+                    publish,
+                    format!("read HELLO failed: {error}"),
+                ));
+            }
+            None => {
+                return Err(gateway_setup_failure(
+                    session,
+                    &connection.handshake,
+                    publish,
+                    "connection closed before HELLO",
+                ));
+            }
         }
     };
-    let hello: Value =
-        serde_json::from_str(&hello_frame).map_err(|error| format!("HELLO parse: {error}"))?;
+    let hello: Value = serde_json::from_str(&hello_frame).map_err(|error| {
+        gateway_setup_failure(
+            session,
+            &connection.handshake,
+            publish,
+            format!("HELLO parse: {error}"),
+        )
+    })?;
     if hello.get("op").and_then(Value::as_u64) != Some(10) {
-        return Err(format!(
-            "first frame was not HELLO: {}",
-            hello.get("op").and_then(Value::as_u64).unwrap_or_default()
+        return Err(gateway_setup_failure(
+            session,
+            &connection.handshake,
+            publish,
+            format!(
+                "first frame was not HELLO: {}",
+                hello.get("op").and_then(Value::as_u64).unwrap_or_default()
+            ),
         ));
     }
     let heartbeat_interval_ms = hello
@@ -1059,31 +1169,42 @@ async fn connect_and_run(
     // Either resume with the saved session or send a fresh IDENTIFY. RESUME
     // tells Discord to replay missed dispatches. This is good for transient drops.
     // IDENTIFY rebuilds the world from scratch.
-    if session.can_resume() {
-        let payload = build_resume_payload(token, session);
-        send_text(&sender, payload).await?;
-        logging::debug("gateway", "RESUME sent");
-    } else {
-        resources
-            .guild_member_requests
-            .start_new_session(Instant::now());
-        let client_state = {
-            let state = publish
-                .state
-                .read()
-                .expect("discord state lock is not poisoned");
-            if session.has_received_ready && resources.last_presence.is_none() {
-                resources.last_presence = current_gateway_presence(&state);
-            }
-            GatewayClientState::from_discord_state(&state)
-        };
-        let reidentify_presence = session
-            .has_received_ready
-            .then_some(resources.last_presence.as_ref())
-            .flatten();
-        let payload = build_identify_payload(token, fingerprint, reidentify_presence, client_state);
-        send_text(&sender, payload).await?;
-        logging::debug("gateway", "IDENTIFY sent");
+    match &connection.handshake {
+        GatewayHandshake::Resume {
+            session_id,
+            sequence,
+        } => {
+            let payload = build_resume_payload(token, session_id, *sequence);
+            send_text(&sender, payload).await.map_err(|error| {
+                gateway_setup_failure(session, &connection.handshake, publish, error)
+            })?;
+            logging::debug("gateway", "RESUME sent");
+        }
+        GatewayHandshake::Identify => {
+            resources
+                .guild_member_requests
+                .start_new_session(Instant::now());
+            let client_state = {
+                let state = publish
+                    .state
+                    .read()
+                    .expect("discord state lock is not poisoned");
+                if session.has_received_ready && resources.last_presence.is_none() {
+                    resources.last_presence = current_gateway_presence(&state);
+                }
+                state.client_cache_state()
+            };
+            let reidentify_presence = session
+                .has_received_ready
+                .then_some(resources.last_presence.as_ref())
+                .flatten();
+            let payload =
+                build_identify_payload(token, fingerprint, reidentify_presence, client_state);
+            send_text(&sender, payload).await.map_err(|error| {
+                gateway_setup_failure(session, &connection.handshake, publish, error)
+            })?;
+            logging::debug("gateway", "IDENTIFY sent");
+        }
     }
 
     // Background heartbeat task driven by Discord's interval. We jitter the
@@ -1328,14 +1449,33 @@ async fn handle_json_frame(
     resources: &mut GatewaySessionResources,
     frame_context: FrameContext<'_>,
 ) -> FrameOutcome {
-    let value: Value = match serde_json::from_str(text) {
+    let value = match parse_gateway_frame(text, session) {
         Ok(value) => value,
-        Err(error) => {
-            logging::debug("gateway", format!("ignoring non-JSON frame: {error}"));
-            return FrameOutcome::Continue;
+        Err(failure) => {
+            log_and_publish_gateway_error(frame_context.publish, failure.message).await;
+            return failure.outcome;
         }
     };
     handle_frame(value, session, frame_context, resources).await
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct MalformedGatewayFrame {
+    message: String,
+    outcome: FrameOutcome,
+}
+
+fn parse_gateway_frame(
+    text: &str,
+    session: &mut SessionState,
+) -> Result<Value, MalformedGatewayFrame> {
+    serde_json::from_str(text).map_err(|error| MalformedGatewayFrame {
+        message: format!("gateway JSON parse failed: {error}"),
+        // A single Resume can repair transient transport corruption. If the
+        // same confirmed sequence fails again, abandon the replay buffer and
+        // re-identify instead of reconnecting forever.
+        outcome: session.malformed_frame_outcome(),
+    })
 }
 
 fn gateway_websocket_config() -> WebSocketConfig {
@@ -1354,6 +1494,7 @@ fn gateway_request(url: &str, fingerprint: &ClientFingerprint) -> Result<Request
     Ok(request)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FrameOutcome {
     Continue,
     Resume,
@@ -1371,7 +1512,7 @@ async fn handle_frame(
         // Dispatch
         0 => {
             if let Some(seq) = value.get("s").and_then(Value::as_u64) {
-                session.last_sequence = Some(seq);
+                session.record_sequence(seq);
                 *context.sequence_cell.lock().await = Some(seq);
             }
             let dispatch_type = value.get("t").and_then(Value::as_str).unwrap_or("");
@@ -1497,6 +1638,28 @@ async fn handle_frame(
 
 async fn publish_gateway_event(context: GatewayPublishContext<'_>, event: AppEvent) {
     context.event_publisher.publish(event).await;
+}
+
+fn clear_published_gateway_session(context: GatewayPublishContext<'_>) {
+    *context
+        .gateway_session_id
+        .write()
+        .expect("gateway session id lock is not poisoned") = None;
+}
+
+/// A Resume is only useful when its connection and initial handshake both
+/// succeed. Transport failures after the socket opens must not select the same
+/// failed Resume plan forever, so the next loop starts a fresh Identify.
+fn gateway_setup_failure(
+    session: &mut SessionState,
+    handshake: &GatewayHandshake,
+    context: GatewayPublishContext<'_>,
+    error: impl Into<String>,
+) -> String {
+    if session.abandon_failed_resume(handshake) {
+        clear_published_gateway_session(context);
+    }
+    error.into()
 }
 
 fn ready_installation_id(ready: &Value) -> Option<&str> {
@@ -1951,7 +2114,7 @@ fn build_identify_payload(
     token: &str,
     fingerprint: &ClientFingerprint,
     presence: Option<&GatewayPresence>,
-    client_state: GatewayClientState,
+    client_state: ClientCacheState,
 ) -> String {
     let mut properties = json!({
         "os": fingerprint.os,
@@ -1991,11 +2154,21 @@ fn build_identify_payload(
             "compress": false,
             "client_state": {
                 "guild_versions": {},
-                "highest_last_message_id": client_state.highest_last_message_id.to_string(),
-                "read_state_version": client_state.read_state_version,
-                "user_guild_settings_version": client_state.user_guild_settings_version,
+                "highest_last_message_id": client_state
+                    .highest_guild_message_id
+                    .map(Id::get)
+                    .unwrap_or_default()
+                    .to_string(),
+                "read_state_version": client_state.read_state_version.unwrap_or_default(),
+                "user_guild_settings_version": client_state
+                    .user_guild_settings_version
+                    .unwrap_or(-1),
                 "user_settings_version": -1,
-                "private_channels_version": "0",
+                "private_channels_version": client_state
+                    .highest_private_message_id
+                    .map(Id::get)
+                    .unwrap_or_default()
+                    .to_string(),
                 "api_code_version": 0,
             },
         },
@@ -2003,13 +2176,13 @@ fn build_identify_payload(
     .to_string()
 }
 
-fn build_resume_payload(token: &str, session: &SessionState) -> String {
+fn build_resume_payload(token: &str, session_id: &str, sequence: u64) -> String {
     json!({
         "op": 6,
         "d": {
             "token": token,
-            "session_id": session.session_id.as_deref().unwrap_or_default(),
-            "seq": session.last_sequence.unwrap_or_default(),
+            "session_id": session_id,
+            "seq": sequence,
         },
     })
     .to_string()
