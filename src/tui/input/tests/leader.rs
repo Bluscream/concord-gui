@@ -3,6 +3,18 @@ use crate::discord::VoiceScope;
 use std::collections::BTreeMap;
 
 #[test]
+fn leader_r_requests_a_one_shot_terminal_refresh() {
+    let mut state = DashboardState::new();
+
+    handle_key(&mut state, char_key(' '));
+    handle_key(&mut state, char_key('r'));
+
+    assert!(!state.is_leader_active());
+    assert!(state.take_terminal_refresh_request());
+    assert!(!state.take_terminal_refresh_request());
+}
+
+#[test]
 fn enter_toggles_selected_channel_category_and_space_opens_leader() {
     let mut state = state_with_channel_tree();
     state.focus_pane(FocusPane::Channels);

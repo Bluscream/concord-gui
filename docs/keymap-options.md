@@ -128,6 +128,7 @@ Navigation and app actions:
 | `OpenPaneFilter`        | `"/"`                      | Open the focused pane filter or search.                                    |
 | `ClosePopup`            | `"q"`                      | Close the active popup.                                                    |
 | `OpenDebugLog`          | `` "`" ``                  | Open the Debug Log popup from the dashboard.                               |
+| `RefreshScreen`         | `"<leader>r"`              | Clear and fully redraw the TUI.                                            |
 | `FocusGuildPane`        | `"1"`                      | Show and focus the Servers pane.                                           |
 | `FocusChannelPane`      | `"2"`                      | Show and focus the Channels pane.                                          |
 | `FocusMessagePane`      | `"3"`                      | Focus the Messages pane.                                                   |

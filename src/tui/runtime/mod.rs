@@ -238,6 +238,9 @@ pub(super) async fn run_dashboard(
                             &mut last_frame_area,
                             &mut mouse_clicks,
                         )?;
+                        if state.take_terminal_refresh_request() {
+                            terminal.clear()?;
+                        }
                         if state.take_open_composer_in_editor_request()
                             && let Err(error) = open_composer_in_editor(terminal, &mut state)
                         {

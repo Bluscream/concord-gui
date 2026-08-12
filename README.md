@@ -272,6 +272,7 @@ Press `Space` to open the leader shortcut window.
 | `Space`, `p`     | Open my profile settings          |
 | `Space`, `o`     | Choose concord option category    |
 | `Space`, `n`     | Open the notification inbox       |
+| `Space`, `r`     | Clear and fully redraw the TUI    |
 | `Space`, `v`     | Open voice shortcuts              |
 | `Space`, `Space` | Open the fuzzy channel switcher   |
 
@@ -480,6 +481,7 @@ OpenFocusedPaneAction = "<leader>a"
 OpenCurrentUserProfile = "<leader>p"
 OpenOptions = "<leader>o"
 OpenNotificationInbox = "<leader>n"
+RefreshScreen = "<leader>r"
 ChannelSwitcher = "<leader><leader>"
 VoiceDeafen = "<leader>vd"
 VoiceMute = "<leader>vm"

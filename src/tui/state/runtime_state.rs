@@ -78,6 +78,7 @@ pub(super) struct RuntimeUiState {
     pub(super) open_composer_in_editor_requested: bool,
     pub(super) open_forum_post_body_in_editor_requested: bool,
     pub(super) paste_clipboard_requested: bool,
+    pub(super) terminal_refresh_requested: bool,
     pub(super) clipboard_paste_pending: bool,
     /// Pending clipboard copy: the text plus the success toast to show. Used by
     /// message copy, forum post link/id copy, and similar one-shot copies.

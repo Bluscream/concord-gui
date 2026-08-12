@@ -112,6 +112,7 @@ define_ui_actions! {
     OpenOptions => ("Options", &[&[Leader, Char('o')]], None),
     ChannelSwitcher => ("Switch channels", &[&[Leader, Leader]], None),
     OpenNotificationInbox => ("Notification inbox", &[&[Leader, Char('n')]], None),
+    RefreshScreen => ("Refresh screen", &[&[Leader, Char('r')]], None),
     OpenDisplayOptions => ("Display options", &[], None),
     OpenComposerOptions => ("Composer options", &[], None),
     OpenNotificationOptions => ("Notification options", &[], None),
