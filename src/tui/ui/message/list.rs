@@ -465,42 +465,8 @@ fn render_unread_banner(frame: &mut Frame, area: Rect, state: &DashboardState) {
         Some(time) => format!(" {} unread messages since {}", banner.unread_count, time),
         None => format!(" {} unread messages", banner.unread_count),
     };
-    let right = state.key_bindings().unread_mark_as_read_hint();
 
-    frame.render_widget(
-        Paragraph::new(unread_banner_line(left, right, area.width as usize, style)).style(style),
-        area,
-    );
-}
-
-fn unread_banner_line(left: String, right: &str, width: usize, style: Style) -> Line<'static> {
-    let right_width = right.width();
-    let left_width = left.as_str().width();
-    if width == 0 {
-        return Line::from(Span::styled("", style));
-    }
-    if right_width >= width {
-        return Line::from(Span::styled(
-            truncate_display_width(right, width),
-            theme::current().apply(theme::HighlightGroup::Strong, style),
-        ));
-    }
-    let max_left_width = width.saturating_sub(right_width);
-    let left = if left_width > max_left_width {
-        truncate_display_width(&left, max_left_width)
-    } else {
-        left
-    };
-    let used = left.as_str().width().saturating_add(right_width);
-    let padding = width.saturating_sub(used);
-    Line::from(vec![
-        Span::styled(left, style),
-        Span::styled(" ".repeat(padding), style),
-        Span::styled(
-            right.to_owned(),
-            theme::current().apply(theme::HighlightGroup::Strong, style),
-        ),
-    ])
+    frame.render_widget(Paragraph::new(left).style(style), area);
 }
 
 fn format_unread_banner_since(

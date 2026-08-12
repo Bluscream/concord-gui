@@ -645,12 +645,17 @@ fn panel_block_owned(title: String, focused: bool) -> Block<'static> {
         theme::HighlightGroup::PaneBorder
     });
 
-    Block::default()
-        .title(format!(" {title} "))
+    let block = Block::default()
         .borders(Borders::ALL)
         .border_type(theme.border_type(theme::BorderSurface::Pane))
         .border_style(border_style)
-        .title_style(theme.style(theme::HighlightGroup::PaneTitle))
+        .title_style(theme.style(theme::HighlightGroup::PaneTitle));
+
+    if title.is_empty() {
+        block
+    } else {
+        block.title(format!(" {title} "))
+    }
 }
 
 pub(super) fn panel_block_line(title: Line<'static>, focused: bool) -> Block<'static> {
