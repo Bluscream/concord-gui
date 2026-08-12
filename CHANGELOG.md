@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.8] - 2026-08-13
+
+### Bug Fixes
+
+- Prevent false media playback errors (#308) in [#308](https://github.com/chojs23/concord/pull/308) by @mvanhorn
+- Match Discord webhook message grouping (#310) in [#310](https://github.com/chojs23/concord/pull/310) by @chojs23
+
+### Features
+
+- _(tui)_ Add full screen refresh shortcut by @chojs23
+
+### New Contributors
+
+- @mvanhorn made their first contribution in [#308](https://github.com/chojs23/concord/pull/308)
+
 ## [2.5.7] - 2026-08-12
 
 ### Bug Fixes
