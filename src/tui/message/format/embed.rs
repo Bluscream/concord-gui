@@ -1,10 +1,10 @@
-use chrono::{DateTime, Local};
 use ratatui::style::{Color, Style};
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
     discord::EmbedInfo,
     tui::{
+        message::time::format_rfc3339_local_time,
         text::{RenderedText, replace_custom_emoji_markup_in_rendered_with_images},
         theme,
     },
@@ -225,20 +225,13 @@ fn format_embed_footer(embed: &EmbedInfo, hour_format_24: bool) -> Option<String
         embed
             .timestamp
             .as_deref()
-            .and_then(|timestamp| format_embed_timestamp(timestamp, hour_format_24)),
+            .and_then(|timestamp| format_rfc3339_local_time(timestamp, hour_format_24)),
     ) {
         (Some(text), Some(timestamp)) => Some(format!("{text} · {timestamp}")),
         (Some(text), None) => Some(text.to_owned()),
         (None, Some(timestamp)) => Some(timestamp),
         (None, None) => None,
     }
-}
-
-fn format_embed_timestamp(timestamp: &str, hour_format_24: bool) -> Option<String> {
-    let format = if hour_format_24 { "%H:%M" } else { "%I:%M %p" };
-    DateTime::parse_from_rfc3339(timestamp)
-        .ok()
-        .map(|datetime| datetime.with_timezone(&Local).format(format).to_string())
 }
 
 fn push_embed_text(

@@ -283,7 +283,7 @@ impl DashboardState {
                 value: None,
                 gauge: None,
                 effective: options.hour_format_24,
-                description: "Show message time in 24-hour (14:30) instead of 12 hour (2:30 pm).",
+                description: "Use 24-hour time for message timestamps.",
             },
         ]
     }

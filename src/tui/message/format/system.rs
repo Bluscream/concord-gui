@@ -314,7 +314,10 @@ pub(super) fn format_forwarded_snapshot(
         metadata.push(state.channel_label(channel_id));
     }
     if let Some(timestamp) = snapshot.timestamp.as_deref() {
-        metadata.push(format_forwarded_time(timestamp));
+        metadata.push(
+            message_time::format_rfc3339_local_time(timestamp, state.hour_format_24())
+                .unwrap_or_else(|| timestamp.to_owned()),
+        );
     }
     if !metadata.is_empty() {
         lines.push(MessageContentLine::dim(truncate_text(
@@ -324,14 +327,6 @@ pub(super) fn format_forwarded_snapshot(
     }
 
     lines
-}
-
-fn format_forwarded_time(timestamp: &str) -> String {
-    timestamp
-        .split_once('T')
-        .and_then(|(_, time)| time.get(0..5))
-        .unwrap_or(timestamp)
-        .to_owned()
 }
 
 #[cfg(test)]

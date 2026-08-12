@@ -7,7 +7,10 @@ use super::super::*;
 use crate::tui::media;
 use crate::tui::message::{
     layout::{MessageViewportPlan, MessageViewportRow},
-    time::{format_message_local_time, message_local_date, message_local_datetime},
+    time::{
+        format_local_date_time, format_message_local_time, message_local_date,
+        message_local_datetime,
+    },
 };
 use crate::tui::ui::emoji_overlay::{EmojiSlot, intersects_any, overlay_emoji_slots};
 
@@ -504,16 +507,10 @@ fn format_unread_banner_since(
     message_id: Id<MessageMarker>,
     hour_format_24: bool,
 ) -> Option<String> {
-    let format = if hour_format_24 {
-        "%Y-%m-%d %H:%M"
-    } else {
-        "%Y-%m-%d %I:%M %p"
-    };
-    Some(
-        message_local_datetime(message_id)?
-            .format(format)
-            .to_string(),
-    )
+    Some(format_local_date_time(
+        &message_local_datetime(message_id)?,
+        hour_format_24,
+    ))
 }
 
 fn render_inline_reaction_emojis(

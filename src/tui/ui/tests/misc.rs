@@ -672,14 +672,21 @@ fn forwarded_snapshot_lines_include_channel_and_time() {
     ));
     let mut snapshot = forwarded_snapshot(Some("hello"), Vec::new());
     snapshot.source_channel_id = Some(Id::new(9));
-    snapshot.timestamp = Some("2026-04-30T12:34:56.000000+00:00".to_owned());
+    let timestamp = "2026-04-30T12:34:56.000000+00:00";
+    snapshot.timestamp = Some(timestamp.to_owned());
     let message = message_with_forwarded_snapshot(snapshot);
+    let expected_time = crate::tui::message::time::format_rfc3339_local_time(timestamp, true)
+        .expect("static timestamp is valid");
 
     let lines = format_message_content_lines(&message, &state, 200);
 
     assert_eq!(
         line_texts(&lines),
-        vec!["↱ Forwarded", "│ hello", "│ #general · 12:34"]
+        vec![
+            "↱ Forwarded".to_owned(),
+            "│ hello".to_owned(),
+            format!("│ #general · {expected_time}"),
+        ]
     );
     assert_eq!(lines[2].style, Style::default().add_modifier(Modifier::DIM));
 }
