@@ -831,10 +831,6 @@ impl KeyBindings {
         }
     }
 
-    pub fn unread_mark_as_read_hint(&self) -> &'static str {
-        "channel action (a) to mark as read "
-    }
-
     pub fn start_composer_key_label(&self) -> String {
         self.binding_label(UiAction::StartComposer)
     }
