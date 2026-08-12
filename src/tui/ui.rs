@@ -74,7 +74,7 @@ use self::panes::{
 };
 use self::popups::{
     active_selectable_popup_layout, forum_post_composer_metrics, forum_post_composer_popup_area,
-    keymap_popup_text_area, keymap_popup_total_lines, render_attachment_viewer,
+    keymap_popup_text_area, keymap_popup_total_lines, popup_form_areas, render_attachment_viewer,
     render_channel_action_menu, render_channel_switcher_popup, render_debug_log_popup,
     render_downloads_popup, render_emoji_reaction_picker, render_folder_settings_popup,
     render_forum_post_composer, render_forum_post_tag_picker, render_guild_action_menu,
@@ -188,26 +188,37 @@ pub fn sync_view_heights(area: Rect, state: &mut DashboardState) {
     if state.is_active_modal_popup(ActiveModalPopupKind::ForumPostComposer)
         && let Some(view) = state.forum_post_composer_view()
     {
-        // Mirror the renderer's geometry: a 1-cell border plus a reserved
-        // scrollbar column. Keep the laid-out height and the focus/cursor reveal
-        // in lockstep with what `render_forum_post_composer` draws.
+        // Mirror the renderer's fixed-footer geometry and reserved scrollbar
+        // column so scroll reveal matches the rows that are actually visible.
         let popup = forum_post_composer_popup_area(area);
-        let viewport = usize::from(popup.height.saturating_sub(2));
-        let content_width = usize::from(popup.width.saturating_sub(3)).max(1);
+        let form = popup_form_areas(popup);
+        let viewport = usize::from(form.content.height);
+        let content_width = usize::from(form.content.width.saturating_sub(1)).max(1);
         let preview_count = state.forum_post_attachment_previews().len();
         let metrics = forum_post_composer_metrics(&view, content_width, preview_count);
-        state.set_forum_post_composer_metrics(viewport, metrics.total_lines);
-        state.reveal_forum_post_composer_rows(metrics.reveal_start, metrics.reveal_end);
+        state.sync_forum_post_body_scroll(
+            metrics.body_viewport_lines,
+            metrics.body_total_lines,
+            metrics.body_cursor_row,
+        );
+
+        // Body reveal can change its local offset. Rebuild the small form plan
+        // so the outer document reveals the cursor at its final visible row.
+        if let Some(view) = state.forum_post_composer_view() {
+            let metrics = forum_post_composer_metrics(&view, content_width, preview_count);
+            state.set_forum_post_composer_metrics(viewport, metrics.total_lines);
+            state.reveal_forum_post_composer_rows(metrics.reveal_start, metrics.reveal_end);
+        }
     }
     if state.is_active_modal_popup(ActiveModalPopupKind::ThreadEdit)
         && let Some(view) = state.thread_edit_view()
     {
-        // Mirror the renderer's geometry: a 1-cell border plus a reserved
-        // scrollbar column. Keep the laid-out height and the focus/cursor reveal
-        // in lockstep with what `render_thread_edit` draws.
+        // Mirror the renderer's fixed-footer geometry and reserved scrollbar
+        // column so scroll reveal matches the rows that are actually visible.
         let popup = thread_edit_popup_area(area);
-        let viewport = usize::from(popup.height.saturating_sub(2));
-        let content_width = usize::from(popup.width.saturating_sub(3)).max(1);
+        let form = popup_form_areas(popup);
+        let viewport = usize::from(form.content.height);
+        let content_width = usize::from(form.content.width.saturating_sub(1)).max(1);
         let metrics = thread_edit_metrics(&view, content_width);
         state.set_thread_edit_metrics(viewport, metrics.total_lines);
         state.reveal_thread_edit_rows(metrics.reveal_start, metrics.reveal_end);

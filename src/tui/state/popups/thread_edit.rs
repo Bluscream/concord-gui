@@ -7,7 +7,9 @@ use crate::tui::keybindings::{ScrollAction, SelectionAction};
 use crate::tui::text_input::TextEditAction;
 
 use super::super::{DashboardState, ThreadEditField, ThreadEditTagView, ThreadEditView};
-use super::{ActiveModalPopupKind, ModalPopup, SelectablePopupTarget, ThreadEditState};
+use super::{
+    ActiveModalPopupKind, ModalPopup, PopupFormStatus, SelectablePopupTarget, ThreadEditState,
+};
 
 /// Discord allows at most five tags applied to a single forum post.
 const MAX_FORUM_POST_TAGS: usize = 5;
@@ -163,12 +165,12 @@ impl super::super::DashboardState {
         let channel = self.discord.cache.channel(popup.channel_id)?;
         // The available tags and the require-tag rule live on the PARENT forum,
         // not on the post thread, so resolve them through `parent_id`.
-        let forum = channel
+        let parent_channel = channel
             .parent_id
             .and_then(|parent_id| self.discord.cache.channel(parent_id));
         let available_tags: &[crate::discord::ForumTagInfo] =
-            forum.map_or(&[], |forum| forum.available_tags.as_slice());
-        let requires_tag = forum.is_some_and(|forum| forum.requires_forum_tag());
+            parent_channel.map_or(&[], |parent| parent.available_tags.as_slice());
+        let requires_tag = parent_channel.is_some_and(|parent| parent.requires_forum_tag());
         // While the picker is open we render the snapshot order captured on
         // entry; otherwise we sort selected tags to the top live.
         let display_ids: Vec<Id<ForumTagMarker>> =
@@ -218,9 +220,11 @@ impl super::super::DashboardState {
         } else {
             popup.title.cursor_byte_index()
         };
-
         Some(ThreadEditView {
-            channel_label: format!("#{}", channel.name),
+            channel_label: format!(
+                "#{}",
+                parent_channel.map_or(channel.name.as_str(), |parent| parent.name.as_str())
+            ),
             active_field: popup.active_field,
             editing_title: popup.editing_title,
             editing_tags: popup.editing_tags,
@@ -233,7 +237,8 @@ impl super::super::DashboardState {
             slow_mode_label: SLOW_MODE_OPTIONS[popup.rate_limit_index].1.to_owned(),
             can_set_slow_mode: popup.can_set_slow_mode,
             auto_archive_label: AUTO_ARCHIVE_OPTIONS[popup.auto_archive_index].1.to_owned(),
-            status: popup.status.clone(),
+            status: popup.status.as_ref().map(|status| status.message.clone()),
+            status_field: popup.status.as_ref().and_then(|status| status.field),
         })
     }
 
@@ -522,7 +527,10 @@ impl super::super::DashboardState {
             return;
         };
         if ordered.is_empty() {
-            popup.status = Some("no tags available".to_owned());
+            popup.status = Some(PopupFormStatus::for_field(
+                ThreadEditField::Tags,
+                "no tags available",
+            ));
             return;
         }
         popup.tag_order = ordered;
@@ -537,29 +545,38 @@ impl super::super::DashboardState {
                 self.close_thread_edit();
                 Some(command)
             }
-            Err(message) => {
+            Err(error) => {
                 if let Some(popup) = self.popups.thread_edit_mut() {
-                    popup.status = Some(message);
+                    let field = error.field;
+                    popup.status = Some(error);
+                    popup.active_field = field.unwrap_or(ThreadEditField::Submit);
+                    popup.pending_scroll_reveal = true;
                 }
                 None
             }
         }
     }
 
-    fn build_thread_edit(&self) -> Result<AppCommand, String> {
+    fn build_thread_edit(&self) -> Result<AppCommand, PopupFormStatus<ThreadEditField>> {
         let Some(popup) = self.popups.thread_edit() else {
-            return Err("thread editor is not open".to_owned());
+            return Err(PopupFormStatus::general("thread editor is not open"));
         };
         let channel_id = popup.channel_id;
         let name = popup.title.value().trim().to_owned();
         if name.is_empty() {
-            return Err("title is required".to_owned());
+            return Err(PopupFormStatus::for_field(
+                ThreadEditField::Title,
+                "title is required",
+            ));
         }
         if name.chars().count() > 100 {
-            return Err("title must be 100 characters or fewer".to_owned());
+            return Err(PopupFormStatus::for_field(
+                ThreadEditField::Title,
+                "title must be 100 characters or fewer",
+            ));
         }
         let Some(channel) = self.discord.cache.channel(channel_id) else {
-            return Err("thread is no longer available".to_owned());
+            return Err(PopupFormStatus::general("thread is no longer available"));
         };
         let applied_tags = popup.selected_tag_ids.clone();
         // The require-tag rule is a parent-forum setting, not a thread setting.
@@ -568,7 +585,10 @@ impl super::super::DashboardState {
             .and_then(|parent_id| self.discord.cache.channel(parent_id))
             .is_some_and(|forum| forum.requires_forum_tag());
         if requires_tag && applied_tags.is_empty() {
-            return Err("at least one tag is required".to_owned());
+            return Err(PopupFormStatus::for_field(
+                ThreadEditField::Tags,
+                "at least one tag is required",
+            ));
         }
         let rate_limit_per_user = SLOW_MODE_OPTIONS[popup.rate_limit_index].0;
         let auto_archive_duration = AUTO_ARCHIVE_OPTIONS[popup.auto_archive_index].0;

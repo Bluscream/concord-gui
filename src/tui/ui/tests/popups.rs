@@ -1,5 +1,221 @@
 use super::*;
 
+const VIEW_CHANNEL: u64 = 0x0000_0000_0000_0400;
+const SEND_MESSAGES: u64 = 0x0000_0000_0000_0800;
+const ATTACH_FILES: u64 = 0x0000_0000_0000_8000;
+
+fn post_form_state(
+    parent_kind: &str,
+) -> (
+    DashboardState,
+    Id<crate::discord::ids::marker::ChannelMarker>,
+    Id<crate::discord::ids::marker::ChannelMarker>,
+) {
+    let guild_id = Id::new(1);
+    let parent_id = Id::new(20);
+    let thread_id = Id::new(31);
+    let current_user_id = Id::new(10);
+    let is_forum = parent_kind == "GuildForum";
+    let tags = if is_forum {
+        vec![
+            ForumTagInfo {
+                id: Id::new(101),
+                name: "Bug".to_owned(),
+                moderated: false,
+                emoji_id: None,
+                emoji_name: Some("🐛".to_owned()),
+            },
+            ForumTagInfo {
+                id: Id::new(102),
+                name: "Help".to_owned(),
+                moderated: false,
+                emoji_id: None,
+                emoji_name: None,
+            },
+        ]
+    } else {
+        Vec::new()
+    };
+    let mut state = DashboardState::new();
+    state.push_event(guild_create_event(GuildCreateFixture {
+        channels: vec![
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                name: "support".to_owned(),
+                flags: is_forum.then_some(1 << 4),
+                available_tags: tags,
+                ..ChannelInfo::test(parent_id, parent_kind)
+            },
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                parent_id: Some(parent_id),
+                owner_id: Some(current_user_id),
+                name: "release-notes".to_owned(),
+                applied_tags: is_forum.then_some(Id::new(101)).into_iter().collect(),
+                rate_limit_per_user: Some(5),
+                thread_metadata: Some(ThreadMetadataInfo::test(false, false)),
+                ..ChannelInfo::test(thread_id, "GuildPublicThread")
+            },
+        ],
+        members: vec![MemberInfo::test(current_user_id, "neo")],
+        roles: vec![RoleInfo {
+            permissions: VIEW_CHANNEL | SEND_MESSAGES | ATTACH_FILES,
+            ..RoleInfo::test(Id::new(guild_id.get()), "@everyone")
+        }],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+    state.confirm_selected_guild();
+    state.confirm_selected_channel();
+    state.push_event(AppEvent::Ready {
+        user: "neo".to_owned(),
+        user_id: Some(current_user_id),
+    });
+    (state, parent_id, thread_id)
+}
+
+#[test]
+fn post_forms_render_shared_sections_context_and_actions() {
+    let (mut create, forum_id, _) = post_form_state("GuildForum");
+    create.open_forum_post_composer(forum_id);
+    let create_dump = render_dashboard_dump(100, 30, &mut create);
+    let create_text = create_dump.join("\n");
+    for expected in [
+        "Create post",
+        "#support",
+        "CONTENT",
+        "Body *",
+        "0 / 2000",
+        "DETAILS",
+        "Attachments",
+        "None",
+        "Tags *",
+        "[c] Cancel",
+        "[s] Create",
+    ] {
+        assert!(
+            create_text.contains(expected),
+            "missing {expected}:\n{create_text}"
+        );
+    }
+    for removed in [
+        "Add a clear title",
+        "Write the first message",
+        "Move ·",
+        "Tab Next",
+    ] {
+        assert!(
+            !create_text.contains(removed),
+            "unexpected {removed}:\n{create_text}"
+        );
+    }
+    let create_row = create_dump
+        .iter()
+        .position(|line| line.contains("[s] Create"))
+        .expect("create action should render");
+    let cancel_row = create_dump
+        .iter()
+        .position(|line| line.contains("[c] Cancel"))
+        .expect("cancel action should render");
+    assert_eq!(
+        cancel_row,
+        create_row + 1,
+        "actions should stack vertically"
+    );
+    assert_eq!(create.save_forum_post_composer(), None);
+    let narrow_error = render_dashboard_dump(40, 14, &mut create).join("\n");
+    assert!(narrow_error.contains("title is required"));
+    assert!(narrow_error.contains("[s] Create"));
+
+    let (mut forum_edit, _, forum_thread_id) = post_form_state("GuildForum");
+    forum_edit.open_thread_edit(forum_thread_id);
+    forum_edit.activate_thread_edit();
+    forum_edit.push_thread_edit_char('!');
+    let forum_edit_text = render_dashboard_dump(100, 30, &mut forum_edit).join("\n");
+    for expected in [
+        "Edit post settings",
+        "POST",
+        "Tags *",
+        "BEHAVIOR",
+        "Slow mode",
+        "Read only",
+        "Auto-archive",
+        "[s] Save",
+    ] {
+        assert!(
+            forum_edit_text.contains(expected),
+            "missing {expected}:\n{forum_edit_text}"
+        );
+    }
+
+    let (mut thread_edit, _, thread_id) = post_form_state("GuildText");
+    thread_edit.open_thread_edit(thread_id);
+    let thread_edit_text = render_dashboard_dump(100, 30, &mut thread_edit).join("\n");
+    assert!(thread_edit_text.contains("Edit thread settings"));
+    assert!(!thread_edit_text.contains("Tags *"));
+}
+
+#[test]
+fn create_post_body_scrolls_inside_a_bounded_editor_and_fields_remain_reachable() {
+    let (mut state, forum_id, _) = post_form_state("GuildForum");
+    state.open_forum_post_composer(forum_id);
+    let first_dump = render_dashboard_dump(100, 20, &mut state);
+    let footer_row = first_dump
+        .iter()
+        .position(|line| line.contains("[s] Create"))
+        .expect("create action should render");
+
+    state.cycle_forum_post_field_next();
+    state.activate_forum_post_composer();
+    let body = (1..=30)
+        .map(|index| format!("body-row-{index:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(state.insert_forum_post_text(&body));
+    state.request_forum_post_scroll_reveal();
+    let scrolled_dump = render_dashboard_dump(100, 20, &mut state);
+
+    assert_eq!(
+        state.forum_post_composer_scroll(),
+        0,
+        "the body should scroll internally instead of growing the form"
+    );
+    assert_eq!(
+        scrolled_dump
+            .iter()
+            .filter(|line| line.contains("body-row-"))
+            .count(),
+        6,
+        "the body viewport should stop at six text rows"
+    );
+    assert!(
+        scrolled_dump
+            .iter()
+            .any(|line| line.contains("body-row-") && line.contains('┃')),
+        "an overflowing body should show its own scrollbar"
+    );
+    assert!(scrolled_dump.iter().any(|line| line.contains("DETAILS")));
+    assert_eq!(
+        scrolled_dump
+            .iter()
+            .position(|line| line.contains("[s] Create")),
+        Some(footer_row)
+    );
+
+    state.activate_forum_post_composer();
+    state.cycle_forum_post_field_next();
+    state.cycle_forum_post_field_next();
+    state.request_forum_post_scroll_reveal();
+    let tags_dump = render_dashboard_dump(100, 20, &mut state);
+    assert!(tags_dump.iter().any(|line| line.contains("› Tags *")));
+
+    state.cycle_forum_post_field_previous();
+    state.cycle_forum_post_field_previous();
+    state.cycle_forum_post_field_previous();
+    state.request_forum_post_scroll_reveal();
+    let title_dump = render_dashboard_dump(100, 20, &mut state);
+    assert!(title_dump.iter().any(|line| line.contains("› Title *")));
+}
+
 #[test]
 fn long_message_confirmation_explains_the_file_fallback() {
     let lines = long_message_confirmation_lines_for_test(2_001, 2_000);

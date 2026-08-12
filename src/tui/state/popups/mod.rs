@@ -309,6 +309,28 @@ pub(in crate::tui::state) enum ForumPostComposerFieldState {
 }
 
 #[derive(Debug)]
+pub(super) struct PopupFormStatus<F> {
+    pub(super) field: Option<F>,
+    pub(super) message: String,
+}
+
+impl<F> PopupFormStatus<F> {
+    pub(super) fn for_field(field: F, message: impl Into<String>) -> Self {
+        Self {
+            field: Some(field),
+            message: message.into(),
+        }
+    }
+
+    pub(super) fn general(message: impl Into<String>) -> Self {
+        Self {
+            field: None,
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub(super) struct ForumPostComposerState {
     pub(super) channel_id: Id<ChannelMarker>,
     pub(super) title: TextInputState,
@@ -327,12 +349,12 @@ pub(super) struct ForumPostComposerState {
     pub(super) attachments: Vec<MessageAttachmentUpload>,
     pub(super) attachment_previews: Vec<super::local_upload_preview::LocalUploadPreviewState>,
     pub(super) attachment_preview_generation: u64,
-    pub(super) status: Option<String>,
-    /// Viewport scroll for the (possibly overflowing) composer body, driven by
-    /// the scroll keys. `pending_scroll_reveal` asks the next render to bring the
-    /// focused field or text cursor back into view after a focus/edit change.
+    pub(super) status: Option<PopupFormStatus<ForumPostComposerFieldState>>,
+    /// Scroll for the whole form. The body owns a separate viewport so a long
+    /// draft cannot push the other fields out of the form document.
     pub(super) scroll: ScrollablePopupState,
     pub(super) pending_scroll_reveal: bool,
+    pub(super) body_scroll: ScrollablePopupState,
 }
 
 impl ForumPostComposerState {
@@ -353,6 +375,7 @@ impl ForumPostComposerState {
             status: None,
             scroll: ScrollablePopupState::default(),
             pending_scroll_reveal: true,
+            body_scroll: ScrollablePopupState::default(),
         }
     }
 }
@@ -387,7 +410,7 @@ pub(super) struct ThreadEditState {
     /// manage-channel permission, mirroring Discord's General settings panel.
     pub(super) can_set_slow_mode: bool,
     pub(super) active_field: ThreadEditField,
-    pub(super) status: Option<String>,
+    pub(super) status: Option<PopupFormStatus<ThreadEditField>>,
     /// Viewport scroll for the (possibly overflowing) settings form, driven by
     /// the scroll keys. `pending_scroll_reveal` asks the next render to bring
     /// the focused field or text cursor back into view after a focus/edit

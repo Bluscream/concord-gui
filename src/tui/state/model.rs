@@ -278,12 +278,21 @@ pub struct ForumPostComposerView {
     pub title_cursor: usize,
     pub body: String,
     pub body_cursor: usize,
+    /// First wrapped body row shown inside the bounded body editor.
+    pub body_scroll: usize,
+    /// Character count after shortcode expansion and trimming, matching the
+    /// payload that is validated on submit.
+    pub body_character_count: usize,
+    pub body_character_limit: usize,
     pub attachments: Vec<ForumPostComposerAttachmentView>,
     pub tags: Vec<ForumPostComposerTagView>,
     pub tag_scroll: usize,
     pub requires_tag: bool,
     pub paste_pending: bool,
     pub status: Option<String>,
+    /// Field that owns the current validation message. `None` is a form-level
+    /// request error or editing hint.
+    pub status_field: Option<ForumPostComposerField>,
 }
 
 /// Focusable cells in the thread edit popup. A leaner mirror of
@@ -332,11 +341,13 @@ pub struct ThreadEditView {
     pub requires_tag: bool,
     /// Display label for the current slow-mode option, e.g. "5s" or "Off".
     pub slow_mode_label: String,
-    /// Whether the slow-mode selector can be changed (manage-channel permission).
+    /// Whether the slow-mode selector can be changed (Manage Threads permission).
     pub can_set_slow_mode: bool,
     /// Display label for the current auto-archive option, e.g. "1 day".
     pub auto_archive_label: String,
     pub status: Option<String>,
+    /// Field that owns the current validation message. `None` is form-level.
+    pub status_field: Option<ThreadEditField>,
 }
 
 pub enum LocalUploadPreviewView<'a> {

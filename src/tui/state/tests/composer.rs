@@ -612,7 +612,7 @@ fn forum_post_field_selection_stops_at_the_ends() {
 }
 
 #[test]
-fn forum_post_composer_scroll_keys_pan_and_reveal() {
+fn forum_post_form_and_body_scroll_use_local_reveal_behavior() {
     let mut state = state_with_forum_post_channel(false);
     state.start_composer();
     // Pretend the laid-out content overflows a five-row viewport.
@@ -635,6 +635,31 @@ fn forum_post_composer_scroll_keys_pan_and_reveal() {
     assert_eq!(state.forum_post_composer_scroll(), 0);
     state.reveal_forum_post_composer_rows(15, 16);
     assert_eq!(state.forum_post_composer_scroll(), 0);
+
+    // The nested body viewport moves only when the cursor crosses an edge.
+    // Moving upward inside the visible range must not keep the cursor pinned to
+    // the bottom row.
+    state.sync_forum_post_body_scroll(6, 12, 11);
+    assert_eq!(
+        state
+            .forum_post_composer_view()
+            .map(|view| view.body_scroll),
+        Some(6)
+    );
+    state.sync_forum_post_body_scroll(6, 12, 10);
+    assert_eq!(
+        state
+            .forum_post_composer_view()
+            .map(|view| view.body_scroll),
+        Some(6)
+    );
+    state.sync_forum_post_body_scroll(6, 12, 5);
+    assert_eq!(
+        state
+            .forum_post_composer_view()
+            .map(|view| view.body_scroll),
+        Some(5)
+    );
 }
 
 #[test]
@@ -708,9 +733,15 @@ fn forum_post_long_body_keeps_the_post_open_for_correction() {
         .expect("invalid forum post should stay open");
     assert_eq!(view.body.chars().count(), 2_001);
     assert_eq!(
-        view.status.as_deref(),
-        Some("Body is 2001 characters. Limit: 2000.")
+        (view.body_character_count, view.body_character_limit),
+        (2_001, 2_000)
     );
+    assert_eq!(
+        view.status.as_deref(),
+        Some("Remove 1 character before creating this post.")
+    );
+    assert_eq!(view.status_field, Some(ForumPostComposerField::Body));
+    assert_eq!(view.active_field, ForumPostComposerField::Body);
 }
 
 #[test]
@@ -769,12 +800,12 @@ fn submit_forum_post_overlay_blocks_missing_required_tag() {
 
     assert_eq!(state.save_forum_post_composer(), None);
     assert!(state.is_active_modal_popup(ActiveModalPopupKind::ForumPostComposer));
-    assert_eq!(
-        state
-            .forum_post_composer_view()
-            .and_then(|view| view.status),
-        Some("at least one tag is required".to_owned())
-    );
+    let view = state
+        .forum_post_composer_view()
+        .expect("forum post composer should remain open");
+    assert_eq!(view.status.as_deref(), Some("at least one tag is required"));
+    assert_eq!(view.status_field, Some(ForumPostComposerField::Tags));
+    assert_eq!(view.active_field, ForumPostComposerField::Tags);
 }
 
 #[test]

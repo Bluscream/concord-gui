@@ -23,6 +23,7 @@ use super::super::{
 use super::SelectablePopupTarget;
 use super::{
     ActiveModalPopupKind, ForumPostComposerFieldState, ForumPostComposerState, ModalPopup,
+    PopupFormStatus,
 };
 
 /// Discord allows at most five tags applied to a single forum post.
@@ -149,6 +150,24 @@ impl DashboardState {
         }
     }
 
+    /// Synchronize the bounded body viewport with its wrapped rows. Reusing the
+    /// shared reveal behavior keeps the offset still while the cursor remains
+    /// visible and only scrolls when it crosses a viewport edge.
+    pub(in crate::tui) fn sync_forum_post_body_scroll(
+        &mut self,
+        view_height: usize,
+        total_lines: usize,
+        cursor_row: usize,
+    ) {
+        if let Some(popup) = self.popups.forum_post_composer_mut() {
+            popup.body_scroll.set_view_height(view_height);
+            popup.body_scroll.set_total_lines(total_lines);
+            popup
+                .body_scroll
+                .reveal(cursor_row, cursor_row.saturating_add(1));
+        }
+    }
+
     pub fn forum_post_composer_view(&self) -> Option<ForumPostComposerView> {
         let popup = self.popups.forum_post_composer()?;
         let channel = self.discord.cache.channel(popup.channel_id)?;
@@ -205,6 +224,13 @@ impl DashboardState {
                 size_bytes: attachment.size_bytes,
             })
             .collect();
+        let body = forum_post_text_field_value(popup, ForumPostComposerFieldState::Body).to_owned();
+        let body_character_count = expand_emoji_shortcodes(&body).trim().chars().count();
+        let body_character_limit = self
+            .discord
+            .cache
+            .message_send_limits(popup.channel_id)
+            .max_content_chars;
         Some(ForumPostComposerView {
             channel_label: format!("#{}", channel.name),
             active_field: popup.active_field.into(),
@@ -212,14 +238,21 @@ impl DashboardState {
             title: forum_post_text_field_value(popup, ForumPostComposerFieldState::Title)
                 .to_owned(),
             title_cursor: forum_post_text_field_cursor(popup, ForumPostComposerFieldState::Title),
-            body: forum_post_text_field_value(popup, ForumPostComposerFieldState::Body).to_owned(),
+            body,
             body_cursor: forum_post_text_field_cursor(popup, ForumPostComposerFieldState::Body),
+            body_scroll: popup.body_scroll.scroll(),
+            body_character_count,
+            body_character_limit,
             attachments,
             tags,
             tag_scroll: popup.tag_selection.scroll(),
             requires_tag: channel.requires_forum_tag(),
             paste_pending: self.runtime.clipboard_paste_pending,
-            status: popup.status.clone(),
+            status: popup.status.as_ref().map(|status| status.message.clone()),
+            status_field: popup
+                .status
+                .as_ref()
+                .and_then(|status| status.field.map(ForumPostComposerField::from)),
         })
     }
 
@@ -387,8 +420,10 @@ impl DashboardState {
             });
         if moderated_tag_denied {
             if let Some(popup) = self.popups.forum_post_composer_mut() {
-                popup.status =
-                    Some("Manage Threads permission is required for moderated tags".to_owned());
+                popup.status = Some(PopupFormStatus::for_field(
+                    ForumPostComposerFieldState::Tags,
+                    "Manage Threads permission is required for moderated tags",
+                ));
             }
             return;
         }
@@ -615,7 +650,7 @@ impl DashboardState {
             } else {
                 "Press Enter to finish editing first"
             };
-            popup.status = Some(message.to_owned());
+            popup.status = Some(PopupFormStatus::general(message));
             return None;
         }
         self.submit_forum_post_composer()
@@ -678,7 +713,10 @@ impl DashboardState {
             return;
         };
         if ordered.is_empty() {
-            popup.status = Some("no tags available".to_owned());
+            popup.status = Some(PopupFormStatus::for_field(
+                ForumPostComposerFieldState::Tags,
+                "no tags available",
+            ));
             return;
         }
         popup.tag_order = ordered;
@@ -753,18 +791,23 @@ impl DashboardState {
                 self.close_forum_post_composer();
                 Some(AppCommand::CreateForumPost { post })
             }
-            Err(message) => {
+            Err(error) => {
                 if let Some(popup) = self.popups.forum_post_composer_mut() {
-                    popup.status = Some(message);
+                    let field = error.field;
+                    popup.status = Some(error);
+                    popup.active_field = field.unwrap_or(ForumPostComposerFieldState::Submit);
+                    popup.pending_scroll_reveal = true;
                 }
                 None
             }
         }
     }
 
-    fn build_forum_post_create(&mut self) -> Result<ForumPostCreate, String> {
+    fn build_forum_post_create(
+        &mut self,
+    ) -> Result<ForumPostCreate, PopupFormStatus<ForumPostComposerFieldState>> {
         let Some(popup) = self.popups.forum_post_composer() else {
-            return Err("forum post composer is not open".to_owned());
+            return Err(PopupFormStatus::general("forum post composer is not open"));
         };
         let channel_id = popup.channel_id;
         let title = popup.title.value().trim().to_owned();
@@ -776,19 +819,32 @@ impl DashboardState {
         let applied_tags = popup.selected_tag_ids.clone();
 
         if title.is_empty() {
-            return Err("title is required".to_owned());
+            return Err(PopupFormStatus::for_field(
+                ForumPostComposerFieldState::Title,
+                "title is required",
+            ));
         }
         if title.chars().count() > 100 {
-            return Err("title must be 100 characters or fewer".to_owned());
+            return Err(PopupFormStatus::for_field(
+                ForumPostComposerFieldState::Title,
+                "title must be 100 characters or fewer",
+            ));
         }
         if content.is_empty() {
-            return Err("body is required".to_owned());
+            return Err(PopupFormStatus::for_field(
+                ForumPostComposerFieldState::Body,
+                "body is required",
+            ));
         }
         let Some(channel) = self.discord.cache.channel(channel_id) else {
-            return Err("forum channel is no longer available".to_owned());
+            return Err(PopupFormStatus::general(
+                "forum channel is no longer available",
+            ));
         };
         if !channel.is_forum() {
-            return Err("cannot create posts in this channel".to_owned());
+            return Err(PopupFormStatus::general(
+                "cannot create posts in this channel",
+            ));
         }
         if let Some(reason) = self
             .discord
@@ -796,15 +852,18 @@ impl DashboardState {
             .forum_post_decision(channel, !popup.attachments.is_empty())
             .block_reason()
         {
-            return Err(forum_post_block_message(reason));
+            return Err(PopupFormStatus::general(forum_post_block_message(reason)));
         }
         if let Some(remaining_seconds) = self.slow_mode_remaining_seconds(channel.id) {
-            return Err(format!(
+            return Err(PopupFormStatus::general(format!(
                 "Slow mode is active. Try again in {remaining_seconds}s"
-            ));
+            )));
         }
         if channel.requires_forum_tag() && applied_tags.is_empty() {
-            return Err("at least one tag is required".to_owned());
+            return Err(PopupFormStatus::for_field(
+                ForumPostComposerFieldState::Tags,
+                "at least one tag is required",
+            ));
         }
         if applied_tags.iter().any(|tag_id| {
             channel
@@ -813,11 +872,14 @@ impl DashboardState {
                 .any(|tag| tag.id == *tag_id && tag.moderated)
         }) && !self.discord.cache.can_manage_threads_in_channel(channel)
         {
-            return Err("Manage Threads permission is required for moderated tags".to_owned());
+            return Err(PopupFormStatus::for_field(
+                ForumPostComposerFieldState::Tags,
+                "Manage Threads permission is required for moderated tags",
+            ));
         }
         let limits = self.discord.cache.message_send_limits(channel_id);
         validate_message_payload(&content, &popup.attachments, limits)
-            .map_err(forum_post_payload_error_message)?;
+            .map_err(forum_post_payload_error)?;
 
         let attachments = self
             .popups
@@ -855,20 +917,31 @@ fn forum_post_block_message(reason: ActionBlockReason) -> String {
     }
 }
 
-fn forum_post_payload_error_message(error: AppError) -> String {
+fn forum_post_payload_error(error: AppError) -> PopupFormStatus<ForumPostComposerFieldState> {
     match error {
         AppError::MessageTooLong { len, limit } => {
-            format!("Body is {len} characters. Limit: {limit}.")
+            let excess = len.saturating_sub(limit);
+            PopupFormStatus::for_field(
+                ForumPostComposerFieldState::Body,
+                format!(
+                    "Remove {excess} character{} before creating this post.",
+                    if excess == 1 { "" } else { "s" }
+                ),
+            )
         }
         AppError::AttachmentTooLarge {
             filename,
             size,
             limit,
-        } => format!("{filename} is too large ({size} bytes). Upload limit: {limit} bytes."),
-        AppError::TooManyAttachments { count } => {
-            format!("Post has too many attachments ({count}).")
-        }
-        error => error.to_string(),
+        } => PopupFormStatus::for_field(
+            ForumPostComposerFieldState::Attachments,
+            format!("{filename} is too large ({size} bytes). Upload limit: {limit} bytes."),
+        ),
+        AppError::TooManyAttachments { count } => PopupFormStatus::for_field(
+            ForumPostComposerFieldState::Attachments,
+            format!("Post has too many attachments ({count})."),
+        ),
+        error => PopupFormStatus::general(error.to_string()),
     }
 }
 

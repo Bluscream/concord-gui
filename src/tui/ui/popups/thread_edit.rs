@@ -5,8 +5,6 @@ use crate::tui::ui::emoji_overlay::overlay_emoji_column;
 
 const FORUM_POST_EDIT_POPUP_WIDTH: u16 = 78;
 const FORUM_POST_EDIT_POPUP_HEIGHT: u16 = 18;
-/// Tags always shown on the summary, even before any are selected.
-const TAG_SUMMARY_MIN_VISIBLE: usize = 3;
 /// Width of the floating tag picker popup.
 const TAG_PICKER_WIDTH: u16 = 46;
 /// Tag rows shown at once in the floating tag picker before it scrolls.
@@ -21,8 +19,6 @@ struct EditLayout {
     tags_row: usize,
     slow_mode_row: usize,
     auto_archive_row: usize,
-    submit_row: usize,
-    cancel_row: usize,
     cursor: Option<(usize, usize)>,
 }
 
@@ -40,18 +36,18 @@ pub(in crate::tui::ui) fn render_thread_edit(
 
     let popup = thread_edit_popup_area(area);
     let title = if view.is_forum_post {
-        "Edit Forum Post"
+        "Edit post settings"
     } else {
-        "Edit Thread"
+        "Edit thread settings"
     };
-    let inner = render_modal_frame(frame, popup, title);
+    let areas = render_popup_form_frame(frame, popup, title, &view.channel_label);
     // Reserve the rightmost column for the scrollbar so long content never
     // collides with it.
-    let content_width = usize::from(inner.width.saturating_sub(1)).max(1);
+    let content_width = usize::from(areas.content.width.saturating_sub(1)).max(1);
 
     let layout = build_edit_layout(&view, content_width);
     let total = layout.lines.len();
-    let viewport = inner.height as usize;
+    let viewport = usize::from(areas.content.height);
     let scroll = state
         .thread_edit_scroll()
         .min(total.saturating_sub(viewport));
@@ -63,20 +59,33 @@ pub(in crate::tui::ui) fn render_thread_edit(
         .take(viewport)
         .cloned()
         .collect();
-    frame.render_widget(Paragraph::new(visible), inner);
-    render_vertical_scrollbar(frame, inner, scroll, viewport, total);
+    frame.render_widget(Paragraph::new(visible), areas.content);
+    render_vertical_scrollbar(frame, areas.content, scroll, viewport, total);
 
     if let Some((row, column)) = layout.cursor
         && row >= scroll
         && row - scroll < viewport
     {
-        let x = inner
-            .x
-            .saturating_add(column as u16)
-            .min(inner.x.saturating_add(inner.width.saturating_sub(1)));
-        let y = inner.y.saturating_add((row - scroll) as u16);
+        let x = areas.content.x.saturating_add(column as u16).min(
+            areas
+                .content
+                .x
+                .saturating_add(areas.content.width.saturating_sub(2)),
+        );
+        let y = areas.content.y.saturating_add((row - scroll) as u16);
         frame.set_cursor_position(Position::new(x, y));
     }
+
+    render_popup_form_footer(
+        frame,
+        areas.footer,
+        PopupFormActions {
+            cancel_active: view.active_field == ThreadEditField::Cancel,
+            primary_shortcut: "s",
+            primary_label: "Save",
+            primary_active: view.active_field == ThreadEditField::Submit,
+        },
+    );
 }
 
 pub(in crate::tui::ui) fn thread_edit_popup_area(area: Rect) -> Rect {
@@ -92,80 +101,95 @@ pub(in crate::tui::ui) fn thread_edit_popup_area(area: Rect) -> Rect {
 }
 
 fn build_edit_layout(view: &ThreadEditView, width: usize) -> EditLayout {
+    let status_field = view.status_field;
     let mut lines = Vec::new();
 
+    lines.push(popup_form_section_heading("POST"));
     let title_row = lines.len();
-    lines.push(field_line(
-        "title",
+    lines.push(popup_form_text_field_line(
+        "Title",
+        true,
         &view.title,
         view.active_field == ThreadEditField::Title,
         view.editing_title,
         width,
-        "(empty)",
     ));
+    if status_field == Some(ThreadEditField::Title)
+        && let Some(status) = view.status.as_deref()
+    {
+        push_popup_form_inline_status(&mut lines, status, width);
+    }
 
     // Tags only exist on forum posts. For a regular thread the whole Tags
     // section is omitted, and `tags_row` collapses onto the slow-mode row so the
     // (then-unreachable) Tags focus range stays valid.
     let tags_row = if view.is_forum_post {
-        lines.push(Line::from(""));
         let tags_row = lines.len();
-        lines.push(editable_tags_section_line(
-            view.active_field == ThreadEditField::Tags,
+        lines.push(popup_form_summary_line(
+            "Tags",
             view.requires_tag,
+            &tag_summary(&view.tags, width),
+            (!view.tags.is_empty()).then_some("Enter ›"),
+            view.active_field == ThreadEditField::Tags,
+            !view.tags.is_empty(),
+            width,
         ));
-        push_tag_summary(&mut lines, &view.tags, width);
+        if status_field == Some(ThreadEditField::Tags)
+            && let Some(status) = view.status.as_deref()
+        {
+            push_popup_form_inline_status(&mut lines, status, width);
+        }
         tags_row
     } else {
         lines.len()
     };
 
     lines.push(Line::from(""));
+    lines.push(popup_form_section_heading("BEHAVIOR"));
     let slow_mode_row = lines.len();
-    lines.push(selector_line(
-        "slow mode",
+    lines.push(popup_form_summary_line(
+        "Slow mode",
+        false,
         &view.slow_mode_label,
+        Some(if view.can_set_slow_mode {
+            "← →"
+        } else {
+            "Read only"
+        }),
         view.active_field == ThreadEditField::SlowMode,
         view.can_set_slow_mode,
         width,
     ));
 
     let auto_archive_row = lines.len();
-    lines.push(selector_line(
-        "auto-archive",
+    lines.push(popup_form_summary_line(
+        "Auto-archive",
+        false,
         &view.auto_archive_label,
+        Some("← →"),
         view.active_field == ThreadEditField::AutoArchive,
         true,
         width,
     ));
 
-    lines.push(Line::from(""));
-    let submit_row = lines.len();
-    lines.push(popup_button_line(
-        "s",
-        "submit",
-        view.active_field == ThreadEditField::Submit,
-    ));
-    let cancel_row = lines.len();
-    lines.push(popup_button_line(
-        "c",
-        "cancel",
-        view.active_field == ThreadEditField::Cancel,
-    ));
-
-    if let Some(status) = view.status.as_deref() {
-        push_wrapped_styled_popup_text(
-            &mut lines,
-            status,
-            width,
-            theme::current().style(theme::HighlightGroup::Error),
-        );
+    if view.is_forum_post {
+        lines.push(Line::from(Span::styled(
+            truncate_display_width("  The first message is edited from the post itself.", width),
+            theme::current().style(theme::HighlightGroup::MessageSecondary),
+        )));
+    }
+    if status_field.is_none()
+        && let Some(status) = view.status.as_deref()
+    {
+        lines.push(Line::from(""));
+        push_popup_form_inline_status(&mut lines, status, width);
     }
 
     let cursor = view.editing_title.then(|| {
         (
             title_row,
-            "› title: ".width() + cursor_column(&view.title, view.title_cursor),
+            popup_form_text_value_column("Title", true, true)
+                + cursor_column(&view.title, view.title_cursor),
         )
     });
 
@@ -175,8 +199,6 @@ fn build_edit_layout(view: &ThreadEditView, width: usize) -> EditLayout {
         tags_row,
         slow_mode_row,
         auto_archive_row,
-        submit_row,
-        cancel_row,
         cursor,
     }
 }
@@ -188,11 +210,10 @@ fn focus_rows(view: &ThreadEditView, layout: &EditLayout) -> (usize, usize) {
         ThreadEditField::Title => (layout.title_row, layout.title_row + 1),
         ThreadEditField::Tags => (layout.tags_row, layout.slow_mode_row),
         ThreadEditField::SlowMode => (layout.slow_mode_row, layout.auto_archive_row),
-        ThreadEditField::AutoArchive => (layout.auto_archive_row, layout.submit_row),
-        // Anchor the buttons to the end of the content so the other button and
-        // any error status below them stay on screen instead of being clipped.
-        ThreadEditField::Submit => (layout.submit_row, layout.lines.len()),
-        ThreadEditField::Cancel => (layout.cancel_row, layout.lines.len()),
+        ThreadEditField::AutoArchive => (layout.auto_archive_row, layout.lines.len()),
+        ThreadEditField::Submit | ThreadEditField::Cancel => {
+            (layout.lines.len().saturating_sub(1), layout.lines.len())
+        }
     }
 }
 
@@ -381,98 +402,38 @@ pub(super) fn tag_custom_emoji_ready(
     custom_emoji_url.is_some_and(|url| ready_urls.iter().any(|ready| ready == url))
 }
 
-fn push_tag_summary(lines: &mut Vec<Line<'static>>, tags: &[ThreadEditTagView], width: usize) {
+fn tag_summary(tags: &[ThreadEditTagView], width: usize) -> String {
     if tags.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  no tags available",
-            theme::current().style(theme::HighlightGroup::Placeholder),
-        )));
-        return;
+        return "None".to_owned();
     }
-    let selected_count = tags.iter().filter(|tag| tag.selected).count();
-    let shown = selected_count.max(TAG_SUMMARY_MIN_VISIBLE).min(tags.len());
-    for tag in tags.iter().take(shown) {
-        let checkbox = if tag.selected { "[x]" } else { "[ ]" };
-        // The collapsed summary is part of the static form (no image overlay),
-        // so custom emoji fall back to their `:name:` label here.
-        let emoji = tag_emoji_text(
-            tag.unicode_emoji.as_deref(),
-            tag.custom_emoji_url.as_deref(),
-            tag.custom_emoji_label.as_deref(),
-            false,
-        );
-        let style = if tag.selected {
-            theme::current().style(theme::HighlightGroup::Tag)
-        } else {
-            theme::current().style(theme::HighlightGroup::Disabled)
-        };
-        lines.push(Line::from(Span::styled(
-            truncate_display_width(&format!("  {checkbox}{emoji} {}", tag.name), width),
-            style,
-        )));
+    let selected: Vec<String> = tags
+        .iter()
+        .filter(|tag| tag.selected)
+        .map(|tag| {
+            let emoji = tag_emoji_text(
+                tag.unicode_emoji.as_deref(),
+                tag.custom_emoji_url.as_deref(),
+                tag.custom_emoji_label.as_deref(),
+                false,
+            );
+            let emoji = emoji.trim();
+            if emoji.is_empty() {
+                format!("[{}]", tag.name)
+            } else {
+                format!("[{emoji} {}]", tag.name)
+            }
+        })
+        .collect();
+    if selected.is_empty() {
+        return "None selected".to_owned();
     }
-    let remaining = tags.len().saturating_sub(shown);
-    if remaining > 0 {
-        lines.push(Line::from(Span::styled(
-            truncate_display_width(&format!("  ...(+{remaining} more)"), width),
-            theme::current().style(theme::HighlightGroup::Hint),
-        )));
-    }
-}
 
-fn field_line(
-    label: &str,
-    value: &str,
-    active: bool,
-    editing: bool,
-    width: usize,
-    placeholder: &str,
-) -> Line<'static> {
-    let marker = editable_field_marker(active);
-    let prefix = format!("{marker}{label}: ");
-    let available = width.saturating_sub(prefix.width()).max(1);
-    let content = if value.is_empty() {
-        Span::styled(
-            truncate_display_width(placeholder, available),
-            theme::current().style(theme::HighlightGroup::Placeholder),
-        )
-    } else {
-        Span::styled(
-            truncate_display_width(value, available),
-            editable_field_value_style(active, editing),
-        )
-    };
-    Line::from(vec![
-        Span::styled(prefix, editable_field_label_style(active, editing)),
-        content,
-    ])
-}
-
-/// A selector cell: `label: ‹ value ›`. Dimmed when not changeable (slow mode
-/// without the manage permission), so it reads as read-only.
-fn selector_line(
-    label: &str,
-    value: &str,
-    active: bool,
-    changeable: bool,
-    width: usize,
-) -> Line<'static> {
-    let marker = editable_field_marker(active);
-    let prefix = format!("{marker}{label}: ");
-    let value_style = if !changeable {
-        theme::current().style(theme::HighlightGroup::Disabled)
-    } else {
-        editable_field_value_style(active, false)
-    };
-    let arrows = if active && changeable {
-        format!("‹ {value} ›")
-    } else {
-        value.to_owned()
-    };
-    Line::from(vec![
-        Span::styled(prefix, editable_field_label_style(active, false)),
-        Span::styled(truncate_display_width(&arrows, width.max(1)), value_style),
-    ])
+    let available = width.saturating_sub(20).max(1);
+    let all = selected.join(" ");
+    if all.width() <= available || selected.len() == 1 {
+        return all;
+    }
+    format!("{} +{}", selected[0], selected.len().saturating_sub(1))
 }
 
 fn cursor_column(value: &str, cursor: usize) -> usize {

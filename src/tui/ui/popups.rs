@@ -524,6 +524,101 @@ fn render_modal_frame(frame: &mut Frame, popup: Rect, title: impl Into<String>) 
     inner
 }
 
+/// Shared geometry for modal forms whose actions stay visible while the form
+/// body scrolls. Keeping this calculation in one place prevents rendering and
+/// scroll metrics from disagreeing about the usable viewport.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct PopupFormAreas {
+    pub(super) content: Rect,
+    pub(super) footer: Rect,
+}
+
+pub(super) fn popup_form_areas(popup: Rect) -> PopupFormAreas {
+    let inner = Block::default().borders(Borders::ALL).inner(popup);
+    let footer_height = inner.height.min(3);
+    PopupFormAreas {
+        content: Rect {
+            height: inner.height.saturating_sub(footer_height),
+            ..inner
+        },
+        footer: Rect {
+            y: inner
+                .y
+                .saturating_add(inner.height.saturating_sub(footer_height)),
+            height: footer_height,
+            ..inner
+        },
+    }
+}
+
+/// Draws the common form frame with an optional destination or item label on
+/// the right. The context is omitted on narrow terminals instead of colliding
+/// with the main title.
+fn render_popup_form_frame(
+    frame: &mut Frame,
+    popup: Rect,
+    title: &str,
+    context: &str,
+) -> PopupFormAreas {
+    clear_area(frame, popup);
+    let mut block = modal_block_owned(title.to_owned());
+    let required_width = title
+        .width()
+        .saturating_add(context.width())
+        .saturating_add(8);
+    if !context.is_empty() && usize::from(popup.width) >= required_width {
+        block = block.title(
+            Line::from(Span::styled(
+                format!(" {context} "),
+                theme::current().style(theme::HighlightGroup::MessageSecondary),
+            ))
+            .right_aligned(),
+        );
+    }
+    frame.render_widget(block, popup);
+    popup_form_areas(popup)
+}
+
+/// Renders the always-visible actions shared by create and edit forms. Each
+/// action gets its own row so focus and hierarchy stay clear at every width.
+struct PopupFormActions {
+    cancel_active: bool,
+    primary_shortcut: &'static str,
+    primary_label: &'static str,
+    primary_active: bool,
+}
+
+fn render_popup_form_footer(frame: &mut Frame, area: Rect, actions: PopupFormActions) {
+    if area.is_empty() {
+        return;
+    }
+
+    let theme = theme::current();
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_type(theme.border_type(theme::BorderSurface::Modal))
+        .border_style(theme.style(theme::HighlightGroup::ModalBorder));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.is_empty() {
+        return;
+    }
+
+    let lines = truncate_popup_lines(
+        vec![
+            popup_button_line_with_style(
+                actions.primary_shortcut,
+                actions.primary_label,
+                actions.primary_active,
+                theme::current().style(theme::HighlightGroup::Strong),
+            ),
+            popup_button_line("c", "Cancel", actions.cancel_active),
+        ],
+        usize::from(inner.width),
+    );
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
 fn render_modal_paragraph(
     frame: &mut Frame,
     popup: Rect,
@@ -724,18 +819,126 @@ fn editable_field_value_style(active: bool, editing: bool) -> Style {
     }
 }
 
-fn editable_tags_section_line(active: bool, required: bool) -> Line<'static> {
-    let mut spans = vec![Span::styled(
-        format!("{}tags:", editable_field_marker(active)),
-        editable_field_label_style(active, false),
-    )];
+fn popup_form_section_heading(label: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        format!(" {label}"),
+        theme::current().style(theme::HighlightGroup::Heading),
+    ))
+}
+
+fn popup_form_field_label_style(active: bool, editing: bool) -> Style {
+    if editing {
+        theme::current().apply(
+            theme::HighlightGroup::Strong,
+            theme::current().style(theme::HighlightGroup::Editing),
+        )
+    } else if active {
+        theme::current().style(theme::HighlightGroup::ActiveField)
+    } else {
+        theme::current().style(theme::HighlightGroup::MessageSecondary)
+    }
+}
+
+fn popup_form_field_value_style(active: bool, editing: bool) -> Style {
+    if editing {
+        theme::current().style(theme::HighlightGroup::Editing)
+    } else if active {
+        theme::current().style(theme::HighlightGroup::ActiveField)
+    } else {
+        Style::default()
+    }
+}
+
+fn popup_form_field_label(label: &str, required: bool) -> String {
     if required {
+        format!("{label} *")
+    } else {
+        label.to_owned()
+    }
+}
+
+fn popup_form_text_field_line(
+    label: &str,
+    required: bool,
+    value: &str,
+    active: bool,
+    editing: bool,
+    width: usize,
+) -> Line<'static> {
+    let label = popup_form_field_label(label, required);
+    let prefix = format!("{}{label}  ", editable_field_marker(active));
+    let available = width.saturating_sub(prefix.width()).max(1);
+    let content = Span::styled(
+        truncate_display_width(value, available),
+        popup_form_field_value_style(active, editing),
+    );
+    Line::from(vec![
+        Span::styled(prefix, popup_form_field_label_style(active, editing)),
+        content,
+    ])
+}
+
+fn popup_form_text_value_column(label: &str, required: bool, active: bool) -> usize {
+    let label = popup_form_field_label(label, required);
+    format!("{}{label}  ", editable_field_marker(active)).width()
+}
+
+fn popup_form_summary_line(
+    label: &str,
+    required: bool,
+    value: &str,
+    affordance: Option<&str>,
+    active: bool,
+    enabled: bool,
+    width: usize,
+) -> Line<'static> {
+    let label = popup_form_field_label(label, required);
+    let prefix = format!("{}{label}  ", editable_field_marker(active));
+    let affordance = affordance.unwrap_or_default();
+    let affordance_width = affordance.width();
+    let value_width = width
+        .saturating_sub(prefix.width())
+        .saturating_sub(affordance_width)
+        .saturating_sub(usize::from(!affordance.is_empty()))
+        .max(1);
+    let value = truncate_display_width(value, value_width);
+    let padding = width
+        .saturating_sub(prefix.width())
+        .saturating_sub(value.width())
+        .saturating_sub(affordance_width);
+    let value_style = if enabled {
+        popup_form_field_value_style(active, false)
+    } else {
+        theme::current().style(theme::HighlightGroup::Disabled)
+    };
+
+    let mut spans = vec![
+        Span::styled(prefix, popup_form_field_label_style(active, false)),
+        Span::styled(value, value_style),
+    ];
+    if padding > 0 {
+        spans.push(Span::raw(" ".repeat(padding)));
+    }
+    if !affordance.is_empty() {
         spans.push(Span::styled(
-            " required",
-            theme::current().style(theme::HighlightGroup::Error),
+            affordance.to_owned(),
+            if active && enabled {
+                theme::current().style(theme::HighlightGroup::Shortcut)
+            } else {
+                theme::current().style(theme::HighlightGroup::Hint)
+            },
         ));
     }
-    Line::from(spans)
+    truncate_line_to_display_width(Line::from(spans), width)
+}
+
+fn push_popup_form_inline_status(lines: &mut Vec<Line<'static>>, status: &str, width: usize) {
+    push_wrapped_styled_popup_text(
+        lines,
+        &format!("  {status}"),
+        width,
+        theme::current().style(theme::HighlightGroup::Error),
+    );
 }
 
 fn selectable_popup_shortcut_span(shortcut: impl Into<String>) -> Span<'static> {

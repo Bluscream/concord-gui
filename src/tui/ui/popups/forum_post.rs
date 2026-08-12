@@ -7,8 +7,10 @@ use crate::tui::ui::{LOCAL_UPLOAD_PREVIEW_HEIGHT, LOCAL_UPLOAD_PREVIEW_WIDTH};
 
 const FORUM_POST_POPUP_WIDTH: u16 = 78;
 const FORUM_POST_POPUP_HEIGHT: u16 = 24;
-/// Tags always shown on the composer summary, even before any are selected.
-const TAG_SUMMARY_MIN_VISIBLE: usize = 3;
+/// The body grows with short drafts, then keeps a six-row text viewport. The
+/// remaining form fields stay close enough to reach without crossing the full
+/// draft document.
+const BODY_EDITOR_MAX_VISIBLE_LINES: usize = 6;
 /// Width of the floating tag picker popup.
 const TAG_PICKER_WIDTH: u16 = 46;
 /// Tag rows shown at once in the floating tag picker before it scrolls.
@@ -22,10 +24,12 @@ struct ComposerLayout {
     title_row: usize,
     body_row: usize,
     body_content_row: usize,
+    body_viewport_len: usize,
+    body_total_lines: usize,
+    body_cursor_row: usize,
+    body_boxed: bool,
     attachments_row: usize,
     tags_row: usize,
-    submit_row: usize,
-    cancel_row: usize,
     preview_row: Option<usize>,
     cursor: Option<(usize, usize)>,
 }
@@ -44,14 +48,14 @@ pub(in crate::tui::ui) fn render_forum_post_composer(
     let previews = state.forum_post_attachment_previews();
 
     let popup = forum_post_composer_popup_area(area);
-    let inner = render_modal_frame(frame, popup, "Create Forum Post");
+    let areas = render_popup_form_frame(frame, popup, "Create post", &view.channel_label);
     // Reserve the rightmost column for the scrollbar so long content never
     // collides with it.
-    let content_width = usize::from(inner.width.saturating_sub(1)).max(1);
+    let content_width = usize::from(areas.content.width.saturating_sub(1)).max(1);
 
     let layout = build_composer_layout(&view, content_width, previews.len());
     let total = layout.lines.len();
-    let viewport = inner.height as usize;
+    let viewport = usize::from(areas.content.height);
     let scroll = state
         .forum_post_composer_scroll()
         .min(total.saturating_sub(viewport));
@@ -63,8 +67,16 @@ pub(in crate::tui::ui) fn render_forum_post_composer(
         .take(viewport)
         .cloned()
         .collect();
-    frame.render_widget(Paragraph::new(visible), inner);
-    render_vertical_scrollbar(frame, inner, scroll, viewport, total);
+    frame.render_widget(Paragraph::new(visible), areas.content);
+    render_vertical_scrollbar(frame, areas.content, scroll, viewport, total);
+    render_body_scrollbar(
+        frame,
+        areas.content,
+        scroll,
+        viewport,
+        &layout,
+        view.body_scroll,
+    );
 
     // Paint preview tiles over the reserved blank rows, offset by the scroll.
     if let Some(preview_row) = layout.preview_row
@@ -73,7 +85,15 @@ pub(in crate::tui::ui) fn render_forum_post_composer(
     {
         let row_in_view = preview_row - scroll;
         if row_in_view < viewport {
-            render_forum_post_attachment_previews(frame, inner, row_in_view as u16, previews);
+            render_forum_post_attachment_previews(
+                frame,
+                Rect {
+                    width: areas.content.width.saturating_sub(1),
+                    ..areas.content
+                },
+                row_in_view as u16,
+                previews,
+            );
         }
     }
 
@@ -81,13 +101,26 @@ pub(in crate::tui::ui) fn render_forum_post_composer(
         && row >= scroll
         && row - scroll < viewport
     {
-        let x = inner
-            .x
-            .saturating_add(column as u16)
-            .min(inner.x.saturating_add(inner.width.saturating_sub(1)));
-        let y = inner.y.saturating_add((row - scroll) as u16);
+        let x = areas.content.x.saturating_add(column as u16).min(
+            areas
+                .content
+                .x
+                .saturating_add(areas.content.width.saturating_sub(2)),
+        );
+        let y = areas.content.y.saturating_add((row - scroll) as u16);
         frame.set_cursor_position(Position::new(x, y));
     }
+
+    render_popup_form_footer(
+        frame,
+        areas.footer,
+        PopupFormActions {
+            cancel_active: view.active_field == ForumPostComposerField::Cancel,
+            primary_shortcut: "s",
+            primary_label: "Create",
+            primary_active: view.active_field == ForumPostComposerField::Submit,
+        },
+    );
 }
 
 pub(in crate::tui::ui) fn forum_post_composer_popup_area(area: Rect) -> Rect {
@@ -102,6 +135,43 @@ pub(in crate::tui::ui) fn forum_post_composer_popup_area(area: Rect) -> Rect {
     )
 }
 
+fn render_body_scrollbar(
+    frame: &mut Frame,
+    content: Rect,
+    form_scroll: usize,
+    form_viewport: usize,
+    layout: &ComposerLayout,
+    body_scroll: usize,
+) {
+    if !layout.body_boxed || layout.body_total_lines <= layout.body_viewport_len {
+        return;
+    }
+
+    let body_start = layout.body_content_row;
+    let body_end = body_start.saturating_add(layout.body_viewport_len);
+    let form_end = form_scroll.saturating_add(form_viewport);
+    // Avoid painting through the fixed footer on very short terminals. The
+    // body scrollbar appears as soon as its complete text viewport is visible.
+    if body_start < form_scroll || body_end > form_end || content.width <= 3 {
+        return;
+    }
+
+    render_vertical_scrollbar(
+        frame,
+        Rect {
+            x: content.x.saturating_add(2),
+            y: content
+                .y
+                .saturating_add((body_start.saturating_sub(form_scroll)) as u16),
+            width: content.width.saturating_sub(3),
+            height: layout.body_viewport_len as u16,
+        },
+        body_scroll,
+        layout.body_viewport_len,
+        layout.body_total_lines,
+    );
+}
+
 fn build_composer_layout(
     view: &ForumPostComposerView,
     width: usize,
@@ -109,71 +179,77 @@ fn build_composer_layout(
 ) -> ComposerLayout {
     let editing_title = view.editing_field == Some(ForumPostComposerField::Title);
     let editing_body = view.editing_field == Some(ForumPostComposerField::Body);
+    let status_field = view.status_field;
     let mut lines = Vec::new();
 
+    lines.push(popup_form_section_heading("CONTENT"));
     let title_row = lines.len();
-    lines.push(field_line(
-        "title",
+    lines.push(popup_form_text_field_line(
+        "Title",
+        true,
         &view.title,
         view.active_field == ForumPostComposerField::Title,
         editing_title,
         width,
-        "(empty)",
     ));
+    if status_field == Some(ForumPostComposerField::Title)
+        && let Some(status) = view.status.as_deref()
+    {
+        push_popup_form_inline_status(&mut lines, status, width);
+    }
 
     let body_row = lines.len();
-    lines.push(section_line(
-        "body:",
-        view.active_field == ForumPostComposerField::Body,
-        editing_body,
-    ));
-    let body_content_row = lines.len();
-    let body_lines = visible_body_lines(&view.body);
     let body_active = view.active_field == ForumPostComposerField::Body;
-    for line in &body_lines {
-        lines.push(Line::from(Span::styled(
-            truncate_display_width(&format!("  {line}"), width),
-            editable_field_value_style(body_active, editing_body),
-        )));
-    }
-    if body_lines.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  (empty)",
-            theme::current().style(theme::HighlightGroup::Placeholder),
-        )));
+    lines.push(body_header_line(view, body_active, editing_body, width));
+    let body_editor = body_editor_layout(
+        &view.body,
+        view.body_cursor,
+        body_active,
+        editing_body,
+        width,
+        view.body_scroll,
+    );
+    let body_content_row = lines.len().saturating_add(body_editor.content_row_offset);
+    let body_viewport_len = body_editor.viewport_len;
+    let body_total_lines = body_editor.total_lines;
+    let body_cursor_row = body_editor.cursor_row;
+    let body_boxed = body_editor.boxed;
+    let body_cursor = body_editor.cursor;
+    lines.extend(body_editor.lines);
+    if status_field == Some(ForumPostComposerField::Body)
+        && let Some(status) = view.status.as_deref()
+    {
+        push_popup_form_inline_status(&mut lines, status, width);
+    } else if view.body_character_count > view.body_character_limit {
+        let excess = view
+            .body_character_count
+            .saturating_sub(view.body_character_limit);
+        push_popup_form_inline_status(
+            &mut lines,
+            &format!(
+                "Remove {excess} character{} before creating this post.",
+                if excess == 1 { "" } else { "s" }
+            ),
+            width,
+        );
     }
 
+    lines.push(Line::from(""));
+    lines.push(popup_form_section_heading("DETAILS"));
     let attachments_row = lines.len();
-    lines.push(section_line(
-        "attachments:",
-        view.active_field == ForumPostComposerField::Attachments,
+    lines.push(popup_form_summary_line(
+        "Attachments",
         false,
+        &attachment_summary(view),
+        None,
+        view.active_field == ForumPostComposerField::Attachments,
+        true,
+        width,
     ));
-    if view.attachments.is_empty() && !view.paste_pending {
-        lines.push(Line::from(Span::styled(
-            "  (empty)",
-            theme::current().style(theme::HighlightGroup::Placeholder),
-        )));
-    } else {
-        for attachment in &view.attachments {
-            lines.push(Line::from(Span::styled(
-                truncate_display_width(
-                    &format!(
-                        "  upload: {} ({})",
-                        attachment.filename,
-                        format_byte_size(attachment.size_bytes)
-                    ),
-                    width,
-                ),
-                theme::current().style(theme::HighlightGroup::Warning),
-            )));
-        }
-        if view.paste_pending {
-            lines.push(Line::from(Span::styled(
-                truncate_display_width("  upload: processing clipboard attachment...", width),
-                theme::current().style(theme::HighlightGroup::Loading),
-            )));
-        }
+    if status_field == Some(ForumPostComposerField::Attachments)
+        && let Some(status) = view.status.as_deref()
+    {
+        push_popup_form_inline_status(&mut lines, status, width);
     }
     // Blank rows reserved for the image preview tiles painted on top.
     let preview_row = (preview_count > 0).then(|| {
@@ -185,43 +261,40 @@ fn build_composer_layout(
     });
 
     let tags_row = lines.len();
-    lines.push(editable_tags_section_line(
-        view.active_field == ForumPostComposerField::Tags,
+    lines.push(popup_form_summary_line(
+        "Tags",
         view.requires_tag,
+        &tag_summary(&view.tags, width),
+        (!view.tags.is_empty()).then_some("Enter ›"),
+        view.active_field == ForumPostComposerField::Tags,
+        !view.tags.is_empty(),
+        width,
     ));
-    push_tag_summary(&mut lines, &view.tags, width);
-
-    lines.push(Line::from(""));
-    let submit_row = lines.len();
-    lines.push(popup_button_line(
-        "s",
-        "submit",
-        view.active_field == ForumPostComposerField::Submit,
-    ));
-    let cancel_row = lines.len();
-    lines.push(popup_button_line(
-        "c",
-        "cancel",
-        view.active_field == ForumPostComposerField::Cancel,
-    ));
-
-    if let Some(status) = view.status.as_deref() {
-        push_wrapped_styled_popup_text(
-            &mut lines,
-            status,
-            width,
-            theme::current().style(theme::HighlightGroup::Error),
-        );
+    if status_field == Some(ForumPostComposerField::Tags)
+        && let Some(status) = view.status.as_deref()
+    {
+        push_popup_form_inline_status(&mut lines, status, width);
+    }
+    if status_field.is_none()
+        && let Some(status) = view.status.as_deref()
+    {
+        lines.push(Line::from(""));
+        push_popup_form_inline_status(&mut lines, status, width);
     }
 
     let cursor = if editing_title {
         Some((
             title_row,
-            "› title: ".width() + cursor_column(&view.title, view.title_cursor),
+            popup_form_text_value_column("Title", true, true)
+                + cursor_column(&view.title, view.title_cursor),
         ))
     } else if editing_body {
-        let (line, column) = body_cursor_line_column(&view.body, view.body_cursor);
-        Some((body_content_row + line, 2 + column))
+        body_cursor.map(|(line, column)| {
+            (
+                body_content_row + line,
+                usize::from(body_boxed) * 4 + column,
+            )
+        })
     } else {
         None
     };
@@ -231,10 +304,12 @@ fn build_composer_layout(
         title_row,
         body_row,
         body_content_row,
+        body_viewport_len,
+        body_total_lines,
+        body_cursor_row,
+        body_boxed,
         attachments_row,
         tags_row,
-        submit_row,
-        cancel_row,
         preview_row,
         cursor,
     }
@@ -257,11 +332,12 @@ fn focus_rows(view: &ForumPostComposerView, layout: &ComposerLayout) -> (usize, 
             }
         }
         ForumPostComposerField::Attachments => (layout.attachments_row, layout.tags_row),
-        ForumPostComposerField::Tags => (layout.tags_row, layout.submit_row),
-        // Anchor the buttons to the end of the content so the other button and
-        // any error status below them stay on screen instead of being clipped.
-        ForumPostComposerField::Submit => (layout.submit_row, layout.lines.len()),
-        ForumPostComposerField::Cancel => (layout.cancel_row, layout.lines.len()),
+        ForumPostComposerField::Tags => (layout.tags_row, layout.lines.len()),
+        // Actions live in the fixed footer, so keep the final details row in
+        // view without trying to scroll to a row that no longer exists.
+        ForumPostComposerField::Submit | ForumPostComposerField::Cancel => {
+            (layout.lines.len().saturating_sub(1), layout.lines.len())
+        }
     }
 }
 
@@ -281,6 +357,9 @@ pub(in crate::tui::ui) struct ForumPostComposerMetrics {
     pub total_lines: usize,
     pub reveal_start: usize,
     pub reveal_end: usize,
+    pub body_viewport_lines: usize,
+    pub body_total_lines: usize,
+    pub body_cursor_row: usize,
 }
 
 pub(in crate::tui::ui) fn forum_post_composer_metrics(
@@ -294,6 +373,9 @@ pub(in crate::tui::ui) fn forum_post_composer_metrics(
         total_lines: layout.lines.len(),
         reveal_start,
         reveal_end,
+        body_viewport_lines: layout.body_viewport_len,
+        body_total_lines: layout.body_total_lines,
+        body_cursor_row: layout.body_cursor_row,
     }
 }
 
@@ -322,50 +404,69 @@ fn tag_line(tag: &ForumPostComposerTagView, width: usize, thumbnail_ready: bool)
     ))
 }
 
-/// The applied-tag summary on the composer. Every selected tag is shown (never
-/// reduced), and at least [`TAG_SUMMARY_MIN_VISIBLE`] rows appear by default.
-/// the rest fold into `...(+N more)`. Tags arrive selected-first.
-fn push_tag_summary(
-    lines: &mut Vec<Line<'static>>,
-    tags: &[ForumPostComposerTagView],
-    width: usize,
-) {
+fn tag_summary(tags: &[ForumPostComposerTagView], width: usize) -> String {
     if tags.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  no tags available",
-            theme::current().style(theme::HighlightGroup::Placeholder),
-        )));
-        return;
+        return "None".to_owned();
     }
-    let selected_count = tags.iter().filter(|tag| tag.selected).count();
-    let shown = selected_count.max(TAG_SUMMARY_MIN_VISIBLE).min(tags.len());
-    for tag in tags.iter().take(shown) {
-        let checkbox = if tag.selected { "[x]" } else { "[ ]" };
-        // The collapsed summary is part of the static composer form (no image
-        // overlay), so custom emoji fall back to their `:name:` label here.
-        let emoji = super::thread_edit::tag_emoji_text(
-            tag.unicode_emoji.as_deref(),
-            tag.custom_emoji_url.as_deref(),
-            tag.custom_emoji_label.as_deref(),
-            false,
-        );
-        let style = if tag.selected {
-            theme::current().style(theme::HighlightGroup::Tag)
+    let selected: Vec<String> = tags
+        .iter()
+        .filter(|tag| tag.selected)
+        .map(|tag| {
+            let emoji = super::thread_edit::tag_emoji_text(
+                tag.unicode_emoji.as_deref(),
+                tag.custom_emoji_url.as_deref(),
+                tag.custom_emoji_label.as_deref(),
+                false,
+            );
+            let emoji = emoji.trim();
+            if emoji.is_empty() {
+                format!("[{}]", tag.name)
+            } else {
+                format!("[{emoji} {}]", tag.name)
+            }
+        })
+        .collect();
+    if selected.is_empty() {
+        return "None selected".to_owned();
+    }
+
+    let available = width.saturating_sub(20).max(1);
+    let all = selected.join(" ");
+    if all.width() <= available || selected.len() == 1 {
+        return all;
+    }
+    format!("{} +{}", selected[0], selected.len().saturating_sub(1))
+}
+
+fn attachment_summary(view: &ForumPostComposerView) -> String {
+    if view.attachments.is_empty() {
+        return if view.paste_pending {
+            "Processing...".to_owned()
         } else {
-            theme::current().style(theme::HighlightGroup::Disabled)
+            "None".to_owned()
         };
-        lines.push(Line::from(Span::styled(
-            truncate_display_width(&format!("  {checkbox}{emoji} {}", tag.name), width),
-            style,
-        )));
     }
-    let remaining = tags.len().saturating_sub(shown);
-    if remaining > 0 {
-        lines.push(Line::from(Span::styled(
-            truncate_display_width(&format!("  ...(+{remaining} more)"), width),
-            theme::current().style(theme::HighlightGroup::Hint),
-        )));
+
+    let total_size = view.attachments.iter().fold(0u64, |total, attachment| {
+        total.saturating_add(attachment.size_bytes)
+    });
+    let mut summary = if view.attachments.len() == 1 {
+        format!(
+            "{} · {}",
+            view.attachments[0].filename,
+            format_byte_size(total_size)
+        )
+    } else {
+        format!(
+            "{} files · {}",
+            view.attachments.len(),
+            format_byte_size(total_size)
+        )
+    };
+    if view.paste_pending {
+        summary.push_str(" · processing");
     }
+    summary
 }
 
 /// Floating tag picker drawn on top of the composer, in the style of the emoji
@@ -507,66 +608,151 @@ fn render_forum_post_attachment_preview(
     }
 }
 
-fn field_line(
-    label: &str,
-    value: &str,
+fn body_header_line(
+    view: &ForumPostComposerView,
     active: bool,
     editing: bool,
     width: usize,
-    placeholder: &str,
 ) -> Line<'static> {
-    let marker = editable_field_marker(active);
-    let prefix = format!("{marker}{label}: ");
-    let available = width.saturating_sub(prefix.width()).max(1);
-    let content = if value.is_empty() {
-        Span::styled(
-            truncate_display_width(placeholder, available),
-            theme::current().style(theme::HighlightGroup::Placeholder),
-        )
+    let label = format!("{}Body *", editable_field_marker(active));
+    let count = format!(
+        "{} / {}",
+        view.body_character_count, view.body_character_limit
+    );
+    let padding = width
+        .saturating_sub(label.width())
+        .saturating_sub(count.width());
+    let count_style = if view.body_character_count > view.body_character_limit {
+        theme::current().style(theme::HighlightGroup::Error)
     } else {
-        Span::styled(
-            truncate_display_width(value, available),
-            editable_field_value_style(active, editing),
-        )
+        theme::current().style(theme::HighlightGroup::MessageSecondary)
     };
-    Line::from(vec![
-        Span::styled(prefix, editable_field_label_style(active, editing)),
-        content,
-    ])
+    truncate_line_to_display_width(
+        Line::from(vec![
+            Span::styled(label, popup_form_field_label_style(active, editing)),
+            Span::raw(" ".repeat(padding)),
+            Span::styled(count, count_style),
+        ]),
+        width,
+    )
 }
 
-fn section_line(label: &str, active: bool, editing: bool) -> Line<'static> {
-    Line::from(Span::styled(
-        format!("{}{}", editable_field_marker(active), label),
-        editable_field_label_style(active, editing),
-    ))
+fn body_editor_text_width(width: usize) -> usize {
+    width.saturating_sub(6).max(1)
 }
 
-fn visible_body_lines(body: &str) -> Vec<&str> {
-    if body.is_empty() {
-        Vec::new()
+struct BodyEditorLayout {
+    lines: Vec<Line<'static>>,
+    content_row_offset: usize,
+    viewport_len: usize,
+    total_lines: usize,
+    cursor_row: usize,
+    boxed: bool,
+    cursor: Option<(usize, usize)>,
+}
+
+fn body_editor_layout(
+    body: &str,
+    cursor: usize,
+    active: bool,
+    editing: bool,
+    width: usize,
+    scroll: usize,
+) -> BodyEditorLayout {
+    let boxed = width > 6;
+    let text_width = if boxed {
+        body_editor_text_width(width)
     } else {
-        body.split('\n').collect()
+        width.max(1)
+    };
+    let (body_lines, cursor_row, cursor_column) = wrapped_body_rows(body, cursor, text_width);
+    let total_lines = body_lines.len();
+    let viewport_len = total_lines.clamp(1, BODY_EDITOR_MAX_VISIBLE_LINES);
+    let scroll = scroll.min(total_lines.saturating_sub(viewport_len));
+    let visible_lines = body_lines
+        .into_iter()
+        .skip(scroll)
+        .take(viewport_len)
+        .collect::<Vec<_>>();
+    let cursor = editing
+        .then_some((cursor_row, cursor_column))
+        .filter(|(row, _)| *row >= scroll && *row < scroll.saturating_add(viewport_len))
+        .map(|(row, column)| (row - scroll, column));
+    let value_style = popup_form_field_value_style(active, editing);
+
+    if !boxed {
+        let lines = visible_lines
+            .into_iter()
+            .map(|line| Line::from(Span::styled(line, value_style)))
+            .collect();
+        return BodyEditorLayout {
+            lines,
+            content_row_offset: 0,
+            viewport_len,
+            total_lines,
+            cursor_row,
+            boxed,
+            cursor,
+        };
+    }
+
+    let border_style = popup_form_field_label_style(active, editing);
+    let horizontal = "─".repeat(width.saturating_sub(4));
+    let mut lines = vec![Line::from(Span::styled(
+        format!("  ┌{horizontal}┐"),
+        border_style,
+    ))];
+    for line in visible_lines {
+        let content = truncate_display_width(&line, text_width);
+        let padding = text_width.saturating_sub(content.width());
+        lines.push(Line::from(vec![
+            Span::styled("  │ ", border_style),
+            Span::styled(content, value_style),
+            Span::raw(" ".repeat(padding)),
+            Span::styled(" │", border_style),
+        ]));
+    }
+    lines.push(Line::from(Span::styled(
+        format!("  └{horizontal}┘"),
+        border_style,
+    )));
+    BodyEditorLayout {
+        lines,
+        content_row_offset: 1,
+        viewport_len,
+        total_lines,
+        cursor_row,
+        boxed,
+        cursor,
     }
 }
 
-fn body_cursor_line_column(value: &str, cursor: usize) -> (usize, usize) {
-    let prefix = cursor_prefix(value, cursor);
-    let line = prefix.chars().filter(|value| *value == '\n').count();
-    let column = prefix
-        .rsplit('\n')
-        .next()
-        .map(cursor_column_for_str)
-        .unwrap_or_default();
-    (line, column)
+fn wrapped_body_rows(body: &str, cursor: usize, text_width: usize) -> (Vec<String>, usize, usize) {
+    let mut lines = if body.is_empty() {
+        vec![String::new()]
+    } else {
+        wrap_text_lines(body, text_width)
+    };
+    let (cursor_row, cursor_column) = wrapped_body_cursor(body, cursor, text_width);
+    while lines.len() <= cursor_row {
+        lines.push(String::new());
+    }
+    (lines, cursor_row, cursor_column)
+}
+
+fn wrapped_body_cursor(value: &str, cursor: usize, width: usize) -> (usize, usize) {
+    let wrapped = wrap_text_lines(cursor_prefix(value, cursor), width.max(1));
+    let mut row = wrapped.len().saturating_sub(1);
+    let mut column = wrapped.last().map(|line| line.width()).unwrap_or_default();
+    if column >= width.max(1) {
+        row = row.saturating_add(1);
+        column = 0;
+    }
+    (row, column)
 }
 
 fn cursor_column(value: &str, cursor: usize) -> usize {
-    cursor_column_for_str(cursor_prefix(value, cursor))
-}
-
-fn cursor_column_for_str(value: &str) -> usize {
-    value.width()
+    cursor_prefix(value, cursor).width()
 }
 
 fn cursor_prefix(value: &str, cursor: usize) -> &str {
@@ -591,27 +777,31 @@ mod tests {
             title_cursor: 0,
             body: body.to_owned(),
             body_cursor,
+            body_scroll: 0,
+            body_character_count: body.chars().count(),
+            body_character_limit: 2_000,
             attachments: Vec::new(),
             tags: Vec::new(),
             tag_scroll: 0,
             requires_tag: false,
             paste_pending: false,
             status: None,
+            status_field: None,
         }
     }
 
     #[test]
-    fn body_layout_keeps_every_line_and_tracks_cursor() {
+    fn body_layout_caps_its_viewport_and_tracks_the_scrolled_cursor() {
         let body = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight";
-        let view = body_view(body, body.len());
+        let mut view = body_view(body, body.len());
+        view.body_scroll = 2;
 
         let layout = build_composer_layout(&view, 40, 0);
 
-        // Body header at row 1, then all eight lines (no fixed window), so the
-        // attachments header sits nine rows below the body header.
-        assert_eq!(layout.attachments_row - layout.body_row, 9);
-        // Cursor follows the last body line.
-        assert_eq!(layout.cursor, Some((layout.body_content_row + 7, 7)));
+        assert_eq!(layout.body_total_lines, 8);
+        assert_eq!(layout.body_viewport_len, 6);
+        assert_eq!(layout.attachments_row - layout.body_row, 11);
+        assert_eq!(layout.cursor, Some((layout.body_content_row + 5, 9)));
     }
 
     #[test]
@@ -634,40 +824,17 @@ mod tests {
         }
     }
 
-    fn line_text(line: &Line<'_>) -> String {
-        line.spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect()
-    }
-
     #[test]
-    fn tag_summary_shows_at_least_three_then_folds_the_rest() {
-        let tags: Vec<_> = (0..20)
+    fn details_use_compact_summaries() {
+        let no_selection: Vec<_> = (0..20)
             .map(|index| tag(&format!("t{index}"), false))
             .collect();
-        let mut lines = Vec::new();
-
-        push_tag_summary(&mut lines, &tags, 40);
-
-        // Three tag rows are shown by default even with nothing selected.
-        assert_eq!(lines.len(), 4);
-        assert!(line_text(&lines[3]).contains("...(+17 more)"));
-    }
-
-    #[test]
-    fn tag_summary_never_reduces_selected_tags() {
-        // Five selected (listed first, the view's contract) and one spare.
         let tags: Vec<_> = (0..6)
             .map(|index| tag(&format!("t{index}"), index < 5))
             .collect();
-        let mut lines = Vec::new();
 
-        push_tag_summary(&mut lines, &tags, 40);
-
-        // All five selected rows plus a single "...(+1 more)".
-        assert_eq!(lines.len(), 6);
-        assert!(line_text(&lines[5]).contains("...(+1 more)"));
+        assert_eq!(tag_summary(&no_selection, 40), "None selected");
+        assert_eq!(tag_summary(&tags, 40), "[t0] +4");
     }
 
     #[test]
@@ -677,9 +844,10 @@ mod tests {
 
         let metrics = forum_post_composer_metrics(&view, 40, 0);
 
-        // Body content begins at row 2 (title, body header), cursor on line 3.
-        assert_eq!((metrics.reveal_start, metrics.reveal_end), (4, 5));
-        // Title, body header, three body lines, plus the rest of the form.
-        assert!(metrics.total_lines > 5);
+        assert_eq!((metrics.reveal_start, metrics.reveal_end), (6, 7));
+        assert_eq!(metrics.body_viewport_lines, 3);
+        assert_eq!(metrics.body_total_lines, 3);
+        assert_eq!(metrics.body_cursor_row, 2);
+        assert!(metrics.total_lines > 7);
     }
 }
