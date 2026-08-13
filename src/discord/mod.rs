@@ -9,6 +9,7 @@ mod channel;
 mod client;
 mod commands;
 mod display_name;
+mod emoji;
 mod events;
 mod fingerprint;
 mod gateway;
@@ -75,6 +76,7 @@ pub use commands::{
     MAX_PROFILE_AVATAR_BYTES, MAX_UPLOAD_ATTACHMENT_COUNT, MAX_UPLOAD_PREVIEW_BYTES,
     MessageAttachmentUpload, ReactionEmoji,
 };
+pub(crate) use emoji::custom_emoji_image_url;
 #[cfg(test)]
 pub(crate) use events::test_builders;
 pub use events::{

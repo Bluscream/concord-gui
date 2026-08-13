@@ -13,6 +13,7 @@ use crate::discord::ids::{
 use super::application_commands::{
     ApplicationCommandAutocompleteInvocation, ApplicationCommandInvocation,
 };
+use super::emoji::custom_emoji_image_url;
 use super::message::MessageInfo;
 use super::{ActivityInfo, PresenceStatus, VoiceScope};
 
@@ -394,12 +395,7 @@ impl ReactionEmoji {
         let Self::Custom { id, animated, .. } = self else {
             return None;
         };
-        let extension = if *animated { "gif" } else { "png" };
-        Some(format!(
-            "https://cdn.discordapp.com/emojis/{}.{}",
-            id.get(),
-            extension
-        ))
+        Some(custom_emoji_image_url(id.get(), *animated))
     }
 
     pub(crate) fn route_component(&self) -> String {

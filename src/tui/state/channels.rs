@@ -4,7 +4,10 @@ use crate::discord::ids::{
     Id,
     marker::{ChannelMarker, GuildMarker},
 };
-use crate::discord::{ChannelState, ChannelUnreadState, TypingUserState, VoiceParticipantState};
+use crate::discord::{
+    ChannelState, ChannelUnreadState, TypingUserState, VoiceParticipantState,
+    custom_emoji_image_url,
+};
 
 use super::{ActiveGuildScope, DashboardState, MessagePaneSource, ThreadReturnTarget};
 use super::{
@@ -451,7 +454,18 @@ impl DashboardState {
                 // `emoji_id` (its `emoji_name` is null) and a unicode tag carries
                 // the character in `emoji_name` (its `emoji_id` is null).
                 let custom_emoji_url = tag.emoji_id.map(|emoji_id| {
-                    format!("https://cdn.discordapp.com/emojis/{}.png", emoji_id.get())
+                    let animated = parent
+                        .guild_id
+                        .and_then(|guild_id| {
+                            self.discord
+                                .cache
+                                .custom_emojis_for_guild(guild_id)
+                                .iter()
+                                .find(|emoji| emoji.id == emoji_id)
+                                .map(|emoji| emoji.animated)
+                        })
+                        .unwrap_or(false);
+                    custom_emoji_image_url(emoji_id.get(), animated)
                 });
                 let unicode_emoji = if custom_emoji_url.is_some() {
                     None

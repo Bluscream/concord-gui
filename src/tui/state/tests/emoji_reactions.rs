@@ -65,7 +65,7 @@ fn custom_emoji_reaction_items_expose_cdn_image_url() {
 
     assert_eq!(
         items[8].custom_image_url().as_deref(),
-        Some("https://cdn.discordapp.com/emojis/50.gif")
+        Some("https://cdn.discordapp.com/emojis/50.webp?animated=true")
     );
     assert_eq!(items[0].custom_image_url(), None);
 }

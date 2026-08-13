@@ -1,5 +1,7 @@
 use crate::discord::ids::{Id, marker::EmojiMarker};
 
+use super::emoji::custom_emoji_image_url;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum PresenceStatus {
     Online,
@@ -84,12 +86,7 @@ impl ActivityEmoji {
     /// which render as text.
     pub fn image_url(&self) -> Option<String> {
         let id = self.id?;
-        let ext = if self.animated { "gif" } else { "png" };
-        Some(format!(
-            "https://cdn.discordapp.com/emojis/{}.{}",
-            id.get(),
-            ext
-        ))
+        Some(custom_emoji_image_url(id.get(), self.animated))
     }
 }
 

@@ -5,7 +5,7 @@ use crate::discord::ids::{
 
 use crate::discord::{
     ApplicationCommandIdentity, ApplicationCommandInfo, ApplicationCommandOptionInfo, ChannelState,
-    CustomEmojiInfo, PresenceStatus, RoleState, builtin_slash_commands,
+    CustomEmojiInfo, PresenceStatus, RoleState, builtin_slash_commands, custom_emoji_image_url,
 };
 
 use super::super::{MemberEntry, emoji::custom_emoji_can_be_used_directly};
@@ -448,18 +448,16 @@ pub(in crate::tui::state) fn build_emoji_candidates<'a>(
 
 fn custom_emoji_markup(name: &str, id: Id<EmojiMarker>, animated: bool, as_link: bool) -> String {
     if as_link {
-        let link = custom_emoji_image_url(id, animated);
-        format!("[{name}]({link}?size=48&name={name}&lossless=true)")
+        let mut link = custom_emoji_image_url(id.get(), animated);
+        let query_separator = if link.contains('?') { '&' } else { '?' };
+        link.push(query_separator);
+        link.push_str(&format!("size=48&name={name}&lossless=true"));
+        format!("[{name}]({link})")
     } else if animated {
         format!("<a:{name}:{}>", id.get())
     } else {
         format!("<:{name}:{}>", id.get())
     }
-}
-
-fn custom_emoji_image_url(id: Id<EmojiMarker>, animated: bool) -> String {
-    let extension = if animated { "gif" } else { "png" };
-    format!("https://cdn.discordapp.com/emojis/{}.{extension}", id.get())
 }
 
 pub(in crate::tui::state) fn should_start_completion_query(input: &str) -> bool {

@@ -1514,6 +1514,10 @@ fn emoji_image_targets_include_visible_forum_post_custom_tag_emoji() {
     let mut state = DashboardState::new();
 
     state.push_event(guild_create_event(GuildCreateFixture {
+        emojis: vec![CustomEmojiInfo {
+            animated: true,
+            ..CustomEmojiInfo::test(Id::new(77), "bug")
+        }],
         channels: vec![ChannelInfo {
             guild_id: Some(guild_id),
             name: "forum".to_owned(),
@@ -1567,7 +1571,7 @@ fn emoji_image_targets_include_visible_forum_post_custom_tag_emoji() {
     assert_eq!(
         targets,
         vec![EmojiImageTarget {
-            url: "https://cdn.discordapp.com/emojis/77.png".to_owned(),
+            url: "https://cdn.discordapp.com/emojis/77.webp?animated=true".to_owned(),
         }]
     );
 }

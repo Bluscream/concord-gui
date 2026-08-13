@@ -2,7 +2,7 @@ use crate::discord::ids::{
     Id,
     marker::{ChannelMarker, ForumTagMarker},
 };
-use crate::discord::{AppCommand, DiscordAction};
+use crate::discord::{AppCommand, DiscordAction, custom_emoji_image_url};
 use crate::tui::keybindings::{ScrollAction, SelectionAction};
 use crate::tui::text_input::TextEditAction;
 
@@ -629,16 +629,19 @@ impl DashboardState {
         if let Some(emoji_id) = tag.emoji_id {
             // The tag payload omits the custom emoji name, so the `:name:`
             // fallback is resolved from the guild emoji cache.
-            let url = format!("https://cdn.discordapp.com/emojis/{}.png", emoji_id.get());
-            let resolved_name = guild_id.and_then(|guild_id| {
+            let resolved_emoji = guild_id.and_then(|guild_id| {
                 self.discord
                     .cache
                     .custom_emojis_for_guild(guild_id)
                     .iter()
                     .find(|emoji| emoji.id == emoji_id)
-                    .map(|emoji| emoji.name.clone())
             });
-            let label = resolved_name
+            let url = custom_emoji_image_url(
+                emoji_id.get(),
+                resolved_emoji.is_some_and(|emoji| emoji.animated),
+            );
+            let label = resolved_emoji
+                .map(|emoji| emoji.name.clone())
                 .map(|name| format!(":{name}:"))
                 .unwrap_or_else(|| ":custom:".to_owned());
             return ForumTagEmojiFields {

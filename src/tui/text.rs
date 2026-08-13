@@ -1,6 +1,8 @@
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+use crate::discord::custom_emoji_image_url;
+
 pub fn truncate_text(value: &str, limit: usize) -> String {
     let mut chars = value.chars();
     let text: String = chars.by_ref().take(limit).collect();
@@ -218,8 +220,6 @@ fn next_mention_start(value: &str, cursor: usize) -> Option<usize> {
     Some(cursor.saturating_add(relative))
 }
 
-const CUSTOM_EMOJI_CDN_BASE: &str = "https://cdn.discordapp.com/emojis";
-
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RenderedText {
     pub text: String,
@@ -425,12 +425,11 @@ pub fn replace_custom_emoji_markup_in_rendered_with_images(
         }
         let slot_byte_len = output.len() - slot_byte_start;
         if images_enabled {
-            let extension = if emoji.animated { "gif" } else { "png" };
             emoji_slots.push(InlineEmojiSlot {
                 byte_start: slot_byte_start,
                 byte_len: slot_byte_len,
                 display_width: u16::try_from(slot_byte_len).unwrap_or(u16::MAX),
-                url: format!("{CUSTOM_EMOJI_CDN_BASE}/{}.{extension}", emoji.id),
+                url: custom_emoji_image_url(&emoji.id, emoji.animated),
             });
         }
         cursor = emoji.input_end;

@@ -1697,7 +1697,10 @@ fn thread_edit_tag_picker_keeps_custom_emoji_tags() {
         channels: vec![forum],
         // The tag payload omits the custom emoji name, so it is resolved from
         // the guild emoji cache by `emoji_id`.
-        emojis: vec![CustomEmojiInfo::test(Id::new(77), "sparkle")],
+        emojis: vec![CustomEmojiInfo {
+            animated: true,
+            ..CustomEmojiInfo::test(Id::new(77), "sparkle")
+        }],
         ..GuildCreateFixture::new(guild_id)
     }));
     state.confirm_selected_guild();
@@ -1731,7 +1734,7 @@ fn thread_edit_tag_picker_keeps_custom_emoji_tags() {
     assert_eq!(custom.unicode_emoji, None);
     assert_eq!(
         custom.custom_emoji_url.as_deref(),
-        Some("https://cdn.discordapp.com/emojis/77.png")
+        Some("https://cdn.discordapp.com/emojis/77.webp?animated=true")
     );
     assert_eq!(custom.custom_emoji_label.as_deref(), Some(":sparkle:"));
 

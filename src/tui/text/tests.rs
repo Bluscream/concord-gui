@@ -28,7 +28,7 @@ fn rendered_replacer_emits_text_fallback_and_records_slot() {
 }
 
 #[test]
-fn rendered_replacer_uses_gif_for_animated() {
+fn rendered_replacer_uses_animated_webp_for_animated_emoji() {
     let rendered = RenderedText {
         text: "<a:wave:42>".to_owned(),
         ..Default::default()
@@ -37,7 +37,7 @@ fn rendered_replacer_uses_gif_for_animated() {
     assert_eq!(out.text, ":wave:");
     assert_eq!(
         out.emoji_slots[0].url,
-        "https://cdn.discordapp.com/emojis/42.gif"
+        "https://cdn.discordapp.com/emojis/42.webp?animated=true"
     );
 }
 

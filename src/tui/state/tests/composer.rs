@@ -2348,7 +2348,7 @@ fn animated_current_guild_emoji_sends_link_without_nitro_when_enabled() {
         Some(AppCommand::SendMessage {
             channel_id: Id::new(2),
             nonce: Id::new(1),
-            content: "[party_time](https://cdn.discordapp.com/emojis/50.gif?size=48&name=party_time&lossless=true)".to_owned(),
+            content: "[party_time](https://cdn.discordapp.com/emojis/50.webp?animated=true&size=48&name=party_time&lossless=true)".to_owned(),
             reply_to: None,
             attachments: Vec::new(),
         })
@@ -2716,7 +2716,7 @@ fn foreign_emoji_fall_back_to_links_without_nitro_when_enabled() {
         (
             ":da",
             "dance_foreign",
-            "https://cdn.discordapp.com/emojis/61.gif?size=48&name=dance_foreign&lossless=true",
+            "https://cdn.discordapp.com/emojis/61.webp?animated=true&size=48&name=dance_foreign&lossless=true",
         ),
     ];
 
