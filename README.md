@@ -1,7 +1,7 @@
 # Concord
 
 <img width="1613" height="848" alt="concord - a feature-rich TUI client for
-  Discord" src="./docs/example.png" />
+  Discord" src="./assets/example.png" />
 
 Concord is a feature-rich TUI client for Discord, written in Rust with ratatui.
 
@@ -186,7 +186,7 @@ storage is unavailable. See the Security section below for details.
 
 #### Markdown Rendering & Code syntax highlighting
 
-![Markdown rendering example](./docs/markdown-example.png)
+![Markdown rendering example](./assets/markdown-example.png)
 
 Concord renders a practical subset of Discord-style Markdown in message bodies:
 
@@ -198,6 +198,8 @@ Concord renders a practical subset of Discord-style Markdown in message bodies:
 - Raw URLs and markdown link destinations are underlined and can be opened from message actions
 
 ### Media Support
+
+<img width="1018" height="323" alt="Concord media support" src="./assets/media-gif.gif" />
 
 Image rendering is powered by [ratatui-image](https://github.com/benjajaja/ratatui-image). On startup, Concord queries the terminal to detect the best available graphics protocol. Supported protocols:
 
