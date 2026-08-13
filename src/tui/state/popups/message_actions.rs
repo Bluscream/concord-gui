@@ -867,6 +867,7 @@ fn message_playable_media_urls(message: &MessageState) -> Vec<String> {
 fn playable_embed_video_urls(embeds: &[EmbedInfo]) -> Vec<String> {
     embeds
         .iter()
+        .filter(|embed| embed.gifv_image_url.is_none())
         .filter_map(|embed| embed.video_url.clone())
         .filter(|url| is_playable_media_url(url))
         .collect()

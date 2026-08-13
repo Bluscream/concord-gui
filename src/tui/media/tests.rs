@@ -29,6 +29,7 @@ use crate::{
     },
 };
 
+use super::work::MediaWorkError;
 use super::*;
 
 fn layout(list_height: usize) -> ImagePreviewLayout {
@@ -40,28 +41,6 @@ fn layout(list_height: usize) -> ImagePreviewLayout {
         viewer_preview_width: 76,
         viewer_max_preview_height: 13,
         font_size: None,
-    }
-}
-
-fn image_preview_cache_without_picker() -> ImagePreviewCache {
-    ImagePreviewCache {
-        picker: None,
-        cache: super::cache::MediaImageCacheCore::new(),
-    }
-}
-
-fn avatar_cache_without_picker() -> AvatarImageCache {
-    AvatarImageCache {
-        picker: None,
-        cache: super::cache::MediaImageCacheCore::new(),
-        active_popup_avatar_url: None,
-    }
-}
-
-fn emoji_cache_without_picker() -> EmojiImageCache {
-    EmojiImageCache {
-        picker: None,
-        cache: super::cache::MediaImageCacheCore::new(),
     }
 }
 
@@ -80,6 +59,10 @@ fn encoded_png(width: u32, height: u32) -> Vec<u8> {
 }
 
 fn encoded_animated_gif() -> Vec<u8> {
+    encoded_two_frame_gif(10)
+}
+
+fn encoded_two_frame_gif(delay_ms: u32) -> Vec<u8> {
     let mut bytes = Vec::new();
     {
         let mut encoder = GifEncoder::new(&mut bytes);
@@ -92,7 +75,33 @@ fn encoded_animated_gif() -> Vec<u8> {
                     ImageBuffer::from_pixel(2, 2, color),
                     0,
                     0,
-                    Delay::from_numer_denom_ms(10, 1),
+                    Delay::from_numer_denom_ms(delay_ms, 1),
+                ))
+                .expect("test GIF frame should encode");
+        }
+    }
+    bytes
+}
+
+fn encoded_long_animated_gif() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = GifEncoder::new(&mut bytes);
+        encoder
+            .set_repeat(Repeat::Infinite)
+            .expect("test GIF repeat should encode");
+        for frame_index in 0..300u16 {
+            let delay_ms = if frame_index < 240 { 20 } else { 300 };
+            encoder
+                .encode_frame(ImageFrame::from_parts(
+                    ImageBuffer::from_pixel(
+                        1,
+                        1,
+                        Rgba([frame_index as u8, (frame_index >> 8) as u8, 0, 255]),
+                    ),
+                    0,
+                    0,
+                    Delay::from_numer_denom_ms(delay_ms, 1),
                 ))
                 .expect("test GIF frame should encode");
         }
@@ -352,7 +361,7 @@ fn image_preview_quality_does_not_change_avatar_or_custom_emoji_requests() {
 }
 
 #[test]
-fn image_preview_targets_choose_embed_thumbnail_url() {
+fn image_preview_targets_choose_embed_media_url() {
     for (name, embed, content, expected_url) in [
         (
             "youtube thumbnail is downgraded to a preview size",
@@ -440,6 +449,42 @@ fn image_preview_targets_choose_embed_thumbnail_url() {
         assert_eq!(targets[0].filename, "embed-thumbnail", "{name}");
         assert!(targets[0].show_play_marker, "{name}");
     }
+
+    let mut state = state_with_image_messages(1, &[]);
+    push_media_message(
+        &mut state,
+        MessageCreateFixture {
+            message_id: Id::new(2),
+            content: Some("https://giphy.com/gifs/hvY8Ahy9r340SU8xLY".to_owned()),
+            embeds: vec![EmbedInfo {
+                url: Some("https://giphy.com/gifs/hvY8Ahy9r340SU8xLY".to_owned()),
+                thumbnail_url: Some(
+                    "https://media2.giphy.com/media/hvY8Ahy9r340SU8xLY/giphy_s.gif".to_owned(),
+                ),
+                thumbnail_width: Some(500),
+                thumbnail_height: Some(599),
+                gifv_image_url: Some(
+                    "https://media2.giphy.com/media/hvY8Ahy9r340SU8xLY/giphy.webp".to_owned(),
+                ),
+                video_url: Some(
+                    "https://media2.giphy.com/media/hvY8Ahy9r340SU8xLY/giphy.mp4".to_owned(),
+                ),
+                ..EmbedInfo::test()
+            }],
+            ..guild_message_create_fixture()
+        },
+    );
+
+    let target = visible_image_preview_targets(&state, layout(8))
+        .into_iter()
+        .next()
+        .expect("gifv embed should produce an inline preview");
+
+    assert_eq!(
+        target.url,
+        "https://media2.giphy.com/media/hvY8Ahy9r340SU8xLY/giphy.webp"
+    );
+    assert_eq!(target.filename, "embed-gifv");
 }
 
 #[test]
@@ -627,6 +672,12 @@ fn avatar_preview_url_sizes_user_avatars_but_not_default_ones() {
             "https://cdn.discordapp.com/avatars/1/hash.png?foo=bar&size=128",
         ),
         (
+            "https://cdn.discordapp.com/guilds/1/users/2/avatars/hash.webp?animated=true",
+            2,
+            2,
+            "https://cdn.discordapp.com/guilds/1/users/2/avatars/hash.webp?animated=true&size=64",
+        ),
+        (
             "https://cdn.discordapp.com/embed/avatars/0.png",
             8,
             4,
@@ -655,7 +706,7 @@ fn avatar_targets_clip_first_message_avatar_after_line_scroll() {
 
 #[test]
 fn avatar_image_cache_evicts_least_recently_used_when_over_capacity() {
-    let mut cache = avatar_cache_without_picker();
+    let mut cache = AvatarImageCache::new(None);
     for id in 0..MAX_AVATAR_IMAGE_CACHE_ENTRIES {
         let url = avatar_preview_url(
             &format!("https://cdn.discordapp.com/avatars/{id}.png"),
@@ -726,7 +777,7 @@ fn avatar_protocol_key_tracks_render_clipping() {
 
 #[test]
 fn avatar_popup_request_prunes_cache_to_limit() {
-    let mut cache = avatar_cache_without_picker();
+    let mut cache = AvatarImageCache::new(None);
     for id in 0..MAX_AVATAR_IMAGE_CACHE_ENTRIES {
         cache.cache.entries.insert(
             format!("https://cdn.discordapp.com/avatars/{id}.png"),
@@ -755,7 +806,7 @@ fn avatar_popup_request_prunes_cache_to_limit() {
 
 #[test]
 fn avatar_popup_upload_request_uses_local_preview_command() {
-    let mut cache = avatar_cache_without_picker();
+    let mut cache = AvatarImageCache::new(None);
     let upload = ProfileAvatarUpload::from_bytes("avatar.png".to_owned(), vec![1, 2, 3]);
 
     let request = cache.next_request_for_profile_upload("pending-avatar", || Some(upload.clone()));
@@ -773,10 +824,8 @@ fn avatar_popup_upload_request_uses_local_preview_command() {
 #[test]
 fn avatar_cache_pruning_preserves_active_popup_avatar() {
     let popup_url = "https://cdn.discordapp.com/avatars/popup.png?size=128";
-    let mut cache = AvatarImageCache {
-        active_popup_avatar_url: Some(popup_url.to_owned()),
-        ..avatar_cache_without_picker()
-    };
+    let mut cache = AvatarImageCache::new(None);
+    cache.active_popup_avatar_url = Some(popup_url.to_owned());
     for id in 0..MAX_AVATAR_IMAGE_CACHE_ENTRIES {
         let url = avatar_preview_url(
             &format!("https://cdn.discordapp.com/avatars/{id}.png"),
@@ -999,7 +1048,7 @@ fn image_preview_targets_include_image_messages_in_scrolloff_context() {
 
 #[test]
 fn image_preview_request_is_created_for_draw_target() {
-    let mut cache = image_preview_cache_without_picker();
+    let mut cache = ImagePreviewCache::new(None);
     let target = image_preview_target(1);
 
     assert!(cache.cache.entries.is_empty());
@@ -1019,7 +1068,7 @@ fn image_preview_request_is_created_for_draw_target() {
 
 #[test]
 fn image_preview_render_state_preserves_target_order() {
-    let mut cache = image_preview_cache_without_picker();
+    let mut cache = ImagePreviewCache::new(None);
     let first = image_preview_target(1);
     let second = ImagePreviewTarget {
         message_id: Id::new(1),
@@ -1031,7 +1080,7 @@ fn image_preview_render_state_preserves_target_order() {
         second.key(),
         ImagePreviewEntry::Loading {
             filename: second.filename.clone(),
-            render_info: second.preview_render_info(),
+            protocol_spec: second.protocol_render_spec(),
             last_used: 1,
         },
     );
@@ -1039,7 +1088,7 @@ fn image_preview_render_state_preserves_target_order() {
         first.key(),
         ImagePreviewEntry::Loading {
             filename: first.filename.clone(),
-            render_info: first.preview_render_info(),
+            protocol_spec: first.protocol_render_spec(),
             last_used: 2,
         },
     );
@@ -1059,8 +1108,27 @@ fn image_preview_render_state_preserves_target_order() {
 }
 
 #[test]
+fn image_preview_protocol_spec_ignores_screen_placement() {
+    let target = image_preview_target(1);
+    let original_spec = target.protocol_render_spec();
+    let moved = ImagePreviewTarget {
+        message_index: 3,
+        preview_x_offset_columns: target.preview_x_offset_columns + 2,
+        accent_color: Some(0x12_34_56),
+        ..target.clone()
+    };
+    assert_eq!(original_spec, moved.protocol_render_spec());
+
+    let resized = ImagePreviewTarget {
+        preview_width: target.preview_width + 1,
+        ..target
+    };
+    assert_ne!(original_spec, resized.protocol_render_spec());
+}
+
+#[test]
 fn image_preview_cache_keeps_duplicate_urls_as_separate_preview_instances() {
-    let mut cache = image_preview_cache_without_picker();
+    let mut cache = ImagePreviewCache::new(None);
     let first = image_preview_target(1);
     let second = ImagePreviewTarget {
         preview_index: 1,
@@ -1088,7 +1156,7 @@ fn image_preview_cache_keeps_duplicate_urls_as_separate_preview_instances() {
 
 #[test]
 fn image_preview_cache_deduplicates_url_already_loading_from_previous_frame() {
-    let mut cache = image_preview_cache_without_picker();
+    let mut cache = ImagePreviewCache::new(None);
     let first = image_preview_target(1);
     cache.next_requests(std::slice::from_ref(&first));
     let second = ImagePreviewTarget {
@@ -1105,7 +1173,7 @@ fn image_preview_cache_deduplicates_url_already_loading_from_previous_frame() {
 
 #[test]
 fn image_preview_cache_keeps_viewer_and_inline_entries_separate() {
-    let mut cache = image_preview_cache_without_picker();
+    let mut cache = ImagePreviewCache::new(None);
     let inline = image_preview_target(1);
     let viewer = ImagePreviewTarget {
         viewer: true,
@@ -1127,7 +1195,7 @@ fn image_preview_cache_keeps_viewer_and_inline_entries_separate() {
 
 #[test]
 fn image_preview_cache_evicts_least_recently_used_entries() {
-    let mut cache = image_preview_cache_without_picker();
+    let mut cache = ImagePreviewCache::new(None);
     let existing_targets = (1..=MAX_IMAGE_PREVIEW_CACHE_ENTRIES as u64)
         .map(image_preview_target)
         .collect::<Vec<_>>();
@@ -1141,11 +1209,36 @@ fn image_preview_cache_evicts_least_recently_used_entries() {
     assert!(cache.cache.entries.contains_key(&existing_targets[0].key()));
     assert!(!cache.cache.entries.contains_key(&existing_targets[1].key()));
     assert!(cache.cache.entries.contains_key(&new_target.key()));
+
+    let mut decoded_cache =
+        ImagePreviewCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
+    let first = image_preview_target(1);
+    let second = image_preview_target(2);
+    for (last_used, target) in [first.clone(), second.clone()].into_iter().enumerate() {
+        decoded_cache.cache.entries.insert(
+            target.key(),
+            ImagePreviewEntry::Ready {
+                filename: target.filename.clone(),
+                generation: 1,
+                image: decode_media_image_bytes(&encoded_png(2, 2))
+                    .expect("small preview should decode"),
+                protocol_spec: target.protocol_render_spec(),
+                protocols: Box::new(super::cache::RenderProtocolCache::new()),
+                last_used: last_used as u64,
+            },
+        );
+    }
+    decoded_cache
+        .cache
+        .prune_to_limits(MAX_IMAGE_PREVIEW_CACHE_ENTRIES, 16, |_| false);
+    assert_eq!(decoded_cache.cache.retained_decoded_bytes(), 16);
+    assert!(!decoded_cache.cache.entries.contains_key(&first.key()));
+    assert!(decoded_cache.cache.entries.contains_key(&second.key()));
 }
 
 #[test]
 fn image_preview_cache_limits_visible_requests() {
-    let mut cache = image_preview_cache_without_picker();
+    let mut cache = ImagePreviewCache::new(None);
     let targets = (1..=MAX_IMAGE_PREVIEW_CACHE_ENTRIES as u64 + 2)
         .map(image_preview_target)
         .collect::<Vec<_>>();
@@ -1165,7 +1258,7 @@ fn image_preview_cache_limits_visible_requests() {
 
 #[test]
 fn image_preview_store_loaded_preserves_existing_non_loading_entries() {
-    let mut cache = image_preview_cache_without_picker();
+    let mut cache = ImagePreviewCache::new(None);
     let existing = image_preview_target(1).key();
     let loading = ImagePreviewTarget {
         message_id: Id::new(2),
@@ -1184,12 +1277,12 @@ fn image_preview_store_loaded_preserves_existing_non_loading_entries() {
         loading.clone(),
         ImagePreviewEntry::Loading {
             filename: "loading.png".to_owned(),
-            render_info: image_preview_target(1).preview_render_info(),
+            protocol_spec: image_preview_target(1).protocol_render_spec(),
             last_used: 2,
         },
     );
 
-    cache.store_loaded(&existing.url, &[]);
+    cache.store_loaded(&existing.url);
 
     assert!(matches!(
         cache.cache.entries.get(&existing),
@@ -1203,45 +1296,95 @@ fn image_preview_store_loaded_preserves_existing_non_loading_entries() {
 }
 
 #[test]
-fn image_preview_loaded_bytes_start_decode_jobs_for_loading_entries() {
-    let mut cache = image_preview_cache_without_picker();
-    let target = image_preview_target(1);
-    let key = target.key();
-    let render_info = target.preview_render_info();
-    cache.cache.entries.insert(
-        key.clone(),
-        ImagePreviewEntry::Loading {
-            filename: "loading.png".to_owned(),
-            render_info,
-            last_used: 1,
-        },
+fn media_decode_cache_shares_one_url_decode_across_preview_requests() {
+    let first = image_preview_target(1);
+    let second = ImagePreviewTarget {
+        preview_index: 1,
+        preview_x_offset_columns: 8,
+        ..image_preview_target(1)
+    };
+    let keys = [first.key(), second.key()];
+    let requests = keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| super::decode::MediaImageDecodeRequest {
+            key: MediaImageDecodeKey::Preview(key.clone()),
+            generation: index as u64 + 1,
+        })
+        .collect();
+    let mut decoded_images = MediaImageDecodeCache::new();
+    let encoded = encoded_animated_gif();
+    let outcome = decoded_images.request(&first.url, &encoded, requests);
+
+    assert!(outcome.deliveries.is_empty());
+    assert_eq!(
+        outcome.job.as_ref().map(|job| job.bytes.as_ref()),
+        Some(encoded.as_slice())
     );
+    let deliveries = decoded_images.complete(MediaImageDecodeResult {
+        url: first.url.clone(),
+        result: decode_media_image_bytes(&encoded).map_err(MediaWorkError::Failed),
+    });
+    assert_eq!(deliveries.len(), 2);
+    assert_eq!(
+        deliveries
+            .iter()
+            .map(|delivery| (&delivery.key, delivery.generation))
+            .collect::<Vec<_>>(),
+        vec![
+            (&MediaImageDecodeKey::Preview(keys[0].clone()), 1),
+            (&MediaImageDecodeKey::Preview(keys[1].clone()), 2),
+        ]
+    );
+    let first_image = deliveries[0]
+        .result
+        .as_ref()
+        .expect("shared decode should succeed");
+    let second_image = deliveries[1]
+        .result
+        .as_ref()
+        .expect("shared decode should succeed");
+    assert!(first_image.shares_frames_with(second_image));
 
-    let jobs = cache.decode_jobs_for_loaded_keys(vec![key.clone()], b"image bytes");
-
-    assert_eq!(jobs.len(), 1);
-    assert_eq!(jobs[0].key, MediaImageDecodeKey::Preview(key.clone()));
-    assert_eq!(jobs[0].generation, 1);
-    assert_eq!(jobs[0].bytes.as_ref(), b"image bytes");
-    assert!(matches!(
-        cache.cache.entries.get(&key),
-        Some(ImagePreviewEntry::Decoding { filename, generation, .. })
-            if filename == "loading.png" && *generation == 1
-    ));
+    let third = ImagePreviewTarget {
+        message_id: Id::new(2),
+        ..image_preview_target(1)
+    };
+    let third_key = third.key();
+    let cached = decoded_images.request(
+        &third.url,
+        &encoded,
+        vec![super::decode::MediaImageDecodeRequest {
+            key: MediaImageDecodeKey::Preview(third_key.clone()),
+            generation: 3,
+        }],
+    );
+    assert!(cached.job.is_none());
+    assert_eq!(cached.deliveries.len(), 1);
+    let delivery = &cached.deliveries[0];
+    assert_eq!(
+        (&delivery.key, delivery.generation),
+        (&MediaImageDecodeKey::Preview(third_key), 3)
+    );
+    let third_image = delivery
+        .result
+        .as_ref()
+        .expect("cached decode should succeed");
+    assert!(first_image.shares_frames_with(third_image));
 }
 
 #[test]
 fn image_preview_store_decoded_records_decode_failure() {
-    let mut cache = image_preview_cache_without_picker();
+    let mut cache = ImagePreviewCache::new(None);
     let target = image_preview_target(1);
     let key = target.key();
-    let render_info = target.preview_render_info();
+    let protocol_spec = target.protocol_render_spec();
     cache.cache.entries.insert(
         key.clone(),
         ImagePreviewEntry::Decoding {
             filename: "loading.png".to_owned(),
             generation: 1,
-            render_info,
+            protocol_spec,
             last_used: 1,
         },
     );
@@ -1249,7 +1392,9 @@ fn image_preview_store_decoded_records_decode_failure() {
     cache.store_decoded(
         key.clone(),
         1,
-        Err("decode failed: invalid image".to_owned()),
+        Err(MediaWorkError::Failed(
+            "decode failed: invalid image".to_owned(),
+        )),
     );
 
     assert!(matches!(
@@ -1260,17 +1405,124 @@ fn image_preview_store_decoded_records_decode_failure() {
 }
 
 #[test]
+fn media_decode_queue_pressure_retries_all_consumers() {
+    let preview_target = image_preview_target(1);
+    let preview_key = preview_target.key();
+    let mut previews = ImagePreviewCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
+    previews.cache.entries.insert(
+        preview_key.clone(),
+        ImagePreviewEntry::Decoding {
+            filename: preview_target.filename.clone(),
+            generation: 1,
+            protocol_spec: preview_target.protocol_render_spec(),
+            last_used: 1,
+        },
+    );
+    previews.store_decoded(preview_key.clone(), 1, Err(MediaWorkError::Busy));
+    assert!(!previews.cache.entries.contains_key(&preview_key));
+    assert_eq!(
+        previews.next_requests(std::slice::from_ref(&preview_target)),
+        vec![AppCommand::LoadAttachmentPreview {
+            url: preview_target.url.clone(),
+        }]
+    );
+
+    let avatar_target = AvatarTarget {
+        row: 0,
+        visible_height: 1,
+        top_clip_rows: 0,
+        url: "https://cdn.discordapp.com/avatars/1/hash.png".to_owned(),
+    };
+    let avatar_cache_url = avatar_preview_url(
+        &avatar_target.url,
+        AVATAR_PREVIEW_WIDTH,
+        AVATAR_PREVIEW_HEIGHT,
+    );
+    let mut avatars = AvatarImageCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
+    avatars.cache.entries.insert(
+        avatar_cache_url.clone(),
+        AvatarImageEntry::Decoding {
+            generation: 1,
+            last_used: 1,
+        },
+    );
+    avatars.store_decoded(avatar_cache_url.clone(), 1, Err(MediaWorkError::Busy));
+    assert!(!avatars.cache.entries.contains_key(&avatar_cache_url));
+    assert_eq!(
+        avatars.next_requests(std::slice::from_ref(&avatar_target)),
+        vec![AppCommand::LoadAttachmentPreview {
+            url: avatar_cache_url,
+        }]
+    );
+
+    let emoji_target = EmojiImageTarget {
+        url: "https://cdn.discordapp.com/emojis/1.gif".to_owned(),
+    };
+    let mut emojis = EmojiImageCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
+    emojis.cache.entries.insert(
+        emoji_target.url.clone(),
+        EmojiImageEntry::Decoding {
+            generation: 1,
+            last_used: 1,
+        },
+    );
+    emojis.store_decoded(emoji_target.url.clone(), 1, Err(MediaWorkError::Busy));
+    assert!(!emojis.cache.entries.contains_key(&emoji_target.url));
+    assert_eq!(
+        emojis.next_requests(std::slice::from_ref(&emoji_target)),
+        vec![AppCommand::LoadAttachmentPreview {
+            url: emoji_target.url,
+        }]
+    );
+}
+
+#[test]
+fn protocol_queue_pressure_does_not_consume_failure_attempts() {
+    let mut protocols = super::cache::RenderProtocolCache::<usize>::new();
+
+    for _ in 0..3 {
+        assert!(protocols.request_build(&0));
+        assert_eq!(protocols.store_result(0, Err(MediaWorkError::Busy)), Ok(()));
+        assert!(!protocols.is_terminally_failed(&0));
+    }
+
+    assert!(protocols.request_build(&0));
+    assert_eq!(
+        protocols.store_result(
+            0,
+            Err(MediaWorkError::Failed(
+                "temporary protocol failure".to_owned(),
+            )),
+        ),
+        Ok(())
+    );
+    assert!(!protocols.is_terminally_failed(&0));
+
+    assert!(protocols.request_build(&0));
+    assert_eq!(
+        protocols.store_result(
+            0,
+            Err(MediaWorkError::Failed(
+                "terminal protocol failure".to_owned(),
+            )),
+        ),
+        Err("terminal protocol failure".to_owned())
+    );
+    assert!(protocols.is_terminally_failed(&0));
+}
+
+#[test]
 fn image_preview_store_decoded_ignores_replaced_decoding_generation() {
-    let mut cache = image_preview_cache_without_picker();
+    let mut cache = ImagePreviewCache::new(None);
     let target = image_preview_target(1);
     let key = target.key();
-    let render_info = target.preview_render_info();
+    let protocol_spec = target.protocol_render_spec();
     cache.cache.entries.insert(
         key.clone(),
         ImagePreviewEntry::Decoding {
             filename: "newer.png".to_owned(),
             generation: 2,
-            render_info,
+            protocol_spec,
             last_used: 2,
         },
     );
@@ -1278,7 +1530,9 @@ fn image_preview_store_decoded_ignores_replaced_decoding_generation() {
     cache.store_decoded(
         key.clone(),
         1,
-        Err("decode failed: old generation".to_owned()),
+        Err(MediaWorkError::Failed(
+            "decode failed: old generation".to_owned(),
+        )),
     );
 
     assert!(matches!(
@@ -1289,17 +1543,24 @@ fn image_preview_store_decoded_ignores_replaced_decoding_generation() {
 }
 
 #[test]
-fn decode_original_preview_image_reports_invalid_bytes() {
-    let error = decode_original_preview_image(b"not an image")
-        .expect_err("invalid bytes should fail to decode");
+fn decode_image_bytes_reports_invalid_bytes() {
+    let error =
+        decode_image_bytes(b"not an image").expect_err("invalid bytes should fail to decode");
 
     assert!(error.starts_with("decode failed:"));
 }
 
 #[test]
 fn media_decoder_preserves_and_plays_gif_and_webp_animation_frames() {
-    let cases: [(&str, &[u8]); 2] = [
-        ("GIF", &encoded_animated_gif()),
+    let gif_10_ms = encoded_two_frame_gif(10);
+    let gif_20_ms = encoded_two_frame_gif(20);
+    let gif_30_ms = encoded_two_frame_gif(30);
+    let gif_40_ms = encoded_two_frame_gif(40);
+    let cases: [(&str, &[u8]); 5] = [
+        ("10 ms GIF", &gif_10_ms),
+        ("20 ms GIF", &gif_20_ms),
+        ("30 ms GIF", &gif_30_ms),
+        ("40 ms GIF", &gif_40_ms),
         ("WebP", include_bytes!("testdata/two-frame.webp")),
     ];
 
@@ -1308,6 +1569,7 @@ fn media_decoder_preserves_and_plays_gif_and_webp_animation_frames() {
             .unwrap_or_else(|error| panic!("{label} animation should decode: {error}"));
         assert_eq!(image.frame_count(), 2, "{label}");
         assert!(image.is_animated(), "{label}");
+        assert_eq!(image.retained_bytes(), 32, "{label}");
 
         let first_pixel = image.current_frame().to_rgba8().get_pixel(0, 0).0;
         let started_at = Instant::now();
@@ -1334,16 +1596,58 @@ fn media_decoder_preserves_and_plays_gif_and_webp_animation_frames() {
         image.pause_animation();
         assert_eq!(image.next_frame_deadline(), None, "{label}");
     }
+
+    let encoded = encoded_animated_gif();
+    let error = match decode_media_image_bytes(&encoded[..encoded.len() - 2]) {
+        Ok(_) => panic!("a corrupt later GIF frame should fail the full decode"),
+        Err(error) => error,
+    };
+    assert!(error.starts_with("decode failed at animation frame 2:"));
+}
+
+#[test]
+fn media_decoder_samples_long_animations_across_the_full_timeline() {
+    let mut image = decode_media_image_bytes(&encoded_long_animated_gif())
+        .expect("long GIF animation should decode");
+    assert_eq!(image.frame_count(), MAX_RETAINED_ANIMATION_FRAMES);
+
+    let mut sampled_source_frames = Vec::new();
+    let started_at = Instant::now();
+    let mut frame_started_at = started_at;
+    let mut sampled_duration = Duration::ZERO;
+    image.start_animation(started_at);
+
+    for _ in 0..image.frame_count() {
+        let pixel = image.current_frame().to_rgba8().get_pixel(0, 0).0;
+        sampled_source_frames.push(u16::from(pixel[0]) | (u16::from(pixel[1]) << 8));
+        let deadline = image
+            .next_frame_deadline()
+            .expect("sampled animation should schedule every retained frame");
+        let frame_duration = deadline.duration_since(frame_started_at);
+        assert!(frame_duration >= Duration::from_millis(50));
+        sampled_duration += frame_duration;
+        assert!(image.advance_frame(deadline));
+        frame_started_at = deadline;
+    }
+
+    assert_eq!(sampled_duration, Duration::from_millis(22_800));
+    assert_eq!(sampled_source_frames.first(), Some(&0));
+    assert_eq!(sampled_source_frames.last(), Some(&299));
+    assert!(
+        sampled_source_frames
+            .iter()
+            .filter(|frame| **frame >= 240)
+            .count()
+            >= 16,
+        "longer source delays should retain more representatives"
+    );
 }
 
 #[test]
 fn emoji_animation_clock_runs_only_while_the_image_is_visible() {
     let url = "https://cdn.discordapp.com/emojis/42.webp?animated=true".to_owned();
     let target = EmojiImageTarget { url: url.clone() };
-    let mut cache = EmojiImageCache {
-        picker: Some(ratatui_image::picker::Picker::halfblocks()),
-        cache: super::cache::MediaImageCacheCore::new(),
-    };
+    let mut cache = EmojiImageCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
     cache.cache.entries.insert(
         url.clone(),
         EmojiImageEntry::Decoding {
@@ -1354,8 +1658,27 @@ fn emoji_animation_clock_runs_only_while_the_image_is_visible() {
     cache.store_decoded(
         url.clone(),
         1,
-        decode_media_image_bytes(&encoded_animated_gif()),
+        decode_media_image_bytes(&encoded_animated_gif()).map_err(MediaWorkError::Failed),
     );
+    let _ = cache.render_state(std::slice::from_ref(&target));
+    let jobs = cache.take_protocol_jobs();
+    assert_eq!(jobs.len(), 1);
+    let mut failed = build_media_protocol(
+        jobs.into_iter()
+            .next()
+            .expect("first frame protocol job should exist"),
+    );
+    failed.result = Err(MediaWorkError::Failed(
+        "temporary protocol worker failure".to_owned(),
+    ));
+    cache.store_protocol(failed);
+    let _ = cache.render_state(std::slice::from_ref(&target));
+    let retry_jobs = cache.take_protocol_jobs();
+    assert_eq!(retry_jobs.len(), 1);
+    for job in retry_jobs {
+        cache.store_protocol(build_media_protocol(job));
+    }
+    assert_eq!(cache.render_state(std::slice::from_ref(&target)).len(), 1);
 
     let started_at = Instant::now();
     cache.sync_animation_visibility(std::slice::from_ref(&target), started_at);
@@ -1367,45 +1690,100 @@ fn emoji_animation_clock_runs_only_while_the_image_is_visible() {
         let rendered = cache.render_state(std::slice::from_ref(&target));
         assert_eq!(rendered.len(), 1);
     }
+    let jobs = cache.take_protocol_jobs();
+    assert_eq!(jobs.len(), 1);
+    for job in jobs {
+        cache.store_protocol(build_media_protocol(job));
+    }
+    assert_eq!(cache.render_state(std::slice::from_ref(&target)).len(), 1);
     assert!(matches!(
         cache.cache.entries.get(&url),
         Some(EmojiImageEntry::Ready {
             image,
-            protocol_frame_index: 1,
+            protocols,
             ..
-        }) if image.current_frame_index() == 1
+        }) if image.current_frame_index() == 1 && protocols.len() == 2
     ));
 
-    cache.sync_animation_visibility(&[], deadline);
+    let loop_deadline = cache
+        .next_animation_deadline()
+        .expect("animated emoji should schedule its loop frame");
+    assert!(cache.advance_animations(loop_deadline));
+    assert_eq!(cache.render_state(std::slice::from_ref(&target)).len(), 1);
+    assert!(matches!(
+        cache.cache.entries.get(&url),
+        Some(EmojiImageEntry::Ready {
+            image,
+            protocols,
+            ..
+        }) if image.current_frame_index() == 0 && protocols.len() == 2
+    ));
+
+    cache.sync_animation_visibility(&[], loop_deadline);
     assert_eq!(cache.next_animation_deadline(), None);
-    assert!(!cache.advance_animations(deadline + Duration::from_secs(1)));
+    assert!(!cache.advance_animations(loop_deadline + Duration::from_secs(1)));
 }
 
 #[test]
-fn attachment_preview_rebuilds_its_protocol_for_each_visible_animation_frame() {
+fn attachment_preview_waits_for_a_ready_or_failed_next_animation_frame() {
     let target = image_preview_target(42);
     let key = target.key();
-    let render_info = target.preview_render_info();
-    let mut cache = ImagePreviewCache {
-        picker: Some(ratatui_image::picker::Picker::halfblocks()),
-        cache: super::cache::MediaImageCacheCore::new(),
-    };
+    let protocol_spec = target.protocol_render_spec();
+    let mut cache = ImagePreviewCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
     cache.cache.entries.insert(
         key.clone(),
         ImagePreviewEntry::Decoding {
             filename: target.filename.clone(),
             generation: 1,
-            render_info,
+            protocol_spec,
             last_used: 1,
         },
     );
     cache.store_decoded(
         key.clone(),
         1,
-        decode_media_image_bytes(&encoded_animated_gif()),
+        decode_media_image_bytes(&encoded_animated_gif()).map_err(MediaWorkError::Failed),
     );
+    let _ = cache.render_state(std::slice::from_ref(&target));
+    let jobs = cache.take_protocol_jobs();
+    assert_eq!(jobs.len(), 1);
 
     let started_at = Instant::now();
+    cache.sync_animation_visibility(std::slice::from_ref(&target), started_at);
+    assert_eq!(cache.next_animation_deadline(), None);
+
+    for job in jobs {
+        cache.store_protocol(build_media_protocol(job));
+    }
+    assert_eq!(cache.render_state(std::slice::from_ref(&target)).len(), 1);
+    let jobs = cache.take_protocol_jobs();
+    assert_eq!(jobs.len(), 1);
+    cache.sync_animation_visibility(std::slice::from_ref(&target), started_at);
+    assert_eq!(cache.next_animation_deadline(), None);
+    let mut failed = build_media_protocol(
+        jobs.into_iter()
+            .next()
+            .expect("next frame protocol job should exist"),
+    );
+    failed.result = Err(MediaWorkError::Failed(
+        "unsupported frame protocol".to_owned(),
+    ));
+    cache.store_protocol(failed);
+    let _ = cache.render_state(std::slice::from_ref(&target));
+    let mut failed = build_media_protocol(
+        cache
+            .take_protocol_jobs()
+            .into_iter()
+            .next()
+            .expect("failed frame protocol should retry once"),
+    );
+    failed.result = Err(MediaWorkError::Failed(
+        "unsupported frame protocol".to_owned(),
+    ));
+    cache.store_protocol(failed);
+    assert_eq!(cache.render_state(std::slice::from_ref(&target)).len(), 1);
+    assert!(cache.take_protocol_jobs().is_empty());
+
     cache.sync_animation_visibility(std::slice::from_ref(&target), started_at);
     let deadline = cache
         .next_animation_deadline()
@@ -1415,16 +1793,31 @@ fn attachment_preview_rebuilds_its_protocol_for_each_visible_animation_frame() {
         let rendered = cache.render_state(std::slice::from_ref(&target));
         assert_eq!(rendered.len(), 1);
     }
+    assert!(cache.take_protocol_jobs().is_empty());
     assert!(matches!(
         cache.cache.entries.get(&key),
         Some(ImagePreviewEntry::Ready {
             image,
-            protocol_frame_index: 1,
+            protocols,
             ..
-        }) if image.current_frame_index() == 1
+        }) if image.current_frame_index() == 1 && protocols.len() == 1
     ));
 
-    cache.sync_animation_visibility(&[], deadline);
+    let loop_deadline = cache
+        .next_animation_deadline()
+        .expect("animated attachment should schedule its loop frame");
+    assert!(cache.advance_animations(loop_deadline));
+    assert_eq!(cache.render_state(std::slice::from_ref(&target)).len(), 1);
+    assert!(matches!(
+        cache.cache.entries.get(&key),
+        Some(ImagePreviewEntry::Ready {
+            image,
+            protocols,
+            ..
+        }) if image.current_frame_index() == 0 && protocols.len() == 1
+    ));
+
+    cache.sync_animation_visibility(&[], loop_deadline);
     assert_eq!(cache.next_animation_deadline(), None);
 }
 
@@ -1445,23 +1838,18 @@ fn media_decode_rejects_oversized_image_dimensions() {
 }
 
 #[test]
-fn clipped_preview_image_stays_within_preview_pixel_bounds() {
+fn clipped_media_image_stays_within_preview_pixel_bounds() {
     let image = DynamicImage::ImageRgba8(ImageBuffer::from_pixel(400, 400, Rgba([0, 0, 0, 255])));
-    let render_info = ImagePreviewRenderInfo {
-        viewer: false,
-        message_index: 0,
-        preview_x_offset_columns: 0,
-        preview_y_offset_rows: 0,
-        preview_width: 16,
-        preview_height: 3,
-        visible_preview_height: 3,
+    let render_spec = MediaProtocolRenderSpec {
+        width: 16,
+        height: 3,
+        visible_height: 3,
         top_clip_rows: 0,
-        accent_color: None,
         show_play_marker: false,
         mask_circular: false,
     };
 
-    let resized = clipped_preview_image(&image, (10, 20), render_info)
+    let resized = clipped_media_image(&image, (10, 20), render_spec)
         .expect("preview dimensions should produce resized image");
 
     assert!(resized.width() <= 160);
@@ -1474,21 +1862,16 @@ fn clipped_preview_image_stays_within_preview_pixel_bounds() {
 fn clipped_video_preview_draws_play_marker_into_image_pixels() {
     let image =
         DynamicImage::ImageRgba8(ImageBuffer::from_pixel(200, 400, Rgba([20, 30, 40, 255])));
-    let render_info = ImagePreviewRenderInfo {
-        viewer: false,
-        message_index: 0,
-        preview_x_offset_columns: 0,
-        preview_y_offset_rows: 0,
-        preview_width: 16,
-        preview_height: 3,
-        visible_preview_height: 3,
+    let render_spec = MediaProtocolRenderSpec {
+        width: 16,
+        height: 3,
+        visible_height: 3,
         top_clip_rows: 0,
-        accent_color: None,
         show_play_marker: true,
         mask_circular: false,
     };
 
-    let marked = clipped_preview_image(&image, (10, 20), render_info)
+    let marked = clipped_media_image(&image, (10, 20), render_spec)
         .expect("preview dimensions should produce resized image")
         .to_rgba8();
     let center = marked.get_pixel(marked.width() / 2, marked.height() / 2);
@@ -1770,7 +2153,7 @@ fn emoji_image_targets_include_visible_forum_post_custom_tag_emoji() {
 
 #[test]
 fn emoji_image_cache_skips_requests_without_image_protocol() {
-    let mut cache = emoji_cache_without_picker();
+    let mut cache = EmojiImageCache::new(None);
     let target = EmojiImageTarget {
         url: "https://cdn.discordapp.com/emojis/50.png".to_owned(),
     };

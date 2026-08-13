@@ -105,6 +105,9 @@ pub struct EmbedInfo {
     pub image_width: Option<u64>,
     pub image_height: Option<u64>,
     pub image_flags: u64,
+    /// Animated image rendition recovered for a `gifv` embed when its provider
+    /// exposes only a video URL in Discord's payload.
+    pub gifv_image_url: Option<String>,
     pub video_url: Option<String>,
 }
 
@@ -132,6 +135,7 @@ impl EmbedInfo {
             image_width: None,
             image_height: None,
             image_flags: 0,
+            gifv_image_url: None,
             video_url: None,
         }
     }
@@ -574,6 +578,20 @@ impl AttachmentInfo {
 
 impl EmbedInfo {
     pub fn inline_preview_info(&self) -> Option<InlinePreviewInfo<'_>> {
+        if let Some(url) = self.gifv_image_url.as_deref() {
+            return Some(InlinePreviewInfo {
+                url,
+                proxy_url: None,
+                filename: "embed-gifv",
+                width: self.image_width.or(self.thumbnail_width),
+                height: self.image_height.or(self.thumbnail_height),
+                accent_color: Some(self.color.unwrap_or(0xff0000)),
+                animated: true,
+                proxy_preview_only: false,
+                show_play_marker: false,
+            });
+        }
+
         let show_play_marker = self.video_url.is_some();
 
         if let Some(url) = self.thumbnail_url.as_deref() {
@@ -605,20 +623,16 @@ impl EmbedInfo {
 }
 
 fn media_is_animated(flags: u64, filename: &str, url: &str) -> bool {
+    let url_path = url.split_once('?').map_or(url, |(path, _)| path);
     flags & MEDIA_FLAG_IS_ANIMATED != 0
         || filename_has_extension(filename, &["gif"])
-        || url_without_query(url).is_some_and(|path| filename_has_extension(path, &["gif"]))
+        || filename_has_extension(url_path, &["gif"])
         || url
             .split_once('?')
             .map(|(_, query)| query.split('&'))
             .into_iter()
             .flatten()
             .any(|param| param.eq_ignore_ascii_case("animated=true"))
-}
-
-fn url_without_query(url: &str) -> Option<&str> {
-    let path = url.split_once('?').map_or(url, |(path, _)| path);
-    (!path.is_empty()).then_some(path)
 }
 
 fn filename_has_extension(filename: &str, extensions: &[&str]) -> bool {

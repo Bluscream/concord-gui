@@ -122,43 +122,6 @@ pub(in crate::tui) fn visible_image_preview_targets(
     state: &DashboardState,
     layout: ImagePreviewLayout,
 ) -> Vec<ImagePreviewTarget> {
-    if let Some((message_id, preview_index, preview)) = state.selected_attachment_viewer_preview()
-        && state.show_images()
-    {
-        let quality = state.attachment_viewer_quality();
-        let (preview_width, preview_height) = image_preview_size_for_dimensions(
-            layout.viewer_preview_width,
-            layout.viewer_max_preview_height,
-            preview.width,
-            preview.height,
-            true,
-            layout.font_size,
-        );
-        if preview_height == 0 {
-            return Vec::new();
-        }
-        return vec![ImagePreviewTarget {
-            viewer: true,
-            message_index: 0,
-            preview_index,
-            preview_x_offset_columns: 0,
-            preview_y_offset_rows: 0,
-            preview_width,
-            preview_height,
-            visible_preview_height: preview_height,
-            top_clip_rows: 0,
-            accent_color: preview.accent_color,
-            show_play_marker: preview.show_play_marker,
-            message_id,
-            url: preview_request_url(preview, preview_width, preview_height, quality),
-            filename: preview.filename.to_owned(),
-        }];
-    }
-
-    if !state.show_images() {
-        return Vec::new();
-    }
-
     let messages = state.visible_messages();
     let selected = state.focused_message_selection();
     let plan = MessageViewportPlan::new(

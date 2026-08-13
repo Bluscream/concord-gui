@@ -14,14 +14,13 @@ pub(in crate::tui) const PROFILE_POPUP_AVATAR_HEIGHT: u16 = 4;
 const AVATAR_SOURCE_PIXELS_PER_COLUMN: u64 = 10;
 const AVATAR_SOURCE_PIXELS_PER_ROW: u64 = AVATAR_SOURCE_PIXELS_PER_COLUMN * 3;
 const DISCORD_AVATAR_CDN_PREFIX: &str = "https://cdn.discordapp.com/avatars/";
+const DISCORD_GUILD_CDN_PREFIX: &str = "https://cdn.discordapp.com/guilds/";
 const DISCORD_AVATAR_MIN_SIZE: u64 = 16;
 const DISCORD_AVATAR_MAX_SIZE: u64 = 1024;
 pub(super) const EMOJI_REACTION_THUMB_WIDTH: u16 = 2;
 pub(super) const EMOJI_REACTION_THUMB_HEIGHT: u16 = 1;
 
 pub(in crate::tui) fn query_image_picker(
-    target: &str,
-    unavailable_message: &str,
     protocol_preference: ImageProtocolPreference,
 ) -> Option<Picker> {
     match Picker::from_query_stdio() {
@@ -30,7 +29,7 @@ pub(in crate::tui) fn query_image_picker(
             Some(picker)
         }
         Err(error) => {
-            logging::error(target, format!("{unavailable_message}: {error}"));
+            logging::error("media", format!("image picker unavailable: {error}"));
             None
         }
     }
@@ -96,7 +95,30 @@ pub(super) fn avatar_preview_url(url: &str, width_columns: u16, height_rows: u16
 }
 
 fn is_discord_avatar_url(url: &str) -> bool {
-    url.starts_with(DISCORD_AVATAR_CDN_PREFIX)
+    url.starts_with(DISCORD_AVATAR_CDN_PREFIX) || is_discord_guild_member_avatar_url(url)
+}
+
+fn is_discord_guild_member_avatar_url(url: &str) -> bool {
+    let Some(path) = url
+        .split_once('?')
+        .map_or(url, |(path, _)| path)
+        .strip_prefix(DISCORD_GUILD_CDN_PREFIX)
+    else {
+        return false;
+    };
+    let mut segments = path.split('/');
+    matches!(
+        (
+            segments.next(),
+            segments.next(),
+            segments.next(),
+            segments.next(),
+            segments.next(),
+            segments.next(),
+        ),
+        (Some(guild_id), Some("users"), Some(user_id), Some("avatars"), Some(avatar), None)
+            if !guild_id.is_empty() && !user_id.is_empty() && !avatar.is_empty()
+    )
 }
 
 fn avatar_preview_size(width_columns: u16, height_rows: u16) -> u64 {
@@ -109,35 +131,25 @@ fn avatar_preview_size(width_columns: u16, height_rows: u16) -> u64 {
         .min(DISCORD_AVATAR_MAX_SIZE)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::tui) struct ImagePreviewRenderInfo {
-    pub(super) viewer: bool,
-    pub(super) message_index: usize,
-    pub(super) preview_x_offset_columns: u16,
-    pub(super) preview_y_offset_rows: usize,
-    pub(super) preview_width: u16,
-    pub(super) preview_height: u16,
-    pub(super) visible_preview_height: u16,
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(in crate::tui) struct MediaProtocolRenderSpec {
+    pub(super) width: u16,
+    pub(super) height: u16,
+    pub(super) visible_height: u16,
     pub(super) top_clip_rows: u16,
-    pub(super) accent_color: Option<u32>,
     pub(super) show_play_marker: bool,
     pub(super) mask_circular: bool,
 }
 
-pub(in crate::tui) fn fixed_image_preview_render_info(
-    preview_width: u16,
-    preview_height: u16,
-) -> ImagePreviewRenderInfo {
-    ImagePreviewRenderInfo {
-        viewer: false,
-        message_index: 0,
-        preview_x_offset_columns: 0,
-        preview_y_offset_rows: 0,
-        preview_width,
-        preview_height,
-        visible_preview_height: preview_height,
+pub(in crate::tui) fn fixed_media_protocol_render_spec(
+    width: u16,
+    height: u16,
+) -> MediaProtocolRenderSpec {
+    MediaProtocolRenderSpec {
+        width,
+        height,
+        visible_height: height,
         top_clip_rows: 0,
-        accent_color: None,
         show_play_marker: false,
         mask_circular: false,
     }
@@ -145,28 +157,25 @@ pub(in crate::tui) fn fixed_image_preview_render_info(
 
 /// `Picker::font_size` returns a `FontSize` struct as of ratatui-image 11; the
 /// rest of our pixel math works in `(width, height)` tuples, so convert here.
-pub(super) fn picker_font_size(picker: &Picker) -> (u16, u16) {
+pub(in crate::tui) fn picker_font_size(picker: &Picker) -> (u16, u16) {
     let font_size = picker.font_size();
     (font_size.width, font_size.height)
 }
 
-pub(super) fn clipped_preview_image(
+pub(super) fn clipped_media_image(
     image: &DynamicImage,
     font_size: (u16, u16),
-    render_info: ImagePreviewRenderInfo,
+    spec: MediaProtocolRenderSpec,
 ) -> Option<DynamicImage> {
-    if render_info.preview_width == 0
-        || render_info.preview_height == 0
-        || render_info.visible_preview_height == 0
-    {
+    if spec.width == 0 || spec.height == 0 || spec.visible_height == 0 {
         return None;
     }
 
     let (font_width, font_height) = font_size;
-    let full_width = u32::from(render_info.preview_width).checked_mul(u32::from(font_width))?;
-    let full_height = u32::from(render_info.preview_height).checked_mul(u32::from(font_height))?;
-    let crop_top = u32::from(render_info.top_clip_rows).checked_mul(u32::from(font_height))?;
-    let crop_height = u32::from(render_info.visible_preview_height)
+    let full_width = u32::from(spec.width).checked_mul(u32::from(font_width))?;
+    let full_height = u32::from(spec.height).checked_mul(u32::from(font_height))?;
+    let crop_top = u32::from(spec.top_clip_rows).checked_mul(u32::from(font_height))?;
+    let crop_height = u32::from(spec.visible_height)
         .checked_mul(u32::from(font_height))?
         .min(full_height.saturating_sub(crop_top));
     if full_width == 0 || crop_height == 0 {
@@ -174,11 +183,11 @@ pub(super) fn clipped_preview_image(
     }
 
     let mut fitted = fit_image_to_canvas(image, full_width, full_height);
-    if render_info.show_play_marker {
+    if spec.show_play_marker {
         apply_video_play_marker(&mut fitted);
     }
     let mut cropped = fitted.crop_imm(0, crop_top, full_width, crop_height);
-    if render_info.mask_circular {
+    if spec.mask_circular {
         apply_circular_alpha_mask(&mut cropped, full_width, full_height, crop_top);
     }
     Some(cropped)
@@ -272,19 +281,16 @@ fn apply_circular_alpha_mask(
     *image = DynamicImage::ImageRgba8(rgba);
 }
 
-pub(in crate::tui) fn clipped_preview_protocol(
+pub(in crate::tui) fn clipped_media_protocol(
     picker: &Picker,
     image: &DynamicImage,
-    render_info: ImagePreviewRenderInfo,
+    spec: MediaProtocolRenderSpec,
 ) -> Option<ratatui_image::protocol::Protocol> {
-    let image = clipped_preview_image(image, picker_font_size(picker), render_info)?;
+    let image = clipped_media_image(image, picker_font_size(picker), spec)?;
     picker
         .new_protocol(
             image,
-            Size::new(
-                render_info.preview_width,
-                render_info.visible_preview_height,
-            ),
+            Size::new(spec.width, spec.visible_height),
             Resize::Fit(None),
         )
         .ok()

@@ -2691,6 +2691,39 @@ fn message_create_parser_keeps_regular_embeds() {
 }
 
 #[test]
+fn message_create_parser_builds_giphy_animation_url_for_gifv() {
+    let event = parse_message_create(&json!({
+        "id": "20",
+        "channel_id": "10",
+        "author": { "id": "30", "username": "neo" },
+        "content": "https://giphy.com/gifs/hvY8Ahy9r340SU8xLY",
+        "embeds": [{
+            "type": "gifv",
+            "url": "https://giphy.com/gifs/hvY8Ahy9r340SU8xLY",
+            "thumbnail": {
+                "url": "https://media2.giphy.com/media/hvY8Ahy9r340SU8xLY/giphy_s.gif",
+                "width": 500,
+                "height": 599
+            },
+            "video": {
+                "url": "https://media2.giphy.com/media/hvY8Ahy9r340SU8xLY/giphy.mp4?cid=discord",
+                "width": 500,
+                "height": 599
+            }
+        }]
+    }))
+    .expect("message create should parse");
+
+    let AppEvent::MessageCreate { message } = event else {
+        panic!("expected message create event");
+    };
+    assert_eq!(
+        message.embeds[0].gifv_image_url.as_deref(),
+        Some("https://media2.giphy.com/media/hvY8Ahy9r340SU8xLY/giphy.webp?cid=discord")
+    );
+}
+
+#[test]
 fn message_create_parser_keeps_timestamp_only_embeds() {
     let event = parse_message_create(&json!({
         "id": "20",

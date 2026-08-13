@@ -23,27 +23,23 @@ use crate::{
 };
 
 use super::super::{
-    media::{
-        AvatarImageCache, EmojiImageCache, ImagePreviewCache, MediaImageDecodeResult,
-        spawn_media_image_decode,
-    },
+    media::MediaImageDecodeResult,
     state::{DashboardState, DesktopNotification},
 };
+use super::media_runtime::DashboardMediaRuntime;
 
 pub(super) const MAX_DRAINED_EFFECT_EVENTS: usize = 1024;
 static NOTIFICATION_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
 
-pub(in crate::tui) struct EffectContext<'a> {
-    pub(in crate::tui) state: &'a mut DashboardState,
-    pub(in crate::tui) client: &'a DiscordClient,
-    pub(in crate::tui) image_previews: &'a mut ImagePreviewCache,
-    pub(in crate::tui) avatar_images: &'a mut AvatarImageCache,
-    pub(in crate::tui) emoji_images: &'a mut EmojiImageCache,
-    pub(in crate::tui) media_decode_tx: &'a mpsc::UnboundedSender<MediaImageDecodeResult>,
+pub(super) struct EffectContext<'a> {
+    pub(super) state: &'a mut DashboardState,
+    pub(super) client: &'a DiscordClient,
+    pub(super) media_runtime: &'a mut DashboardMediaRuntime,
+    pub(super) media_decode_tx: &'a mpsc::UnboundedSender<MediaImageDecodeResult>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(in crate::tui) struct EffectProcessingOutcome {
+pub(super) struct EffectProcessingOutcome {
     pub(super) processed_event: bool,
     pub(super) force_redraw: bool,
 }
@@ -66,7 +62,7 @@ impl EffectProcessingOutcome {
 /// cover, mainly the media caches (an inline preview, avatar, or emoji finishing
 /// or failing to load) and connection-lifecycle events. Force a redraw for those
 /// regardless of whether the visible signature changed.
-pub(in crate::tui) fn effect_forces_redraw(event: &AppEvent) -> bool {
+pub(super) fn effect_forces_redraw(event: &AppEvent) -> bool {
     matches!(
         event,
         AppEvent::AttachmentPreviewLoaded { .. }
@@ -169,14 +165,7 @@ fn dispatch_runtime_side_effects(event: &AppEvent, ctx: &EffectContext<'_>) {
 }
 
 fn record_media_event(event: &AppEvent, ctx: &mut EffectContext<'_>) {
-    let preview_jobs = ctx.image_previews.record_event(event);
-    for job in preview_jobs
-        .into_iter()
-        .chain(ctx.avatar_images.record_event(event))
-        .chain(ctx.emoji_images.record_event(event))
-    {
-        spawn_media_image_decode(job, ctx.media_decode_tx.clone());
-    }
+    ctx.media_runtime.record_event(event, ctx.media_decode_tx);
 }
 
 fn push_dashboard_effect(event: AppEvent, ctx: &mut EffectContext<'_>) {
@@ -395,7 +384,7 @@ fn ring_terminal_bell() {
     let _ = output.flush();
 }
 
-pub(in crate::tui) fn process_sequenced_effect(
+pub(super) fn process_sequenced_effect(
     event: SequencedAppEvent,
     current_snapshot_revision: u64,
     deferred_effects: &mut VecDeque<SequencedAppEvent>,
@@ -408,7 +397,7 @@ pub(in crate::tui) fn process_sequenced_effect(
     process_effect_event(event.event, ctx)
 }
 
-pub(in crate::tui) fn process_deferred_effects(
+pub(super) fn process_deferred_effects(
     current_snapshot_revision: u64,
     deferred_effects: &mut VecDeque<SequencedAppEvent>,
     ctx: &mut EffectContext<'_>,
@@ -436,6 +425,8 @@ pub(super) fn handle_gateway_closed(state: &mut DashboardState) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+
     use tokio::sync::mpsc;
 
     use crate::discord::ids::Id;
@@ -447,10 +438,58 @@ mod tests {
     use crate::discord::{
         AppCommand, AppEvent, ChannelInfo, ForumPostArchiveState, MemberInfo, MentionInfo,
         MessageHistoryAfterMode, MessageInfo, MessageUpdateDispatchInfo, MessageUpdateEventFields,
-        ReactionEmoji, ReactionUserInfo, RoleInfo, VoiceStateInfo,
+        ReactionEmoji, ReactionUserInfo, RoleInfo, SequencedAppEvent, VoiceStateInfo,
     };
 
     use super::*;
+
+    #[test]
+    fn effect_waits_until_snapshot_revision_catches_up() {
+        let mut state = DashboardState::new();
+        let mut media_runtime =
+            DashboardMediaRuntime::new(crate::config::ImageProtocolPreference::Auto);
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
+        let (media_decode_tx, _media_decode_rx) = mpsc::unbounded_channel();
+        let mut deferred_effects = VecDeque::new();
+
+        {
+            let mut ctx = EffectContext {
+                state: &mut state,
+                client: &client,
+                media_runtime: &mut media_runtime,
+                media_decode_tx: &media_decode_tx,
+            };
+            process_sequenced_effect(
+                SequencedAppEvent {
+                    revision: 2,
+                    event: AppEvent::Ready {
+                        user: "tester".to_owned(),
+                        user_id: None,
+                    },
+                },
+                1,
+                &mut deferred_effects,
+                &mut ctx,
+            );
+        }
+
+        assert_eq!(deferred_effects.len(), 1);
+        assert_eq!(state.current_user(), None);
+
+        {
+            let mut ctx = EffectContext {
+                state: &mut state,
+                client: &client,
+                media_runtime: &mut media_runtime,
+                media_decode_tx: &media_decode_tx,
+            };
+            process_deferred_effects(2, &mut deferred_effects, &mut ctx);
+        }
+
+        assert!(deferred_effects.is_empty());
+        assert_eq!(state.current_user(), Some("tester"));
+    }
 
     #[test]
     fn events_carrying_unloaded_authors_enqueue_a_member_request() {
@@ -775,16 +814,13 @@ mod tests {
     fn process_effect_in_default_context(state: &mut DashboardState, event: AppEvent) {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
-        let mut image_previews = ImagePreviewCache::new();
-        let mut avatar_images = AvatarImageCache::new();
-        let mut emoji_images = EmojiImageCache::new();
+        let mut media_runtime =
+            DashboardMediaRuntime::new(crate::config::ImageProtocolPreference::Auto);
         let (media_decode_tx, _media_decode_rx) = mpsc::unbounded_channel();
         let mut ctx = EffectContext {
             state,
             client: &client,
-            image_previews: &mut image_previews,
-            avatar_images: &mut avatar_images,
-            emoji_images: &mut emoji_images,
+            media_runtime: &mut media_runtime,
             media_decode_tx: &media_decode_tx,
         };
 

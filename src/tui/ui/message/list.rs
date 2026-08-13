@@ -625,8 +625,7 @@ pub(in crate::tui::ui) fn render_image_preview(
             area,
         ),
         ImagePreviewState::Ready { protocol, .. } => {
-            let widget = StatefulImage::new().resize(Resize::Fit(None));
-            frame.render_stateful_widget(widget, area, protocol);
+            frame.render_widget(RatatuiImage::new(protocol), area);
         }
     }
 }

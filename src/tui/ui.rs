@@ -9,7 +9,7 @@ use ratatui::{
         ScrollbarState, Wrap,
     },
 };
-use ratatui_image::{Image as RatatuiImage, Resize, StatefulImage};
+use ratatui_image::Image as RatatuiImage;
 use unicode_width::UnicodeWidthStr;
 
 #[cfg(test)]

@@ -182,7 +182,8 @@ pub(super) fn parse_embeds(value: Option<&Value>) -> Vec<EmbedInfo> {
 }
 
 fn parse_embed(value: &Value) -> Option<EmbedInfo> {
-    if value.get("type").and_then(Value::as_str) == Some("poll_result") {
+    let embed_type = value.get("type").and_then(Value::as_str).map(str::to_owned);
+    if embed_type.as_deref() == Some("poll_result") {
         return None;
     }
 
@@ -191,6 +192,16 @@ fn parse_embed(value: &Value) -> Option<EmbedInfo> {
         .and_then(Value::as_array)
         .map(|fields| fields.iter().filter_map(parse_embed_field).collect())
         .unwrap_or_default();
+    let video_url = value
+        .get("video")
+        .and_then(|video| video.get("url"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let gifv_image_url = if embed_type.as_deref() == Some("gifv") {
+        video_url.as_deref().and_then(giphy_gifv_image_url)
+    } else {
+        None
+    };
     let embed = EmbedInfo {
         color: value
             .get("color")
@@ -271,14 +282,29 @@ fn parse_embed(value: &Value) -> Option<EmbedInfo> {
             .and_then(|image| image.get("flags"))
             .and_then(Value::as_u64)
             .unwrap_or_default(),
-        video_url: value
-            .get("video")
-            .and_then(|video| video.get("url"))
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        gifv_image_url,
+        video_url,
     };
 
     embed_has_renderable_content(&embed).then_some(embed)
+}
+
+/// Giphy publishes equivalent MP4 and animated WebP renditions at the same
+/// media path. Discord sends the MP4 as `video.url` for `gifv` embeds, while
+/// Concord's inline renderer consumes animated image frames.
+fn giphy_gifv_image_url(video_url: &str) -> Option<String> {
+    let mut url = reqwest::Url::parse(video_url).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    let host = url.host_str()?;
+    if host != "giphy.com" && !host.ends_with(".giphy.com") {
+        return None;
+    }
+
+    let image_path = format!("{}.webp", url.path().strip_suffix(".mp4")?);
+    url.set_path(&image_path);
+    Some(url.into())
 }
 
 fn parse_embed_field(value: &Value) -> Option<EmbedFieldInfo> {

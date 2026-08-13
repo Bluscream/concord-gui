@@ -23,6 +23,7 @@ use super::global_push_to_talk::GlobalPushToTalkRuntime;
 use super::{
     clipboard::{ClipboardError, ClipboardPasteData, ClipboardService},
     commands as command_helpers, input,
+    media::MediaImageDecodeResult,
     state::DashboardState,
     ui::loading_indicator::LOADING_ANIMATION_FRAME_INTERVAL,
 };
@@ -47,6 +48,20 @@ type ClipboardPasteResult = std::result::Result<
     std::result::Result<ClipboardPasteData, ClipboardError>,
     tokio::task::JoinError,
 >;
+
+fn effect_context<'a>(
+    media_runtime: &'a mut DashboardMediaRuntime,
+    state: &'a mut DashboardState,
+    client: &'a DiscordClient,
+    media_decode_tx: &'a mpsc::UnboundedSender<MediaImageDecodeResult>,
+) -> effect_helpers::EffectContext<'a> {
+    effect_helpers::EffectContext {
+        state,
+        client,
+        media_runtime,
+        media_decode_tx,
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DashboardExit {
@@ -126,6 +141,7 @@ pub(super) async fn run_dashboard(
     let mut terminal_events = EventStream::new();
     let mut mouse_clicks = input::MouseClickTracker::default();
     let (media_decode_tx, mut media_decode_rx) = mpsc::unbounded_channel();
+    let (media_protocol_tx, mut media_protocol_rx) = mpsc::unbounded_channel();
     let (local_upload_preview_tx, mut local_upload_preview_rx) =
         mpsc::unbounded_channel::<LocalUploadPreviewResult>();
     let (clipboard_paste_tx, mut clipboard_paste_rx) = mpsc::unbounded_channel();
@@ -208,6 +224,7 @@ pub(super) async fn run_dashboard(
                 &mut media_runtime,
                 &commands,
                 &local_upload_preview_tx,
+                &media_protocol_tx,
             )
             .await;
         }
@@ -358,6 +375,10 @@ pub(super) async fn run_dashboard(
                 media_runtime.store_media_decode(result);
                 schedule_background_redraw(&mut pending_redraw_deadline, BACKGROUND_REDRAW_DEBOUNCE);
             }
+            Some(result) = media_protocol_rx.recv() => {
+                media_runtime.store_media_protocol(result);
+                schedule_background_redraw(&mut pending_redraw_deadline, BACKGROUND_REDRAW_DEBOUNCE);
+            }
             Some(result) = local_upload_preview_rx.recv() => {
                 store_local_upload_preview_result(
                     &mut state,
@@ -398,7 +419,8 @@ pub(super) async fn run_dashboard(
                             &snapshot,
                             previous_snapshot_area_revision,
                         );
-                        let mut ctx = media_runtime.effect_context(
+                        let mut ctx = effect_context(
+                            &mut media_runtime,
                             &mut state,
                             &client,
                             &media_decode_tx,
@@ -431,7 +453,8 @@ pub(super) async fn run_dashboard(
                 match maybe_effect {
                     Some(effect) => {
                         let mut effect_outcome = effect_helpers::EffectProcessingOutcome::default();
-                        let mut ctx = media_runtime.effect_context(
+                        let mut ctx = effect_context(
+                            &mut media_runtime,
                             &mut state,
                             &client,
                             &media_decode_tx,

@@ -1,20 +1,25 @@
 use std::{io::Read, time::Instant};
 
 use ratatui::layout::Rect;
-use ratatui_image::{picker::Picker, protocol::Protocol};
+use ratatui_image::{
+    picker::{Picker, ProtocolType},
+    protocol::Protocol,
+};
 use tokio::sync::mpsc;
 
 use crate::{
     config::ImageProtocolPreference,
-    discord::{AppCommand, DiscordClient, MAX_UPLOAD_PREVIEW_BYTES, MessageAttachmentUpload},
+    discord::{AppCommand, AppEvent, MAX_UPLOAD_PREVIEW_BYTES, MessageAttachmentUpload},
     tui::{
         commands as command_helpers,
         media::{
             AvatarImageCache, AvatarTarget, EmojiImageCache, EmojiImageTarget, ImagePreviewCache,
-            ImagePreviewTarget, MediaImageDecodeKey, MediaImageDecodeResult,
-            clipped_preview_protocol, decode_image_bytes, fixed_image_preview_render_info,
-            query_image_picker, visible_avatar_targets_from_plan, visible_emoji_image_targets,
-            visible_image_preview_targets_from_plan,
+            ImagePreviewTarget, MediaImageDecodeCache, MediaImageDecodeDelivery,
+            MediaImageDecodeKey, MediaImageDecodeResult, MediaProtocolBuildResult,
+            MediaProtocolBuildTarget, clipped_media_protocol, decode_image_bytes,
+            fixed_media_protocol_render_spec, picker_font_size, query_image_picker,
+            spawn_media_image_decode, spawn_media_protocol_build, visible_avatar_targets_from_plan,
+            visible_emoji_image_targets, visible_image_preview_targets_from_plan,
         },
         message::layout::MessageViewportPlan,
         state::DashboardState,
@@ -22,7 +27,6 @@ use crate::{
     },
 };
 
-use super::effects as effect_helpers;
 use super::placement::{FramePlacements, PlacementDiff};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -43,7 +47,8 @@ pub(super) struct DashboardMediaRuntime {
     image_previews: ImagePreviewCache,
     avatar_images: AvatarImageCache,
     emoji_images: EmojiImageCache,
-    local_upload_preview_picker: Option<Picker>,
+    decoded_images: MediaImageDecodeCache,
+    picker: Option<Picker>,
     image_targets: Vec<ImagePreviewTarget>,
     avatar_targets: Vec<AvatarTarget>,
     emoji_targets: Vec<EmojiImageTarget>,
@@ -59,15 +64,13 @@ pub(super) struct DashboardMediaRuntime {
 
 impl DashboardMediaRuntime {
     pub(super) fn new(protocol_preference: ImageProtocolPreference) -> Self {
+        let picker = query_image_picker(protocol_preference);
         Self {
-            image_previews: ImagePreviewCache::new_with_protocol_preference(protocol_preference),
-            avatar_images: AvatarImageCache::new_with_protocol_preference(protocol_preference),
-            emoji_images: EmojiImageCache::new_with_protocol_preference(protocol_preference),
-            local_upload_preview_picker: query_image_picker(
-                "local upload",
-                "local upload image picker unavailable",
-                protocol_preference,
-            ),
+            image_previews: ImagePreviewCache::new(picker.clone()),
+            avatar_images: AvatarImageCache::new(picker.clone()),
+            emoji_images: EmojiImageCache::new(picker.clone()),
+            decoded_images: MediaImageDecodeCache::new(),
+            picker,
             image_targets: Vec::new(),
             avatar_targets: Vec::new(),
             emoji_targets: Vec::new(),
@@ -111,7 +114,7 @@ impl DashboardMediaRuntime {
         work: (usize, u64, String, MessageAttachmentUpload),
     ) -> bool {
         let (attachment_index, generation, filename, upload) = work;
-        let Some(picker) = self.local_upload_preview_picker.clone() else {
+        let Some(picker) = self.picker.clone() else {
             store_local_upload_preview_result(
                 state,
                 owner,
@@ -136,38 +139,70 @@ impl DashboardMediaRuntime {
         true
     }
 
-    pub(super) fn effect_context<'a>(
-        &'a mut self,
-        state: &'a mut DashboardState,
-        client: &'a DiscordClient,
-        media_decode_tx: &'a mpsc::UnboundedSender<MediaImageDecodeResult>,
-    ) -> effect_helpers::EffectContext<'a> {
-        effect_helpers::EffectContext {
-            state,
-            client,
-            image_previews: &mut self.image_previews,
-            avatar_images: &mut self.avatar_images,
-            emoji_images: &mut self.emoji_images,
-            media_decode_tx,
+    pub(super) fn record_event(
+        &mut self,
+        event: &AppEvent,
+        media_decode_tx: &mpsc::UnboundedSender<MediaImageDecodeResult>,
+    ) {
+        let preview_requests = self.image_previews.record_event(event);
+        let requests = preview_requests
+            .into_iter()
+            .chain(self.avatar_images.record_event(event))
+            .chain(self.emoji_images.record_event(event))
+            .collect::<Vec<_>>();
+        let AppEvent::AttachmentPreviewLoaded { url, bytes } = event else {
+            return;
+        };
+
+        let outcome = self.decoded_images.request(url, bytes, requests);
+        for delivery in outcome.deliveries {
+            self.store_media_decode_delivery(delivery);
+        }
+        if let Some(job) = outcome.job {
+            spawn_media_image_decode(job, media_decode_tx.clone());
         }
     }
 
     pub(super) fn store_media_decode(&mut self, result: MediaImageDecodeResult) {
-        let MediaImageDecodeResult {
-            key,
-            generation,
-            result,
-        } = result;
-        match key {
+        for delivery in self.decoded_images.complete(result) {
+            self.store_media_decode_delivery(delivery);
+        }
+    }
+
+    fn store_media_decode_delivery(&mut self, delivery: MediaImageDecodeDelivery) {
+        match delivery.key {
             MediaImageDecodeKey::Preview(key) => {
-                self.image_previews.store_decoded(key, generation, result);
+                self.image_previews
+                    .store_decoded(key, delivery.generation, delivery.result);
             }
             MediaImageDecodeKey::Avatar(key) => {
-                self.avatar_images.store_decoded(key, generation, result);
+                self.avatar_images
+                    .store_decoded(key, delivery.generation, delivery.result);
             }
             MediaImageDecodeKey::Emoji(url) => {
-                self.emoji_images.store_decoded(url, generation, result);
+                self.emoji_images
+                    .store_decoded(url, delivery.generation, delivery.result);
             }
+        }
+    }
+
+    pub(super) fn store_media_protocol(&mut self, result: MediaProtocolBuildResult) {
+        match &result.target {
+            MediaProtocolBuildTarget::Preview { .. } => self.image_previews.store_protocol(result),
+            MediaProtocolBuildTarget::Avatar { .. } => self.avatar_images.store_protocol(result),
+            MediaProtocolBuildTarget::Emoji { .. } => self.emoji_images.store_protocol(result),
+        }
+    }
+
+    fn schedule_protocol_builds(&mut self, tx: &mpsc::UnboundedSender<MediaProtocolBuildResult>) {
+        for job in self
+            .image_previews
+            .take_protocol_jobs()
+            .into_iter()
+            .chain(self.avatar_images.take_protocol_jobs())
+            .chain(self.emoji_images.take_protocol_jobs())
+        {
+            spawn_media_protocol_build(job, tx.clone());
         }
     }
 
@@ -177,7 +212,7 @@ impl DashboardMediaRuntime {
         area: Rect,
     ) -> ImagePreviewLayout {
         let mut preview_layout = ui::image_preview_layout(area, state);
-        preview_layout.font_size = self.image_previews.font_size();
+        preview_layout.font_size = self.picker.as_ref().map(picker_font_size);
         if !state.show_images() {
             preview_layout.preview_width = 0;
             preview_layout.max_preview_height = 0;
@@ -325,7 +360,11 @@ impl DashboardMediaRuntime {
         // redundant repaint there (and a residual blink). Skip it for Kitty.
         // iTerm2 and Sixel still need it because they blit pixels the cell diff
         // cannot reach.
-        self.placement_diff.need_clear && !self.image_previews.uses_kitty_protocol()
+        self.placement_diff.need_clear
+            && !self
+                .picker
+                .as_ref()
+                .is_some_and(|picker| picker.protocol_type() == ProtocolType::Kitty)
     }
 
     pub(super) fn sync_animation_visibility(&mut self, now: Instant) {
@@ -482,10 +521,10 @@ fn build_local_upload_preview_protocol(
 ) -> std::result::Result<Protocol, String> {
     let bytes = local_upload_preview_bytes(attachment)?;
     let image = decode_image_bytes(&bytes)?;
-    clipped_preview_protocol(
+    clipped_media_protocol(
         picker,
         &image,
-        fixed_image_preview_render_info(LOCAL_UPLOAD_PREVIEW_WIDTH, LOCAL_UPLOAD_PREVIEW_HEIGHT),
+        fixed_media_protocol_render_spec(LOCAL_UPLOAD_PREVIEW_WIDTH, LOCAL_UPLOAD_PREVIEW_HEIGHT),
     )
     .ok_or_else(|| "preview dimensions unavailable".to_owned())
 }
@@ -697,9 +736,11 @@ pub(super) async fn schedule_media_loads_after_draw(
     media_runtime: &mut DashboardMediaRuntime,
     commands: &mpsc::Sender<AppCommand>,
     local_upload_preview_tx: &mpsc::UnboundedSender<LocalUploadPreviewResult>,
+    media_protocol_tx: &mpsc::UnboundedSender<MediaProtocolBuildResult>,
 ) -> bool {
     let mut dirty = false;
     dirty |= media_runtime.schedule_local_upload_previews(state, local_upload_preview_tx);
+    media_runtime.schedule_protocol_builds(media_protocol_tx);
     send_media_request_commands(
         state,
         commands,

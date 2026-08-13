@@ -904,6 +904,7 @@ fn message_action_detects_embed_urls() {
                 image_width: None,
                 image_height: None,
                 image_flags: 0,
+                gifv_image_url: None,
                 video_url: Some("https://media.example/video.mp4".to_owned()),
             }],
             ..message_info(Id::new(2), 1)

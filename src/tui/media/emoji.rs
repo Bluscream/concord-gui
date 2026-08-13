@@ -1,28 +1,30 @@
 use std::{collections::HashSet, time::Instant};
 
-use ratatui_image::{picker::Picker, protocol::Protocol};
+use ratatui_image::picker::Picker;
 
 use crate::{
-    config::ImageProtocolPreference,
     discord::{AppCommand, AppEvent},
     tui::ui::EmojiImage,
 };
 
 use super::{
     EmojiImageTarget,
-    cache::{MediaImageCacheCore, MediaImageCacheEntry},
-    decode::{DecodedMediaImage, MediaImageDecodeJob, MediaImageDecodeKey},
-    emoji_protocol, query_image_picker,
+    cache::{MediaImageCacheCore, MediaImageCacheEntry, RenderProtocolCache},
+    decode::{DecodedMediaImage, MediaImageDecodeKey, MediaImageDecodeRequest},
+    protocol_job::{MediaProtocolBuildJob, MediaProtocolBuildResult, MediaProtocolBuildTarget},
+    work::{MediaWorkError, MediaWorkResult},
 };
 
 /// Cap on the URL-keyed emoji image cache. Animated entries retain decoded
 /// frames, so the cache must stay bounded even though Discord emoji files are
 /// small on the wire.
 pub(super) const MAX_EMOJI_IMAGE_CACHE_ENTRIES: usize = 128;
+const EMOJI_IMAGE_CACHE_DECODED_BYTE_BUDGET: u64 = 64 * 1024 * 1024;
 
 pub(in crate::tui) struct EmojiImageCache {
     pub(super) picker: Option<Picker>,
     pub(super) cache: MediaImageCacheCore<String, EmojiImageEntry>,
+    pub(super) protocol_jobs: Vec<MediaProtocolBuildJob>,
 }
 
 pub(super) enum EmojiImageEntry {
@@ -34,9 +36,9 @@ pub(super) enum EmojiImageEntry {
         last_used: u64,
     },
     Ready {
+        generation: u64,
         image: DecodedMediaImage,
-        protocol: Protocol,
-        protocol_frame_index: usize,
+        protocols: Box<RenderProtocolCache<usize>>,
         last_used: u64,
     },
     Failed {
@@ -51,6 +53,24 @@ impl MediaImageCacheEntry for EmojiImageEntry {
             | EmojiImageEntry::Decoding { last_used, .. }
             | EmojiImageEntry::Ready { last_used, .. }
             | EmojiImageEntry::Failed { last_used } => *last_used,
+        }
+    }
+
+    fn decoded_image(&self) -> Option<&DecodedMediaImage> {
+        match self {
+            EmojiImageEntry::Ready { image, .. } => Some(image),
+            EmojiImageEntry::Loading { .. }
+            | EmojiImageEntry::Decoding { .. }
+            | EmojiImageEntry::Failed { .. } => None,
+        }
+    }
+
+    fn decoded_image_mut(&mut self) -> Option<&mut DecodedMediaImage> {
+        match self {
+            EmojiImageEntry::Ready { image, .. } => Some(image),
+            EmojiImageEntry::Loading { .. }
+            | EmojiImageEntry::Decoding { .. }
+            | EmojiImageEntry::Failed { .. } => None,
         }
     }
 
@@ -78,21 +98,11 @@ impl MediaImageCacheEntry for EmojiImageEntry {
 }
 
 impl EmojiImageCache {
-    #[cfg(test)]
-    pub(in crate::tui) fn new() -> Self {
-        Self::new_with_protocol_preference(ImageProtocolPreference::Auto)
-    }
-
-    pub(in crate::tui) fn new_with_protocol_preference(
-        protocol_preference: ImageProtocolPreference,
-    ) -> Self {
+    pub(in crate::tui) fn new(picker: Option<Picker>) -> Self {
         Self {
-            picker: query_image_picker(
-                "emoji",
-                "emoji image picker unavailable",
-                protocol_preference,
-            ),
+            picker,
             cache: MediaImageCacheCore::new(),
+            protocol_jobs: Vec::new(),
         }
     }
 
@@ -107,31 +117,36 @@ impl EmojiImageCache {
             if let Some(entry) = self.cache.entries.get_mut(&target.url) {
                 entry.touch(touch_tick);
                 if let EmojiImageEntry::Ready {
+                    generation,
                     image,
-                    protocol,
-                    protocol_frame_index,
+                    protocols,
                     ..
                 } = entry
-                    && *protocol_frame_index != image.current_frame_index()
                     && let Some(picker) = self.picker.as_ref()
-                    && let Some(updated_protocol) = emoji_protocol(picker, image.current_frame())
+                    && protocols.request_build(&image.current_frame_index())
                 {
-                    *protocol = updated_protocol;
-                    *protocol_frame_index = image.current_frame_index();
+                    self.protocol_jobs.push(MediaProtocolBuildJob::emoji(
+                        target.url.clone(),
+                        *generation,
+                        image.current_frame_index(),
+                        picker.clone(),
+                        image.current_frame_shared(),
+                    ));
                 }
             }
         }
         targets
             .iter()
             .filter_map(|target| {
-                let EmojiImageEntry::Ready { protocol, .. } =
-                    self.cache.entries.get(&target.url)?
+                let EmojiImageEntry::Ready {
+                    image, protocols, ..
+                } = self.cache.entries.get(&target.url)?
                 else {
                     return None;
                 };
                 Some(EmojiImage {
                     url: target.url.clone(),
-                    protocol,
+                    protocol: protocols.get_or_last(&image.current_frame_index())?,
                 })
             })
             .collect()
@@ -162,9 +177,12 @@ impl EmojiImageCache {
         intents
     }
 
-    pub(in crate::tui) fn record_event(&mut self, event: &AppEvent) -> Option<MediaImageDecodeJob> {
+    pub(in crate::tui) fn record_event(
+        &mut self,
+        event: &AppEvent,
+    ) -> Option<MediaImageDecodeRequest> {
         match event {
-            AppEvent::AttachmentPreviewLoaded { url, bytes } => self.store_loaded(url, bytes),
+            AppEvent::AttachmentPreviewLoaded { url, .. } => self.store_loaded(url),
             AppEvent::AttachmentPreviewLoadFailed { url, .. } => {
                 self.store_failed(url);
                 None
@@ -181,16 +199,16 @@ impl EmojiImageCache {
             .take(MAX_EMOJI_IMAGE_CACHE_ENTRIES)
             .map(|target| target.url.as_str())
             .collect();
-        self.cache
-            .prune_to_limit(MAX_EMOJI_IMAGE_CACHE_ENTRIES, |url| {
-                protected.contains(url.as_str())
-            });
+        self.cache.prune_to_limits(
+            MAX_EMOJI_IMAGE_CACHE_ENTRIES,
+            EMOJI_IMAGE_CACHE_DECODED_BYTE_BUDGET,
+            |url| protected.contains(url.as_str()),
+        );
     }
 
-    fn store_loaded(&mut self, url: &str, bytes: &[u8]) -> Option<MediaImageDecodeJob> {
-        self.cache.start_decode_job(
+    fn store_loaded(&mut self, url: &str) -> Option<MediaImageDecodeRequest> {
+        self.cache.start_decode_request(
             url.to_owned(),
-            std::sync::Arc::from(bytes.to_vec()),
             self.picker.is_some(),
             |generation, last_used| EmojiImageEntry::Decoding {
                 generation,
@@ -205,7 +223,7 @@ impl EmojiImageCache {
         &mut self,
         url: String,
         result_generation: u64,
-        result: std::result::Result<DecodedMediaImage, String>,
+        result: MediaWorkResult<DecodedMediaImage>,
     ) {
         if !self
             .cache
@@ -217,29 +235,26 @@ impl EmojiImageCache {
         let last_used = self.cache.next_tick();
         match result {
             Ok(image) => {
-                let Some(picker) = self.picker.as_ref() else {
+                if self.picker.is_none() {
                     self.cache
                         .entries
                         .insert(url, EmojiImageEntry::Failed { last_used });
                     return;
-                };
-                let Some(protocol) = emoji_protocol(picker, image.current_frame()) else {
-                    self.cache
-                        .entries
-                        .insert(url, EmojiImageEntry::Failed { last_used });
-                    return;
-                };
+                }
                 self.cache.entries.insert(
                     url,
                     EmojiImageEntry::Ready {
+                        generation: result_generation,
                         image,
-                        protocol,
-                        protocol_frame_index: 0,
+                        protocols: Box::new(RenderProtocolCache::new()),
                         last_used,
                     },
                 );
             }
-            Err(_) => {
+            Err(MediaWorkError::Busy) => {
+                self.cache.entries.remove(&url);
+            }
+            Err(MediaWorkError::Failed(_)) => {
                 self.cache
                     .entries
                     .insert(url, EmojiImageEntry::Failed { last_used });
@@ -264,10 +279,13 @@ impl EmojiImageCache {
             .map(|target| target.url.as_str())
             .collect::<HashSet<_>>();
         for (url, entry) in &mut self.cache.entries {
-            let EmojiImageEntry::Ready { image, .. } = entry else {
+            let EmojiImageEntry::Ready {
+                image, protocols, ..
+            } = entry
+            else {
                 continue;
             };
-            if visible.contains(url.as_str()) {
+            if visible.contains(url.as_str()) && !protocols.is_empty() {
                 image.start_animation(now);
             } else {
                 image.pause_animation();
@@ -276,31 +294,40 @@ impl EmojiImageCache {
     }
 
     pub(in crate::tui) fn pause_animations(&mut self) {
-        for entry in self.cache.entries.values_mut() {
-            if let EmojiImageEntry::Ready { image, .. } = entry {
-                image.pause_animation();
-            }
-        }
+        self.cache.pause_animations();
     }
 
     pub(in crate::tui) fn next_animation_deadline(&self) -> Option<Instant> {
-        self.cache
-            .entries
-            .values()
-            .filter_map(|entry| match entry {
-                EmojiImageEntry::Ready { image, .. } => image.next_frame_deadline(),
-                _ => None,
-            })
-            .min()
+        self.cache.next_animation_deadline()
     }
 
     pub(in crate::tui) fn advance_animations(&mut self, now: Instant) -> bool {
-        let mut advanced = false;
-        for entry in self.cache.entries.values_mut() {
-            if let EmojiImageEntry::Ready { image, .. } = entry {
-                advanced |= image.advance_frame(now);
-            }
+        self.cache.advance_animations(now)
+    }
+
+    pub(in crate::tui) fn take_protocol_jobs(&mut self) -> Vec<MediaProtocolBuildJob> {
+        std::mem::take(&mut self.protocol_jobs)
+    }
+
+    pub(in crate::tui) fn store_protocol(&mut self, completed: MediaProtocolBuildResult) {
+        let MediaProtocolBuildTarget::Emoji { url, frame_index } = completed.target else {
+            return;
+        };
+        let failed = match self.cache.entries.get_mut(&url) {
+            Some(EmojiImageEntry::Ready {
+                generation,
+                protocols,
+                ..
+            }) if *generation == completed.generation => protocols
+                .store_result(frame_index, completed.result)
+                .is_err(),
+            _ => false,
+        };
+        if failed {
+            let last_used = self.cache.next_tick();
+            self.cache
+                .entries
+                .insert(url, EmojiImageEntry::Failed { last_used });
         }
-        advanced
     }
 }

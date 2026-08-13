@@ -1,5 +1,5 @@
 use ratatui::{layout::Rect, text::Line};
-use ratatui_image::protocol::{Protocol, StatefulProtocol};
+use ratatui_image::protocol::Protocol;
 
 use super::super::state::{FocusPane, SelectablePopupTarget};
 
@@ -59,7 +59,7 @@ pub(super) struct MessageViewportLayout {
 pub enum ImagePreviewState<'a> {
     Loading { filename: String },
     Failed { filename: String, message: String },
-    Ready { protocol: &'a mut StatefulProtocol },
+    Ready { protocol: &'a Protocol },
 }
 
 #[derive(Clone, Copy)]

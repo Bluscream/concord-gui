@@ -1,16 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
     time::Instant,
 };
 
-use crate::config::ImageProtocolPreference;
 use crate::discord::ids::{Id, marker::MessageMarker};
-use image::DynamicImage;
-use ratatui_image::{
-    picker::{Picker, ProtocolType},
-    protocol::StatefulProtocol,
-};
+use ratatui_image::picker::Picker;
 
 use crate::{
     discord::{AppCommand, AppEvent},
@@ -18,14 +12,16 @@ use crate::{
 };
 
 use super::{
-    ImagePreviewRenderInfo, ImagePreviewTarget,
-    cache::{MediaImageCacheCore, MediaImageCacheEntry},
-    clipped_preview_image,
-    decode::{DecodedMediaImage, MediaImageDecodeJob, MediaImageDecodeKey},
-    picker_font_size, query_image_picker,
+    ImagePreviewTarget, MediaProtocolRenderSpec,
+    cache::{MediaImageCacheCore, MediaImageCacheEntry, RenderProtocolCache},
+    decode::{DecodedMediaImage, MediaImageDecodeKey, MediaImageDecodeRequest},
+    protocol_job::{MediaProtocolBuildJob, MediaProtocolBuildResult},
+    work::{MediaWorkError, MediaWorkResult},
 };
 
 pub(super) const MAX_IMAGE_PREVIEW_CACHE_ENTRIES: usize = 16;
+const IMAGE_PREVIEW_CACHE_DECODED_BYTE_BUDGET: u64 = 128 * 1024 * 1024;
+const ANIMATION_PROTOCOL_WINDOW_FRAMES: usize = 2;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(in crate::tui) struct ImagePreviewKey {
@@ -41,26 +37,27 @@ pub(in crate::tui) struct ImagePreviewKey {
 pub(in crate::tui) struct ImagePreviewCache {
     pub(super) picker: Option<Picker>,
     pub(super) cache: MediaImageCacheCore<ImagePreviewKey, ImagePreviewEntry>,
+    pub(super) protocol_jobs: Vec<MediaProtocolBuildJob>,
 }
 
 pub(super) enum ImagePreviewEntry {
     Loading {
         filename: String,
-        render_info: ImagePreviewRenderInfo,
+        protocol_spec: MediaProtocolRenderSpec,
         last_used: u64,
     },
     Decoding {
         filename: String,
         generation: u64,
-        render_info: ImagePreviewRenderInfo,
+        protocol_spec: MediaProtocolRenderSpec,
         last_used: u64,
     },
     Ready {
         filename: String,
+        generation: u64,
         image: DecodedMediaImage,
-        protocol_render_info: ImagePreviewRenderInfo,
-        protocol_frame_index: usize,
-        protocol: Box<StatefulProtocol>,
+        protocol_spec: MediaProtocolRenderSpec,
+        protocols: Box<RenderProtocolCache<usize>>,
         last_used: u64,
     },
     Failed {
@@ -71,32 +68,12 @@ pub(super) enum ImagePreviewEntry {
 }
 
 impl ImagePreviewCache {
-    #[cfg(test)]
-    pub(in crate::tui) fn new() -> Self {
-        Self::new_with_protocol_preference(ImageProtocolPreference::Auto)
-    }
-
-    pub(in crate::tui) fn new_with_protocol_preference(
-        protocol_preference: ImageProtocolPreference,
-    ) -> Self {
+    pub(in crate::tui) fn new(picker: Option<Picker>) -> Self {
         Self {
-            picker: query_image_picker(
-                "preview",
-                "inline image picker unavailable",
-                protocol_preference,
-            ),
+            picker,
             cache: MediaImageCacheCore::new(),
+            protocol_jobs: Vec::new(),
         }
-    }
-
-    pub(in crate::tui) fn font_size(&self) -> Option<(u16, u16)> {
-        self.picker.as_ref().map(picker_font_size)
-    }
-
-    pub(in crate::tui) fn uses_kitty_protocol(&self) -> bool {
-        self.picker
-            .as_ref()
-            .is_some_and(|picker| picker.protocol_type() == ProtocolType::Kitty)
     }
 
     pub(in crate::tui) fn render_state(
@@ -108,16 +85,17 @@ impl ImagePreviewCache {
         let target_by_key = targets
             .iter()
             .enumerate()
-            .map(|(index, target)| (target.key(), (index, target.preview_render_info())))
+            .map(|(index, target)| (target.key(), (index, target)))
             .collect::<HashMap<_, _>>();
         let mut rendered_keys = HashSet::new();
         let mut previews = Vec::new();
 
         let mut tick = self.cache.tick;
         for (key, entry) in &mut self.cache.entries {
-            let Some((order, render_info)) = target_by_key.get(key).copied() else {
+            let Some((order, target)) = target_by_key.get(key).copied() else {
                 continue;
             };
+            let render_spec = target.protocol_render_spec();
             rendered_keys.insert(key.clone());
             tick = tick.saturating_add(1);
             entry.touch(tick);
@@ -127,28 +105,47 @@ impl ImagePreviewCache {
                     filename: filename.clone(),
                 },
                 ImagePreviewEntry::Ready {
+                    filename,
+                    generation,
                     image,
-                    protocol,
-                    protocol_render_info,
-                    protocol_frame_index,
+                    protocol_spec,
+                    protocols,
                     ..
                 } => {
                     let current_frame_index = image.current_frame_index();
-                    if (*protocol_render_info != render_info
-                        || *protocol_frame_index != current_frame_index)
-                        && let Some(picker) = picker.as_ref()
-                        && let Some(updated_protocol) = clipped_preview_stateful_protocol(
-                            picker,
-                            image.current_frame(),
-                            render_info,
-                        )
-                    {
-                        *protocol = updated_protocol;
-                        *protocol_render_info = render_info;
-                        *protocol_frame_index = current_frame_index;
+                    if *protocol_spec != render_spec {
+                        **protocols = RenderProtocolCache::new();
+                        *protocol_spec = render_spec;
+                        image.pause_animation();
                     }
-                    ImagePreviewState::Ready {
-                        protocol: protocol.as_mut(),
+                    if let Some(picker) = picker.as_ref() {
+                        // Build the current frame first, then keep one frame ahead.
+                        // The existing single pending job bounds work when several
+                        // animated previews are visible at once.
+                        for frame_index in protocol_window_frame_indices(image) {
+                            if protocols.get(&frame_index).is_some()
+                                || protocols.is_terminally_failed(&frame_index)
+                            {
+                                continue;
+                            }
+                            if protocols.request_build(&frame_index) {
+                                self.protocol_jobs.push(MediaProtocolBuildJob::preview(
+                                    key.clone(),
+                                    *generation,
+                                    render_spec,
+                                    frame_index,
+                                    picker.clone(),
+                                    image.frame_shared(frame_index),
+                                ));
+                            }
+                            break;
+                        }
+                    }
+                    match protocols.get_or_last(&current_frame_index) {
+                        Some(protocol) => ImagePreviewState::Ready { protocol },
+                        None => ImagePreviewState::Loading {
+                            filename: filename.clone(),
+                        },
                     }
                 }
                 ImagePreviewEntry::Failed {
@@ -158,20 +155,7 @@ impl ImagePreviewCache {
                     message: message.clone(),
                 },
             };
-            previews.push((
-                order,
-                ImagePreview {
-                    viewer: render_info.viewer,
-                    message_index: render_info.message_index,
-                    preview_x_offset_columns: render_info.preview_x_offset_columns,
-                    preview_y_offset_rows: render_info.preview_y_offset_rows,
-                    preview_width: render_info.preview_width,
-                    preview_height: render_info.preview_height,
-                    visible_preview_height: render_info.visible_preview_height,
-                    accent_color: render_info.accent_color,
-                    state,
-                },
-            ));
+            previews.push((order, target.render(state)));
         }
         self.cache.tick = tick;
 
@@ -179,19 +163,9 @@ impl ImagePreviewCache {
             if !rendered_keys.contains(&target.key()) {
                 previews.push((
                     order,
-                    ImagePreview {
-                        viewer: target.viewer,
-                        message_index: target.message_index,
-                        preview_x_offset_columns: target.preview_x_offset_columns,
-                        preview_y_offset_rows: target.preview_y_offset_rows,
-                        preview_width: target.preview_width,
-                        preview_height: target.preview_height,
-                        visible_preview_height: target.visible_preview_height,
-                        accent_color: target.accent_color,
-                        state: ImagePreviewState::Loading {
-                            filename: target.filename.clone(),
-                        },
-                    },
+                    target.render(ImagePreviewState::Loading {
+                        filename: target.filename.clone(),
+                    }),
                 ));
             }
         }
@@ -224,7 +198,7 @@ impl ImagePreviewCache {
                 key,
                 ImagePreviewEntry::Loading {
                     filename: target.filename.clone(),
-                    render_info: target.preview_render_info(),
+                    protocol_spec: target.protocol_render_spec(),
                     last_used,
                 },
             );
@@ -236,9 +210,12 @@ impl ImagePreviewCache {
         intents
     }
 
-    pub(in crate::tui) fn record_event(&mut self, event: &AppEvent) -> Vec<MediaImageDecodeJob> {
+    pub(in crate::tui) fn record_event(
+        &mut self,
+        event: &AppEvent,
+    ) -> Vec<MediaImageDecodeRequest> {
         match event {
-            AppEvent::AttachmentPreviewLoaded { url, bytes } => self.store_loaded(url, bytes),
+            AppEvent::AttachmentPreviewLoaded { url, .. } => self.store_loaded(url),
             AppEvent::AttachmentPreviewLoadFailed { url, message } => {
                 self.store_failed(url, message.clone());
                 Vec::new()
@@ -247,7 +224,7 @@ impl ImagePreviewCache {
         }
     }
 
-    pub(super) fn store_loaded(&mut self, url: &str, bytes: &[u8]) -> Vec<MediaImageDecodeJob> {
+    pub(super) fn store_loaded(&mut self, url: &str) -> Vec<MediaImageDecodeRequest> {
         let keys = self.loading_keys_for_url(url);
         if keys.is_empty() {
             return Vec::new();
@@ -269,19 +246,17 @@ impl ImagePreviewCache {
             return Vec::new();
         };
 
-        self.decode_jobs_for_loaded_keys(keys, bytes)
+        self.decode_requests_for_loaded_keys(keys)
     }
 
-    pub(super) fn decode_jobs_for_loaded_keys(
+    fn decode_requests_for_loaded_keys(
         &mut self,
         keys: Vec<ImagePreviewKey>,
-        bytes: &[u8],
-    ) -> Vec<MediaImageDecodeJob> {
-        let bytes: Arc<[u8]> = Arc::from(bytes.to_vec());
-        let mut jobs = Vec::new();
+    ) -> Vec<MediaImageDecodeRequest> {
+        let mut requests = Vec::new();
         for key in keys {
             let filename = self.filename_for_key(&key);
-            let Some(render_info) = self.render_info_for_key(&key) else {
+            let Some(protocol_spec) = self.protocol_spec_for_key(&key) else {
                 let last_used = self.cache.next_tick();
                 self.cache.entries.insert(
                     key,
@@ -300,33 +275,32 @@ impl ImagePreviewCache {
                 ImagePreviewEntry::Decoding {
                     filename,
                     generation,
-                    render_info,
+                    protocol_spec,
                     last_used,
                 },
             );
-            jobs.push(MediaImageDecodeJob {
+            requests.push(MediaImageDecodeRequest {
                 key: MediaImageDecodeKey::Preview(key),
                 generation,
-                bytes: bytes.clone(),
             });
         }
-        jobs
+        requests
     }
 
     pub(in crate::tui) fn store_decoded(
         &mut self,
         key: ImagePreviewKey,
         result_generation: u64,
-        result: std::result::Result<DecodedMediaImage, String>,
+        result: MediaWorkResult<DecodedMediaImage>,
     ) {
-        let Some((filename, render_info)) = self.cache.entries.get(&key).and_then(|entry| {
+        let Some((filename, protocol_spec)) = self.cache.entries.get(&key).and_then(|entry| {
             if let ImagePreviewEntry::Decoding {
                 filename,
-                render_info,
+                protocol_spec,
                 ..
             } = entry
             {
-                Some((filename.clone(), *render_info))
+                Some((filename.clone(), *protocol_spec))
             } else {
                 None
             }
@@ -344,7 +318,7 @@ impl ImagePreviewCache {
         let last_used = self.cache.next_tick();
         match result {
             Ok(image) => {
-                let Some(picker) = self.picker.as_ref() else {
+                if self.picker.is_none() {
                     self.cache.entries.insert(
                         key,
                         ImagePreviewEntry::Failed {
@@ -354,33 +328,23 @@ impl ImagePreviewCache {
                         },
                     );
                     return;
-                };
-                let Some(protocol) =
-                    clipped_preview_stateful_protocol(picker, image.current_frame(), render_info)
-                else {
-                    self.cache.entries.insert(
-                        key,
-                        ImagePreviewEntry::Failed {
-                            filename,
-                            message: "inline preview dimensions unavailable".to_owned(),
-                            last_used,
-                        },
-                    );
-                    return;
-                };
+                }
                 self.cache.entries.insert(
                     key,
                     ImagePreviewEntry::Ready {
                         filename,
+                        generation: result_generation,
                         image,
-                        protocol_render_info: render_info,
-                        protocol_frame_index: 0,
-                        protocol,
+                        protocol_spec,
+                        protocols: Box::new(RenderProtocolCache::new()),
                         last_used,
                     },
                 );
             }
-            Err(message) => {
+            Err(MediaWorkError::Busy) => {
+                self.cache.entries.remove(&key);
+            }
+            Err(MediaWorkError::Failed(message)) => {
                 self.cache.entries.insert(
                     key,
                     ImagePreviewEntry::Failed {
@@ -393,10 +357,10 @@ impl ImagePreviewCache {
         }
     }
 
-    fn render_info_for_key(&self, key: &ImagePreviewKey) -> Option<ImagePreviewRenderInfo> {
+    fn protocol_spec_for_key(&self, key: &ImagePreviewKey) -> Option<MediaProtocolRenderSpec> {
         match self.cache.entries.get(key)? {
-            ImagePreviewEntry::Loading { render_info, .. }
-            | ImagePreviewEntry::Decoding { render_info, .. } => Some(*render_info),
+            ImagePreviewEntry::Loading { protocol_spec, .. }
+            | ImagePreviewEntry::Decoding { protocol_spec, .. } => Some(*protocol_spec),
             ImagePreviewEntry::Ready { .. } | ImagePreviewEntry::Failed { .. } => None,
         }
     }
@@ -411,44 +375,76 @@ impl ImagePreviewCache {
             .map(ImagePreviewTarget::key)
             .collect::<HashSet<_>>();
         for (key, entry) in &mut self.cache.entries {
-            let ImagePreviewEntry::Ready { image, .. } = entry else {
+            let ImagePreviewEntry::Ready {
+                image, protocols, ..
+            } = entry
+            else {
                 continue;
             };
-            if visible.contains(key) {
-                image.start_animation(now);
-            } else {
+            if !visible.contains(key) {
                 image.pause_animation();
+                continue;
+            }
+            if image.next_frame_deadline().is_none()
+                && protocol_window_frame_indices(image).all(|frame_index| {
+                    protocols.get(&frame_index).is_some()
+                        || protocols.is_terminally_failed(&frame_index)
+                })
+            {
+                image.start_animation(now);
             }
         }
     }
 
     pub(in crate::tui) fn pause_animations(&mut self) {
-        for entry in self.cache.entries.values_mut() {
-            if let ImagePreviewEntry::Ready { image, .. } = entry {
-                image.pause_animation();
-            }
-        }
+        self.cache.pause_animations();
     }
 
     pub(in crate::tui) fn next_animation_deadline(&self) -> Option<Instant> {
-        self.cache
-            .entries
-            .values()
-            .filter_map(|entry| match entry {
-                ImagePreviewEntry::Ready { image, .. } => image.next_frame_deadline(),
-                _ => None,
-            })
-            .min()
+        self.cache.next_animation_deadline()
     }
 
     pub(in crate::tui) fn advance_animations(&mut self, now: Instant) -> bool {
-        let mut advanced = false;
-        for entry in self.cache.entries.values_mut() {
-            if let ImagePreviewEntry::Ready { image, .. } = entry {
-                advanced |= image.advance_frame(now);
-            }
+        self.cache.advance_animations(now)
+    }
+
+    pub(in crate::tui) fn take_protocol_jobs(&mut self) -> Vec<MediaProtocolBuildJob> {
+        std::mem::take(&mut self.protocol_jobs)
+    }
+
+    pub(in crate::tui) fn store_protocol(&mut self, completed: MediaProtocolBuildResult) {
+        let super::protocol_job::MediaProtocolBuildTarget::Preview {
+            key,
+            render_spec,
+            frame_index,
+        } = completed.target
+        else {
+            return;
+        };
+        let failure = match self.cache.entries.get_mut(&key) {
+            Some(ImagePreviewEntry::Ready {
+                filename,
+                generation,
+                protocol_spec,
+                protocols,
+                ..
+            }) if *generation == completed.generation && *protocol_spec == render_spec => protocols
+                .store_result(frame_index, completed.result)
+                .err()
+                .map(|error| (filename.clone(), error)),
+            _ => None,
+        };
+        if let Some((filename, message)) = failure {
+            let last_used = self.cache.next_tick();
+            self.cache.entries.insert(
+                key,
+                ImagePreviewEntry::Failed {
+                    filename,
+                    message,
+                    last_used,
+                },
+            );
         }
-        advanced
     }
 
     fn prune_to_limit(&mut self, targets: &[ImagePreviewTarget]) {
@@ -457,10 +453,11 @@ impl ImagePreviewCache {
             .take(MAX_IMAGE_PREVIEW_CACHE_ENTRIES)
             .map(ImagePreviewTarget::key)
             .collect::<HashSet<_>>();
-        self.cache
-            .prune_to_limit(MAX_IMAGE_PREVIEW_CACHE_ENTRIES, |key| {
-                protected.contains(key)
-            });
+        self.cache.prune_to_limits(
+            MAX_IMAGE_PREVIEW_CACHE_ENTRIES,
+            IMAGE_PREVIEW_CACHE_DECODED_BYTE_BUDGET,
+            |key| protected.contains(key),
+        );
     }
 
     pub(super) fn store_failed(&mut self, url: &str, message: String) {
@@ -499,13 +496,9 @@ impl ImagePreviewCache {
     }
 }
 
-fn clipped_preview_stateful_protocol(
-    picker: &Picker,
-    image: &DynamicImage,
-    render_info: ImagePreviewRenderInfo,
-) -> Option<Box<StatefulProtocol>> {
-    let image = clipped_preview_image(image, picker_font_size(picker), render_info)?;
-    Some(Box::new(picker.new_resize_protocol(image)))
+fn protocol_window_frame_indices(image: &DecodedMediaImage) -> impl Iterator<Item = usize> + '_ {
+    (0..image.frame_count().min(ANIMATION_PROTOCOL_WINDOW_FRAMES))
+        .map(|offset| image.frame_index_with_offset(offset))
 }
 
 impl ImagePreviewTarget {
@@ -521,19 +514,28 @@ impl ImagePreviewTarget {
         }
     }
 
-    pub(super) fn preview_render_info(&self) -> ImagePreviewRenderInfo {
-        ImagePreviewRenderInfo {
+    pub(super) fn protocol_render_spec(&self) -> MediaProtocolRenderSpec {
+        MediaProtocolRenderSpec {
+            width: self.preview_width,
+            height: self.preview_height,
+            visible_height: self.visible_preview_height,
+            top_clip_rows: self.top_clip_rows,
+            show_play_marker: self.show_play_marker,
+            mask_circular: false,
+        }
+    }
+
+    fn render<'a>(&self, state: ImagePreviewState<'a>) -> ImagePreview<'a> {
+        ImagePreview {
+            viewer: self.viewer,
             message_index: self.message_index,
             preview_x_offset_columns: self.preview_x_offset_columns,
             preview_y_offset_rows: self.preview_y_offset_rows,
             preview_width: self.preview_width,
             preview_height: self.preview_height,
             visible_preview_height: self.visible_preview_height,
-            top_clip_rows: self.top_clip_rows,
             accent_color: self.accent_color,
-            show_play_marker: self.show_play_marker,
-            viewer: self.viewer,
-            mask_circular: false,
+            state,
         }
     }
 }
@@ -559,6 +561,20 @@ impl MediaImageCacheEntry for ImagePreviewEntry {
         }
     }
 
+    fn decoded_image(&self) -> Option<&DecodedMediaImage> {
+        match self {
+            Self::Ready { image, .. } => Some(image),
+            Self::Loading { .. } | Self::Decoding { .. } | Self::Failed { .. } => None,
+        }
+    }
+
+    fn decoded_image_mut(&mut self) -> Option<&mut DecodedMediaImage> {
+        match self {
+            Self::Ready { image, .. } => Some(image),
+            Self::Loading { .. } | Self::Decoding { .. } | Self::Failed { .. } => None,
+        }
+    }
+
     fn touch(&mut self, tick: u64) {
         match self {
             ImagePreviewEntry::Loading { last_used, .. }
@@ -580,11 +596,4 @@ impl MediaImageCacheEntry for ImagePreviewEntry {
             | ImagePreviewEntry::Failed { .. } => None,
         }
     }
-}
-
-#[cfg(test)]
-pub(super) fn decode_original_preview_image(
-    bytes: &[u8],
-) -> std::result::Result<DynamicImage, String> {
-    super::decode::decode_image_bytes(bytes)
 }

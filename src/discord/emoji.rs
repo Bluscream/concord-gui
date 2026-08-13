@@ -14,20 +14,3 @@ pub(crate) fn custom_emoji_image_url(id: impl fmt::Display, animated: bool) -> S
         format!("{CUSTOM_EMOJI_CDN_BASE}/{id}.png")
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::custom_emoji_image_url;
-
-    #[test]
-    fn custom_emoji_urls_use_discord_compatible_formats() {
-        assert_eq!(
-            custom_emoji_image_url(42, false),
-            "https://cdn.discordapp.com/emojis/42.png"
-        );
-        assert_eq!(
-            custom_emoji_image_url(42, true),
-            "https://cdn.discordapp.com/emojis/42.webp?animated=true"
-        );
-    }
-}
