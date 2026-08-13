@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
+    time::Instant,
 };
 
 use crate::config::ImageProtocolPreference;
@@ -20,7 +21,7 @@ use super::{
     ImagePreviewRenderInfo, ImagePreviewTarget,
     cache::{MediaImageCacheCore, MediaImageCacheEntry},
     clipped_preview_image,
-    decode::{MediaImageDecodeJob, MediaImageDecodeKey},
+    decode::{DecodedMediaImage, MediaImageDecodeJob, MediaImageDecodeKey},
     picker_font_size, query_image_picker,
 };
 
@@ -56,8 +57,9 @@ pub(super) enum ImagePreviewEntry {
     },
     Ready {
         filename: String,
-        image: DynamicImage,
+        image: DecodedMediaImage,
         protocol_render_info: ImagePreviewRenderInfo,
+        protocol_frame_index: usize,
         protocol: Box<StatefulProtocol>,
         last_used: u64,
     },
@@ -128,15 +130,22 @@ impl ImagePreviewCache {
                     image,
                     protocol,
                     protocol_render_info,
+                    protocol_frame_index,
                     ..
                 } => {
-                    if *protocol_render_info != render_info
+                    let current_frame_index = image.current_frame_index();
+                    if (*protocol_render_info != render_info
+                        || *protocol_frame_index != current_frame_index)
                         && let Some(picker) = picker.as_ref()
-                        && let Some(updated_protocol) =
-                            clipped_preview_stateful_protocol(picker, image, render_info)
+                        && let Some(updated_protocol) = clipped_preview_stateful_protocol(
+                            picker,
+                            image.current_frame(),
+                            render_info,
+                        )
                     {
                         *protocol = updated_protocol;
                         *protocol_render_info = render_info;
+                        *protocol_frame_index = current_frame_index;
                     }
                     ImagePreviewState::Ready {
                         protocol: protocol.as_mut(),
@@ -308,7 +317,7 @@ impl ImagePreviewCache {
         &mut self,
         key: ImagePreviewKey,
         result_generation: u64,
-        result: std::result::Result<DynamicImage, String>,
+        result: std::result::Result<DecodedMediaImage, String>,
     ) {
         let Some((filename, render_info)) = self.cache.entries.get(&key).and_then(|entry| {
             if let ImagePreviewEntry::Decoding {
@@ -346,7 +355,8 @@ impl ImagePreviewCache {
                     );
                     return;
                 };
-                let Some(protocol) = clipped_preview_stateful_protocol(picker, &image, render_info)
+                let Some(protocol) =
+                    clipped_preview_stateful_protocol(picker, image.current_frame(), render_info)
                 else {
                     self.cache.entries.insert(
                         key,
@@ -364,6 +374,7 @@ impl ImagePreviewCache {
                         filename,
                         image,
                         protocol_render_info: render_info,
+                        protocol_frame_index: 0,
                         protocol,
                         last_used,
                     },
@@ -388,6 +399,56 @@ impl ImagePreviewCache {
             | ImagePreviewEntry::Decoding { render_info, .. } => Some(*render_info),
             ImagePreviewEntry::Ready { .. } | ImagePreviewEntry::Failed { .. } => None,
         }
+    }
+
+    pub(in crate::tui) fn sync_animation_visibility(
+        &mut self,
+        targets: &[ImagePreviewTarget],
+        now: Instant,
+    ) {
+        let visible = targets
+            .iter()
+            .map(ImagePreviewTarget::key)
+            .collect::<HashSet<_>>();
+        for (key, entry) in &mut self.cache.entries {
+            let ImagePreviewEntry::Ready { image, .. } = entry else {
+                continue;
+            };
+            if visible.contains(key) {
+                image.start_animation(now);
+            } else {
+                image.pause_animation();
+            }
+        }
+    }
+
+    pub(in crate::tui) fn pause_animations(&mut self) {
+        for entry in self.cache.entries.values_mut() {
+            if let ImagePreviewEntry::Ready { image, .. } = entry {
+                image.pause_animation();
+            }
+        }
+    }
+
+    pub(in crate::tui) fn next_animation_deadline(&self) -> Option<Instant> {
+        self.cache
+            .entries
+            .values()
+            .filter_map(|entry| match entry {
+                ImagePreviewEntry::Ready { image, .. } => image.next_frame_deadline(),
+                _ => None,
+            })
+            .min()
+    }
+
+    pub(in crate::tui) fn advance_animations(&mut self, now: Instant) -> bool {
+        let mut advanced = false;
+        for entry in self.cache.entries.values_mut() {
+            if let ImagePreviewEntry::Ready { image, .. } = entry {
+                advanced |= image.advance_frame(now);
+            }
+        }
+        advanced
     }
 
     fn prune_to_limit(&mut self, targets: &[ImagePreviewTarget]) {

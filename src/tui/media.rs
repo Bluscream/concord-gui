@@ -35,7 +35,9 @@ pub(super) use protocol::{PROFILE_POPUP_AVATAR_HEIGHT, PROFILE_POPUP_AVATAR_WIDT
 #[cfg(test)]
 use avatar::{AvatarImageEntry, AvatarProtocolKey, MAX_AVATAR_IMAGE_CACHE_ENTRIES};
 #[cfg(test)]
-use decode::{MAX_DECODED_IMAGE_HEIGHT, MAX_DECODED_IMAGE_WIDTH};
+use decode::{MAX_DECODED_IMAGE_HEIGHT, MAX_DECODED_IMAGE_WIDTH, decode_media_image_bytes};
+#[cfg(test)]
+use emoji::EmojiImageEntry;
 #[cfg(test)]
 use preview::{ImagePreviewEntry, MAX_IMAGE_PREVIEW_CACHE_ENTRIES, decode_original_preview_image};
 

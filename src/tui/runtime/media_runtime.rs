@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::{io::Read, time::Instant};
 
 use ratatui::layout::Rect;
 use ratatui_image::{picker::Picker, protocol::Protocol};
@@ -326,6 +326,39 @@ impl DashboardMediaRuntime {
         // iTerm2 and Sixel still need it because they blit pixels the cell diff
         // cannot reach.
         self.placement_diff.need_clear && !self.image_previews.uses_kitty_protocol()
+    }
+
+    pub(super) fn sync_animation_visibility(&mut self, now: Instant) {
+        self.image_previews
+            .sync_animation_visibility(&self.image_targets, now);
+        self.avatar_images
+            .sync_animation_visibility(&self.avatar_targets, now);
+        self.emoji_images
+            .sync_animation_visibility(&self.emoji_targets, now);
+    }
+
+    pub(super) fn pause_animations(&mut self) {
+        self.image_previews.pause_animations();
+        self.avatar_images.pause_animations();
+        self.emoji_images.pause_animations();
+    }
+
+    pub(super) fn next_animation_deadline(&self) -> Option<Instant> {
+        [
+            self.image_previews.next_animation_deadline(),
+            self.avatar_images.next_animation_deadline(),
+            self.emoji_images.next_animation_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
+    pub(super) fn advance_animations(&mut self, now: Instant) -> bool {
+        let preview_advanced = self.image_previews.advance_animations(now);
+        let avatar_advanced = self.avatar_images.advance_animations(now);
+        let emoji_advanced = self.emoji_images.advance_animations(now);
+        preview_advanced || avatar_advanced || emoji_advanced
     }
 }
 

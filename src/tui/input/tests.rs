@@ -652,6 +652,7 @@ fn state_with_image_message() -> DashboardState {
                 width: Some(640),
                 height: Some(480),
                 description: None,
+                flags: 0,
             },
             crate::discord::AttachmentInfo {
                 id: Id::new(4),
@@ -663,6 +664,7 @@ fn state_with_image_message() -> DashboardState {
                 width: Some(640),
                 height: Some(480),
                 description: None,
+                flags: 0,
             },
         ]),
     ));

@@ -1023,6 +1023,7 @@ fn attachment_viewer_x_shortcut_plays_video_attachment() {
             width: Some(640),
             height: Some(480),
             description: None,
+            flags: 0,
         }],
         ..guild_message_create_fixture()
     }));
@@ -1066,6 +1067,7 @@ fn disabled_media_playback_display_option_blocks_attachment_viewer_playback() {
             width: Some(640),
             height: Some(480),
             description: None,
+            flags: 0,
         }],
         ..guild_message_create_fixture()
     }));

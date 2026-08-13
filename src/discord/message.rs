@@ -13,6 +13,7 @@ use crate::discord::ids::{
 };
 
 pub const MESSAGE_FLAG_SUPPRESS_EMBEDS: u64 = 1 << 2;
+const MEDIA_FLAG_IS_ANIMATED: u64 = 1 << 5;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MentionInfo {
@@ -48,6 +49,7 @@ pub struct AttachmentInfo {
     pub width: Option<u64>,
     pub height: Option<u64>,
     pub description: Option<String>,
+    pub flags: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -71,6 +73,7 @@ impl AttachmentInfo {
             width: None,
             height: None,
             description: None,
+            flags: 0,
         }
     }
 }
@@ -96,10 +99,12 @@ pub struct EmbedInfo {
     pub thumbnail_proxy_url: Option<String>,
     pub thumbnail_width: Option<u64>,
     pub thumbnail_height: Option<u64>,
+    pub thumbnail_flags: u64,
     pub image_url: Option<String>,
     pub image_proxy_url: Option<String>,
     pub image_width: Option<u64>,
     pub image_height: Option<u64>,
+    pub image_flags: u64,
     pub video_url: Option<String>,
 }
 
@@ -121,10 +126,12 @@ impl EmbedInfo {
             thumbnail_proxy_url: None,
             thumbnail_width: None,
             thumbnail_height: None,
+            thumbnail_flags: 0,
             image_url: None,
             image_proxy_url: None,
             image_width: None,
             image_height: None,
+            image_flags: 0,
             video_url: None,
         }
     }
@@ -138,6 +145,7 @@ pub struct InlinePreviewInfo<'a> {
     pub width: Option<u64>,
     pub height: Option<u64>,
     pub accent_color: Option<u32>,
+    pub animated: bool,
     pub proxy_preview_only: bool,
     pub show_play_marker: bool,
 }
@@ -544,6 +552,7 @@ impl AttachmentInfo {
                 width: self.width,
                 height: self.height,
                 accent_color: None,
+                animated: false,
                 proxy_preview_only: true,
                 show_play_marker: true,
             });
@@ -556,6 +565,7 @@ impl AttachmentInfo {
             width: self.width,
             height: self.height,
             accent_color: None,
+            animated: media_is_animated(self.flags, &self.filename, self.url.as_str()),
             proxy_preview_only: false,
             show_play_marker: false,
         })
@@ -574,6 +584,7 @@ impl EmbedInfo {
                 width: self.thumbnail_width,
                 height: self.thumbnail_height,
                 accent_color: Some(self.color.unwrap_or(0xff0000)),
+                animated: media_is_animated(self.thumbnail_flags, "", url),
                 proxy_preview_only: false,
                 show_play_marker,
             });
@@ -586,10 +597,28 @@ impl EmbedInfo {
             width: self.image_width,
             height: self.image_height,
             accent_color: Some(self.color.unwrap_or(0xff0000)),
+            animated: media_is_animated(self.image_flags, "", url),
             proxy_preview_only: false,
             show_play_marker,
         })
     }
+}
+
+fn media_is_animated(flags: u64, filename: &str, url: &str) -> bool {
+    flags & MEDIA_FLAG_IS_ANIMATED != 0
+        || filename_has_extension(filename, &["gif"])
+        || url_without_query(url).is_some_and(|path| filename_has_extension(path, &["gif"]))
+        || url
+            .split_once('?')
+            .map(|(_, query)| query.split('&'))
+            .into_iter()
+            .flatten()
+            .any(|param| param.eq_ignore_ascii_case("animated=true"))
+}
+
+fn url_without_query(url: &str) -> Option<&str> {
+    let path = url.split_once('?').map_or(url, |(path, _)| path);
+    (!path.is_empty()).then_some(path)
 }
 
 fn filename_has_extension(filename: &str, extensions: &[&str]) -> bool {

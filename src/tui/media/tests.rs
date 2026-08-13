@@ -1,4 +1,7 @@
-use std::io::Cursor;
+use std::{
+    io::Cursor,
+    time::{Duration, Instant},
+};
 
 use crate::discord::ids::{Id, marker::MessageMarker};
 use crate::discord::test_builders::{
@@ -6,7 +9,10 @@ use crate::discord::test_builders::{
     empty_latest_message_history_loaded_event, forum_posts_loaded_event, guild_create_event,
     guild_message_create_fixture, message_create_event,
 };
-use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba};
+use image::{
+    Delay, DynamicImage, Frame as ImageFrame, ImageBuffer, ImageFormat, Rgba,
+    codecs::gif::{GifEncoder, Repeat},
+};
 
 use crate::{
     config::{DisplayOptions, ImagePreviewQualityPreset},
@@ -71,6 +77,27 @@ fn encoded_png(width: u32, height: u32) -> Vec<u8> {
         .write_to(&mut bytes, ImageFormat::Png)
         .expect("test image should encode");
     bytes.into_inner()
+}
+
+fn encoded_animated_gif() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = GifEncoder::new(&mut bytes);
+        encoder
+            .set_repeat(Repeat::Infinite)
+            .expect("test GIF repeat should encode");
+        for color in [Rgba([255, 0, 0, 255]), Rgba([0, 0, 255, 255])] {
+            encoder
+                .encode_frame(ImageFrame::from_parts(
+                    ImageBuffer::from_pixel(2, 2, color),
+                    0,
+                    0,
+                    Delay::from_numer_denom_ms(10, 1),
+                ))
+                .expect("test GIF frame should encode");
+        }
+    }
+    bytes
 }
 
 #[test]
@@ -211,6 +238,39 @@ fn image_preview_quality_rewrites_attachment_preview_urls() {
             .expect("image attachment should produce preview target");
 
         assert_eq!(target.url, expected_url);
+    }
+}
+
+#[test]
+fn animated_attachment_previews_keep_animation_through_the_media_proxy() {
+    for (name, filename, flags) in [
+        ("animated WebP flag", "animation.webp", 1 << 5),
+        ("GIF filename fallback", "animation.gif", 0),
+    ] {
+        let mut state = state_with_image_messages(0, &[]);
+        let mut attachment = image_attachment(1);
+        attachment.filename = filename.to_owned();
+        attachment.flags = flags;
+        attachment.proxy_url = concat!(
+            "https://media.discordapp.net/attachments/691/150/animation.webp",
+            "?ex=abc&is=def&hm=123&format=png&animated=false&width=4000&height=3000"
+        )
+        .to_owned();
+        push_attachment_message(&mut state, attachment);
+
+        let target = visible_image_preview_targets(&state, layout(12))
+            .into_iter()
+            .next()
+            .expect("animated attachment should produce a preview target");
+
+        assert_eq!(
+            target.url,
+            concat!(
+                "https://media.discordapp.net/attachments/691/150/animation.webp",
+                "?ex=abc&is=def&hm=123&format=webp&animated=true&width=320&height=240"
+            ),
+            "{name}"
+        );
     }
 }
 
@@ -1234,6 +1294,138 @@ fn decode_original_preview_image_reports_invalid_bytes() {
         .expect_err("invalid bytes should fail to decode");
 
     assert!(error.starts_with("decode failed:"));
+}
+
+#[test]
+fn media_decoder_preserves_and_plays_gif_and_webp_animation_frames() {
+    let cases: [(&str, &[u8]); 2] = [
+        ("GIF", &encoded_animated_gif()),
+        ("WebP", include_bytes!("testdata/two-frame.webp")),
+    ];
+
+    for (label, bytes) in cases {
+        let mut image = decode_media_image_bytes(bytes)
+            .unwrap_or_else(|error| panic!("{label} animation should decode: {error}"));
+        assert_eq!(image.frame_count(), 2, "{label}");
+        assert!(image.is_animated(), "{label}");
+
+        let first_pixel = image.current_frame().to_rgba8().get_pixel(0, 0).0;
+        let started_at = Instant::now();
+        image.start_animation(started_at);
+        let first_deadline = image
+            .next_frame_deadline()
+            .expect("visible animation should schedule its next frame");
+        assert!(first_deadline >= started_at + Duration::from_millis(50));
+
+        assert!(image.advance_frame(first_deadline), "{label}");
+        assert_eq!(image.current_frame_index(), 1, "{label}");
+        assert_ne!(
+            first_pixel,
+            image.current_frame().to_rgba8().get_pixel(0, 0).0,
+            "{label} frame should visibly change"
+        );
+
+        let second_deadline = image
+            .next_frame_deadline()
+            .expect("animation should schedule the following frame");
+        assert!(image.advance_frame(second_deadline), "{label}");
+        assert_eq!(image.current_frame_index(), 0, "{label} should loop");
+
+        image.pause_animation();
+        assert_eq!(image.next_frame_deadline(), None, "{label}");
+    }
+}
+
+#[test]
+fn emoji_animation_clock_runs_only_while_the_image_is_visible() {
+    let url = "https://cdn.discordapp.com/emojis/42.webp?animated=true".to_owned();
+    let target = EmojiImageTarget { url: url.clone() };
+    let mut cache = EmojiImageCache {
+        picker: Some(ratatui_image::picker::Picker::halfblocks()),
+        cache: super::cache::MediaImageCacheCore::new(),
+    };
+    cache.cache.entries.insert(
+        url.clone(),
+        EmojiImageEntry::Decoding {
+            generation: 1,
+            last_used: 1,
+        },
+    );
+    cache.store_decoded(
+        url.clone(),
+        1,
+        decode_media_image_bytes(&encoded_animated_gif()),
+    );
+
+    let started_at = Instant::now();
+    cache.sync_animation_visibility(std::slice::from_ref(&target), started_at);
+    let deadline = cache
+        .next_animation_deadline()
+        .expect("visible emoji should schedule an animation frame");
+    assert!(cache.advance_animations(deadline));
+    {
+        let rendered = cache.render_state(std::slice::from_ref(&target));
+        assert_eq!(rendered.len(), 1);
+    }
+    assert!(matches!(
+        cache.cache.entries.get(&url),
+        Some(EmojiImageEntry::Ready {
+            image,
+            protocol_frame_index: 1,
+            ..
+        }) if image.current_frame_index() == 1
+    ));
+
+    cache.sync_animation_visibility(&[], deadline);
+    assert_eq!(cache.next_animation_deadline(), None);
+    assert!(!cache.advance_animations(deadline + Duration::from_secs(1)));
+}
+
+#[test]
+fn attachment_preview_rebuilds_its_protocol_for_each_visible_animation_frame() {
+    let target = image_preview_target(42);
+    let key = target.key();
+    let render_info = target.preview_render_info();
+    let mut cache = ImagePreviewCache {
+        picker: Some(ratatui_image::picker::Picker::halfblocks()),
+        cache: super::cache::MediaImageCacheCore::new(),
+    };
+    cache.cache.entries.insert(
+        key.clone(),
+        ImagePreviewEntry::Decoding {
+            filename: target.filename.clone(),
+            generation: 1,
+            render_info,
+            last_used: 1,
+        },
+    );
+    cache.store_decoded(
+        key.clone(),
+        1,
+        decode_media_image_bytes(&encoded_animated_gif()),
+    );
+
+    let started_at = Instant::now();
+    cache.sync_animation_visibility(std::slice::from_ref(&target), started_at);
+    let deadline = cache
+        .next_animation_deadline()
+        .expect("visible attachment should schedule an animation frame");
+    assert!(cache.advance_animations(deadline));
+    {
+        let rendered = cache.render_state(std::slice::from_ref(&target));
+        assert_eq!(rendered.len(), 1);
+    }
+    assert!(matches!(
+        cache.cache.entries.get(&key),
+        Some(ImagePreviewEntry::Ready {
+            image,
+            protocol_frame_index: 1,
+            ..
+        }) if image.current_frame_index() == 1
+    ));
+
+    cache.sync_animation_visibility(&[], deadline);
+    assert_eq!(cache.next_animation_deadline(), None);
 }
 
 #[test]

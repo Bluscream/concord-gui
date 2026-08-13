@@ -311,7 +311,7 @@ fn fit_image_to_canvas(image: &DynamicImage, width: u32, height: u32) -> Dynamic
 
 pub(super) fn emoji_protocol(
     picker: &Picker,
-    img: DynamicImage,
+    img: &DynamicImage,
 ) -> Option<ratatui_image::protocol::Protocol> {
     let (font_width, font_height) = picker_font_size(picker);
     let canvas_w = u32::from(EMOJI_REACTION_THUMB_WIDTH) * u32::from(font_width);

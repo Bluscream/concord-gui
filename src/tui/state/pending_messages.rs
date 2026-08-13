@@ -110,6 +110,7 @@ impl DashboardState {
                 width: None,
                 height: None,
                 description: None,
+                flags: 0,
             })
             .collect();
 

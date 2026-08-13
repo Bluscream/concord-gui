@@ -3172,6 +3172,43 @@ fn message_create_parser_keeps_video_attachment_metadata() {
 }
 
 #[test]
+fn message_create_parser_keeps_animated_media_flags() {
+    let event = parse_message_create(&json!({
+        "id": "20",
+        "channel_id": "10",
+        "author": { "id": "30", "username": "neo" },
+        "content": "",
+        "attachments": [{
+            "id": "40",
+            "filename": "dance.webp",
+            "url": "https://cdn.discordapp.com/dance.webp",
+            "proxy_url": "https://media.discordapp.net/dance.webp",
+            "content_type": "image/webp",
+            "flags": 32
+        }],
+        "embeds": [{
+            "type": "image",
+            "thumbnail": {
+                "url": "https://example.com/thumb.webp",
+                "flags": 32
+            },
+            "image": {
+                "url": "https://example.com/image.webp",
+                "flags": 32
+            }
+        }]
+    }))
+    .expect("message create should parse");
+
+    let AppEvent::MessageCreate { message } = event else {
+        panic!("expected message create event");
+    };
+    assert_eq!(message.attachments[0].flags, 1 << 5);
+    assert_eq!(message.embeds[0].thumbnail_flags, 1 << 5);
+    assert_eq!(message.embeds[0].image_flags, 1 << 5);
+}
+
+#[test]
 fn message_create_parser_preserves_content_and_sticker_names() {
     let cases = [
         (

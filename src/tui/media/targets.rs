@@ -331,6 +331,7 @@ fn preview_request_url(
             preview.width,
             preview.height,
             quality,
+            preview.animated,
         );
     }
 
@@ -400,6 +401,7 @@ fn discord_media_proxy_preview_url(
     source_width: Option<u64>,
     source_height: Option<u64>,
     quality: ImagePreviewQualityPreset,
+    animated: bool,
 ) -> String {
     let (width, height) = discord_media_proxy_preview_dimensions(
         width_columns,
@@ -414,11 +416,14 @@ fn discord_media_proxy_preview_url(
         .filter(|param| !param.is_empty())
         .filter(|param| {
             let key = param.split_once('=').map_or(*param, |(key, _)| key);
-            !matches!(key, "format" | "quality" | "width" | "height")
+            !matches!(key, "format" | "quality" | "width" | "height" | "animated")
         })
         .map(str::to_owned)
         .collect::<Vec<_>>();
     params.push(format!("format={DISCORD_MEDIA_PROXY_PREVIEW_FORMAT}"));
+    if animated {
+        params.push("animated=true".to_owned());
+    }
     match quality {
         ImagePreviewQualityPreset::Efficient => {
             params.push(format!("quality={DISCORD_MEDIA_PROXY_LOW_QUALITY}"));

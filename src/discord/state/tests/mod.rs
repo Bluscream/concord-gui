@@ -329,6 +329,7 @@ fn attachment_info(id: u64, filename: &str, content_type: &str) -> crate::discor
         width: Some(100),
         height: Some(100),
         description: None,
+        flags: 0,
     }
 }
 

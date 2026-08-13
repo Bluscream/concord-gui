@@ -898,10 +898,12 @@ fn message_action_detects_embed_urls() {
                 thumbnail_proxy_url: None,
                 thumbnail_width: None,
                 thumbnail_height: None,
+                thumbnail_flags: 0,
                 image_url: Some("https://media.example/image.jpg".to_owned()),
                 image_proxy_url: None,
                 image_width: None,
                 image_height: None,
+                image_flags: 0,
                 video_url: Some("https://media.example/video.mp4".to_owned()),
             }],
             ..message_info(Id::new(2), 1)

@@ -243,6 +243,11 @@ fn parse_embed(value: &Value) -> Option<EmbedInfo> {
             .get("thumbnail")
             .and_then(|thumbnail| thumbnail.get("height"))
             .and_then(Value::as_u64),
+        thumbnail_flags: value
+            .get("thumbnail")
+            .and_then(|thumbnail| thumbnail.get("flags"))
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
         image_url: value
             .get("image")
             .and_then(|image| image.get("url"))
@@ -261,6 +266,11 @@ fn parse_embed(value: &Value) -> Option<EmbedInfo> {
             .get("image")
             .and_then(|image| image.get("height"))
             .and_then(Value::as_u64),
+        image_flags: value
+            .get("image")
+            .and_then(|image| image.get("flags"))
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
         video_url: value
             .get("video")
             .and_then(|video| video.get("url"))
@@ -648,6 +658,10 @@ fn parse_attachment(value: &Value) -> Option<AttachmentInfo> {
             .get("description")
             .and_then(Value::as_str)
             .map(str::to_owned),
+        flags: value
+            .get("flags")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
     })
 }
 

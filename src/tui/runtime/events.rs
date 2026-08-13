@@ -44,8 +44,14 @@ pub(super) fn handle_terminal_event(
         TerminalEvent::Paste(text) if input::handle_paste(state, &text) => {
             outcome.dirty = true;
         }
-        TerminalEvent::FocusGained => state.set_terminal_focused(true),
-        TerminalEvent::FocusLost => state.set_terminal_focused(false),
+        TerminalEvent::FocusGained => {
+            state.set_terminal_focused(true);
+            outcome.dirty = true;
+        }
+        TerminalEvent::FocusLost => {
+            state.set_terminal_focused(false);
+            outcome.dirty = true;
+        }
         _ => {}
     }
 

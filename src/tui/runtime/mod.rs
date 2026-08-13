@@ -194,6 +194,11 @@ pub(super) async fn run_dashboard(
                 let _ = execute!(terminal.backend_mut(), EndSynchronizedUpdate);
             }
             media_runtime.commit_placements();
+            if state.terminal_focused() {
+                media_runtime.sync_animation_visibility(std::time::Instant::now());
+            } else {
+                media_runtime.pause_animations();
+            }
             dirty = false;
             last_view_signature = redraw_gate::view_signature(&state);
 
@@ -218,6 +223,12 @@ pub(super) async fn run_dashboard(
         .min();
         let pending_member_list_subscription_deadline = client.member_list_subscription_deadline();
         let pending_composer_lock_refresh_deadline = state.next_composer_lock_refresh_deadline();
+        let pending_media_animation_deadline = if state.terminal_focused() {
+            media_runtime.next_animation_deadline()
+        } else {
+            media_runtime.pause_animations();
+            None
+        };
         // Keep the dashboard idle when no animation is visible. A persistent
         // deadline avoids restarting the frame delay when unrelated events arrive.
         if state.needs_animation_frame() {
@@ -479,6 +490,19 @@ pub(super) async fn run_dashboard(
                     tokio::time::Instant::now() + LOADING_ANIMATION_FRAME_INTERVAL,
                 );
                 dirty = true;
+            }
+            _ = async {
+                match pending_media_animation_deadline {
+                    Some(deadline) => tokio::time::sleep_until(
+                        tokio::time::Instant::from_std(deadline),
+                    )
+                    .await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                if media_runtime.advance_animations(std::time::Instant::now()) {
+                    dirty = true;
+                }
             }
             _ = async {
                 match push_to_talk_deadline {

@@ -133,7 +133,7 @@ impl DashboardState {
         self.runtime.terminal_focus_lost = !focused;
     }
 
-    pub(super) fn terminal_focused(&self) -> bool {
+    pub(in crate::tui) fn terminal_focused(&self) -> bool {
         !self.runtime.terminal_focus_lost
     }
 

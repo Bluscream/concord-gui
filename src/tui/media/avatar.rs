@@ -1,6 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Instant,
+};
 
-use image::DynamicImage;
 use ratatui_image::{picker::Picker, protocol::Protocol};
 
 use crate::{
@@ -14,7 +16,7 @@ use super::{
     PROFILE_POPUP_AVATAR_HEIGHT, PROFILE_POPUP_AVATAR_WIDTH, avatar_preview_url,
     cache::{MediaImageCacheCore, MediaImageCacheEntry},
     clipped_preview_protocol,
-    decode::{MediaImageDecodeJob, MediaImageDecodeKey},
+    decode::{DecodedMediaImage, MediaImageDecodeJob, MediaImageDecodeKey},
     query_image_picker,
 };
 
@@ -37,7 +39,7 @@ pub(super) enum AvatarImageEntry {
         last_used: u64,
     },
     Ready {
-        image: DynamicImage,
+        image: DecodedMediaImage,
         protocols: HashMap<AvatarProtocolKey, AvatarProtocolEntry>,
         last_used: u64,
     },
@@ -185,7 +187,7 @@ impl AvatarImageCache {
                 };
                 if !protocols.contains_key(&key)
                     && let Some(protocol) =
-                        clipped_preview_protocol(picker, image, key.render_info())
+                        clipped_preview_protocol(picker, image.current_frame(), key.render_info())
                 {
                     protocols.insert(key, AvatarProtocolEntry { protocol });
                 }
@@ -199,7 +201,7 @@ impl AvatarImageCache {
                 let key = AvatarProtocolKey::profile_popup(circular);
                 if !protocols.contains_key(&key)
                     && let Some(protocol) =
-                        clipped_preview_protocol(picker, image, key.render_info())
+                        clipped_preview_protocol(picker, image.current_frame(), key.render_info())
                 {
                     protocols.insert(key, AvatarProtocolEntry { protocol });
                 }
@@ -323,7 +325,7 @@ impl AvatarImageCache {
         &mut self,
         key: String,
         result_generation: u64,
-        result: std::result::Result<DynamicImage, String>,
+        result: std::result::Result<DecodedMediaImage, String>,
     ) {
         if !self
             .cache
@@ -357,6 +359,64 @@ impl AvatarImageCache {
             .store_failed_if_present(url.to_owned(), |last_used| AvatarImageEntry::Failed {
                 last_used,
             });
+    }
+
+    pub(in crate::tui) fn sync_animation_visibility(
+        &mut self,
+        targets: &[AvatarTarget],
+        now: Instant,
+    ) {
+        let visible = targets
+            .iter()
+            .map(|target| {
+                avatar_preview_url(&target.url, AVATAR_PREVIEW_WIDTH, AVATAR_PREVIEW_HEIGHT)
+            })
+            .chain(self.active_popup_avatar_url.iter().cloned())
+            .collect::<HashSet<_>>();
+        for (url, entry) in &mut self.cache.entries {
+            let AvatarImageEntry::Ready { image, .. } = entry else {
+                continue;
+            };
+            if visible.contains(url) {
+                image.start_animation(now);
+            } else {
+                image.pause_animation();
+            }
+        }
+    }
+
+    pub(in crate::tui) fn pause_animations(&mut self) {
+        for entry in self.cache.entries.values_mut() {
+            if let AvatarImageEntry::Ready { image, .. } = entry {
+                image.pause_animation();
+            }
+        }
+    }
+
+    pub(in crate::tui) fn next_animation_deadline(&self) -> Option<Instant> {
+        self.cache
+            .entries
+            .values()
+            .filter_map(|entry| match entry {
+                AvatarImageEntry::Ready { image, .. } => image.next_frame_deadline(),
+                _ => None,
+            })
+            .min()
+    }
+
+    pub(in crate::tui) fn advance_animations(&mut self, now: Instant) -> bool {
+        let mut advanced = false;
+        for entry in self.cache.entries.values_mut() {
+            if let AvatarImageEntry::Ready {
+                image, protocols, ..
+            } = entry
+                && image.advance_frame(now)
+            {
+                protocols.clear();
+                advanced = true;
+            }
+        }
+        advanced
     }
 
     pub(super) fn prune_to_limit(&mut self, targets: &[AvatarTarget]) {
