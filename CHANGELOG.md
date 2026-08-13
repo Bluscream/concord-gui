@@ -2,7 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.5.8] - 2026-08-13
+## [2.5.9] - 2026-08-13
+
+### Bug Fixes
+
+- _(media)_ Request animated Discord emoji as WebP by @chojs23
+
+### Documentation
+
+- Update readme by @chojs23
+
+### Features
+
+- _(media)_ Animate GIF and WebP images by @chojs23
+- _(media)_ Preserve Discord types and render Giphy GIFV inline by @chojs23
+
+## [2.5.8] - 2026-08-12
 
 ### Bug Fixes
 
