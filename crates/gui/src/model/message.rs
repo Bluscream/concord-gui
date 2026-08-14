@@ -58,6 +58,8 @@ pub struct MessageRow {
     /// `(emoji, count, me_reacted)`.
     pub reactions: Vec<(String, u64, bool)>,
     pub embed_count: usize,
+    /// Set once the user clicks a hidden spoiler in this message.
+    pub spoiler_revealed: bool,
     /// Whether the authenticated user wrote this message, which gates the
     /// edit and delete actions.
     pub own: bool,
@@ -140,6 +142,7 @@ pub fn project_messages(
                 .map(|reaction| (reaction_glyph(&reaction.emoji), reaction.count, reaction.me))
                 .collect(),
             embed_count: message.embeds.len(),
+            spoiler_revealed: false,
             own: current_user == Some(message.author_id),
         });
 

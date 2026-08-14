@@ -21,13 +21,34 @@ use crate::ui::chrome::{avatar_with_url, column, row};
 /// with the avatar column above them.
 const GUTTER: f32 = layout::AVATAR + space::MD;
 
-/// An action requested from a message's hover toolbar.
+impl MessageAction {
+    /// A stable small number, used only to build unique element ids.
+    fn slot(self) -> usize {
+        match self {
+            MessageAction::Reply => 0,
+            MessageAction::React => 1,
+            MessageAction::Edit => 2,
+            MessageAction::Delete => 3,
+            MessageAction::ToggleReaction(_) => 4,
+            MessageAction::RevealSpoiler => 5,
+        }
+    }
+}
+
+/// An action requested from a message's hover toolbar or its reaction bar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageAction {
     Reply,
+    /// Open the emoji picker for this message.
     React,
     Edit,
     Delete,
+    /// Toggle an existing reaction, identified by its index in the row's
+    /// reaction list. Carrying the index avoids threading emoji identity
+    /// through the callback.
+    ToggleReaction(usize),
+    /// Reveal a spoiler that was hidden in this message.
+    RevealSpoiler,
 }
 
 /// Render the full message list, oldest first.
@@ -82,7 +103,7 @@ fn message_row(
         .w_full()
         .group("message")
         .hover(|style| style.bg(rgb(DARK.surface_hover)))
-        .child(message_block(message))
+        .child(message_block(index, message, on_action.clone()))
         .child(
             gpui::div()
                 .absolute()
@@ -110,7 +131,7 @@ fn action_bar(
     let button = |label: &'static str, action: MessageAction, danger: bool| {
         let handler = on_action.clone();
         gpui::div()
-            .id(("action", index * 8 + action as usize))
+            .id(("action", index * 8 + action.slot()))
             .px(px(6.))
             .py(px(2.))
             .rounded(px(3.))
@@ -137,7 +158,11 @@ fn action_bar(
     bar
 }
 
-fn message_block(message: &MessageRow) -> Div {
+fn message_block(
+    index: usize,
+    message: &MessageRow,
+    on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
+) -> Div {
     let mut block = column()
         .w_full()
         .when(!message.continues, |d| d.pt(px(space::MD)))
@@ -161,7 +186,7 @@ fn message_block(message: &MessageRow) -> Div {
                         .text_color(rgb(DARK.text_subtle))
                         .child(message.short_time()),
                 )
-                .child(message_body(message)),
+                .child(message_body(index, message, on_action)),
         )
     } else {
         block
@@ -182,7 +207,7 @@ fn message_block(message: &MessageRow) -> Div {
                     .w_full()
                     .items_start()
                     .child(gpui::div().w(px(GUTTER)).flex_none())
-                    .child(message_body(message)),
+                    .child(message_body(index, message, on_action)),
             )
     }
 }
@@ -228,11 +253,27 @@ fn author_line(message: &MessageRow) -> Div {
     line
 }
 
-fn message_body(message: &MessageRow) -> Div {
+fn message_body(
+    index: usize,
+    message: &MessageRow,
+    on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
+) -> Div {
     let mut body = column().flex_1().gap(px(space::XS));
 
     if !message.body.text.is_empty() {
-        body = body.child(rich_text(&message.body));
+        let has_spoiler = message.body.runs.iter().any(|(_, style)| style.spoiler);
+        let handler = on_action.clone();
+
+        body = body.child(
+            gpui::div()
+                .id(("body", index))
+                .when(has_spoiler && !message.spoiler_revealed, |d| {
+                    d.cursor_pointer().on_click(move |_event, _window, cx| {
+                        handler(index, MessageAction::RevealSpoiler, cx)
+                    })
+                })
+                .child(rich_text(&message.body, message.spoiler_revealed)),
+        );
 
         if message.edited {
             body = body.child(
@@ -266,7 +307,7 @@ fn message_body(message: &MessageRow) -> Div {
     }
 
     if !message.reactions.is_empty() {
-        body = body.child(reaction_bar(&message.reactions));
+        body = body.child(reaction_bar(index, &message.reactions, on_action));
     }
 
     body
@@ -276,7 +317,7 @@ fn message_body(message: &MessageRow) -> Div {
 ///
 /// One element rather than a row of styled spans, so wrapping happens at word
 /// boundaries across style changes instead of at segment boundaries.
-fn rich_text(parsed: &markdown::Parsed) -> impl IntoElement {
+fn rich_text(parsed: &markdown::Parsed, reveal_spoilers: bool) -> impl IntoElement {
     let highlights = parsed.runs.iter().map(|(range, style)| {
         let mut highlight = HighlightStyle::default();
 
@@ -318,11 +359,14 @@ fn rich_text(parsed: &markdown::Parsed) -> impl IntoElement {
             .into(),
         );
 
-        // Spoilers are hidden by painting text on its own background. Click to
-        // reveal needs per-run hit testing, which StyledText does not expose.
+        // Hidden spoilers paint the text in its own background colour. Once
+        // revealed they keep the block tint, so it stays clear which part of
+        // the message was spoilered.
         if style.spoiler {
             highlight.background_color = Some(rgb(DARK.surface_active).into());
-            highlight.color = Some(rgb(DARK.surface_active).into());
+            if !reveal_spoilers {
+                highlight.color = Some(rgb(DARK.surface_active).into());
+            }
         }
 
         (range.clone(), highlight)
@@ -382,12 +426,26 @@ fn attachment_chip(filename: &str, size: u64, is_image: bool) -> Div {
         )
 }
 
-fn reaction_bar(reactions: &[(String, u64, bool)]) -> Div {
+fn reaction_bar(
+    message_index: usize,
+    reactions: &[(String, u64, bool)],
+    on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
+) -> Div {
     let mut bar = row().gap(px(space::XS)).flex_wrap();
 
-    for (glyph, count, mine) in reactions {
+    for (reaction_index, (glyph, count, mine)) in reactions.iter().enumerate() {
+        let handler = on_action.clone();
         bar = bar.child(
             row()
+                .id(("reaction", message_index * 32 + reaction_index))
+                .cursor_pointer()
+                .on_click(move |_event, _window, cx| {
+                    handler(
+                        message_index,
+                        MessageAction::ToggleReaction(reaction_index),
+                        cx,
+                    )
+                })
                 .gap(px(space::XS))
                 .px(px(6.))
                 .py(px(2.))

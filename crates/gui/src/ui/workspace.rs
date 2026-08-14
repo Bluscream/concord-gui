@@ -24,6 +24,7 @@ use crate::ui::chrome::{
     sidebar_row, voice_participant_row,
 };
 use crate::ui::composer::{Composer, composer_view};
+use crate::ui::emoji::{self, EmojiPicker};
 use crate::ui::login::{Login, login_view};
 use crate::ui::messages::{MessageAction, message_list};
 
@@ -135,6 +136,7 @@ pub struct SearchResult {
     pub author: String,
     pub content: String,
     pub channel_id: Id<marker::ChannelMarker>,
+    pub message_id: Id<marker::MessageMarker>,
 }
 
 /// Which top-level surface is showing.
@@ -165,6 +167,8 @@ pub struct Workspace {
     pub self_deaf: bool,
     /// Search state. `None` when the search panel is closed.
     pub search: Option<Search>,
+    /// Emoji picker, anchored to the message being reacted to.
+    pub picker: Option<EmojiPicker<Id<marker::MessageMarker>>>,
     focus: FocusHandle,
 }
 
@@ -184,6 +188,7 @@ impl Workspace {
             self_mute: false,
             self_deaf: false,
             search: None,
+            picker: None,
             focus: cx.focus_handle(),
         }
     }
@@ -362,6 +367,29 @@ impl Workspace {
         }
     }
 
+    /// Open the channel containing a search hit and load history around it.
+    ///
+    /// The surrounding history matters: jumping to a message with nothing
+    /// above or below it gives no context for why it matched.
+    pub fn jump_to(
+        &mut self,
+        channel_id: Id<marker::ChannelMarker>,
+        message_id: Id<marker::MessageMarker>,
+    ) {
+        if self.nav.channel != Some(channel_id) {
+            self.open_channel(channel_id);
+        }
+
+        if let Some(handle) = &self.handle {
+            handle.send(AppCommand::LoadMessageHistoryAround {
+                channel_id,
+                message_id,
+            });
+        }
+
+        self.search = None;
+    }
+
     /// Open or close the search panel.
     pub fn toggle_search(&mut self) {
         self.search = match self.search {
@@ -499,10 +527,77 @@ impl Workspace {
             MessageAction::Reply => self.start_reply(message_id, author),
             MessageAction::Edit => self.start_edit(message_id),
             MessageAction::Delete => self.delete_message(message_id),
-            // A picker is the proper affordance here; until then the toolbar
-            // offers the single most common acknowledgement rather than
-            // pretending to support arbitrary emoji.
-            MessageAction::React => self.react(message_id, "\u{1f44d}"),
+            MessageAction::React => self.open_emoji_picker(message_id),
+            MessageAction::ToggleReaction(reaction) => {
+                self.toggle_reaction(index, reaction);
+            }
+            MessageAction::RevealSpoiler => {
+                if let Some(row) = self.messages.get_mut(index) {
+                    row.spoiler_revealed = true;
+                }
+            }
+        }
+    }
+
+    /// Open the emoji picker for a message.
+    fn open_emoji_picker(&mut self, message_id: Id<marker::MessageMarker>) {
+        self.picker = Some(EmojiPicker {
+            target: message_id,
+            cursor: 0,
+        });
+    }
+
+    /// Send the picked reaction and close the picker.
+    fn pick_emoji(&mut self, glyph: &str) {
+        let Some(picker) = self.picker.take() else {
+            return;
+        };
+        self.react(picker.target, glyph);
+    }
+
+    /// Move the picker cursor, wrapping at both ends.
+    fn move_picker(&mut self, delta: isize) {
+        let total = emoji::flat().len() as isize;
+        if let Some(picker) = &mut self.picker {
+            let next = (picker.cursor as isize + delta).rem_euclid(total);
+            picker.cursor = next as usize;
+        }
+    }
+
+    /// Add or remove a reaction, depending on whether the user already
+    /// reacted with that emoji.
+    fn toggle_reaction(&mut self, message: usize, reaction: usize) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        let Some(row) = self.messages.get(message) else {
+            return;
+        };
+        let Some((glyph, _, mine)) = row.reactions.get(reaction) else {
+            return;
+        };
+
+        // Custom emoji round-trip as :name:, which the API will not accept as
+        // a unicode reaction, so only unicode reactions toggle for now.
+        if glyph.starts_with(':') {
+            return;
+        }
+
+        let emoji = ReactionEmoji::Unicode(glyph.clone());
+        let message_id = row.id;
+
+        if *mine {
+            handle.send(AppCommand::RemoveReaction {
+                channel_id,
+                message_id,
+                emoji,
+            });
+        } else {
+            handle.send(AppCommand::AddReaction {
+                channel_id,
+                message_id,
+                emoji,
+            });
         }
     }
 
@@ -557,7 +652,7 @@ impl Workspace {
 
     /// Search panel. Replaces the member list rather than adding a fourth
     /// column, which would squeeze the message area past readability.
-    fn search_pane(&self) -> impl IntoElement {
+    fn search_pane(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(search) = &self.search else {
             return gpui::div();
         };
@@ -636,6 +731,8 @@ impl Workspace {
             // Long bodies are trimmed: the panel is a jump list, not a reader.
             let preview: String = result.content.chars().take(160).collect();
 
+            let (channel_id, message_id) = (result.channel_id, result.message_id);
+
             results = results.child(
                 column()
                     .id(("search-result", index))
@@ -645,6 +742,10 @@ impl Workspace {
                     .gap(px(2.))
                     .cursor_pointer()
                     .hover(|style| style.bg(rgb(DARK.surface_hover)))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.jump_to(channel_id, message_id);
+                        cx.notify();
+                    }))
                     .child(
                         gpui::div()
                             .text_size(px(text::XS))
@@ -787,6 +888,7 @@ impl Workspace {
                             author: message.author,
                             content: message.content.unwrap_or_default(),
                             channel_id: message.channel_id,
+                            message_id: message.message_id,
                         })
                         .collect();
                 }
@@ -1041,10 +1143,10 @@ impl Workspace {
                     });
                 }
             }))
-            .child(self.composer_row(window))
+            .child(self.composer_row(window, cx))
     }
 
-    fn composer_row(&self, window: &Window) -> impl IntoElement {
+    fn composer_row(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let enabled = self.nav.channel.is_some() && self.handle.is_some();
         let placeholder = if !enabled {
             "Select a channel to start typing".to_string()
@@ -1105,7 +1207,27 @@ impl Render for Workspace {
                     Screen::Ready => {
                         let key = event.keystroke.key.as_str();
 
-                        if key == "f" && event.keystroke.modifiers.control {
+                        if this.picker.is_some() {
+                            // The picker owns the keyboard while open.
+                            match key {
+                                "escape" => this.picker = None,
+                                "left" => this.move_picker(-1),
+                                "right" => this.move_picker(1),
+                                // The grid reflows with width, so up/down move
+                                // by a nominal row rather than a measured one.
+                                "up" => this.move_picker(-8),
+                                "down" => this.move_picker(8),
+                                "enter" => {
+                                    let glyph = emoji::flat()
+                                        .get(this.picker.as_ref().map_or(0, |p| p.cursor))
+                                        .copied();
+                                    if let Some(glyph) = glyph {
+                                        this.pick_emoji(glyph);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        } else if key == "f" && event.keystroke.modifiers.control {
                             this.toggle_search();
                         } else if this.search.is_some() && key == "escape" {
                             this.search = None;
@@ -1143,7 +1265,7 @@ impl Render for Workspace {
                         .child(self.guild_rail(cx))
                         .child(self.channel_sidebar(cx))
                         .child(self.content(window, cx))
-                        .when(self.search.is_some(), |d| d.child(self.search_pane()))
+                        .when(self.search.is_some(), |d| d.child(self.search_pane(cx)))
                         .when(self.shows_members() && self.search.is_none(), |d| {
                             d.child(self.member_pane())
                         }),

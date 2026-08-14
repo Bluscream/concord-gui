@@ -512,6 +512,15 @@ pub fn demo_state() -> DiscordState {
                 1800,
             ),
             message(21, 112, Some(10), 1002, "ferris", "reviewing now", 900),
+            message(
+                22,
+                112,
+                Some(10),
+                1003,
+                "turing",
+                "the fix was ||a missing guild_id|| all along",
+                300,
+            ),
         ],
     );
 

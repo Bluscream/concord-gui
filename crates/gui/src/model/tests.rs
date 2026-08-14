@@ -392,3 +392,49 @@ fn dm_messages_have_no_guild_scope() {
         "DMs have no roles, so no author colours"
     );
 }
+
+#[test]
+fn emoji_picker_offers_only_sendable_glyphs() {
+    // Custom guild emoji round-trip as :name:, which the reaction API will not
+    // accept as unicode. The picker must not offer anything unsendable.
+    for glyph in crate::ui::emoji::flat() {
+        assert!(
+            !glyph.starts_with(':'),
+            "picker offered a non-unicode glyph: {glyph}"
+        );
+        assert!(!glyph.is_empty());
+    }
+}
+
+#[test]
+fn emoji_picker_groups_cover_every_flat_entry() {
+    let flat = crate::ui::emoji::flat();
+    let grouped: usize = crate::ui::emoji::GROUPS
+        .iter()
+        .map(|(_, glyphs)| glyphs.len())
+        .sum();
+
+    // Keyboard navigation indexes the flat list against grouped rendering, so
+    // the two must stay in step.
+    assert_eq!(flat.len(), grouped);
+}
+
+#[test]
+fn spoilers_are_hidden_until_revealed() {
+    let state = demo_state();
+    let rows = project_messages(
+        &state,
+        concord::discord::Id::new(112),
+        state.current_user_id(),
+    );
+
+    let spoilered = rows
+        .iter()
+        .find(|row| row.body.runs.iter().any(|(_, style)| style.spoiler))
+        .expect("fixture defines a spoilered message");
+
+    assert!(
+        !spoilered.spoiler_revealed,
+        "spoilers must start hidden"
+    );
+}
