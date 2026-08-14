@@ -5,15 +5,15 @@ use super::{
     publish_app_event,
 };
 use crate::discord::{
-    commands::{AppCommand, ForumPostArchiveState, MessageHistoryAfterMode},
+    ArchivedThreadPageCursor, ArchivedThreadRequestTarget, ForumPostDataRequestTarget,
+    commands::{AppCommand, MessageHistoryAfterMode},
     events::AppEvent,
     ids::{
         Id,
         marker::{ChannelMarker, GuildMarker, MessageMarker, UserMarker},
     },
     request_lifecycle::{
-        ForumPostRequestTarget, GuildMemberSearchSurface, GuildMemberSearchTarget,
-        MemberListSubscriptionTarget,
+        GuildMemberSearchSurface, GuildMemberSearchTarget, MemberListSubscriptionTarget,
     },
     voice,
 };
@@ -95,39 +95,46 @@ impl DiscordClient {
             .begin_history_after_request(channel_id, after, mode)
     }
 
-    pub(crate) fn next_forum_post_request(
+    pub(crate) fn next_forum_post_data_request(
         &self,
-        target: Option<(Id<GuildMarker>, Id<ChannelMarker>, bool)>,
-    ) -> Option<(
-        Id<GuildMarker>,
-        Id<ChannelMarker>,
-        ForumPostArchiveState,
-        usize,
-    )> {
-        let target =
-            target.map(
-                |(guild_id, channel_id, should_load_more)| ForumPostRequestTarget {
-                    guild_id,
-                    channel_id,
-                    should_load_more,
-                },
-            );
+        target: Option<ForumPostDataRequestTarget>,
+    ) -> Option<ForumPostDataRequestTarget> {
         self.request_lifecycle
             .lock()
             .expect("request lifecycle lock is not poisoned")
-            .next_forum_post_request(target)
+            .next_forum_post_data_request(target)
     }
 
-    pub(crate) fn mark_forum_post_request_failed(
+    pub(crate) fn mark_forum_post_data_request_failed(
         &self,
         channel_id: Id<ChannelMarker>,
-        archive_state: ForumPostArchiveState,
-        offset: usize,
+        thread_ids: &[Id<ChannelMarker>],
     ) {
         self.request_lifecycle
             .lock()
             .expect("request lifecycle lock is not poisoned")
-            .mark_forum_post_failed(channel_id, archive_state, offset);
+            .mark_forum_post_data_failed(channel_id, thread_ids);
+    }
+
+    pub(crate) fn next_archived_thread_request(
+        &self,
+        target: Option<ArchivedThreadRequestTarget>,
+    ) -> Option<ArchivedThreadRequestTarget> {
+        self.request_lifecycle
+            .lock()
+            .expect("request lifecycle lock is not poisoned")
+            .next_archived_thread_request(target)
+    }
+
+    pub(crate) fn mark_archived_thread_request_send_failed(
+        &self,
+        channel_id: Id<ChannelMarker>,
+        cursor: &ArchivedThreadPageCursor,
+    ) {
+        self.request_lifecycle
+            .lock()
+            .expect("request lifecycle lock is not poisoned")
+            .mark_archived_thread_request_send_failed(channel_id, cursor);
     }
 
     pub(crate) fn next_pinned_message_request(
@@ -205,10 +212,11 @@ impl DiscordClient {
         now: Instant,
     ) {
         let target = target.map(
-            |(guild_id, channel_id, bucket, refresh_generation, ranges)| {
+            |(guild_id, channel_id, thread_id, bucket, refresh_generation, ranges)| {
                 MemberListSubscriptionTarget {
                     guild_id,
                     channel_id,
+                    thread_id,
                     bucket,
                     refresh_generation,
                     ranges,
@@ -236,7 +244,14 @@ impl DiscordClient {
             .lock()
             .expect("request lifecycle lock is not poisoned")
             .next_due_member_list_subscription(now)
-            .map(|target| (target.guild_id, target.channel_id, target.ranges))
+            .map(|target| {
+                (
+                    target.guild_id,
+                    target.channel_id,
+                    target.thread_id,
+                    target.ranges,
+                )
+            })
     }
 
     pub(crate) fn next_thread_preview_requests(

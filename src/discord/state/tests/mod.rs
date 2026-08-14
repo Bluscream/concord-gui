@@ -30,8 +30,9 @@ use crate::discord::{
     MessageUpdateDispatchInfo, MessageUpdateEventFields, NotificationLevel,
     PermissionOverwriteInfo, PermissionOverwriteKind, PollAnswerInfo, PollInfo, PremiumTier,
     PresenceStatus, ReactionEmoji, ReactionInfo, ReadStateInfo, ReadySnapshotInfo,
-    RelationshipInfo, ReplyInfo, RoleInfo, ThreadListSyncInfo, ThreadMetadataInfo,
-    UserGuildSettingsInfo, UserProfileInfo, VoiceStateInfo,
+    RelationshipInfo, ReplyInfo, RoleInfo, ThreadGatewayInfo, ThreadListSyncInfo, ThreadMemberInfo,
+    ThreadMemberListUpdateInfo, ThreadMetadataInfo, UserGuildSettingsInfo, UserProfileInfo,
+    VoiceStateInfo,
 };
 
 mod channels;

@@ -847,6 +847,8 @@ mod tests {
             features: Some(Vec::new()),
             onboarding: None,
             channels: vec![channel],
+            thread_snapshot_complete: true,
+            current_user_thread_members: Vec::new(),
             members: vec![member],
             presences: Vec::new(),
             roles: Some(Vec::new()),

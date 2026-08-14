@@ -2,9 +2,7 @@ use std::collections::HashSet;
 
 use crate::discord::ids::marker::{GuildMarker, UserMarker};
 
-use crate::discord::{
-    AppCommand, AppEvent, ForumPostArchiveState, MentionInfo, MessageSnapshotInfo,
-};
+use crate::discord::{AppCommand, AppEvent, MentionInfo, MessageSnapshotInfo};
 mod channel_rows;
 mod channel_tree;
 mod channels;
@@ -182,10 +180,6 @@ impl DashboardState {
     }
 
     pub fn push_effect(&mut self, event: AppEvent) {
-        if let AppEvent::ChannelUpsert(channel) = &event {
-            self.record_thread_channel_upserted(channel);
-            return;
-        }
         self.push_event_inner(event);
     }
 }

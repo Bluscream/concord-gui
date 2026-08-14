@@ -132,9 +132,8 @@ impl DashboardState {
         };
         // Threads live under text-like channels. Forums already show their posts
         // as the channel view, and categories and voice channels cannot host
-        // threads, so the action is offered everywhere else. The list itself is
-        // filled by the `/threads/search` fetch once the view opens, so this no
-        // longer depends on threads already sitting in the gateway cache.
+        // threads, so the action is offered everywhere else. Gateway active
+        // thread events fill the list without a REST search.
         let can_read_history =
             self.discord_action_allowed_in_channel(channel_id, DiscordAction::ReadMessageHistory);
         let can_show_threads = !channel.is_category()

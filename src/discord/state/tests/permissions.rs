@@ -865,14 +865,28 @@ fn threads_inherit_parent_permissions_but_require_thread_send_permission() {
             vec![role_info(Id::new(guild.get()), "@everyone", permissions)],
             Vec::new(),
         );
-        state.apply_event(&AppEvent::ChannelUpsert(ChannelInfo {
-            guild_id: Some(guild),
-            parent_id: Some(parent),
-            name: "planning".to_owned(),
-            current_user_joined_thread: Some(true),
-            thread_metadata: Some(crate::discord::ThreadMetadataInfo::test(false, false)),
-            ..channel_info(thread, kind, Vec::new())
-        }));
+        state.apply_event(&AppEvent::ThreadUpsert {
+            thread: ThreadGatewayInfo {
+                channel: ChannelInfo {
+                    guild_id: Some(guild),
+                    parent_id: Some(parent),
+                    name: "planning".to_owned(),
+                    thread_metadata: Some(crate::discord::ThreadMetadataInfo::test(false, false)),
+                    ..channel_info(thread, kind, Vec::new())
+                },
+                current_user_member: Some(ThreadMemberInfo {
+                    thread_id: Some(thread),
+                    user_id: Some(me),
+                    join_timestamp: None,
+                    flags: None,
+                    muted: Some(false),
+                    mute_end_time: None,
+                    member: None,
+                    presence: None,
+                    extra_fields: BTreeMap::new(),
+                }),
+            },
+        });
 
         let thread_state = state.channel(thread).expect("thread");
         assert!(state.can_view_channel(thread_state), "{kind}");

@@ -9,12 +9,13 @@ use crate::discord::ids::{
     Id,
     marker::{ChannelMarker, GuildMarker, UserMarker},
 };
-use crate::discord::{ActivityInfo, AppCommand, ChannelInfo, MessageInfo, MessageState};
+use crate::discord::{ActivityInfo, AppCommand, MessageInfo, MessageState};
 use crate::tui::theme;
 
 use super::DashboardState;
 use super::member_grouping::{
     MemberEntry, MemberGroup, channel_recipient_group, flatten_member_groups, guild_member_groups,
+    thread_member_group,
 };
 
 const MAX_GUILD_MEMBER_BY_ID_REQUEST_USERS: usize = 100;
@@ -43,6 +44,13 @@ impl DashboardState {
         let Some(guild_id) = self.selected_guild_id() else {
             return self.selected_channel_recipient_group();
         };
+        if let Some((thread_guild_id, thread_id)) = self.selected_thread_scope() {
+            return thread_member_group(
+                self.discord
+                    .cache
+                    .thread_members_for_channel(thread_guild_id, thread_id),
+            );
+        }
         let entries = self.discord.cache.member_list_entries_for_guild(guild_id);
         guild_member_groups(
             entries,
@@ -52,6 +60,12 @@ impl DashboardState {
     }
 
     pub fn is_member_list_loading(&self) -> bool {
+        if let Some((guild_id, thread_id)) = self.selected_thread_scope() {
+            return !self
+                .discord
+                .cache
+                .thread_member_list_loaded(guild_id, thread_id);
+        }
         let Some((guild_id, _)) = self.member_list_subscription_target() else {
             return false;
         };
@@ -159,23 +173,6 @@ impl DashboardState {
         self.missing_guild_member_requests(users)
     }
 
-    pub(in crate::tui) fn missing_thread_owner_member_requests(
-        &self,
-        threads: &[ChannelInfo],
-    ) -> Vec<(Id<GuildMarker>, Vec<Id<UserMarker>>)> {
-        let users = threads.iter().filter_map(|thread| {
-            let user_id = thread.owner_id?;
-            let guild_id = thread.guild_id.or_else(|| {
-                self.discord
-                    .cache
-                    .channel(thread.channel_id)
-                    .and_then(|channel| channel.guild_id)
-            })?;
-            Some((guild_id, user_id))
-        });
-        self.missing_guild_member_requests(users)
-    }
-
     pub(in crate::tui) fn missing_channel_user_member_requests(
         &self,
         channel_id: Id<ChannelMarker>,
@@ -269,6 +266,14 @@ impl DashboardState {
     }
 
     pub fn member_panel_title(&self) -> Line<'static> {
+        if let Some((guild_id, thread_id)) = self.selected_thread_scope() {
+            return self
+                .discord
+                .cache
+                .thread_member_count(guild_id, thread_id)
+                .map(|count| Line::from(format!(" Members {count} ")).alignment(Alignment::Center))
+                .unwrap_or_else(|| Line::from(" Members "));
+        }
         let Some(guild_id) = self.selected_guild_id() else {
             return Line::from(" Members ");
         };
@@ -302,18 +307,36 @@ impl DashboardState {
         flatten_member_groups(self.members_grouped())
     }
 
-    /// Members confirmed by the current guild snapshot, including explicit
-    /// Opcode 8 results that are not part of the streamed sidebar ranges.
+    /// Search candidates for the visible member pane. A selected thread uses
+    /// only its participant snapshot. Other guild channels retain the full
+    /// current-guild search set, including explicit Opcode 8 results.
     pub(in crate::tui) fn searchable_members(&self) -> Vec<MemberEntry<'_>> {
         let Some(guild_id) = self.selected_guild_id() else {
             return flatten_member_groups(self.selected_channel_recipient_group());
         };
+        if let Some((thread_guild_id, thread_id)) = self.selected_thread_scope() {
+            return self
+                .discord
+                .cache
+                .thread_members_for_channel(thread_guild_id, thread_id)
+                .into_iter()
+                .map(MemberEntry::Guild)
+                .collect();
+        }
         self.discord
             .cache
             .searchable_members_for_guild(guild_id)
             .into_iter()
             .map(MemberEntry::Guild)
             .collect()
+    }
+
+    fn selected_thread_scope(&self) -> Option<(Id<GuildMarker>, Id<ChannelMarker>)> {
+        let channel = self.selected_channel_state()?;
+        if !channel.is_thread() {
+            return None;
+        }
+        Some((channel.guild_id?, channel.id))
     }
 }
 

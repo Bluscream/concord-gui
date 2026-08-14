@@ -8,13 +8,6 @@ use crate::discord::ids::{
 
 use super::DashboardState;
 
-#[derive(Debug, Default)]
-pub(super) struct ForumPostListState {
-    pub(super) active_post_ids: Vec<Id<ChannelMarker>>,
-    pub(super) archived_post_ids: Vec<Id<ChannelMarker>>,
-    pub(super) has_more: bool,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum LatestMessageHistoryState {
     Loading,
@@ -24,7 +17,6 @@ pub(super) enum LatestMessageHistoryState {
 
 #[derive(Debug, Default)]
 pub(super) struct RequestTrackingState {
-    pub(super) forum_post_lists: HashMap<Id<ChannelMarker>, ForumPostListState>,
     latest_message_history: HashMap<Id<ChannelMarker>, LatestMessageHistoryState>,
     pub(super) pending_commands: VecDeque<AppCommand>,
 }

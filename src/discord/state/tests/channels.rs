@@ -1,4 +1,5 @@
 use super::*;
+use crate::discord::ArchivedThreadsPage;
 
 #[test]
 fn applies_guild_channels_and_messages() {
@@ -56,88 +57,388 @@ fn stores_channel_parent_and_position() {
 }
 
 #[test]
-fn thread_list_sync_replaces_only_its_parent_scope() {
+fn active_and_joined_thread_state_are_independent() {
     let guild_id = Id::new(1);
-    let synced_parent = Id::new(2);
-    let other_parent = Id::new(3);
-    let stale_thread = Id::new(10);
-    let retained_thread = Id::new(11);
-    let replacement_thread = Id::new(12);
-    let archived_thread = Id::new(13);
+    let forum_id = Id::new(2);
+    let joined_id = Id::new(10);
+    let unjoined_id = Id::new(11);
     let mut state = DiscordState::default();
+    let joined_member = ThreadMemberInfo {
+        thread_id: Some(joined_id),
+        user_id: Some(Id::new(99)),
+        join_timestamp: None,
+        flags: Some(4),
+        muted: Some(false),
+        mute_end_time: None,
+        member: None,
+        presence: None,
+        extra_fields: BTreeMap::new(),
+    };
 
-    for (channel_id, parent_id) in [
-        (stale_thread, synced_parent),
-        (retained_thread, other_parent),
-    ] {
-        state.apply_event(&AppEvent::ChannelUpsert(ChannelInfo {
-            guild_id: Some(guild_id),
-            parent_id: Some(parent_id),
-            kind: "GuildPublicThread".to_owned(),
-            ..channel_info(channel_id, "GuildPublicThread", Vec::new())
-        }));
-    }
-    state.apply_event(&AppEvent::ChannelUpsert(ChannelInfo {
-        guild_id: Some(guild_id),
-        parent_id: Some(synced_parent),
-        kind: "GuildPublicThread".to_owned(),
-        thread_metadata: Some(ThreadMetadataInfo {
-            archived: true,
-            auto_archive_duration: Some(1_440),
-            archive_timestamp: None,
-            locked: false,
-            invitable: None,
-            create_timestamp: None,
-        }),
-        ..channel_info(archived_thread, "GuildPublicThread", Vec::new())
+    state.apply_event(&guild_create_event(GuildCreateFixture {
+        channels: vec![
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                name: "forum".to_owned(),
+                ..channel_info(forum_id, "forum", Vec::new())
+            },
+            test_thread(guild_id, forum_id, joined_id, "joined"),
+            test_thread(guild_id, forum_id, unjoined_id, "not joined"),
+        ],
+        current_user_thread_members: vec![joined_member],
+        ..GuildCreateFixture::new(guild_id)
     }));
 
+    assert_eq!(
+        state.active_thread_ids_for_parent(forum_id),
+        vec![joined_id, unjoined_id]
+    );
+    assert!(state.thread_is_joined(joined_id));
+    assert!(!state.thread_is_joined(unjoined_id));
+    assert!(state.thread_is_sidebar_active(joined_id));
+    assert!(!state.thread_is_sidebar_active(unjoined_id));
+
     state.apply_event(&AppEvent::ThreadListSync {
         sync: ThreadListSyncInfo {
             guild_id,
-            channel_ids: Some(vec![synced_parent]),
-            threads: vec![ChannelInfo {
+            channel_ids: Some(vec![forum_id]),
+            threads: vec![test_thread(guild_id, forum_id, joined_id, "joined")],
+            current_user_members: None,
+            extra_fields: BTreeMap::new(),
+        },
+    });
+    assert!(state.thread_is_joined(joined_id));
+    assert!(state.thread_is_sidebar_active(joined_id));
+
+    state.apply_event(&AppEvent::ThreadListSync {
+        sync: ThreadListSyncInfo {
+            guild_id,
+            channel_ids: Some(vec![forum_id]),
+            threads: vec![test_thread(guild_id, forum_id, joined_id, "joined")],
+            current_user_members: Some(Vec::new()),
+            extra_fields: BTreeMap::new(),
+        },
+    });
+    assert_eq!(
+        state.active_thread_ids_for_parent(forum_id),
+        vec![joined_id]
+    );
+    assert!(!state.thread_is_joined(joined_id));
+    assert!(!state.thread_is_sidebar_active(joined_id));
+}
+
+#[test]
+fn partial_guild_snapshot_preserves_active_and_joined_threads() {
+    let guild_id = Id::new(1);
+    let parent_id = Id::new(2);
+    let thread_id = Id::new(10);
+    let mut state = DiscordState::default();
+    state.apply_event(&guild_create_event(GuildCreateFixture {
+        channels: vec![test_thread(guild_id, parent_id, thread_id, "joined")],
+        current_user_thread_members: vec![ThreadMemberInfo::joined_snapshot(thread_id)],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+
+    state.apply_event(&guild_create_event(GuildCreateFixture {
+        thread_snapshot_complete: false,
+        ..GuildCreateFixture::new(guild_id)
+    }));
+
+    assert_eq!(
+        state.active_thread_ids_for_parent(parent_id),
+        vec![thread_id]
+    );
+    assert!(state.thread_is_sidebar_active(thread_id));
+}
+
+#[test]
+fn participant_snapshot_populates_members_without_joining_the_thread() {
+    let guild_id = Id::new(1);
+    let forum_id = Id::new(2);
+    let thread_id = Id::new(10);
+    let participant_id = Id::new(20);
+    let mut state = DiscordState::default();
+    state.apply_event(&guild_create_event(GuildCreateFixture {
+        channels: vec![
+            ChannelInfo {
                 guild_id: Some(guild_id),
-                parent_id: Some(synced_parent),
-                kind: "GuildPublicThread".to_owned(),
-                ..channel_info(replacement_thread, "GuildPublicThread", Vec::new())
+                ..channel_info(forum_id, "forum", Vec::new())
+            },
+            test_thread(guild_id, forum_id, thread_id, "post"),
+        ],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+
+    state.apply_event(&AppEvent::ThreadMemberListUpdate {
+        update: ThreadMemberListUpdateInfo {
+            guild_id,
+            channel_id: thread_id,
+            members: vec![ThreadMemberInfo {
+                thread_id: Some(thread_id),
+                user_id: Some(participant_id),
+                join_timestamp: None,
+                flags: None,
+                muted: None,
+                mute_end_time: None,
+                member: Some(MemberInfo::test(participant_id, "alice")),
+                presence: None,
+                extra_fields: BTreeMap::new(),
             }],
-            thread_members: Vec::new(),
             extra_fields: BTreeMap::new(),
         },
     });
 
-    assert!(state.channel(stale_thread).is_none());
-    assert!(state.channel(retained_thread).is_some());
-    assert!(state.channel(replacement_thread).is_some());
-    assert!(state.channel(archived_thread).is_some());
+    assert_eq!(
+        state
+            .thread_members_for_channel(guild_id, thread_id)
+            .into_iter()
+            .map(|member| member.user_id)
+            .collect::<Vec<_>>(),
+        vec![participant_id]
+    );
+    assert!(!state.thread_is_joined(thread_id));
+    assert!(!state.thread_is_sidebar_active(thread_id));
+}
 
-    state.apply_event(&AppEvent::ThreadListSync {
-        sync: ThreadListSyncInfo {
-            guild_id,
-            channel_ids: Some(vec![synced_parent]),
-            threads: Vec::new(),
-            thread_members: Vec::new(),
+#[test]
+fn archived_or_removed_thread_updates_leave_the_active_set() {
+    let guild_id = Id::new(1);
+    let parent_id = Id::new(2);
+    let thread_id = Id::new(10);
+    let mut state = DiscordState::default();
+    state.apply_event(&AppEvent::ThreadUpsert {
+        thread: ThreadGatewayInfo {
+            channel: test_thread(guild_id, parent_id, thread_id, "post"),
+            current_user_member: None,
+        },
+    });
+    assert_eq!(
+        state.active_thread_ids_for_parent(parent_id),
+        vec![thread_id]
+    );
+
+    let mut removed = test_thread(guild_id, parent_id, thread_id, "post");
+    removed.flags = Some(1 << 2);
+    state.apply_event(&AppEvent::ThreadUpsert {
+        thread: ThreadGatewayInfo {
+            channel: removed,
+            current_user_member: None,
+        },
+    });
+    assert!(state.active_thread_ids_for_parent(parent_id).is_empty());
+
+    let partial = ChannelInfo {
+        guild_id: Some(guild_id),
+        parent_id: Some(parent_id),
+        name: "renamed post".to_owned(),
+        ..channel_info(thread_id, "GuildPublicThread", Vec::new())
+    };
+    state.apply_event(&AppEvent::ThreadUpsert {
+        thread: ThreadGatewayInfo {
+            channel: partial,
+            current_user_member: None,
+        },
+    });
+    assert!(state.active_thread_ids_for_parent(parent_id).is_empty());
+
+    let mut archived = test_thread(guild_id, parent_id, thread_id, "post");
+    archived.flags = Some(0);
+    archived.thread_metadata = Some(ThreadMetadataInfo::test(true, false));
+    state.apply_event(&AppEvent::ThreadUpsert {
+        thread: ThreadGatewayInfo {
+            channel: archived,
+            current_user_member: None,
+        },
+    });
+    assert!(state.active_thread_ids_for_parent(parent_id).is_empty());
+}
+
+fn test_thread(
+    guild_id: Id<GuildMarker>,
+    parent_id: Id<ChannelMarker>,
+    thread_id: Id<ChannelMarker>,
+    name: &str,
+) -> ChannelInfo {
+    ChannelInfo {
+        guild_id: Some(guild_id),
+        parent_id: Some(parent_id),
+        name: name.to_owned(),
+        thread_metadata: Some(ThreadMetadataInfo::test(false, false)),
+        ..channel_info(thread_id, "GuildPublicThread", Vec::new())
+    }
+}
+
+fn archived_test_thread(
+    guild_id: Id<GuildMarker>,
+    parent_id: Id<ChannelMarker>,
+    thread_id: Id<ChannelMarker>,
+    name: &str,
+    archive_timestamp: &str,
+) -> ChannelInfo {
+    let mut thread = test_thread(guild_id, parent_id, thread_id, name);
+    let metadata = thread
+        .thread_metadata
+        .as_mut()
+        .expect("test thread should have metadata");
+    metadata.archived = true;
+    metadata.archive_timestamp = Some(archive_timestamp.to_owned());
+    thread
+}
+
+#[test]
+fn archived_response_keeps_membership_without_promoting_sidebar_state() {
+    let guild_id = Id::new(1);
+    let forum_id = Id::new(2);
+    let active_id = Id::new(10);
+    let archived_ids = [Id::new(31), Id::new(30)];
+    let current_user_id = Id::new(9);
+    let mut state = DiscordState::default();
+    state.apply_event(&guild_create_event(GuildCreateFixture {
+        channels: vec![
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                ..channel_info(forum_id, "forum", Vec::new())
+            },
+            test_thread(guild_id, forum_id, active_id, "active"),
+        ],
+        current_user_thread_members: vec![ThreadMemberInfo::joined_snapshot(active_id)],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+
+    state.apply_event(&AppEvent::ArchivedThreadsLoaded {
+        guild_id,
+        channel_id: forum_id,
+        before: None,
+        page: ArchivedThreadsPage {
+            threads: vec![
+                archived_test_thread(
+                    guild_id,
+                    forum_id,
+                    archived_ids[0],
+                    "newer archive",
+                    "2026-08-14T02:00:00.000000+00:00",
+                ),
+                archived_test_thread(
+                    guild_id,
+                    forum_id,
+                    archived_ids[1],
+                    "older archive",
+                    "2026-08-14T01:00:00.000000+00:00",
+                ),
+            ],
+            members: vec![ThreadMemberInfo {
+                thread_id: Some(archived_ids[0]),
+                user_id: Some(current_user_id),
+                join_timestamp: Some("2026-08-14T00:00:00.000000+00:00".to_owned()),
+                flags: Some(4),
+                muted: Some(true),
+                mute_end_time: None,
+                member: Some(MemberInfo::test(current_user_id, "current user")),
+                presence: None,
+                extra_fields: BTreeMap::from([(
+                    "future_member_field".to_owned(),
+                    serde_json::json!(true),
+                )]),
+            }],
+            has_more: false,
+            next_before: Some("2026-08-14T01:00:00.000000+00:00".to_owned()),
             extra_fields: BTreeMap::new(),
         },
     });
 
-    assert!(state.channel(replacement_thread).is_none());
-    assert!(state.channel(retained_thread).is_some());
-    assert!(state.channel(archived_thread).is_some());
+    assert_eq!(
+        state.active_thread_ids_for_parent(forum_id),
+        vec![active_id]
+    );
+    assert_eq!(state.archived_thread_ids_for_parent(forum_id), archived_ids);
+    assert!(state.thread_is_joined(archived_ids[0]));
+    assert_eq!(
+        state.thread_notification_level_flags(archived_ids[0]),
+        Some(4)
+    );
+    assert!(state.thread_is_muted(archived_ids[0]));
+    assert!(!state.thread_is_sidebar_active(archived_ids[0]));
 
-    state.apply_event(&AppEvent::ThreadListSync {
-        sync: ThreadListSyncInfo {
-            guild_id,
-            channel_ids: None,
-            threads: Vec::new(),
-            thread_members: Vec::new(),
+    state.apply_event(&AppEvent::ThreadUpsert {
+        thread: ThreadGatewayInfo {
+            channel: test_thread(guild_id, forum_id, archived_ids[0], "reopened"),
+            current_user_member: None,
+        },
+    });
+
+    assert!(state.thread_is_sidebar_active(archived_ids[0]));
+    assert_eq!(
+        state.archived_thread_ids_for_parent(forum_id),
+        vec![archived_ids[1]]
+    );
+}
+
+#[test]
+fn archived_pages_append_without_duplicates_and_advance_timestamp_cursor() {
+    let guild_id = Id::new(1);
+    let forum_id = Id::new(2);
+    let mut state = DiscordState::default();
+    state.apply_event(&AppEvent::ChannelUpsert(ChannelInfo {
+        guild_id: Some(guild_id),
+        ..channel_info(forum_id, "forum", Vec::new())
+    }));
+
+    let first_before = "2026-08-14T01:00:00.000000+00:00";
+    state.apply_event(&AppEvent::ArchivedThreadsLoaded {
+        guild_id,
+        channel_id: forum_id,
+        before: None,
+        page: ArchivedThreadsPage {
+            threads: vec![
+                archived_test_thread(
+                    guild_id,
+                    forum_id,
+                    Id::new(31),
+                    "first",
+                    "2026-08-14T02:00:00.000000+00:00",
+                ),
+                archived_test_thread(guild_id, forum_id, Id::new(30), "second", first_before),
+            ],
+            members: Vec::new(),
+            has_more: true,
+            next_before: Some(first_before.to_owned()),
+            extra_fields: BTreeMap::new(),
+        },
+    });
+    assert_eq!(
+        state.next_archived_thread_page_cursor(forum_id, true),
+        Some(crate::discord::ArchivedThreadPageCursor::Before(
+            first_before.to_owned()
+        ))
+    );
+
+    state.apply_event(&AppEvent::ArchivedThreadsLoaded {
+        guild_id,
+        channel_id: forum_id,
+        before: Some(first_before.to_owned()),
+        page: ArchivedThreadsPage {
+            threads: vec![
+                archived_test_thread(guild_id, forum_id, Id::new(30), "duplicate", first_before),
+                archived_test_thread(
+                    guild_id,
+                    forum_id,
+                    Id::new(29),
+                    "third",
+                    "2026-08-14T00:00:00.000000+00:00",
+                ),
+            ],
+            members: Vec::new(),
+            has_more: false,
+            next_before: Some("2026-08-14T00:00:00.000000+00:00".to_owned()),
             extra_fields: BTreeMap::new(),
         },
     });
 
-    assert!(state.channel(retained_thread).is_none());
-    assert!(state.channel(archived_thread).is_some());
+    assert_eq!(
+        state.archived_thread_ids_for_parent(forum_id),
+        vec![Id::new(31), Id::new(30), Id::new(29)]
+    );
+    assert_eq!(state.next_archived_thread_page_cursor(forum_id, true), None);
 }
 
 #[test]
@@ -783,39 +1084,4 @@ fn channel_delete_removes_cached_thread() {
     });
 
     assert_eq!(state.channel(channel_id), None);
-}
-
-#[test]
-fn thread_created_by_current_user_is_marked_joined() {
-    let guild_id = Id::new(1);
-    let current_user_id = Id::new(10);
-    let own_thread = Id::new(20);
-    let other_thread = Id::new(21);
-    let mut state = DiscordState::default();
-
-    state.apply_event(&AppEvent::Ready {
-        user: "me".to_owned(),
-        user_id: Some(current_user_id),
-    });
-    state.apply_event(&AppEvent::ChannelUpsert(ChannelInfo {
-        owner_id: Some(current_user_id),
-        ..guild_thread_channel(guild_id, own_thread, Id::new(2), "my thread")
-    }));
-    state.apply_event(&AppEvent::ChannelUpsert(ChannelInfo {
-        owner_id: Some(Id::new(99)),
-        ..guild_thread_channel(guild_id, other_thread, Id::new(2), "someone elses thread")
-    }));
-
-    assert!(
-        state
-            .channel(own_thread)
-            .unwrap()
-            .current_user_joined_thread
-    );
-    assert!(
-        !state
-            .channel(other_thread)
-            .unwrap()
-            .current_user_joined_thread
-    );
 }

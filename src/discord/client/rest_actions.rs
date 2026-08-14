@@ -4,16 +4,16 @@ use chrono::{DateTime, Utc};
 
 use super::DiscordClient;
 use crate::discord::{
-    ActionBlockReason, ActionDecision, ApplicationCommandInvocation, DiscordAction,
-    DiscordPermission, DiscordState, ForumPostCreate, GuildFolder, MESSAGE_FLAG_SUPPRESS_EMBEDS,
-    MessageAttachmentUpload, MessageInfo, MessageSendLimits, MessageState, PermissionDecision,
-    ReactionEmoji, ReactionUsersPage, ReplyReference, UserProfileInfo, UserProfileUpdate,
-    commands::ForumPostArchiveState,
+    ActionBlockReason, ActionDecision, ApplicationCommandInvocation, ArchivedThreadsPage,
+    DiscordAction, DiscordPermission, DiscordState, ForumPostCreate, ForumPostDataInfo,
+    GuildFolder, MESSAGE_FLAG_SUPPRESS_EMBEDS, MessageAttachmentUpload, MessageInfo,
+    MessageSendLimits, MessageState, PermissionDecision, ReactionEmoji, ReactionUsersPage,
+    ReplyReference, UserProfileInfo, UserProfileUpdate,
     ids::{
         Id,
         marker::{ChannelMarker, ForumTagMarker, GuildMarker, MessageMarker, UserMarker},
     },
-    rest::{CreatedForumPost, ForumPostPage, MessageCreateRequest, MessageEditRequest},
+    rest::{CreatedForumPost, MessageCreateRequest, MessageEditRequest},
 };
 use crate::{AppError, Result};
 
@@ -516,16 +516,27 @@ impl DiscordClient {
         self.rest.search_messages(query).await
     }
 
-    pub async fn load_forum_posts(
+    pub async fn load_forum_post_data(
         &self,
         guild_id: Id<GuildMarker>,
         channel_id: Id<ChannelMarker>,
-        archive_state: ForumPostArchiveState,
-        offset: usize,
-    ) -> Result<ForumPostPage> {
+        thread_ids: &[Id<ChannelMarker>],
+    ) -> Result<Vec<ForumPostDataInfo>> {
         self.ensure_can_read_message_history(channel_id)?;
         self.rest
-            .load_forum_posts(guild_id, channel_id, archive_state, offset)
+            .load_forum_post_data(guild_id, channel_id, thread_ids)
+            .await
+    }
+
+    pub async fn load_public_archived_threads(
+        &self,
+        guild_id: Id<GuildMarker>,
+        channel_id: Id<ChannelMarker>,
+        before: Option<&str>,
+    ) -> Result<ArchivedThreadsPage> {
+        self.ensure_can_read_message_history(channel_id)?;
+        self.rest
+            .load_public_archived_threads(guild_id, channel_id, before)
             .await
     }
 

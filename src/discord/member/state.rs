@@ -213,6 +213,41 @@ impl DiscordState {
             .unwrap_or_default()
     }
 
+    pub fn thread_member_list_loaded(
+        &self,
+        guild_id: Id<GuildMarker>,
+        channel_id: Id<ChannelMarker>,
+    ) -> bool {
+        self.threads.participant_ids(guild_id, channel_id).is_some()
+    }
+
+    pub fn thread_members_for_channel(
+        &self,
+        guild_id: Id<GuildMarker>,
+        channel_id: Id<ChannelMarker>,
+    ) -> Vec<&GuildMemberState> {
+        let Some(member_ids) = self.threads.participant_ids(guild_id, channel_id) else {
+            return Vec::new();
+        };
+        let Some(members) = self.guild_details.members.get(&guild_id) else {
+            return Vec::new();
+        };
+        member_ids
+            .iter()
+            .filter_map(|user_id| members.get(user_id))
+            .collect()
+    }
+
+    pub fn thread_member_count(
+        &self,
+        guild_id: Id<GuildMarker>,
+        channel_id: Id<ChannelMarker>,
+    ) -> Option<usize> {
+        self.threads
+            .participant_ids(guild_id, channel_id)
+            .map(BTreeSet::len)
+    }
+
     pub(crate) fn prepare_member_list_subscription(
         &mut self,
         guild_id: Id<GuildMarker>,
@@ -267,6 +302,7 @@ impl DiscordState {
         for guild in self.navigation_mut().guilds.values_mut() {
             guild.online_count = None;
         }
+        self.clear_thread_participants();
     }
 
     pub(in crate::discord) fn remove_member_from_list(
@@ -452,9 +488,19 @@ impl DiscordState {
             }
         }
 
-        for creator in self.navigation.thread_creators.values() {
-            if let Some(guild_id) = creator.guild_id {
-                require(guild_id, creator.user_id);
+        for thread in self
+            .navigation
+            .channels
+            .values()
+            .filter(|channel| channel.is_thread())
+        {
+            if let (Some(guild_id), Some(owner_id)) = (thread.guild_id, thread.owner_id) {
+                require(guild_id, owner_id);
+            }
+        }
+        for (guild_id, member_ids) in self.threads.participant_ids_by_guild() {
+            for user_id in member_ids {
+                require(guild_id, *user_id);
             }
         }
 
@@ -626,6 +672,7 @@ impl DiscordState {
                 .current_member_ids
                 .remove(&guild_id);
         }
+        self.retain_thread_participant_guilds(&keep_guilds);
 
         let current_user_id = self.session.current_user_id;
         let message_authors = self.message_author_ids_by_guild();

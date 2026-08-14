@@ -116,18 +116,29 @@ impl CommandDispatcher {
                 history_commands::load_thread_preview(self.client.clone(), channel_id, message_id)
                     .await;
             }
-            AppCommand::LoadForumPosts {
+            AppCommand::LoadForumPostData {
                 guild_id,
                 channel_id,
-                archive_state,
-                offset,
+                thread_ids,
             } => {
-                history_commands::load_forum_posts(
+                history_commands::load_forum_post_data(
                     self.client.clone(),
                     guild_id,
                     channel_id,
-                    archive_state,
-                    offset,
+                    thread_ids,
+                )
+                .await;
+            }
+            AppCommand::LoadArchivedThreads {
+                guild_id,
+                channel_id,
+                before,
+            } => {
+                history_commands::load_archived_threads(
+                    self.client.clone(),
+                    guild_id,
+                    channel_id,
+                    before,
                 )
                 .await;
             }
@@ -186,12 +197,14 @@ impl CommandDispatcher {
             AppCommand::UpdateMemberListSubscription {
                 guild_id,
                 channel_id,
+                thread_id,
                 ranges,
             } => {
                 gateway_commands::update_member_list_subscription(
                     self.client.clone(),
                     guild_id,
                     channel_id,
+                    thread_id,
                     ranges,
                 )
                 .await;

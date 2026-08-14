@@ -1,5 +1,5 @@
 use super::*;
-use crate::discord::GuildFolder;
+use crate::discord::{GuildFolder, ThreadGatewayInfo, ThreadMemberInfo};
 
 #[test]
 fn channel_switcher_groups_channels_and_filters_by_fuzzy_name() {
@@ -58,20 +58,34 @@ fn channel_switcher_groups_channels_and_filters_by_fuzzy_name() {
 }
 
 #[test]
-fn channel_switcher_includes_threads_and_forums_with_type_icons() {
+fn channel_switcher_includes_joined_active_threads_and_forums_with_type_icons() {
     let guild_id = Id::new(1);
     let general_id = Id::new(11);
     let forum_id = Id::new(20);
     let thread_id = Id::new(31);
     let mut state = state_with_channel_tree();
-    state.push_event(AppEvent::ChannelUpsert(forum_channel_info(
-        guild_id, forum_id,
-    )));
-    // A joined, non-archived thread under a text channel must appear.
     state.push_event(AppEvent::ChannelUpsert(ChannelInfo {
-        current_user_joined_thread: Some(true),
-        ..thread_channel_info(guild_id, general_id, thread_id, "a thread")
+        guild_id: Some(guild_id),
+        position: Some(0),
+        name: "announcements".to_owned(),
+        ..ChannelInfo::test(forum_id, "forum")
     }));
+    state.push_event(AppEvent::ThreadUpsert {
+        thread: ThreadGatewayInfo {
+            channel: thread_channel_info(guild_id, general_id, thread_id, "a thread"),
+            current_user_member: Some(ThreadMemberInfo {
+                thread_id: Some(thread_id),
+                user_id: Some(Id::new(99)),
+                join_timestamp: None,
+                flags: None,
+                muted: Some(false),
+                mute_end_time: None,
+                member: None,
+                presence: None,
+                extra_fields: BTreeMap::new(),
+            }),
+        },
+    });
 
     state.open_channel_switcher();
     let items = state.channel_switcher_items();

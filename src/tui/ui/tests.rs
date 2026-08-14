@@ -5,9 +5,8 @@ use std::{
 
 use crate::discord::ids::{Id, marker::MessageMarker};
 use crate::discord::test_builders::{
-    ForumPostsLoadedFixture, GuildCreateFixture, MessageCreateFixture,
-    empty_latest_message_history_loaded_event, forum_posts_loaded_event, guild_create_event,
-    guild_message_create_fixture, message_create_event,
+    GuildCreateFixture, MessageCreateFixture, empty_latest_message_history_loaded_event,
+    guild_create_event, guild_message_create_fixture, message_create_event,
 };
 use ratatui::{
     Terminal,
@@ -386,43 +385,34 @@ fn state_with_folder_settings() -> DashboardState {
 fn state_with_forum_posts(post_count: usize) -> DashboardState {
     let guild_id = Id::new(1);
     let forum_id = Id::new(20);
-    let mut state = DashboardState::new();
-
-    state.push_event(guild_create_event(GuildCreateFixture {
-        channels: vec![ChannelInfo {
+    let mut channels = vec![ChannelInfo {
+        guild_id: Some(guild_id),
+        name: "forum".to_owned(),
+        ..ChannelInfo::test(forum_id, "GuildForum")
+    }];
+    channels.extend((0..post_count).map(|index| {
+        let id = 100 + u64::try_from(index).expect("post index should fit u64");
+        ChannelInfo {
             guild_id: Some(guild_id),
-            name: "forum".to_owned(),
-            ..ChannelInfo::test(forum_id, "GuildForum")
-        }],
+            parent_id: Some(forum_id),
+            last_message_id: Some(Id::new(10_000 + id)),
+            name: format!("post {index}"),
+            message_count: Some(0),
+            total_message_sent: Some(1),
+            thread_metadata: Some(crate::discord::ThreadMetadataInfo::test(false, false)),
+            flags: Some(0),
+            ..ChannelInfo::test(Id::new(id), "GuildPublicThread")
+        }
+    }));
+
+    let mut state = DashboardState::new();
+    state.push_event(guild_create_event(GuildCreateFixture {
+        channels,
         ..GuildCreateFixture::new(guild_id)
     }));
     state.confirm_selected_guild();
     state.confirm_selected_channel();
     state.focus_pane(FocusPane::Messages);
-
-    let threads: Vec<_> = (0..post_count)
-        .map(|index| {
-            let id = 100 + u64::try_from(index).expect("post index should fit u64");
-            ChannelInfo {
-                guild_id: Some(guild_id),
-                parent_id: Some(forum_id),
-                last_message_id: Some(Id::new(10_000 + id)),
-                name: format!("post {index}"),
-                message_count: Some(0),
-                total_message_sent: Some(1),
-                thread_metadata: Some(crate::discord::ThreadMetadataInfo::test(false, false)),
-                flags: Some(0),
-                ..ChannelInfo::test(Id::new(id), "GuildPublicThread")
-            }
-        })
-        .collect();
-    state.push_event(forum_posts_loaded_event(ForumPostsLoadedFixture {
-        channel_id: forum_id,
-        archive_state: crate::discord::ForumPostArchiveState::Active,
-        next_offset: threads.len(),
-        threads,
-        ..ForumPostsLoadedFixture::new()
-    }));
     state
 }
 
@@ -611,10 +601,6 @@ fn channel_with_recipients(kind: &str, statuses: &[PresenceStatus]) -> ChannelSt
         rate_limit_per_user: None,
         available_tags: Vec::new(),
         applied_tags: Vec::new(),
-        current_user_joined_thread: false,
-        current_user_thread_notification_flags: None,
-        current_user_thread_muted: false,
-        current_user_thread_mute_end_time: None,
         recipients: statuses
             .iter()
             .enumerate()

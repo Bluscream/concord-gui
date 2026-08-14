@@ -1,5 +1,21 @@
 use super::*;
+use crate::discord::ids::marker::RoleMarker;
+use crate::discord::{ForumPostDataInfo, ThreadGatewayInfo, ThreadMemberInfo};
 use crate::tui::state::NotificationInboxItem;
+
+fn current_user_thread_member(thread_id: Id<ChannelMarker>, muted: bool) -> ThreadMemberInfo {
+    ThreadMemberInfo {
+        thread_id: Some(thread_id),
+        user_id: Some(Id::new(999)),
+        join_timestamp: Some("2026-08-14T00:00:00.000Z".to_owned()),
+        flags: Some(2),
+        muted: Some(muted),
+        mute_end_time: None,
+        member: None,
+        presence: None,
+        extra_fields: BTreeMap::new(),
+    }
+}
 
 fn notification_inbox_channel_ids(state: &DashboardState) -> Vec<Id<ChannelMarker>> {
     state
@@ -93,35 +109,38 @@ fn notification_inbox_applies_display_order_at_each_scope() {
         let last_root_id = Id::new(20);
         let unread = |message_id| Some(Id::new(message_id));
         let mut state = DashboardState::new();
-        state.push_event(guild_create_event(
-            guild_id,
-            "guild",
-            vec![
-                ChannelInfo {
-                    last_message_id: unread(101),
-                    ..positioned_text_channel_info(guild_id, first_root_id, "first-root", 0)
-                },
-                category_channel_info(guild_id, category_id, "category", 1),
-                ChannelInfo {
-                    last_message_id: unread(102),
-                    ..child_text_channel_info(
-                        guild_id,
-                        first_child_id,
-                        category_id,
-                        "first-child",
-                        0,
-                    )
-                },
-                ChannelInfo {
-                    last_message_id: unread(103),
-                    current_user_joined_thread: Some(true),
-                    ..thread_channel_info(guild_id, first_child_id, thread_id, "thread")
-                },
-                ChannelInfo {
-                    last_message_id: unread(104),
-                    ..positioned_text_channel_info(guild_id, last_root_id, "last-root", 2)
-                },
-            ],
+        state.push_event(crate::discord::test_builders::guild_create_event(
+            GuildCreateFixture {
+                guild_id,
+                name: "guild".to_owned(),
+                channels: vec![
+                    ChannelInfo {
+                        last_message_id: unread(101),
+                        ..positioned_text_channel_info(guild_id, first_root_id, "first-root", 0)
+                    },
+                    category_channel_info(guild_id, category_id, "category", 1),
+                    ChannelInfo {
+                        last_message_id: unread(102),
+                        ..child_text_channel_info(
+                            guild_id,
+                            first_child_id,
+                            category_id,
+                            "first-child",
+                            0,
+                        )
+                    },
+                    ChannelInfo {
+                        last_message_id: unread(103),
+                        ..thread_channel_info(guild_id, first_child_id, thread_id, "thread")
+                    },
+                    ChannelInfo {
+                        last_message_id: unread(104),
+                        ..positioned_text_channel_info(guild_id, last_root_id, "last-root", 2)
+                    },
+                ],
+                current_user_thread_members: vec![current_user_thread_member(thread_id, false)],
+                ..GuildCreateFixture::new(guild_id)
+            },
         ));
 
         state.open_notification_inbox();
@@ -169,70 +188,74 @@ fn notification_inbox_includes_only_eligible_unread_channels() {
             )
         }],
     ));
-    state.push_event(guild_create_event(
-        guild_id,
-        "visible-guild",
-        vec![
-            ChannelInfo {
-                last_message_id: unread(300),
-                ..positioned_text_channel_info(guild_id, visible_channel_id, "visible", 0)
-            },
-            ChannelInfo {
-                last_message_id: unread(301),
-                ..positioned_text_channel_info(guild_id, muted_channel_id, "muted", 1)
-            },
-            category_channel_info(guild_id, muted_category_id, "muted-category", 2),
-            ChannelInfo {
-                last_message_id: unread(302),
-                ..child_text_channel_info(
-                    guild_id,
-                    muted_child_id,
-                    muted_category_id,
-                    "muted-child",
-                    0,
-                )
-            },
-            ChannelInfo {
-                last_message_id: unread(303),
-                current_user_joined_thread: Some(true),
-                ..thread_channel_info(guild_id, muted_child_id, muted_thread_id, "muted-thread")
-            },
-            ChannelInfo {
-                last_message_id: unread(304),
-                ..positioned_text_channel_info(guild_id, hidden_channel_id, "not-opted-in", 3)
-            },
-            ChannelInfo {
-                last_message_id: unread(305),
-                position: Some(4),
-                ..voice_channel_info(guild_id, voice_channel_id, "voice")
-            },
-            ChannelInfo {
-                kind: "stage".to_owned(),
-                last_message_id: unread(306),
-                ..positioned_text_channel_info(guild_id, stage_channel_id, "stage", 5)
-            },
-            ChannelInfo {
-                last_message_id: unread(307),
-                current_user_joined_thread: Some(false),
-                ..thread_channel_info(
-                    guild_id,
-                    visible_channel_id,
-                    unjoined_thread_id,
-                    "unjoined-thread",
-                )
-            },
-            ChannelInfo {
-                last_message_id: unread(308),
-                current_user_joined_thread: Some(true),
-                thread_metadata: Some(crate::discord::ThreadMetadataInfo::test(true, false)),
-                ..thread_channel_info(
-                    guild_id,
-                    visible_channel_id,
-                    archived_thread_id,
-                    "archived-thread",
-                )
-            },
-        ],
+    state.push_event(crate::discord::test_builders::guild_create_event(
+        GuildCreateFixture {
+            guild_id,
+            name: "visible-guild".to_owned(),
+            channels: vec![
+                ChannelInfo {
+                    last_message_id: unread(300),
+                    ..positioned_text_channel_info(guild_id, visible_channel_id, "visible", 0)
+                },
+                ChannelInfo {
+                    last_message_id: unread(301),
+                    ..positioned_text_channel_info(guild_id, muted_channel_id, "muted", 1)
+                },
+                category_channel_info(guild_id, muted_category_id, "muted-category", 2),
+                ChannelInfo {
+                    last_message_id: unread(302),
+                    ..child_text_channel_info(
+                        guild_id,
+                        muted_child_id,
+                        muted_category_id,
+                        "muted-child",
+                        0,
+                    )
+                },
+                ChannelInfo {
+                    last_message_id: unread(303),
+                    ..thread_channel_info(guild_id, muted_child_id, muted_thread_id, "muted-thread")
+                },
+                ChannelInfo {
+                    last_message_id: unread(304),
+                    ..positioned_text_channel_info(guild_id, hidden_channel_id, "not-opted-in", 3)
+                },
+                ChannelInfo {
+                    last_message_id: unread(305),
+                    position: Some(4),
+                    ..voice_channel_info(guild_id, voice_channel_id, "voice")
+                },
+                ChannelInfo {
+                    kind: "stage".to_owned(),
+                    last_message_id: unread(306),
+                    ..positioned_text_channel_info(guild_id, stage_channel_id, "stage", 5)
+                },
+                ChannelInfo {
+                    last_message_id: unread(307),
+                    ..thread_channel_info(
+                        guild_id,
+                        visible_channel_id,
+                        unjoined_thread_id,
+                        "unjoined-thread",
+                    )
+                },
+                ChannelInfo {
+                    last_message_id: unread(308),
+                    thread_metadata: Some(crate::discord::ThreadMetadataInfo::test(true, false)),
+                    ..thread_channel_info(
+                        guild_id,
+                        visible_channel_id,
+                        archived_thread_id,
+                        "archived-thread",
+                    )
+                },
+            ],
+            current_user_thread_members: vec![
+                current_user_thread_member(muted_thread_id, false),
+                current_user_thread_member(archived_thread_id, false),
+            ],
+            ..GuildCreateFixture::new(guild_id)
+        },
     ));
 
     let private_settings = GuildNotificationSettingsInfo {
@@ -291,32 +314,38 @@ fn notification_inbox_loads_forum_post_titles_and_preserves_cached_role_colors()
     let forum_id = Id::new(20);
     let cached_thread_id = Id::new(31);
     let fallback_thread_id = Id::new(32);
-    // Forum search previews can use a message ID that differs from the thread ID.
-    let cached_message_id = Id::new(300);
+    // Discord forum starter messages use the post thread's snowflake.
+    let cached_message_id = Id::new(cached_thread_id.get());
     let author_role_id = Id::<RoleMarker>::new(7);
     let author_role_color = 0x11AA22;
     let mut state = DashboardState::new();
     let thread = |thread_id, name: &str, last_message_id, owner_id| ChannelInfo {
         last_message_id: Some(Id::new(last_message_id)),
         owner_id: Some(Id::new(owner_id)),
-        current_user_joined_thread: Some(true),
         ..thread_channel_info(guild_id, forum_id, thread_id, name)
     };
     let cached_thread = thread(cached_thread_id, "cached post", 301, 99);
     let fallback_thread = thread(fallback_thread_id, "title only", 302, 100);
 
-    state.push_event(guild_create_event(
-        guild_id,
-        "guild",
-        vec![
-            ChannelInfo {
-                kind: "forum".to_owned(),
-                last_message_id: Some(Id::new(302)),
-                ..text_channel_info(guild_id, forum_id, "forum")
-            },
-            cached_thread.clone(),
-            fallback_thread.clone(),
-        ],
+    state.push_event(crate::discord::test_builders::guild_create_event(
+        GuildCreateFixture {
+            guild_id,
+            name: "guild".to_owned(),
+            channels: vec![
+                ChannelInfo {
+                    kind: "forum".to_owned(),
+                    last_message_id: Some(Id::new(302)),
+                    ..text_channel_info(guild_id, forum_id, "forum")
+                },
+                cached_thread.clone(),
+                fallback_thread.clone(),
+            ],
+            current_user_thread_members: vec![
+                current_user_thread_member(cached_thread_id, false),
+                current_user_thread_member(fallback_thread_id, false),
+            ],
+            ..GuildCreateFixture::new(guild_id)
+        },
     ));
     state.push_event(AppEvent::GuildRoleUpsert {
         guild_id,
@@ -331,33 +360,47 @@ fn notification_inbox_loads_forum_post_titles_and_preserves_cached_role_colors()
     let forum_request = state
         .drain_pending_commands()
         .into_iter()
-        .find(|command| matches!(command, AppCommand::LoadForumPosts { .. }))
-        .expect("the forum channel should load its post list");
+        .find(|command| matches!(command, AppCommand::LoadForumPostData { .. }))
+        .expect("the forum channel should load its post data");
     assert_eq!(
         forum_request,
-        AppCommand::LoadForumPosts {
+        AppCommand::LoadForumPostData {
             guild_id,
             channel_id: forum_id,
-            archive_state: ForumPostArchiveState::Active,
-            offset: 0,
+            thread_ids: vec![cached_thread_id, fallback_thread_id],
         }
     );
 
-    state.push_event(forum_posts_loaded_event(ForumPostsLoadedFixture {
+    let mut cached_owner = member_with_username(Id::new(99), "Alice", "alice");
+    cached_owner.role_ids = vec![author_role_id];
+    cached_owner.role_ids_present = true;
+    state.push_event(AppEvent::ForumPostDataLoaded {
         channel_id: forum_id,
-        threads: vec![cached_thread, fallback_thread],
-        first_messages: vec![MessageInfo {
-            guild_id: Some(guild_id),
-            channel_id: cached_thread_id,
-            message_id: cached_message_id,
-            author_id: Id::new(99),
-            author: "alice".to_owned(),
-            author_role_ids: vec![author_role_id],
-            content: Some("cached starter content".to_owned()),
-            ..MessageInfo::default()
-        }],
-        ..ForumPostsLoadedFixture::new()
-    }));
+        requested_thread_ids: vec![cached_thread_id, fallback_thread_id],
+        posts: vec![
+            ForumPostDataInfo {
+                thread_id: cached_thread_id,
+                owner: Some(cached_owner),
+                first_message: Some(MessageInfo {
+                    guild_id: Some(guild_id),
+                    channel_id: cached_thread_id,
+                    message_id: cached_message_id,
+                    author_id: Id::new(99),
+                    author: "alice".to_owned(),
+                    author_role_ids: vec![author_role_id],
+                    content: Some("cached starter content".to_owned()),
+                    ..MessageInfo::default()
+                }),
+                extra_fields: BTreeMap::new(),
+            },
+            ForumPostDataInfo {
+                thread_id: fallback_thread_id,
+                owner: Some(member_with_username(Id::new(100), "user-100", "user-100")),
+                first_message: None,
+                extra_fields: BTreeMap::new(),
+            },
+        ],
+    });
 
     let mut requested_channel_ids = Vec::new();
     for _ in 0..2 {
@@ -520,13 +563,18 @@ fn desktop_notification_and_sound_suppress_ineligible_channels() {
             parent_id
         } else {
             let thread_id = Id::new(5);
-            state.push_event(AppEvent::ChannelUpsert(ChannelInfo {
-                current_user_joined_thread: Some(joined),
-                current_user_thread_notification_flags: Some(2),
-                current_user_thread_muted: Some(thread_muted),
-                thread_metadata: Some(crate::discord::ThreadMetadataInfo::test(archived, false)),
-                ..thread_channel_info(Id::new(1), parent_id, thread_id, "post")
-            }));
+            state.push_event(AppEvent::ThreadUpsert {
+                thread: ThreadGatewayInfo {
+                    channel: ChannelInfo {
+                        thread_metadata: Some(crate::discord::ThreadMetadataInfo::test(
+                            archived, false,
+                        )),
+                        ..thread_channel_info(Id::new(1), parent_id, thread_id, "post")
+                    },
+                    current_user_member: joined
+                        .then(|| current_user_thread_member(thread_id, thread_muted)),
+                },
+            });
             thread_id
         };
         let channel_overrides = regular_channel_muted

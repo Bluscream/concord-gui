@@ -57,11 +57,17 @@ type MemberListRange = (u32, u32);
 type MemberListSubscriptionRequest = (
     Id<GuildMarker>,
     Id<ChannelMarker>,
+    Option<Id<ChannelMarker>>,
     u32,
     u64,
     Vec<MemberListRange>,
 );
-type DueMemberListSubscription = (Id<GuildMarker>, Id<ChannelMarker>, Vec<MemberListRange>);
+type DueMemberListSubscription = (
+    Id<GuildMarker>,
+    Id<ChannelMarker>,
+    Option<Id<ChannelMarker>>,
+    Vec<MemberListRange>,
+);
 
 #[derive(Clone, Debug)]
 pub(crate) struct AppEventPublisher {
@@ -347,6 +353,7 @@ impl DiscordClient {
         &self,
         guild_id: Id<GuildMarker>,
         channel_id: Id<ChannelMarker>,
+        thread_id: Option<Id<ChannelMarker>>,
         ranges: Vec<(u32, u32)>,
     ) -> std::result::Result<(), String> {
         self.state
@@ -356,6 +363,7 @@ impl DiscordClient {
         self.send_gateway_command(GatewayCommand::UpdateMemberListSubscription {
             guild_id,
             channel_id,
+            thread_id,
             ranges,
         })
     }

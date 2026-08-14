@@ -8,7 +8,7 @@ use crate::discord::ids::{
 };
 
 use super::commands::{
-    AttachmentDownloadId, DownloadAttachmentSource, ForumPostArchiveState, MediaPlaybackRequestId,
+    AttachmentDownloadId, DownloadAttachmentSource, MediaPlaybackRequestId,
     MessageHistoryAfterMode, MessageSearchPage, MessageSearchQuery, ReactionEmoji,
     StreamCaptureTargetsRequestId,
 };
@@ -18,10 +18,12 @@ use super::{
     MemberInfo, MentionInfo, MessageInfo, PollInfo, PremiumTier, PresenceStatus, ReactionUserInfo,
     ReadStateInfo, RelationshipInfo, RelationshipUpdateInfo, RoleInfo, SnapshotAreas,
     StreamCaptureTarget, StreamCreateInfo, StreamDeleteInfo, StreamServerInfo, StreamUpdateInfo,
-    UserProfileInfo, UserSettingsInfo, VoiceConnectionStatus, VoiceScope, VoiceServerInfo,
-    VoiceSoundKind, VoiceStateInfo, is_thread_kind,
+    ThreadGatewayInfo, ThreadListSyncInfo, ThreadMemberInfo, ThreadMemberListUpdateInfo,
+    ThreadMembersUpdateInfo, UserProfileInfo, UserSettingsInfo, VoiceConnectionStatus, VoiceScope,
+    VoiceServerInfo, VoiceSoundKind, VoiceStateInfo, is_thread_kind,
 };
 use super::{ApplicationCommandChoiceInfo, ApplicationCommandInfo};
+use super::{ArchivedThreadsPage, ForumPostDataInfo};
 
 #[cfg(test)]
 use super::PollAnswerInfo;
@@ -89,36 +91,6 @@ pub struct PresenceEventFields {
 #[derive(Clone, Debug, PartialEq)]
 pub struct UserGuildSettingsInfo {
     pub notification_settings: GuildNotificationSettingsInfo,
-    pub extra_fields: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ThreadListSyncInfo {
-    pub guild_id: Id<GuildMarker>,
-    /// `None` means every parent channel in the guild. A present list limits
-    /// replacement to those parents, including parents with no active threads.
-    pub channel_ids: Option<Vec<Id<ChannelMarker>>>,
-    pub threads: Vec<ChannelInfo>,
-    pub thread_members: Vec<Value>,
-    pub extra_fields: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ThreadMemberUpdateInfo {
-    pub user_id: Id<UserMarker>,
-    pub flags: Option<u64>,
-    pub muted: Option<bool>,
-    pub mute_end_time: Option<String>,
-    pub extra_fields: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ThreadMembersUpdateInfo {
-    pub guild_id: Option<Id<GuildMarker>>,
-    pub channel_id: Id<ChannelMarker>,
-    pub member_count: Option<u64>,
-    pub added_members: Vec<ThreadMemberUpdateInfo>,
-    pub removed_user_ids: Vec<Id<UserMarker>>,
     pub extra_fields: BTreeMap<String, Value>,
 }
 
@@ -294,6 +266,11 @@ pub enum AppEvent {
         features: Option<Vec<String>>,
         onboarding: Option<GuildOnboardingInfo>,
         channels: Vec<ChannelInfo>,
+        /// Whether the Gateway payload contained the guild's `threads` array.
+        /// An empty array clears the snapshot, while an omitted field in
+        /// `CLIENT_STATE_V2` partial mode must preserve cached thread state.
+        thread_snapshot_complete: bool,
+        current_user_thread_members: Vec<ThreadMemberInfo>,
         members: Vec<MemberInfo>,
         presences: Vec<(Id<UserMarker>, PresenceStatus)>,
         roles: Option<Vec<RoleInfo>>,
@@ -363,18 +340,22 @@ pub enum AppEvent {
         guild_id: Option<Id<GuildMarker>>,
         channel_id: Id<ChannelMarker>,
     },
+    ThreadUpsert {
+        thread: ThreadGatewayInfo,
+    },
     ThreadListSync {
         sync: ThreadListSyncInfo,
     },
     ThreadMembersUpdateDispatch {
         update: ThreadMembersUpdateInfo,
     },
+    ThreadMemberListUpdate {
+        update: ThreadMemberListUpdateInfo,
+    },
     ThreadMemberUpdate {
         guild_id: Option<Id<GuildMarker>>,
         channel_id: Id<ChannelMarker>,
-        flags: Option<u64>,
-        muted: Option<bool>,
-        mute_end_time: Option<String>,
+        member: ThreadMemberInfo,
     },
     MessageCreate {
         message: MessageInfo,
@@ -420,19 +401,26 @@ pub enum AppEvent {
         channel_id: Id<ChannelMarker>,
         message_id: Id<MessageMarker>,
     },
-    ForumPostsLoaded {
+    ForumPostDataLoaded {
         channel_id: Id<ChannelMarker>,
-        archive_state: ForumPostArchiveState,
-        offset: usize,
-        next_offset: usize,
-        threads: Vec<ChannelInfo>,
-        first_messages: Vec<MessageInfo>,
-        has_more: bool,
+        requested_thread_ids: Vec<Id<ChannelMarker>>,
+        posts: Vec<ForumPostDataInfo>,
     },
-    ForumPostsLoadFailed {
+    ForumPostDataLoadFailed {
         channel_id: Id<ChannelMarker>,
-        archive_state: ForumPostArchiveState,
-        offset: usize,
+        thread_ids: Vec<Id<ChannelMarker>>,
+        message: String,
+    },
+    ArchivedThreadsLoaded {
+        guild_id: Id<GuildMarker>,
+        channel_id: Id<ChannelMarker>,
+        before: Option<String>,
+        page: ArchivedThreadsPage,
+    },
+    ArchivedThreadsLoadFailed {
+        guild_id: Id<GuildMarker>,
+        channel_id: Id<ChannelMarker>,
+        before: Option<String>,
         message: String,
     },
     MessageSearchLoaded {
@@ -873,8 +861,10 @@ define_app_event_kinds! {
     ChannelRecipientAdd: AppEvent::ChannelRecipientAdd { .. },
     ChannelRecipientRemove: AppEvent::ChannelRecipientRemove { .. },
     ChannelDelete: AppEvent::ChannelDelete { .. },
+    ThreadUpsert: AppEvent::ThreadUpsert { .. },
     ThreadListSync: AppEvent::ThreadListSync { .. },
     ThreadMembersUpdateDispatch: AppEvent::ThreadMembersUpdateDispatch { .. },
+    ThreadMemberListUpdate: AppEvent::ThreadMemberListUpdate { .. },
     ThreadMemberUpdate: AppEvent::ThreadMemberUpdate { .. },
     MessageCreate: AppEvent::MessageCreate { .. },
     MessageSendFailed: AppEvent::MessageSendFailed { .. },
@@ -886,8 +876,10 @@ define_app_event_kinds! {
     MessageHistoryAroundLoaded: AppEvent::MessageHistoryAroundLoaded { .. },
     ThreadPreviewLoaded: AppEvent::ThreadPreviewLoaded { .. },
     ThreadPreviewLoadFailed: AppEvent::ThreadPreviewLoadFailed { .. },
-    ForumPostsLoaded: AppEvent::ForumPostsLoaded { .. },
-    ForumPostsLoadFailed: AppEvent::ForumPostsLoadFailed { .. },
+    ForumPostDataLoaded: AppEvent::ForumPostDataLoaded { .. },
+    ForumPostDataLoadFailed: AppEvent::ForumPostDataLoadFailed { .. },
+    ArchivedThreadsLoaded: AppEvent::ArchivedThreadsLoaded { .. },
+    ArchivedThreadsLoadFailed: AppEvent::ArchivedThreadsLoadFailed { .. },
     MessageSearchLoaded: AppEvent::MessageSearchLoaded { .. },
     MessageSearchLoadFailed: AppEvent::MessageSearchLoadFailed { .. },
     InboxMentionsLoaded: AppEvent::InboxMentionsLoaded { .. },
@@ -1074,7 +1066,7 @@ pub(crate) mod test_builders {
 
     use crate::discord::{
         ChannelInfo, CustomEmojiInfo, GuildBoostTier, GuildOnboardingInfo, MemberInfo,
-        PresenceStatus, RoleInfo,
+        PresenceStatus, RoleInfo, ThreadMemberInfo,
     };
 
     // Single construction seam for `AppEvent::GuildCreate` so a new field on the
@@ -1091,6 +1083,8 @@ pub(crate) mod test_builders {
         pub(crate) features: Vec<String>,
         pub(crate) onboarding: Option<GuildOnboardingInfo>,
         pub(crate) channels: Vec<ChannelInfo>,
+        pub(crate) thread_snapshot_complete: bool,
+        pub(crate) current_user_thread_members: Vec<ThreadMemberInfo>,
         pub(crate) members: Vec<MemberInfo>,
         pub(crate) presences: Vec<(Id<UserMarker>, PresenceStatus)>,
         pub(crate) roles: Vec<RoleInfo>,
@@ -1111,6 +1105,8 @@ pub(crate) mod test_builders {
                 features: Vec::new(),
                 onboarding: None,
                 channels: Vec::new(),
+                thread_snapshot_complete: true,
+                current_user_thread_members: Vec::new(),
                 members: Vec::new(),
                 presences: Vec::new(),
                 roles: Vec::new(),
@@ -1132,46 +1128,12 @@ pub(crate) mod test_builders {
             features: Some(event.features),
             onboarding: event.onboarding,
             channels: event.channels,
+            thread_snapshot_complete: event.thread_snapshot_complete,
+            current_user_thread_members: event.current_user_thread_members,
             members: event.members,
             presences: event.presences,
             roles: Some(event.roles),
             emojis: event.emojis,
-        }
-    }
-
-    pub(crate) struct ForumPostsLoadedFixture {
-        pub(crate) channel_id: Id<ChannelMarker>,
-        pub(crate) archive_state: ForumPostArchiveState,
-        pub(crate) offset: usize,
-        pub(crate) next_offset: usize,
-        pub(crate) threads: Vec<ChannelInfo>,
-        pub(crate) first_messages: Vec<MessageInfo>,
-        pub(crate) has_more: bool,
-    }
-
-    impl ForumPostsLoadedFixture {
-        pub(crate) fn new() -> Self {
-            Self {
-                channel_id: Id::new(1),
-                archive_state: ForumPostArchiveState::default(),
-                offset: 0,
-                next_offset: 0,
-                threads: Vec::new(),
-                first_messages: Vec::new(),
-                has_more: false,
-            }
-        }
-    }
-
-    pub(crate) fn forum_posts_loaded_event(f: ForumPostsLoadedFixture) -> AppEvent {
-        AppEvent::ForumPostsLoaded {
-            channel_id: f.channel_id,
-            archive_state: f.archive_state,
-            offset: f.offset,
-            next_offset: f.next_offset,
-            threads: f.threads,
-            first_messages: f.first_messages,
-            has_more: f.has_more,
         }
     }
 
@@ -1763,33 +1725,6 @@ pub(crate) mod test_builders {
         }
     }
 
-    pub(crate) struct ForumPostsLoadFailedFixture {
-        pub(crate) channel_id: Id<ChannelMarker>,
-        pub(crate) archive_state: ForumPostArchiveState,
-        pub(crate) offset: usize,
-        pub(crate) message: String,
-    }
-
-    impl ForumPostsLoadFailedFixture {
-        pub(crate) fn new() -> Self {
-            Self {
-                channel_id: Id::new(1),
-                archive_state: ForumPostArchiveState::default(),
-                offset: 0,
-                message: String::new(),
-            }
-        }
-    }
-
-    pub(crate) fn forum_posts_load_failed_event(f: ForumPostsLoadFailedFixture) -> AppEvent {
-        AppEvent::ForumPostsLoadFailed {
-            channel_id: f.channel_id,
-            archive_state: f.archive_state,
-            offset: f.offset,
-            message: f.message,
-        }
-    }
-
     pub(crate) struct AttachmentDownloadFailedFixture {
         pub(crate) id: AttachmentDownloadId,
         pub(crate) filename: String,
@@ -1872,19 +1807,22 @@ impl AppEventKind {
             AppEventKind::GuildCreate
             | AppEventKind::GuildUpdate
             | AppEventKind::GuildOnboardingUpdate
-            | AppEventKind::ThreadListSync
-            | AppEventKind::ThreadMembersUpdateDispatch
             | AppEventKind::ChannelUpsert
             | AppEventKind::LazyPrivateChannelUpsert
             | AppEventKind::ChannelRecipientAdd
             | AppEventKind::ChannelRecipientRemove
+            | AppEventKind::ArchivedThreadsLoaded
             | AppEventKind::Ready => AppEventMetadata::mutating(SnapshotAreas::navigation()),
 
-            AppEventKind::ForumPostsLoaded => {
+            AppEventKind::ForumPostDataLoaded => {
                 AppEventMetadata::mutating_effect(SnapshotAreas::navigation_and_message())
             }
 
             AppEventKind::MessageCreate => {
+                AppEventMetadata::mutating_effect(SnapshotAreas::navigation_and_message())
+            }
+
+            AppEventKind::ThreadUpsert => {
                 AppEventMetadata::mutating_effect(SnapshotAreas::navigation_and_message())
             }
 
@@ -1932,6 +1870,10 @@ impl AppEventKind {
             | AppEventKind::GuildMembersChunk
             | AppEventKind::GuildMemberAdd
             | AppEventKind::GuildMemberUpsert
+            | AppEventKind::ThreadListSync
+            | AppEventKind::ThreadMembersUpdateDispatch
+            | AppEventKind::ThreadMemberListUpdate
+            | AppEventKind::ThreadMemberUpdate
             | AppEventKind::RelationshipsLoaded
             | AppEventKind::RelationshipUpsert
             | AppEventKind::RelationshipUpdate
@@ -1946,6 +1888,10 @@ impl AppEventKind {
             AppEventKind::GuildUnavailable => AppEventMetadata::inert(),
 
             AppEventKind::GatewayReidentified => {
+                AppEventMetadata::mutating_effect(SnapshotAreas::navigation())
+            }
+
+            AppEventKind::ArchivedThreadsLoadFailed => {
                 AppEventMetadata::mutating_effect(SnapshotAreas::navigation())
             }
 
@@ -1964,8 +1910,7 @@ impl AppEventKind {
             | AppEventKind::CurrentUserVerification
             | AppEventKind::UserGuildSettingsInit
             | AppEventKind::UserGuildSettingsSync
-            | AppEventKind::UserGuildSettingsUpdate
-            | AppEventKind::ThreadMemberUpdate => {
+            | AppEventKind::UserGuildSettingsUpdate => {
                 AppEventMetadata::mutating(SnapshotAreas::navigation())
             }
 
@@ -2010,7 +1955,7 @@ impl AppEventKind {
             | AppEventKind::AttachmentPreviewLoaded
             | AppEventKind::AttachmentPreviewLoadFailed
             | AppEventKind::ThreadPreviewLoadFailed
-            | AppEventKind::ForumPostsLoadFailed
+            | AppEventKind::ForumPostDataLoadFailed
             | AppEventKind::MessageSearchLoadFailed
             | AppEventKind::MessageHistoryLoadFailed
             | AppEventKind::InboxMentionsLoaded
@@ -2222,6 +2167,34 @@ mod tests {
                 },
                 Some(SnapshotAreas::navigation_and_message()),
                 false,
+            ),
+            (
+                "archived pages update navigation state",
+                AppEvent::ArchivedThreadsLoaded {
+                    guild_id: Id::new(1),
+                    channel_id: Id::new(10),
+                    before: None,
+                    page: ArchivedThreadsPage {
+                        threads: Vec::new(),
+                        members: Vec::new(),
+                        has_more: false,
+                        next_before: None,
+                        extra_fields: BTreeMap::new(),
+                    },
+                },
+                Some(SnapshotAreas::navigation()),
+                false,
+            ),
+            (
+                "archived page failures update state and notify the UI",
+                AppEvent::ArchivedThreadsLoadFailed {
+                    guild_id: Id::new(1),
+                    channel_id: Id::new(10),
+                    before: None,
+                    message: "temporary failure".to_owned(),
+                },
+                Some(SnapshotAreas::navigation()),
+                true,
             ),
         ];
 

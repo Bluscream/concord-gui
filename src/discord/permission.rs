@@ -457,14 +457,14 @@ impl DiscordState {
         };
         if channel.is_thread() {
             let Some(parent_id) = channel.parent_id else {
-                return if channel.is_private_thread() && !channel.current_user_joined_thread {
+                return if channel.is_private_thread() && !self.thread_is_joined(channel.id) {
                     PermissionResolution::Known(ChannelPermissions::NONE)
                 } else {
                     PermissionResolution::Unavailable(PermissionDataGap::ThreadParent)
                 };
             };
             let Some(parent) = self.navigation.channels.get(&parent_id) else {
-                return if channel.is_private_thread() && !channel.current_user_joined_thread {
+                return if channel.is_private_thread() && !self.thread_is_joined(channel.id) {
                     PermissionResolution::Known(ChannelPermissions::NONE)
                 } else {
                     PermissionResolution::Unavailable(PermissionDataGap::ThreadParent)
@@ -472,7 +472,7 @@ impl DiscordState {
             };
             let parent_permissions = self.effective_permissions_for_channel(parent);
             if channel.is_private_thread()
-                && !channel.current_user_joined_thread
+                && !self.thread_is_joined(channel.id)
                 && !matches!(
                     parent_permissions,
                     PermissionResolution::Known(permissions)

@@ -1,11 +1,9 @@
-use std::collections::BTreeMap;
-
 use serde_json::Value;
 
 use crate::discord::{
     ChannelInfo, ChannelRecipientInfo, ForumTagInfo, PermissionOverwriteInfo,
-    PermissionOverwriteKind, ThreadListSyncInfo, ThreadMemberUpdateInfo, ThreadMembersUpdateInfo,
-    ThreadMetadataInfo,
+    PermissionOverwriteKind, ThreadGatewayInfo, ThreadListSyncInfo, ThreadMemberInfo,
+    ThreadMemberListUpdateInfo, ThreadMembersUpdateInfo, ThreadMetadataInfo,
     avatar::user_avatar_url,
     events::AppEvent,
     ids::{
@@ -16,6 +14,8 @@ use crate::discord::{
     },
 };
 
+use super::members::parse_member_info;
+use super::presence::parse_activities;
 use super::shared::{
     display_name_from_parts, display_name_from_parts_or_unknown, extra_fields, parse_id,
     parse_status,
@@ -96,10 +96,6 @@ pub(crate) fn parse_channel_info(
                 .collect()
         })
         .unwrap_or_default();
-    let current_user_thread_member = parse_current_user_thread_member(value, &kind);
-    let current_user_joined_thread = current_user_thread_member.map(|_| true);
-    let current_user_thread_settings = current_user_thread_member.map(parse_thread_member_settings);
-
     Some(ChannelInfo {
         guild_id,
         channel_id,
@@ -117,15 +113,6 @@ pub(crate) fn parse_channel_info(
         rate_limit_per_user: value.get("rate_limit_per_user").and_then(Value::as_u64),
         available_tags: parse_forum_tags(value.get("available_tags")),
         applied_tags: parse_id_array(value.get("applied_tags")),
-        current_user_joined_thread,
-        current_user_thread_notification_flags: current_user_thread_settings
-            .as_ref()
-            .and_then(|settings| settings.flags),
-        current_user_thread_muted: current_user_thread_settings
-            .as_ref()
-            .and_then(|settings| settings.muted),
-        current_user_thread_mute_end_time: current_user_thread_settings
-            .and_then(|settings| settings.mute_end_time),
         recipients,
         permission_overwrites,
         is_message_request: value.get("is_message_request").and_then(Value::as_bool),
@@ -156,7 +143,7 @@ fn parse_forum_tag(value: &Value) -> Option<ForumTagInfo> {
     })
 }
 
-fn parse_current_user_thread_member<'a>(value: &'a Value, kind: &str) -> Option<&'a Value> {
+fn current_user_thread_member_payload<'a>(value: &'a Value, kind: &str) -> Option<&'a Value> {
     if !matches!(
         kind,
         "GuildNewsThread" | "GuildPublicThread" | "GuildPrivateThread"
@@ -180,20 +167,6 @@ fn parse_thread_member_mute_end_time(value: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|end_time| !end_time.is_empty())
         .map(str::to_owned)
-}
-
-struct ParsedThreadMemberSettings {
-    flags: Option<u64>,
-    muted: Option<bool>,
-    mute_end_time: Option<String>,
-}
-
-fn parse_thread_member_settings(value: &Value) -> ParsedThreadMemberSettings {
-    ParsedThreadMemberSettings {
-        flags: value.get("flags").and_then(Value::as_u64),
-        muted: value.get("muted").and_then(Value::as_bool),
-        mute_end_time: parse_thread_member_mute_end_time(value),
-    }
 }
 
 fn parse_thread_metadata(value: &Value) -> Option<ThreadMetadataInfo> {
@@ -296,6 +269,27 @@ pub(super) fn parse_channel_upsert(data: &Value) -> Option<AppEvent> {
     Some(AppEvent::ChannelUpsert(info))
 }
 
+pub(super) fn parse_thread_gateway_info(
+    data: &Value,
+    default_guild: Option<Id<GuildMarker>>,
+) -> Option<ThreadGatewayInfo> {
+    let channel = parse_channel_info(data, default_guild)?;
+    let current_user_member =
+        current_user_thread_member_payload(data, &channel.kind).and_then(|member| {
+            parse_thread_member_info(member, channel.guild_id, Some(channel.channel_id))
+        });
+    Some(ThreadGatewayInfo {
+        channel,
+        current_user_member,
+    })
+}
+
+pub(super) fn parse_thread_upsert(data: &Value) -> Option<AppEvent> {
+    Some(AppEvent::ThreadUpsert {
+        thread: parse_thread_gateway_info(data, None)?,
+    })
+}
+
 pub(super) fn parse_channel_delete(data: &Value) -> Option<AppEvent> {
     let channel_id = parse_id::<ChannelMarker>(data.get("id")?)?;
     let guild_id = data.get("guild_id").and_then(parse_id::<GuildMarker>);
@@ -351,35 +345,30 @@ pub(super) fn parse_thread_list_sync(data: &Value) -> Vec<AppEvent> {
     let Some(raw_threads) = data.get("threads").and_then(Value::as_array) else {
         return Vec::new();
     };
-    let thread_members = clone_array(data.get("members"));
-    let current_user_members: BTreeMap<Id<ChannelMarker>, ParsedThreadMemberSettings> =
-        thread_members
-            .iter()
-            .filter_map(|member| {
-                let channel_id = member.get("id").and_then(parse_id::<ChannelMarker>)?;
-                Some((channel_id, parse_thread_member_settings(member)))
-            })
-            .collect();
-    let mut threads: Vec<ChannelInfo> = raw_threads
+    let current_user_members = match data.get("members") {
+        Some(value) => {
+            let Some(members) = value.as_array() else {
+                return Vec::new();
+            };
+            Some(
+                members
+                    .iter()
+                    .filter_map(|member| parse_thread_member_info(member, Some(guild_id), None))
+                    .collect(),
+            )
+        }
+        None => None,
+    };
+    let threads: Vec<ChannelInfo> = raw_threads
         .iter()
         .filter_map(|thread| parse_channel_info(thread, Some(guild_id)))
         .collect();
-    for thread in &mut threads {
-        if let Some(settings) = current_user_members.get(&thread.channel_id) {
-            thread.current_user_joined_thread = Some(true);
-            if let Some(flags) = settings.flags {
-                thread.current_user_thread_notification_flags = Some(flags);
-            }
-            thread.current_user_thread_muted = settings.muted;
-            thread.current_user_thread_mute_end_time = settings.mute_end_time.clone();
-        }
-    }
     vec![AppEvent::ThreadListSync {
         sync: ThreadListSyncInfo {
             guild_id,
             channel_ids,
             threads,
-            thread_members,
+            current_user_members,
             extra_fields: extra_fields(data, &["guild_id", "channel_ids", "threads", "members"]),
         },
     }]
@@ -393,12 +382,14 @@ pub(super) fn parse_thread_member_update(data: &Value) -> Vec<AppEvent> {
     let Some(channel_id) = channel_id else {
         return Vec::new();
     };
+    let guild_id = data.get("guild_id").and_then(parse_id::<GuildMarker>);
+    let Some(member) = parse_thread_member_info(data, guild_id, Some(channel_id)) else {
+        return Vec::new();
+    };
     vec![AppEvent::ThreadMemberUpdate {
-        guild_id: data.get("guild_id").and_then(parse_id::<GuildMarker>),
+        guild_id,
         channel_id,
-        flags: data.get("flags").and_then(Value::as_u64),
-        muted: data.get("muted").and_then(Value::as_bool),
-        mute_end_time: parse_thread_member_mute_end_time(data),
+        member,
     }]
 }
 
@@ -412,7 +403,13 @@ pub(super) fn parse_thread_members_update(data: &Value) -> Vec<AppEvent> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(parse_thread_member_update_info)
+        .filter_map(|member| {
+            parse_thread_member_info(
+                member,
+                data.get("guild_id").and_then(parse_id::<GuildMarker>),
+                Some(channel_id),
+            )
+        })
         .collect();
     let removed_user_ids: Vec<_> = data
         .get("removed_member_ids")
@@ -443,21 +440,97 @@ pub(super) fn parse_thread_members_update(data: &Value) -> Vec<AppEvent> {
     }]
 }
 
-fn parse_thread_member_update_info(value: &Value) -> Option<ThreadMemberUpdateInfo> {
-    Some(ThreadMemberUpdateInfo {
-        user_id: value.get("user_id").and_then(parse_id::<UserMarker>)?,
+pub(super) fn parse_thread_member_list_update(data: &Value) -> Vec<AppEvent> {
+    let Some(guild_id) = data.get("guild_id").and_then(parse_id::<GuildMarker>) else {
+        return Vec::new();
+    };
+    let Some(channel_id) = data
+        .get("thread_id")
+        .and_then(parse_id::<ChannelMarker>)
+        .or_else(|| data.get("id").and_then(parse_id::<ChannelMarker>))
+    else {
+        return Vec::new();
+    };
+    let Some(raw_members) = data.get("members").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let members = raw_members
+        .iter()
+        .filter_map(|member| parse_thread_member_info(member, Some(guild_id), Some(channel_id)))
+        .collect();
+
+    vec![AppEvent::ThreadMemberListUpdate {
+        update: ThreadMemberListUpdateInfo {
+            guild_id,
+            channel_id,
+            members,
+            extra_fields: extra_fields(data, &["guild_id", "thread_id", "id", "members"]),
+        },
+    }]
+}
+
+pub(crate) fn parse_thread_member_info(
+    value: &Value,
+    guild_id: Option<Id<GuildMarker>>,
+    default_thread_id: Option<Id<ChannelMarker>>,
+) -> Option<ThreadMemberInfo> {
+    let thread_id = value
+        .get("id")
+        .and_then(parse_id::<ChannelMarker>)
+        .or_else(|| value.get("thread_id").and_then(parse_id::<ChannelMarker>))
+        .or(default_thread_id);
+    let member = guild_id.and_then(|guild_id| {
+        value
+            .get("member")
+            .and_then(|member| parse_member_info(member, Some(guild_id)))
+    });
+    let user_id = value
+        .get("user_id")
+        .and_then(parse_id::<UserMarker>)
+        .or_else(|| member.as_ref().map(|member| member.user_id));
+    if thread_id.is_none() && user_id.is_none() {
+        return None;
+    }
+    let presence = value.get("presence").and_then(|presence| {
+        let user_id = user_id?;
+        let status = presence
+            .get("status")
+            .and_then(Value::as_str)
+            .map(parse_status)?;
+        Some(crate::discord::PresenceEventFields {
+            user_id,
+            status,
+            activities: parse_activities(presence),
+        })
+    });
+
+    Some(ThreadMemberInfo {
+        thread_id,
+        user_id,
+        join_timestamp: value
+            .get("join_timestamp")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
         flags: value.get("flags").and_then(Value::as_u64),
         muted: value.get("muted").and_then(Value::as_bool),
         mute_end_time: parse_thread_member_mute_end_time(value),
-        extra_fields: extra_fields(value, &["user_id", "flags", "muted", "mute_config"]),
+        member,
+        presence,
+        extra_fields: extra_fields(
+            value,
+            &[
+                "id",
+                "thread_id",
+                "user_id",
+                "join_timestamp",
+                "flags",
+                "muted",
+                "mute_config",
+                "member",
+                "presence",
+            ],
+        ),
     })
-}
-
-fn clone_array(value: Option<&Value>) -> Vec<Value> {
-    value
-        .and_then(Value::as_array)
-        .map(|values| values.to_vec())
-        .unwrap_or_default()
 }
 
 fn parse_id_array<T>(value: Option<&Value>) -> Vec<Id<T>> {

@@ -1,25 +1,23 @@
 use crate::discord::ids::Id;
 
 use crate::discord::{
-    AppEvent, ChannelInfo, ForumPostArchiveState, MemberInfo, MessageHistoryAfterMode,
+    AppEvent, ArchivedThreadPageCursor, ArchivedThreadsPage, MemberInfo, MessageHistoryAfterMode,
     MessageHistoryLoadTarget, UserProfileInfo, member::MEMBER_SEARCH_MAX_QUERY_CHARS,
 };
 
 use crate::discord::test_builders::{
-    ChannelPinsUpdateFixture, ForumPostsLoadFailedFixture, ForumPostsLoadedFixture,
-    MessageHistoryAfterLoadedFixture, MessageHistoryLoadFailedFixture, MessageHistoryLoadedFixture,
-    UserProfileLoadFailedFixture, channel_pins_update_event, forum_posts_load_failed_event,
-    forum_posts_loaded_event, message_history_after_loaded_event,
-    message_history_load_failed_event, message_history_loaded_event,
-    user_profile_load_failed_event,
+    ChannelPinsUpdateFixture, MessageHistoryAfterLoadedFixture, MessageHistoryLoadFailedFixture,
+    MessageHistoryLoadedFixture, UserProfileLoadFailedFixture, channel_pins_update_event,
+    message_history_after_loaded_event, message_history_load_failed_event,
+    message_history_loaded_event, user_profile_load_failed_event,
 };
 
 use super::{
-    APPLICATION_COMMAND_REQUEST_TTL, ForumPostRequestTarget, ForumPostRequests,
-    GuildMemberSearchRequests, GuildMemberSearchSurface, GuildMemberSearchTarget, HistoryRequests,
-    MemberBatchRequests, MemberListSubscriptionRequests, MemberListSubscriptionTarget,
-    PinnedMessageRequests, RequestLifecycle, ThreadPreviewRequests, UserNoteRequests,
-    UserProfileRequests,
+    APPLICATION_COMMAND_REQUEST_TTL, ArchivedThreadRequestTarget, ArchivedThreadRequests,
+    ForumPostDataRequestTarget, ForumPostDataRequests, GuildMemberSearchRequests,
+    GuildMemberSearchSurface, GuildMemberSearchTarget, HistoryRequests, MemberBatchRequests,
+    MemberListSubscriptionRequests, MemberListSubscriptionTarget, PinnedMessageRequests,
+    RequestLifecycle, ThreadPreviewRequests, UserNoteRequests, UserProfileRequests,
 };
 
 #[test]
@@ -105,190 +103,94 @@ fn pinned_message_request_reloads_after_channel_pins_update() {
 }
 
 #[test]
-fn forum_post_request_is_sent_once_per_channel() {
-    let mut requests = ForumPostRequests::default();
-    let guild = Id::new(100);
-    let first = Id::new(1);
-    let second = Id::new(2);
+fn forum_post_data_requests_batch_dedupe_and_retry() {
+    let guild_id = Id::new(1);
+    let forum_id = Id::new(2);
+    let thread_ids = (10..22).map(Id::new).collect::<Vec<_>>();
+    let target = || ForumPostDataRequestTarget {
+        guild_id,
+        channel_id: forum_id,
+        thread_ids: thread_ids.clone(),
+    };
+    let mut requests = ForumPostDataRequests::default();
 
-    assert_eq!(requests.next(None), None);
-    assert_eq!(
-        requests.next(Some(target(guild, first, false))),
-        Some((guild, first, ForumPostArchiveState::Active, 0))
-    );
-    assert_eq!(requests.next(Some(target(guild, first, false))), None);
-    assert_eq!(
-        requests.next(Some(target(guild, second, false))),
-        Some((guild, second, ForumPostArchiveState::Active, 0))
-    );
-}
+    let first = requests
+        .next(Some(target()))
+        .expect("the first ten posts should be requested");
+    assert_eq!(first.thread_ids, thread_ids[..10]);
+    let second = requests
+        .next(Some(target()))
+        .expect("the remaining posts should form a second batch");
+    assert_eq!(second.thread_ids, thread_ids[10..]);
+    assert_eq!(requests.next(Some(target())), None);
 
-#[test]
-fn forum_post_request_retries_failed_channel_after_reselect() {
-    let mut requests = ForumPostRequests::default();
-    let guild = Id::new(100);
-    let first = Id::new(1);
-    let second = Id::new(2);
-
+    requests.record_event(&AppEvent::ForumPostDataLoadFailed {
+        channel_id: forum_id,
+        thread_ids: second.thread_ids.clone(),
+        message: "temporary failure".to_owned(),
+    });
+    let retry_thread_ids = second.thread_ids;
     assert_eq!(
-        requests.next(Some(target(guild, first, false))),
-        Some((guild, first, ForumPostArchiveState::Active, 0))
-    );
-    requests.record_event(&forum_posts_load_failed_event(
-        ForumPostsLoadFailedFixture {
-            channel_id: first,
-            archive_state: ForumPostArchiveState::Active,
-            message: "temporary failure".to_owned(),
-            ..ForumPostsLoadFailedFixture::new()
-        },
-    ));
-    assert_eq!(requests.next(Some(target(guild, first, false))), None);
-    assert_eq!(
-        requests.next(Some(target(guild, second, false))),
-        Some((guild, second, ForumPostArchiveState::Active, 0))
-    );
-    assert_eq!(
-        requests.next(Some(target(guild, first, false))),
-        Some((guild, first, ForumPostArchiveState::Active, 0))
+        requests.next(Some(ForumPostDataRequestTarget {
+            guild_id,
+            channel_id: forum_id,
+            thread_ids: retry_thread_ids.clone(),
+        })),
+        Some(ForumPostDataRequestTarget {
+            guild_id,
+            channel_id: forum_id,
+            thread_ids: retry_thread_ids,
+        })
     );
 }
 
 #[test]
-fn forum_post_request_tracks_active_archived_and_server_offsets() {
-    let mut requests = ForumPostRequests::default();
-    let guild = Id::new(100);
-    let channel = Id::new(1);
-
-    assert_eq!(
-        requests.next(Some(target(guild, channel, false))),
-        Some((guild, channel, ForumPostArchiveState::Active, 0))
-    );
-    requests.record_event(&forum_posts_loaded_event(ForumPostsLoadedFixture {
-        channel_id: channel,
-        archive_state: ForumPostArchiveState::Active,
-        next_offset: 2,
-        threads: vec![forum_post(channel, 10), forum_post(channel, 11)],
-        has_more: true,
-        ..ForumPostsLoadedFixture::new()
-    }));
-
-    assert_eq!(requests.next(Some(target(guild, channel, false))), None);
-    assert_eq!(
-        requests.next(Some(target(guild, channel, true))),
-        Some((guild, channel, ForumPostArchiveState::Active, 2))
-    );
-    requests.record_event(&forum_posts_loaded_event(ForumPostsLoadedFixture {
-        channel_id: channel,
-        archive_state: ForumPostArchiveState::Active,
-        offset: 2,
-        next_offset: 3,
-        threads: vec![forum_post(channel, 12)],
-        ..ForumPostsLoadedFixture::new()
-    }));
-
-    assert_eq!(requests.next(Some(target(guild, channel, false))), None);
-    assert_eq!(
-        requests.next(Some(target(guild, channel, true))),
-        Some((guild, channel, ForumPostArchiveState::Archived, 0))
-    );
-    requests.record_event(&forum_posts_loaded_event(ForumPostsLoadedFixture {
-        channel_id: channel,
-        archive_state: ForumPostArchiveState::Archived,
-        next_offset: 2,
-        threads: vec![forum_post(channel, 11), forum_post(channel, 12)],
-        has_more: true,
-        ..ForumPostsLoadedFixture::new()
-    }));
-
-    assert_eq!(
-        requests.next(Some(target(guild, channel, true))),
-        Some((guild, channel, ForumPostArchiveState::Archived, 2))
-    );
-
-    let mut requests = ForumPostRequests::default();
-    let channel = Id::new(2);
-
-    assert_eq!(
-        requests.next(Some(target(guild, channel, false))),
-        Some((guild, channel, ForumPostArchiveState::Active, 0))
-    );
-    requests.record_event(&forum_posts_loaded_event(ForumPostsLoadedFixture {
-        channel_id: channel,
-        archive_state: ForumPostArchiveState::Active,
-        next_offset: 25,
-        threads: vec![forum_post(channel, 10), forum_post(channel, 11)],
-        has_more: true,
-        ..ForumPostsLoadedFixture::new()
-    }));
-
-    assert_eq!(
-        requests.next(Some(target(guild, channel, true))),
-        Some((guild, channel, ForumPostArchiveState::Active, 25))
-    );
-}
-
-#[test]
-fn archived_forum_posts_wait_for_the_active_search_to_drain() {
-    let mut requests = ForumPostRequests::default();
-    let guild = Id::new(100);
-    let channel = Id::new(1);
-
-    assert_eq!(
-        requests.next(Some(target(guild, channel, false))),
-        Some((guild, channel, ForumPostArchiveState::Active, 0))
-    );
-    requests.record_event(&forum_posts_loaded_event(ForumPostsLoadedFixture {
-        channel_id: channel,
-        archive_state: ForumPostArchiveState::Active,
-        next_offset: 25,
-        threads: vec![forum_post(channel, 10)],
-        has_more: true,
-        ..ForumPostsLoadedFixture::new()
-    }));
-
-    assert_eq!(
-        requests.next(Some(target(guild, channel, true))),
-        Some((guild, channel, ForumPostArchiveState::Active, 25))
-    );
-    assert_eq!(requests.next(Some(target(guild, channel, true))), None);
-
-    requests.record_event(&forum_posts_loaded_event(ForumPostsLoadedFixture {
-        channel_id: channel,
-        archive_state: ForumPostArchiveState::Active,
-        offset: 25,
-        next_offset: 26,
-        threads: vec![forum_post(channel, 11)],
-        ..ForumPostsLoadedFixture::new()
-    }));
-    assert_eq!(
-        requests.next(Some(target(guild, channel, true))),
-        Some((guild, channel, ForumPostArchiveState::Archived, 0))
-    );
-}
-
-fn target(
-    guild_id: Id<crate::discord::ids::marker::GuildMarker>,
-    channel_id: Id<crate::discord::ids::marker::ChannelMarker>,
-    should_load_more: bool,
-) -> ForumPostRequestTarget {
-    ForumPostRequestTarget {
+fn archived_thread_requests_dedupe_retry_after_reselect_and_advance_cursor() {
+    let guild_id = Id::new(1);
+    let channel_id = Id::new(2);
+    let initial = ArchivedThreadRequestTarget {
         guild_id,
         channel_id,
-        should_load_more,
-    }
-}
+        cursor: ArchivedThreadPageCursor::Initial,
+    };
+    let mut requests = ArchivedThreadRequests::default();
 
-fn forum_post(
-    forum_id: Id<crate::discord::ids::marker::ChannelMarker>,
-    channel_id: u64,
-) -> ChannelInfo {
-    ChannelInfo {
-        guild_id: Some(Id::new(100)),
-        parent_id: Some(forum_id),
-        name: format!("post {channel_id}"),
-        thread_metadata: Some(crate::discord::ThreadMetadataInfo::test(false, false)),
-        ..ChannelInfo::test(Id::new(channel_id), "GuildPublicThread")
-    }
+    assert_eq!(requests.next(Some(initial.clone())), Some(initial.clone()));
+    assert_eq!(requests.next(Some(initial.clone())), None);
+    requests.record_event(&AppEvent::ArchivedThreadsLoadFailed {
+        guild_id,
+        channel_id,
+        before: None,
+        message: "temporary failure".to_owned(),
+    });
+    assert_eq!(requests.next(Some(initial.clone())), None);
+
+    assert_eq!(requests.next(None), None);
+    assert_eq!(requests.next(Some(initial.clone())), Some(initial.clone()));
+    requests.record_event(&AppEvent::ArchivedThreadsLoaded {
+        guild_id,
+        channel_id,
+        before: None,
+        page: ArchivedThreadsPage {
+            threads: Vec::new(),
+            members: Vec::new(),
+            has_more: true,
+            next_before: Some("2026-08-14T00:00:00.000000+00:00".to_owned()),
+            extra_fields: Default::default(),
+        },
+    });
+    assert_eq!(requests.next(Some(initial)), None);
+
+    let next_page = ArchivedThreadRequestTarget {
+        guild_id,
+        channel_id,
+        cursor: ArchivedThreadPageCursor::Before("2026-08-14T00:00:00.000000+00:00".to_owned()),
+    };
+    assert_eq!(
+        requests.next(Some(next_page.clone())),
+        Some(next_page.clone())
+    );
+    assert_eq!(requests.next(Some(next_page)), None);
 }
 
 fn subscription_target(bucket: u32) -> MemberListSubscriptionTarget {
@@ -300,6 +202,7 @@ fn subscription_target(bucket: u32) -> MemberListSubscriptionTarget {
     MemberListSubscriptionTarget {
         guild_id: Id::new(1),
         channel_id: Id::new(2),
+        thread_id: None,
         bucket,
         refresh_generation: 0,
         ranges,
@@ -492,6 +395,35 @@ fn member_list_subscription_debounces_and_coalesces_bucket_updates() {
         requests.pending_deadline().is_some(),
         "invalidated ranges must resend even when the bucket is unchanged"
     );
+}
+
+#[test]
+fn member_list_subscription_resends_when_the_selected_thread_changes() {
+    let mut requests = MemberListSubscriptionRequests::default();
+    let now = std::time::Instant::now();
+    let mut target = subscription_target(0);
+    target.thread_id = Some(Id::new(10));
+
+    requests.set_target(Some(target.clone()), now);
+    let deadline = requests
+        .pending_deadline()
+        .expect("thread subscription should arm debounce");
+    assert_eq!(requests.next_due(deadline), Some(target));
+
+    let mut next_thread = subscription_target(0);
+    next_thread.thread_id = Some(Id::new(11));
+    requests.set_target(Some(next_thread.clone()), deadline);
+    let deadline = requests
+        .pending_deadline()
+        .expect("selecting another thread should resubscribe");
+    assert_eq!(requests.next_due(deadline), Some(next_thread));
+
+    let no_thread = subscription_target(0);
+    requests.set_target(Some(no_thread.clone()), deadline);
+    let deadline = requests
+        .pending_deadline()
+        .expect("leaving a thread should clear its member-list subscription");
+    assert_eq!(requests.next_due(deadline), Some(no_thread));
 }
 
 #[test]

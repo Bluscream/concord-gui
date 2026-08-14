@@ -41,7 +41,9 @@ mod parser;
 
 pub(in crate::discord) use parser::parse_activity;
 use parser::parse_user_account_dispatch;
-pub(crate) use parser::{parse_channel_info, parse_message_info};
+pub(crate) use parser::{
+    parse_channel_info, parse_member_info, parse_message_info, parse_thread_member_info,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GatewayCommand {
@@ -67,6 +69,7 @@ pub enum GatewayCommand {
     UpdateMemberListSubscription {
         guild_id: Id<GuildMarker>,
         channel_id: Id<ChannelMarker>,
+        thread_id: Option<Id<ChannelMarker>>,
         ranges: Vec<(u32, u32)>,
     },
     UpdateVoiceState {
@@ -1715,7 +1718,6 @@ fn dispatch_command(
         logging::debug("gateway", "skipping duplicate channel subscription");
         return Ok(());
     }
-
     if let GatewayCommand::UpdatePresence { status, activities } = &command {
         resources.last_presence = Some(GatewayPresence {
             status: *status,
@@ -1803,23 +1805,31 @@ fn dispatch_command(
                     channel_id.get()
                 ),
             );
-            guild_channel_subscribe_payload(guild_id, channel_id, &[(0, 99)])
+            guild_channel_subscribe_payload(guild_id, channel_id, &[(0, 99)], None)
         }
         GatewayCommand::UpdateMemberListSubscription {
             guild_id,
             channel_id,
+            thread_id,
             ranges,
         } => {
             logging::debug(
                 "gateway",
                 format!(
-                    "updating member list ranges: guild={} channel={} ranges={:?}",
+                    "updating member list ranges: guild={} channel={} thread={} ranges={:?}",
                     guild_id.get(),
                     channel_id.get(),
+                    thread_id.map(Id::get).unwrap_or_default(),
                     ranges
                 ),
             );
-            guild_channel_subscribe_payload(guild_id, channel_id, &ranges)
+            let thread_member_lists = thread_id.into_iter().collect::<Vec<_>>();
+            guild_channel_subscribe_payload(
+                guild_id,
+                channel_id,
+                &ranges,
+                Some(&thread_member_lists),
+            )
         }
         GatewayCommand::UpdateVoiceState {
             guild_id,
@@ -2245,20 +2255,32 @@ fn guild_channel_subscribe_payload(
     guild_id: Id<GuildMarker>,
     channel_id: Id<ChannelMarker>,
     ranges: &[(u32, u32)],
+    thread_member_lists: Option<&[Id<ChannelMarker>]>,
 ) -> String {
     let ranges_json: Vec<[u32; 2]> = ranges.iter().map(|(start, end)| [*start, *end]).collect();
+    let mut subscription = json!({
+        "typing": true,
+        "activities": true,
+        "threads": true,
+        "member_updates": true,
+        "members": [],
+        "channels": {
+            channel_id.to_string(): ranges_json,
+        },
+    });
+    if let Some(thread_member_lists) = thread_member_lists {
+        subscription["thread_member_lists"] = Value::from(
+            thread_member_lists
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+        );
+    }
     json!({
         "op": 37,
         "d": {
             "subscriptions": {
-                guild_id.to_string(): {
-                    "typing": true,
-                    "activities": true,
-                    "threads": true,
-                    "channels": {
-                        channel_id.to_string(): ranges_json,
-                    },
-                },
+                guild_id.to_string(): subscription,
             },
         },
     })

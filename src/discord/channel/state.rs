@@ -1,3 +1,5 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use crate::discord::ids::{
     Id,
     marker::{ChannelMarker, ForumTagMarker, GuildMarker, MessageMarker, UserMarker},
@@ -9,7 +11,9 @@ use crate::discord::{
 
 use crate::discord::state::DiscordState;
 
-const THREAD_NOTIFICATION_FLAGS_MASK: u64 = (1 << 1) | (1 << 2) | (1 << 3);
+const ACTIVE_CHANNELS_REMOVED: u64 = 1 << 2;
+const DISCORD_EPOCH_MILLIS: u64 = 1_420_070_400_000;
+const MILLIS_PER_MINUTE: u64 = 60_000;
 
 pub(crate) fn is_thread_kind(kind: &str) -> bool {
     matches!(
@@ -45,14 +49,6 @@ pub struct ChannelState {
     pub rate_limit_per_user: Option<u64>,
     pub available_tags: Vec<ForumTagInfo>,
     pub applied_tags: Vec<Id<ForumTagMarker>>,
-    pub current_user_joined_thread: bool,
-    /// Discord's raw current-user thread member flags. Notification settings
-    /// use bits 1 through 3, while other bits remain preserved.
-    pub current_user_thread_notification_flags: Option<u64>,
-    /// Mute state stored on the current user's thread member object.
-    pub current_user_thread_muted: bool,
-    /// Optional expiry for the current user's thread mute.
-    pub current_user_thread_mute_end_time: Option<String>,
     pub recipients: Vec<ChannelRecipientState>,
     /// Channel-level permission overrides used by `can_view_channel`. Threads
     /// inherit from their parent channel, so this stays empty for threads
@@ -142,10 +138,62 @@ impl ChannelState {
         self.flags.map(|flags| flags & (1 << 1) != 0)
     }
 
-    pub fn thread_notification_level_flags(&self) -> Option<u64> {
-        self.current_user_thread_notification_flags
-            .map(|flags| flags & THREAD_NOTIFICATION_FLAGS_MASK)
-            .filter(|flags| *flags != 0)
+    pub fn removed_from_active_channels(&self) -> bool {
+        self.flags
+            .is_some_and(|flags| flags & ACTIVE_CHANNELS_REMOVED != 0)
+    }
+
+    pub(in crate::discord) fn is_active_thread(&self) -> bool {
+        self.is_thread()
+            && !self.thread_archived().unwrap_or(false)
+            && !self.removed_from_active_channels()
+    }
+
+    /// Discord keeps joined threads in the channel tree only until their
+    /// auto-archive inactivity window expires. Pinned forum posts remain in the
+    /// tree. The Gateway can briefly report an overdue thread as unarchived, so
+    /// the client derives the deadline from its latest message or archive-state
+    /// change.
+    pub(in crate::discord) fn shows_in_active_channel_tree(&self) -> bool {
+        let now_millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        self.shows_in_active_channel_tree_at(now_millis)
+    }
+
+    fn shows_in_active_channel_tree_at(&self, now_millis: u64) -> bool {
+        if !self.is_active_thread() {
+            return false;
+        }
+        if self.thread_pinned() == Some(true) {
+            return true;
+        }
+        let Some(auto_archive_minutes) = self
+            .thread_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.auto_archive_duration)
+        else {
+            return true;
+        };
+        let activity_snowflake = self
+            .last_message_id
+            .map(Id::get)
+            .unwrap_or_else(|| self.id.get());
+        let snowflake_millis = (activity_snowflake >> 22).saturating_add(DISCORD_EPOCH_MILLIS);
+        let archive_change_millis = self
+            .thread_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.archive_timestamp.as_deref())
+            .and_then(|timestamp| chrono::DateTime::parse_from_rfc3339(timestamp).ok())
+            .and_then(|timestamp| u64::try_from(timestamp.timestamp_millis()).ok())
+            .unwrap_or(0);
+        let activity_millis = snowflake_millis.max(archive_change_millis);
+        let deadline =
+            activity_millis.saturating_add(auto_archive_minutes.saturating_mul(MILLIS_PER_MINUTE));
+        now_millis < deadline
     }
 
     pub fn requires_forum_tag(&self) -> bool {
@@ -277,6 +325,21 @@ impl DiscordState {
         self.navigation.channels.get(&channel_id)
     }
 
+    /// Whether a joined thread belongs in Discord's active channel tree.
+    ///
+    /// The separate indexes are populated by Gateway active-thread and
+    /// current-user member payloads. Forum card hydration cannot add a sidebar
+    /// row by itself.
+    pub fn thread_is_sidebar_active(&self, channel_id: Id<ChannelMarker>) -> bool {
+        self.threads.is_active(channel_id)
+            && self.threads.current_user_member(channel_id).is_some()
+            && self
+                .navigation
+                .channels
+                .get(&channel_id)
+                .is_some_and(ChannelState::shows_in_active_channel_tree)
+    }
+
     pub(in crate::discord) fn channel_guild_id(
         &self,
         channel_id: Id<ChannelMarker>,
@@ -389,24 +452,16 @@ impl DiscordState {
         } else {
             channel.permission_overwrites.clone()
         };
-        let current_user_joined_thread = channel
-            .current_user_joined_thread
-            .or_else(|| existing.map(|existing| existing.current_user_joined_thread))
-            .or_else(|| {
-                let created_by_current_user = is_thread_kind(&channel.kind)
-                    && channel.owner_id.is_some()
-                    && channel.owner_id == self.session.current_user_id;
-                created_by_current_user.then_some(true)
-            })
-            .unwrap_or(false);
-        let current_user_thread_mute_end_time = if channel.current_user_thread_muted.is_some() {
-            channel.current_user_thread_mute_end_time.clone()
-        } else {
-            existing.and_then(|existing| existing.current_user_thread_mute_end_time.clone())
-        };
-
-        // Build the row before touching the index so the `existing` borrow ends
-        // before the copy-on-write mutable borrow starts.
+        // Supplemental and partial channel payloads may omit these fields.
+        // Preserve the last explicit values so an unrelated update cannot
+        // revive an archived or ACTIVE_CHANNELS_REMOVED thread.
+        let thread_metadata = channel
+            .thread_metadata
+            .clone()
+            .or_else(|| existing.and_then(|existing| existing.thread_metadata.clone()));
+        let flags = channel
+            .flags
+            .or_else(|| existing.and_then(|existing| existing.flags));
         let state = ChannelState {
             id: channel.channel_id,
             guild_id: channel.guild_id,
@@ -419,24 +474,13 @@ impl DiscordState {
             message_count: channel.message_count,
             member_count: channel.member_count,
             total_message_sent: channel.total_message_sent,
-            thread_metadata: channel.thread_metadata.clone(),
-            flags: channel.flags,
+            thread_metadata,
+            flags,
             rate_limit_per_user: channel
                 .rate_limit_per_user
                 .or_else(|| existing.and_then(|existing| existing.rate_limit_per_user)),
             available_tags: channel.available_tags.clone(),
             applied_tags: channel.applied_tags.clone(),
-            current_user_joined_thread,
-            current_user_thread_notification_flags: channel
-                .current_user_thread_notification_flags
-                .or_else(|| {
-                    existing.and_then(|existing| existing.current_user_thread_notification_flags)
-                }),
-            current_user_thread_muted: channel
-                .current_user_thread_muted
-                .or_else(|| existing.map(|existing| existing.current_user_thread_muted))
-                .unwrap_or(false),
-            current_user_thread_mute_end_time,
             recipients,
             permission_overwrites,
             // Preserve across upserts: a partial CHANNEL_UPDATE that omits
@@ -453,38 +497,10 @@ impl DiscordState {
             .insert(channel.channel_id, state);
     }
 
-    pub(in crate::discord) fn set_thread_notification_level(
+    pub(in crate::discord) fn set_thread_member_count(
         &mut self,
         channel_id: Id<ChannelMarker>,
-        flags: u64,
-    ) {
-        if let Some(channel) = self.navigation_mut().channels.get_mut(&channel_id) {
-            let current_flags = channel.current_user_thread_notification_flags.unwrap_or(0);
-            channel.current_user_thread_notification_flags = Some(
-                (current_flags & !THREAD_NOTIFICATION_FLAGS_MASK)
-                    | (flags & THREAD_NOTIFICATION_FLAGS_MASK),
-            );
-        }
-    }
-
-    pub(in crate::discord) fn set_thread_mute(
-        &mut self,
-        channel_id: Id<ChannelMarker>,
-        muted: bool,
-        mute_end_time: Option<String>,
-    ) {
-        if let Some(channel) = self.navigation_mut().channels.get_mut(&channel_id) {
-            channel.current_user_thread_muted = muted;
-            channel.current_user_thread_mute_end_time = mute_end_time;
-        }
-    }
-
-    pub(in crate::discord) fn set_current_user_thread_member_settings(
-        &mut self,
-        channel_id: Id<ChannelMarker>,
-        flags: Option<u64>,
-        muted: Option<bool>,
-        mute_end_time: Option<String>,
+        member_count: u64,
     ) {
         if let Some(channel) = self
             .navigation_mut()
@@ -492,34 +508,7 @@ impl DiscordState {
             .get_mut(&channel_id)
             .filter(|channel| channel.is_thread())
         {
-            channel.current_user_joined_thread = true;
-            if let Some(flags) = flags {
-                channel.current_user_thread_notification_flags = Some(flags);
-            }
-            if let Some(muted) = muted {
-                channel.current_user_thread_muted = muted;
-                channel.current_user_thread_mute_end_time = mute_end_time;
-            }
-        }
-    }
-
-    pub(in crate::discord) fn set_current_user_thread_membership(
-        &mut self,
-        channel_id: Id<ChannelMarker>,
-        joined: bool,
-    ) {
-        if let Some(channel) = self
-            .navigation_mut()
-            .channels
-            .get_mut(&channel_id)
-            .filter(|channel| channel.is_thread())
-        {
-            channel.current_user_joined_thread = joined;
-            if !joined {
-                channel.current_user_thread_notification_flags = None;
-                channel.current_user_thread_muted = false;
-                channel.current_user_thread_mute_end_time = None;
-            }
+            channel.member_count = Some(member_count);
         }
     }
 

@@ -6,6 +6,7 @@ use crate::{
         AppEvent, ApplicationCommandAutocompleteInvocation, ApplicationCommandInvocation,
         AttachmentUpdate, ForumPostCreate, MessageAttachmentUpload, MessageInfo,
         MessageUpdateDispatchInfo, MessageUpdateEventFields, ReactionEmoji, ReplyReference,
+        ThreadGatewayInfo, ThreadMemberInfo,
         ids::{
             Id,
             marker::{ChannelMarker, ForumTagMarker, GuildMarker, MessageMarker, UserMarker},
@@ -70,8 +71,26 @@ pub(super) async fn create_forum_post(client: DiscordClient, post: ForumPostCrea
     match client.create_forum_post(&post).await {
         Ok(created) => {
             let slow_mode = client.message_slow_mode(post.channel_id);
+            let thread_id = created.thread.channel_id;
+            let current_user_member =
+                Some(created.current_user_member.unwrap_or(ThreadMemberInfo {
+                    thread_id: Some(thread_id),
+                    user_id: None,
+                    join_timestamp: None,
+                    flags: None,
+                    muted: None,
+                    mute_end_time: None,
+                    member: None,
+                    presence: None,
+                    extra_fields: BTreeMap::new(),
+                }));
             client
-                .publish_event(AppEvent::ChannelUpsert(created.thread))
+                .publish_event(AppEvent::ThreadUpsert {
+                    thread: ThreadGatewayInfo {
+                        channel: created.thread,
+                        current_user_member,
+                    },
+                })
                 .await;
             if let Some(message) = created.first_message {
                 client.publish_event(message_create_event(message)).await;

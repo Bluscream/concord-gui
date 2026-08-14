@@ -17,12 +17,12 @@ mod streams;
 mod user_settings;
 mod voice;
 
-pub(crate) use channels::parse_channel_info;
 use channels::{
     parse_channel_delete, parse_channel_recipient_add, parse_channel_recipient_remove,
-    parse_channel_upsert, parse_thread_list_sync, parse_thread_member_update,
-    parse_thread_members_update,
+    parse_channel_upsert, parse_thread_list_sync, parse_thread_member_list_update,
+    parse_thread_member_update, parse_thread_members_update, parse_thread_upsert,
 };
+pub(crate) use channels::{parse_channel_info, parse_thread_member_info};
 use guilds::{
     parse_guild_create, parse_guild_delete, parse_guild_emojis_update,
     parse_guild_onboarding_update, parse_guild_role_delete, parse_guild_role_upsert,
@@ -32,6 +32,7 @@ use interactions::{
     parse_application_command_autocomplete_response, parse_application_command_index_update,
     parse_interaction_failure, parse_interaction_success,
 };
+pub(crate) use members::parse_member_info;
 use members::{
     parse_current_user_verification, parse_member_add, parse_member_chunk,
     parse_member_list_update, parse_member_remove, parse_member_upsert, parse_user_update,
@@ -120,14 +121,14 @@ fn parse_user_account_event_data(event_type: &str, data: &Value) -> Vec<AppEvent
                 .into_iter()
                 .collect()
         }
-        "CHANNEL_CREATE" | "CHANNEL_UPDATE" | "THREAD_CREATE" | "THREAD_UPDATE" => {
-            parse_channel_upsert(data).into_iter().collect()
-        }
+        "CHANNEL_CREATE" | "CHANNEL_UPDATE" => parse_channel_upsert(data).into_iter().collect(),
+        "THREAD_CREATE" | "THREAD_UPDATE" => parse_thread_upsert(data).into_iter().collect(),
         "CHANNEL_DELETE" | "THREAD_DELETE" => parse_channel_delete(data).into_iter().collect(),
         "CHANNEL_RECIPIENT_ADD" => parse_channel_recipient_add(data).into_iter().collect(),
         "CHANNEL_RECIPIENT_REMOVE" => parse_channel_recipient_remove(data).into_iter().collect(),
         "THREAD_LIST_SYNC" => parse_thread_list_sync(data),
         "THREAD_MEMBERS_UPDATE" => parse_thread_members_update(data),
+        "THREAD_MEMBER_LIST_UPDATE" => parse_thread_member_list_update(data),
         "THREAD_MEMBER_UPDATE" => parse_thread_member_update(data),
         "MESSAGE_CREATE" => parse_message_create(data).into_iter().collect(),
         "MESSAGE_UPDATE" => parse_message_update(data).into_iter().collect(),

@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 mod primitives;
 
-use primitives::{CursorRequests, LastSelection, OnDemandRequests, TimedRequestSet};
+use primitives::{CursorRequests, OnDemandRequests, TimedRequestSet};
 
 use crate::discord::ids::{
     Id,
@@ -11,12 +11,13 @@ use crate::discord::ids::{
 };
 
 use crate::discord::{
-    AppEvent, ForumPostArchiveState, MessageHistoryAfterMode, MessageHistoryLoadTarget,
+    AppEvent, ArchivedThreadPageCursor, MessageHistoryAfterMode, MessageHistoryLoadTarget,
     member::normalize_member_search_query,
 };
 
 const APPLICATION_COMMAND_REQUEST_TTL: Duration = Duration::from_secs(15 * 60);
 const MAX_APPLICATION_COMMAND_REQUESTS: usize = 1_024;
+const FORUM_POST_DATA_BATCH_LIMIT: usize = 10;
 
 #[derive(Debug, Default)]
 pub(super) struct HistoryRequests {
@@ -24,9 +25,16 @@ pub(super) struct HistoryRequests {
 }
 
 #[derive(Debug, Default)]
-pub(super) struct ForumPostRequests {
-    requests: HashMap<Id<ChannelMarker>, ForumPostRequestState>,
-    last_channel: LastSelection<Id<ChannelMarker>>,
+pub(super) struct ForumPostDataRequests {
+    in_flight: HashSet<(Id<ChannelMarker>, Id<ChannelMarker>)>,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct ArchivedThreadRequests {
+    last_channel: Option<Id<ChannelMarker>>,
+    in_flight: HashSet<(Id<ChannelMarker>, ArchivedThreadPageCursor)>,
+    completed: HashSet<(Id<ChannelMarker>, ArchivedThreadPageCursor)>,
+    failed: HashSet<(Id<ChannelMarker>, ArchivedThreadPageCursor)>,
 }
 
 #[derive(Debug, Default)]
@@ -49,11 +57,18 @@ pub(super) struct ReadAckRequests {
     pending: HashMap<Id<ChannelMarker>, PendingReadAck>,
 }
 
-#[derive(Debug)]
-pub(crate) struct ForumPostRequestTarget {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ForumPostDataRequestTarget {
     pub(crate) guild_id: Id<GuildMarker>,
     pub(crate) channel_id: Id<ChannelMarker>,
-    pub(crate) should_load_more: bool,
+    pub(crate) thread_ids: Vec<Id<ChannelMarker>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ArchivedThreadRequestTarget {
+    pub(crate) guild_id: Id<GuildMarker>,
+    pub(crate) channel_id: Id<ChannelMarker>,
+    pub(crate) cursor: ArchivedThreadPageCursor,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -104,6 +119,7 @@ type OrderedUserIds = (BTreeSet<Id<UserMarker>>, Vec<Id<UserMarker>>);
 pub(crate) struct MemberListSubscriptionTarget {
     pub(crate) guild_id: Id<GuildMarker>,
     pub(crate) channel_id: Id<ChannelMarker>,
+    pub(crate) thread_id: Option<Id<ChannelMarker>>,
     pub(crate) bucket: u32,
     pub(crate) refresh_generation: u64,
     pub(crate) ranges: Vec<(u32, u32)>,
@@ -170,7 +186,8 @@ impl ApplicationCommandRequests {
 #[derive(Debug, Default)]
 pub(crate) struct RequestLifecycle {
     history: HistoryRequests,
-    forum_posts: ForumPostRequests,
+    forum_post_data: ForumPostDataRequests,
+    archived_threads: ArchivedThreadRequests,
     pinned_messages: PinnedMessageRequests,
     older_history: OlderHistoryRequests,
     newer_history: NewerHistoryRequests,
@@ -192,7 +209,8 @@ impl RequestLifecycle {
         self.history.record_event(event);
         self.older_history.record_event(event);
         self.newer_history.record_event(event);
-        self.forum_posts.record_event(event);
+        self.forum_post_data.record_event(event);
+        self.archived_threads.record_event(event);
         self.pinned_messages.record_event(event);
         self.member_hydration.record_event(event);
         self.thread_previews.record_event(event);
@@ -202,6 +220,8 @@ impl RequestLifecycle {
 
     fn reset_gateway_session(&mut self) {
         self.member_hydration = MemberBatchRequests::default();
+        self.forum_post_data = ForumPostDataRequests::default();
+        self.archived_threads = ArchivedThreadRequests::default();
         self.member_list_subscriptions = MemberListSubscriptionRequests::default();
         self.member_searches = Default::default();
         self.pending_application_commands = ApplicationCommandRequests::default();
@@ -263,26 +283,34 @@ impl RequestLifecycle {
         self.newer_history.begin_request(channel_id, after, mode)
     }
 
-    pub(crate) fn next_forum_post_request(
+    pub(crate) fn next_forum_post_data_request(
         &mut self,
-        target: Option<ForumPostRequestTarget>,
-    ) -> Option<(
-        Id<GuildMarker>,
-        Id<ChannelMarker>,
-        ForumPostArchiveState,
-        usize,
-    )> {
-        self.forum_posts.next(target)
+        target: Option<ForumPostDataRequestTarget>,
+    ) -> Option<ForumPostDataRequestTarget> {
+        self.forum_post_data.next(target)
     }
 
-    pub(crate) fn mark_forum_post_failed(
+    pub(crate) fn mark_forum_post_data_failed(
         &mut self,
         channel_id: Id<ChannelMarker>,
-        archive_state: ForumPostArchiveState,
-        offset: usize,
+        thread_ids: &[Id<ChannelMarker>],
     ) {
-        self.forum_posts
-            .mark_failed(channel_id, archive_state, offset);
+        self.forum_post_data.release(channel_id, thread_ids);
+    }
+
+    pub(crate) fn next_archived_thread_request(
+        &mut self,
+        target: Option<ArchivedThreadRequestTarget>,
+    ) -> Option<ArchivedThreadRequestTarget> {
+        self.archived_threads.next(target)
+    }
+
+    pub(crate) fn mark_archived_thread_request_send_failed(
+        &mut self,
+        channel_id: Id<ChannelMarker>,
+        cursor: &ArchivedThreadPageCursor,
+    ) {
+        self.archived_threads.release(channel_id, cursor);
     }
 
     pub(crate) fn next_pinned_message_request(
@@ -493,30 +521,82 @@ impl HistoryRequests {
     }
 }
 
-impl ForumPostRequests {
+impl ForumPostDataRequests {
     pub(super) fn record_event(&mut self, event: &AppEvent) {
         match event {
-            AppEvent::ForumPostsLoaded {
+            AppEvent::ForumPostDataLoaded {
                 channel_id,
-                archive_state,
-                offset: _,
-                next_offset,
-                has_more,
+                requested_thread_ids,
                 ..
-            } => {
-                self.requests.entry(*channel_id).or_default().set_loaded(
-                    *archive_state,
-                    *next_offset,
-                    *has_more,
-                );
+            } => self.release(*channel_id, requested_thread_ids),
+            AppEvent::ForumPostDataLoadFailed {
+                channel_id,
+                thread_ids,
+                ..
+            } => self.release(*channel_id, thread_ids),
+            _ => {}
+        }
+    }
+
+    pub(super) fn next(
+        &mut self,
+        target: Option<ForumPostDataRequestTarget>,
+    ) -> Option<ForumPostDataRequestTarget> {
+        let ForumPostDataRequestTarget {
+            guild_id,
+            channel_id,
+            thread_ids,
+        } = target?;
+        let mut batch = Vec::with_capacity(FORUM_POST_DATA_BATCH_LIMIT);
+        for thread_id in thread_ids {
+            if batch.len() == FORUM_POST_DATA_BATCH_LIMIT {
+                break;
             }
-            AppEvent::ForumPostsLoadFailed {
-                channel_id,
-                archive_state,
-                offset,
-                ..
+            if self.in_flight.insert((channel_id, thread_id)) {
+                batch.push(thread_id);
+            }
+        }
+        (!batch.is_empty()).then_some(ForumPostDataRequestTarget {
+            guild_id,
+            channel_id,
+            thread_ids: batch,
+        })
+    }
+
+    pub(super) fn release(
+        &mut self,
+        channel_id: Id<ChannelMarker>,
+        thread_ids: &[Id<ChannelMarker>],
+    ) {
+        for thread_id in thread_ids {
+            self.in_flight.remove(&(channel_id, *thread_id));
+        }
+    }
+}
+
+impl ArchivedThreadRequests {
+    pub(super) fn record_event(&mut self, event: &AppEvent) {
+        match event {
+            AppEvent::ArchivedThreadsLoaded {
+                channel_id, before, ..
             } => {
-                self.mark_failed(*channel_id, *archive_state, *offset);
+                let key = (
+                    *channel_id,
+                    ArchivedThreadPageCursor::from_before(before.clone()),
+                );
+                self.in_flight.remove(&key);
+                self.failed.remove(&key);
+                self.completed.insert(key);
+            }
+            AppEvent::ArchivedThreadsLoadFailed {
+                channel_id, before, ..
+            } => {
+                let key = (
+                    *channel_id,
+                    ArchivedThreadPageCursor::from_before(before.clone()),
+                );
+                self.in_flight.remove(&key);
+                self.failed.insert(key);
             }
             _ => {}
         }
@@ -524,39 +604,35 @@ impl ForumPostRequests {
 
     pub(super) fn next(
         &mut self,
-        target: Option<ForumPostRequestTarget>,
-    ) -> Option<(
-        Id<GuildMarker>,
-        Id<ChannelMarker>,
-        ForumPostArchiveState,
-        usize,
-    )> {
-        let Some(ForumPostRequestTarget {
-            guild_id,
-            channel_id,
-            should_load_more,
-        }) = target
-        else {
-            self.last_channel.clear();
+        target: Option<ArchivedThreadRequestTarget>,
+    ) -> Option<ArchivedThreadRequestTarget> {
+        let Some(target) = target else {
+            self.last_channel = None;
             return None;
         };
-        let channel_changed = self.last_channel.select(channel_id);
+        let channel_changed =
+            self.last_channel.replace(target.channel_id) != Some(target.channel_id);
+        if channel_changed {
+            self.failed
+                .retain(|(channel_id, _)| *channel_id != target.channel_id);
+        }
 
-        let state = self.requests.entry(channel_id).or_default();
-        let next = state.next(channel_changed, should_load_more)?;
-        Some((guild_id, channel_id, next.archive_state, next.offset))
+        let key = (target.channel_id, target.cursor.clone());
+        if self.completed.contains(&key)
+            || self.failed.contains(&key)
+            || !self.in_flight.insert(key)
+        {
+            return None;
+        }
+        Some(target)
     }
 
-    pub(super) fn mark_failed(
+    pub(super) fn release(
         &mut self,
         channel_id: Id<ChannelMarker>,
-        archive_state: ForumPostArchiveState,
-        offset: usize,
+        cursor: &ArchivedThreadPageCursor,
     ) {
-        self.requests
-            .entry(channel_id)
-            .or_default()
-            .set_failed(archive_state, offset);
+        self.in_flight.remove(&(channel_id, cursor.clone()));
     }
 }
 
@@ -884,6 +960,7 @@ struct PendingReadAck {
 struct MemberListSubscriptionKey {
     guild_id: Id<GuildMarker>,
     channel_id: Id<ChannelMarker>,
+    thread_id: Option<Id<ChannelMarker>>,
     bucket: u32,
     refresh_generation: u64,
 }
@@ -952,6 +1029,7 @@ impl MemberListSubscriptionTarget {
         MemberListSubscriptionKey {
             guild_id: self.guild_id,
             channel_id: self.channel_id,
+            thread_id: self.thread_id,
             bucket: self.bucket,
             refresh_generation: self.refresh_generation,
         }
@@ -967,142 +1045,6 @@ fn normalize_guild_member_search_target(
         guild_id: target.guild_id,
         query,
     })
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ForumPostRequestCursor {
-    archive_state: ForumPostArchiveState,
-    offset: usize,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct ForumPostRequestState {
-    active: ForumPostPageRequestState,
-    archived: ForumPostPageRequestState,
-}
-
-impl ForumPostRequestState {
-    fn next(
-        &mut self,
-        channel_changed: bool,
-        should_load_more: bool,
-    ) -> Option<ForumPostRequestCursor> {
-        if let Some(offset) = self.active.next(channel_changed, true, should_load_more) {
-            return Some(ForumPostRequestCursor {
-                archive_state: ForumPostArchiveState::Active,
-                offset,
-            });
-        }
-        // Only start the archived stream once the active search is fully
-        // drained. While an active page is still in flight, `active.next`
-        // returns `None` even though more active posts are coming, so without
-        // this guard the archived section would start loading and interleave
-        // before the active list finishes.
-        let allow_archived_initial = should_load_more && self.active.is_exhausted();
-        if let Some(offset) =
-            self.archived
-                .next(channel_changed, allow_archived_initial, should_load_more)
-        {
-            return Some(ForumPostRequestCursor {
-                archive_state: ForumPostArchiveState::Archived,
-                offset,
-            });
-        }
-        None
-    }
-
-    fn set_loaded(
-        &mut self,
-        archive_state: ForumPostArchiveState,
-        next_offset: usize,
-        has_more: bool,
-    ) {
-        self.page_mut(archive_state)
-            .set_loaded(next_offset, has_more);
-    }
-
-    fn set_failed(&mut self, archive_state: ForumPostArchiveState, offset: usize) {
-        self.page_mut(archive_state).set_failed(offset);
-    }
-
-    fn page_mut(&mut self, archive_state: ForumPostArchiveState) -> &mut ForumPostPageRequestState {
-        match archive_state {
-            ForumPostArchiveState::Active => &mut self.active,
-            ForumPostArchiveState::Archived => &mut self.archived,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum ForumPostPageRequestState {
-    #[default]
-    NotRequested,
-    Requested {
-        offset: usize,
-    },
-    Loaded {
-        next_offset: usize,
-        has_more: bool,
-    },
-    Failed {
-        offset: usize,
-    },
-}
-
-impl ForumPostPageRequestState {
-    fn next(
-        &mut self,
-        channel_changed: bool,
-        allow_initial: bool,
-        should_load_more: bool,
-    ) -> Option<usize> {
-        match *self {
-            Self::NotRequested if allow_initial => {
-                *self = Self::Requested { offset: 0 };
-                Some(0)
-            }
-            Self::Failed { offset } if channel_changed => {
-                *self = Self::Requested { offset };
-                Some(offset)
-            }
-            Self::Loaded {
-                next_offset,
-                has_more: true,
-            } if should_load_more => {
-                *self = Self::Requested {
-                    offset: next_offset,
-                };
-                Some(next_offset)
-            }
-            Self::NotRequested
-            | Self::Requested { .. }
-            | Self::Loaded { .. }
-            | Self::Failed { .. } => None,
-        }
-    }
-
-    fn set_loaded(&mut self, next_offset: usize, has_more: bool) {
-        *self = Self::Loaded {
-            next_offset,
-            has_more,
-        };
-    }
-
-    fn set_failed(&mut self, offset: usize) {
-        *self = Self::Failed { offset };
-    }
-
-    /// A page stream is drained once a loaded page reported no more results.
-    /// A pending (`Requested`) page is not exhausted: more results may follow.
-    fn is_exhausted(&self) -> bool {
-        matches!(
-            self,
-            Self::Loaded {
-                has_more: false,
-                ..
-            }
-        )
-    }
 }
 
 #[cfg(test)]

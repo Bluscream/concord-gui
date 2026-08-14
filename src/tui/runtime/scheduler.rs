@@ -58,7 +58,9 @@ impl DashboardCommandScheduler {
             .await;
         self.schedule_pinned_messages(state, client, commands, &mut dirty)
             .await;
-        self.schedule_forum_posts(state, client, commands, &mut dirty)
+        self.schedule_archived_threads(state, client, commands, &mut dirty)
+            .await;
+        self.schedule_forum_post_data(state, client, commands, &mut dirty)
             .await;
         self.schedule_member_requests(state, client, now, &mut dirty)
             .await;
@@ -189,30 +191,64 @@ impl DashboardCommandScheduler {
         }
     }
 
-    async fn schedule_forum_posts(
+    async fn schedule_forum_post_data(
         &mut self,
         state: &mut DashboardState,
         client: &DiscordClient,
         commands: &mpsc::Sender<AppCommand>,
         dirty: &mut bool,
     ) {
-        if let Some((guild_id, channel_id, archive_state, offset)) =
-            client.next_forum_post_request(state.selected_forum_channel_with_load_more())
+        if let Some(crate::discord::ForumPostDataRequestTarget {
+            guild_id,
+            channel_id,
+            thread_ids,
+        }) = client.next_forum_post_data_request(state.selected_forum_post_data_target())
             && send_command(
                 state,
                 commands,
-                AppCommand::LoadForumPosts {
+                AppCommand::LoadForumPostData {
                     guild_id,
                     channel_id,
-                    archive_state,
-                    offset,
+                    thread_ids: thread_ids.clone(),
                 },
             )
             .await
             .is_channel_closed()
         {
-            client.mark_forum_post_request_failed(channel_id, archive_state, offset);
+            client.mark_forum_post_data_request_failed(channel_id, &thread_ids);
             *dirty = true;
+        }
+    }
+
+    async fn schedule_archived_threads(
+        &mut self,
+        state: &mut DashboardState,
+        client: &DiscordClient,
+        commands: &mpsc::Sender<AppCommand>,
+        dirty: &mut bool,
+    ) {
+        if let Some(crate::discord::ArchivedThreadRequestTarget {
+            guild_id,
+            channel_id,
+            cursor,
+        }) = client.next_archived_thread_request(state.selected_archived_thread_request_target())
+        {
+            let before = cursor.clone().into_before();
+            if send_command(
+                state,
+                commands,
+                AppCommand::LoadArchivedThreads {
+                    guild_id,
+                    channel_id,
+                    before,
+                },
+            )
+            .await
+            .is_channel_closed()
+            {
+                client.mark_archived_thread_request_send_failed(channel_id, &cursor);
+                *dirty = true;
+            }
         }
     }
 
@@ -268,22 +304,30 @@ impl DashboardCommandScheduler {
         let target = state
             .member_list_subscription_target()
             .map(|(guild_id, channel_id)| {
+                let thread_id = state.thread_member_list_subscription_target().and_then(
+                    |(thread_guild_id, thread_id)| {
+                        (thread_guild_id == guild_id).then_some(thread_id)
+                    },
+                );
                 (
                     guild_id,
                     channel_id,
+                    thread_id,
                     state.member_subscription_top_bucket(),
                     state.member_list_refresh_generation(guild_id),
                     state.member_subscription_ranges(),
                 )
             });
         client.set_member_list_subscription_target(target, now);
-        if let Some((guild_id, channel_id, ranges)) = client.next_due_member_list_subscription(now)
+        if let Some((guild_id, channel_id, thread_id, ranges)) =
+            client.next_due_member_list_subscription(now)
             && send_command(
                 state,
                 commands,
                 AppCommand::UpdateMemberListSubscription {
                     guild_id,
                     channel_id,
+                    thread_id,
                     ranges,
                 },
             )
