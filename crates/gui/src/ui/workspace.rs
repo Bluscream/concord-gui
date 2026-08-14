@@ -527,7 +527,17 @@ impl Workspace {
                 }
             }
             LoginAction::PickDemo => {
-                self.start_token_session("test".to_string(), false, window, cx);
+                if cfg!(feature = "fixtures") {
+                    self.start_token_session("test".to_string(), false, window, cx);
+                } else if let Screen::Login(login) = &mut self.screen {
+                    // Reachable through the keyboard shortcut even when the
+                    // button is hidden, so it explains itself rather than
+                    // failing as a bad credential.
+                    login.error = Some(
+                        "This build has no demo data. Rebuild with --features fixtures."
+                            .to_string(),
+                    );
+                }
             }
 
             // -- Back: return to picker -------------------------------------

@@ -464,13 +464,18 @@ fn picker_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
                     LoginAction::PickQr,
                     cx,
                 ))
-                .child(method_btn(
-                    "Demo Mode",
-                    "Offline fixture data — no account needed",
-                    active().warning,
-                    LoginAction::PickDemo,
-                    cx,
-                )),
+                // Only offered when the build can actually serve it: without
+                // the fixtures feature "test" is not a demo token, so this
+                // would attempt a real login with a literal token and fail.
+                .when(cfg!(feature = "fixtures"), |picker| {
+                    picker.child(method_btn(
+                        "Demo Mode",
+                        "Offline fixture data — no account needed",
+                        active().warning,
+                        LoginAction::PickDemo,
+                        cx,
+                    ))
+                }),
         );
 
     let card = maybe_error(card, &login.error);
