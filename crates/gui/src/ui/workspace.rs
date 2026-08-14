@@ -34,7 +34,7 @@ use crate::ui::emoji::{self, EmojiPicker};
 use crate::ui::login::{Login, LoginEvent, LoginHandle, LoginScreen, PasswordField, login_view};
 use crate::ui::messages::{MessageAction, message_list};
 use crate::ui::profile::{ProfileView, profile_view};
-use crate::ui::settings::SettingsWindow;
+use crate::ui::settings::{OnChange, SettingsWindow};
 
 /// Everything the workspace renders, projected from the core's state store.
 pub struct WorkspaceModel {
@@ -208,11 +208,9 @@ pub struct Workspace {
     /// Loaded config, mutated by the settings panel and persisted on change.
     pub options: AppOptions,
     /// Whether the settings panel is open.
-    pub settings_open: bool,
     /// Result of the last persistence attempt, surfaced in the panel.
     pub settings_note: Option<String>,
     /// Composer for editing custom Discord base URL.
-    pub url_composer: Composer,
     /// Files staged for the next send.
     pub attachments: Vec<MessageAttachmentUpload>,
     /// Reason the last staging attempt failed, shown above the composer.
@@ -226,8 +224,6 @@ pub struct Workspace {
 impl Workspace {
     pub fn new(model: WorkspaceModel, screen: Screen, cx: &mut Context<Self>) -> Self {
         let options = config::load_options().unwrap_or_default();
-        let mut url_composer = Composer::default();
-        url_composer.set_text(&options.server.discord_base_url);
 
         Self {
             screen,
@@ -248,9 +244,7 @@ impl Workspace {
             profile: None,
             window_focused: true,
             options,
-            settings_open: false,
             settings_note: None,
-            url_composer,
             attachments: Vec::new(),
             attachment_error: None,
             last_state: None,
@@ -262,24 +256,24 @@ impl Workspace {
         let options = self.options.clone();
         let bounds = gpui::Bounds::centered(None, gpui::size(px(600.), px(650.)), cx);
 
+        // The window edits its own copy, so it needs a way back: without this
+        // the live client keeps stale settings until restart, and a later
+        // workspace save would overwrite the window's changes.
+        let entity = cx.entity();
+        let on_change: OnChange = std::rc::Rc::new(move |options, cx| {
+            entity.update(cx, |workspace, cx| {
+                workspace.options = options.clone();
+                cx.notify();
+            });
+        });
+
         let _ = cx.open_window(
             gpui::WindowOptions {
                 window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_window, cx| cx.new(|cx| SettingsWindow::new(options, cx)),
+            |_window, cx| cx.new(|cx| SettingsWindow::new(options, cx).on_change(on_change)),
         );
-    }
-
-    pub fn save_options(&mut self) {
-        match config::save_options(&self.options) {
-            Ok(()) => {
-                self.settings_note = Some("Saved to config.toml".to_string());
-            }
-            Err(err) => {
-                self.settings_note = Some(format!("Failed to save: {err}"));
-            }
-        }
     }
 
     /// Send the composer's contents to the open channel.
@@ -1562,7 +1556,6 @@ impl Workspace {
 
         let mute = self.self_mute;
         let deaf = self.self_deaf;
-        let settings_open = self.settings_open;
 
         row()
             .w_full()
@@ -1686,17 +1679,9 @@ impl Workspace {
                             .items_center()
                             .justify_center()
                             .rounded(px(layout::RADIUS))
-                            .bg(rgb(if settings_open {
-                                active().accent
-                            } else {
-                                active().surface
-                            }))
+                            .bg(rgb(active().surface))
                             .text_size(px(14.))
-                            .text_color(rgb(if settings_open {
-                                active().on_accent
-                            } else {
-                                active().text_muted
-                            }))
+                            .text_color(rgb(active().text_muted))
                             .cursor_pointer()
                             .hover(|s| {
                                 s.bg(rgb(active().surface_hover))
@@ -2324,26 +2309,6 @@ impl Render for Workspace {
                                     }
                                 }
                                 _ => {}
-                            }
-                        } else if key == "comma"
-                            && (event.keystroke.modifiers.control
-                                || event.keystroke.modifiers.platform)
-                        {
-                            this.settings_open = !this.settings_open;
-                        } else if this.settings_open {
-                            if key == "escape" {
-                                this.settings_open = false;
-                            } else {
-                                let pasted = (event.keystroke.key == "v"
-                                    && (event.keystroke.modifiers.control
-                                        || event.keystroke.modifiers.platform))
-                                    .then(|| cx.read_from_clipboard().and_then(|item| item.text()))
-                                    .flatten();
-                                if this.url_composer.handle_key_with_clipboard(event, pasted) {
-                                    this.options.server.discord_base_url =
-                                        this.url_composer.text().to_string();
-                                    this.save_options();
-                                }
                             }
                         } else if key == "comma"
                             && (event.keystroke.modifiers.control

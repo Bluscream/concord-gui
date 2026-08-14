@@ -60,34 +60,56 @@ impl Toggle {
     }
 }
 
+/// Notified whenever a setting changes, so the live client can adopt it.
+///
+/// Without this the window edits a detached clone: it would save correctly to
+/// config.toml while the running UI kept stale values until restart.
+pub type OnChange = std::rc::Rc<dyn Fn(&concord::config::AppOptions, &mut gpui::App)>;
+
 pub struct SettingsWindow {
     pub options: concord::config::AppOptions,
     pub settings_note: Option<String>,
     pub url_composer: Composer,
+    on_change: Option<OnChange>,
     focus: FocusHandle,
 }
 
 impl SettingsWindow {
     pub fn new(options: concord::config::AppOptions, cx: &mut Context<Self>) -> Self {
-        let mut url_composer = Composer::default();
-        url_composer.set_text(&options.server.discord_base_url);
         Self {
             options,
             settings_note: None,
-            url_composer,
+            url_composer: Composer::default(),
+            on_change: None,
             focus: cx.focus_handle(),
         }
     }
 
-    pub fn save_options(&mut self) {
-        match concord::config::save_options(&self.options) {
-            Ok(()) => {
-                self.settings_note = Some("Saved to config.toml".to_string());
-            }
-            Err(err) => {
-                self.settings_note = Some(format!("Failed to save: {err}"));
-            }
+    /// Register the callback that propagates changes to the live client.
+    pub fn on_change(mut self, callback: OnChange) -> Self {
+        self.on_change = Some(callback);
+        self
+    }
+
+    /// Persist, apply the theme, and notify the live client.
+    ///
+    /// `cx` is required so the change can reach the opener; saving without it
+    /// would leave the running UI showing stale settings.
+    pub fn save_options(&mut self, cx: &mut gpui::App) {
+        // Applied here rather than at next launch so the palette flips while
+        // the window is still open.
+        crate::theme::set_light_mode(self.options.display.light_mode);
+
+        self.settings_note = match concord::config::save_options(&self.options) {
+            Ok(()) => Some("Saved to config.toml".to_string()),
+            Err(err) => Some(format!("Failed to save: {err}")),
+        };
+
+        if let Some(callback) = self.on_change.clone() {
+            callback(&self.options, cx);
         }
+
+        cx.refresh_windows();
     }
 }
 
@@ -123,7 +145,7 @@ impl Render for SettingsWindow {
                     .flatten();
                 if this.url_composer.handle_key_with_clipboard(event, pasted) {
                     this.options.server.discord_base_url = this.url_composer.text().to_string();
-                    this.save_options();
+                    this.save_options(cx);
                     cx.notify();
                 }
             }))
@@ -233,7 +255,7 @@ impl Render for SettingsWindow {
                                             .hover(|s| s.bg(rgb(theme.surface_hover)))
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.options.display.light_mode = false;
-                                                this.save_options();
+                                                this.save_options(cx);
                                                 cx.notify();
                                             }))
                                             .child(
@@ -271,7 +293,7 @@ impl Render for SettingsWindow {
                                             .hover(|s| s.bg(rgb(theme.surface_hover)))
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.options.display.light_mode = true;
-                                                this.save_options();
+                                                this.save_options(cx);
                                                 cx.notify();
                                             }))
                                             .child(
@@ -329,7 +351,7 @@ impl Render for SettingsWindow {
                                 theme,
                                 cx.listener(|this, _, _, cx| {
                                     this.options.display.show_avatars = !this.options.display.show_avatars;
-                                    this.save_options();
+                                    this.save_options(cx);
                                     cx.notify();
                                 }),
                             ))
@@ -339,7 +361,7 @@ impl Render for SettingsWindow {
                                 theme,
                                 cx.listener(|this, _, _, cx| {
                                     this.options.display.circular_avatars = !this.options.display.circular_avatars;
-                                    this.save_options();
+                                    this.save_options(cx);
                                     cx.notify();
                                 }),
                             ))
@@ -352,7 +374,7 @@ impl Render for SettingsWindow {
                                 cx.listener(|this, _, _, cx| {
                                     this.options.notifications.desktop_notifications =
                                         !this.options.notifications.desktop_notifications;
-                                    this.save_options();
+                                    this.save_options(cx);
                                     cx.notify();
                                 }),
                             ))
@@ -364,7 +386,7 @@ impl Render for SettingsWindow {
                                 theme,
                                 cx.listener(|this, _, _, cx| {
                                     this.options.voice.noise_suppression = !this.options.voice.noise_suppression;
-                                    this.save_options();
+                                    this.save_options(cx);
                                     cx.notify();
                                 }),
                             ))
@@ -377,7 +399,7 @@ impl Render for SettingsWindow {
                                 cx.listener(|this, _, _, cx| {
                                     this.options.presence.share_rich_presence =
                                         !this.options.presence.share_rich_presence;
-                                    this.save_options();
+                                    this.save_options(cx);
                                     cx.notify();
                                 }),
                             )),
