@@ -5,7 +5,9 @@
 //! session already publishes on every state revision - no new plumbing needed,
 //! only mapping.
 
+use concord::config::CredentialStoreMode;
 use concord::discord::{AppCommand, AppEvent, Id, marker, next_message_nonce};
+use concord::token_store;
 use gpui::{Context, FocusHandle, KeyDownEvent, Window, WindowHandle, prelude::*, px, rgb};
 use tokio::sync::mpsc;
 
@@ -18,6 +20,7 @@ use crate::ui::chrome::{
     avatar, column, header, hint, panel_sunken, presence_dot, row, section_label, sidebar_row,
 };
 use crate::ui::composer::{Composer, composer_view};
+use crate::ui::login::{Login, login_view};
 use crate::ui::messages::message_list;
 
 /// Placeholder view-model. Mirrors the shape of the snapshot projections so
@@ -138,7 +141,14 @@ impl WorkspaceModel {
     }
 }
 
+/// Which top-level surface is showing.
+pub enum Screen {
+    Login(Login),
+    Ready,
+}
+
 pub struct Workspace {
+    pub screen: Screen,
     pub model: WorkspaceModel,
     /// Command sink into the core. `None` until a session starts.
     pub handle: Option<SessionHandle>,
@@ -151,8 +161,9 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub fn new(model: WorkspaceModel, cx: &mut Context<Self>) -> Self {
+    pub fn new(model: WorkspaceModel, screen: Screen, cx: &mut Context<Self>) -> Self {
         Self {
+            screen,
             model,
             handle: None,
             nav: Navigation::default(),
@@ -265,6 +276,45 @@ impl Workspace {
             }
             Selection::DirectMessages => {
                 handle.send(AppCommand::SubscribeDirectMessage { channel_id });
+            }
+        }
+    }
+
+    /// Start a session from a token entered on the login screen.
+    fn submit_login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Screen::Login(login) = &mut self.screen else {
+            return;
+        };
+        if !login.is_submittable() {
+            return;
+        }
+
+        let token = login.input.take();
+        let remember = login.remember;
+        login.connecting = true;
+        login.error = None;
+
+        // Persisting is best-effort: a failure to write the credential store
+        // must not block a session that would otherwise work.
+        if remember {
+            let _ = token_store::save_token(&token, CredentialStoreMode::default());
+        }
+
+        match crate::session::spawn(token) {
+            Ok((updates, handle)) => {
+                self.attach(handle);
+                self.screen = Screen::Ready;
+                self.model.status_line = "connecting…".to_string();
+
+                if let Some(window_handle) = window.window_handle().downcast::<Workspace>() {
+                    Workspace::pump(window_handle, updates, cx);
+                }
+            }
+            Err(error) => {
+                if let Screen::Login(login) = &mut self.screen {
+                    login.connecting = false;
+                    login.error = Some(format!("could not start session: {error}"));
+                }
             }
         }
     }
@@ -544,25 +594,46 @@ impl Render for Workspace {
         column()
             .track_focus(&self.focus)
             .key_context("Workspace")
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                if this.composer.handle_key(event) {
-                    this.send_message();
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                match &mut this.screen {
+                    Screen::Login(login) => {
+                        // ctrl-r toggles persistence; everything else edits the
+                        // token buffer.
+                        if event.keystroke.key == "r" && event.keystroke.modifiers.control {
+                            login.remember = !login.remember;
+                        } else if login.input.handle_key(event) {
+                            this.submit_login(window, cx);
+                        }
+                    }
+                    Screen::Ready => {
+                        if this.composer.handle_key(event) {
+                            this.send_message();
+                        }
+                    }
                 }
                 cx.notify();
             }))
             .size_full()
             .bg(rgb(DARK.bg))
             .text_size(px(text::BASE))
-            .child(
-                row()
-                    .flex_1()
-                    .w_full()
-                    .overflow_hidden()
-                    .child(self.guild_rail(cx))
-                    .child(self.channel_sidebar(cx))
-                    .child(self.content(window))
-                    .when(self.shows_members(), |d| d.child(self.member_pane())),
-            )
-            .child(self.status_bar())
+            .when(matches!(self.screen, Screen::Login(_)), |d| {
+                let Screen::Login(login) = &self.screen else {
+                    return d;
+                };
+                d.child(login_view(login))
+            })
+            .when(matches!(self.screen, Screen::Ready), |d| {
+                d.child(
+                    row()
+                        .flex_1()
+                        .w_full()
+                        .overflow_hidden()
+                        .child(self.guild_rail(cx))
+                        .child(self.channel_sidebar(cx))
+                        .child(self.content(window))
+                        .when(self.shows_members(), |d| d.child(self.member_pane())),
+                )
+                .child(self.status_bar())
+            })
     }
 }

@@ -20,7 +20,8 @@ mod ui;
 
 use gpui::{App, Application, Bounds, WindowBounds, WindowOptions, prelude::*, px, size};
 
-use crate::ui::workspace::{Workspace, WorkspaceModel};
+use crate::ui::login::Login;
+use crate::ui::workspace::{Screen, Workspace, WorkspaceModel};
 
 use concord::config::CredentialStoreMode;
 use concord::{paths, token_store};
@@ -96,15 +97,15 @@ fn main() {
                 },
                 |_window, cx| {
                     let mut model = WorkspaceModel::placeholder();
-                    model.status_line = if status.has_token {
-                        "starting session…".to_string()
+                    model.status_line = "connecting…".to_string();
+                    // With a stored credential the workspace opens directly;
+                    // otherwise the login screen is the entry point.
+                    let screen = if status.has_token {
+                        Screen::Ready
                     } else {
-                        format!(
-                            "no credential - set CONCORD_TOKEN or log in with the TUI | config: {}",
-                            status.config_path
-                        )
+                        Screen::Login(Login::default())
                     };
-                    cx.new(|cx| Workspace::new(model, cx))
+                    cx.new(|cx| Workspace::new(model, screen, cx))
                 },
             )
             .expect("failed to open window");
