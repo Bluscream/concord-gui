@@ -38,6 +38,10 @@ impl MessageAction {
             MessageAction::RevealSpoiler => 5,
             MessageAction::OpenProfile => 6,
             MessageAction::LoadOlder => 7,
+            MessageAction::JumpToReplied => 8,
+            MessageAction::CopyText => 9,
+            MessageAction::CopyLink => 10,
+            MessageAction::ShowReactionUsers(_) => 11,
         }
     }
 }
@@ -54,6 +58,14 @@ pub enum MessageAction {
     OpenProfile,
     /// Fetch the page of messages before the oldest one loaded.
     LoadOlder,
+    /// Jump to the message this one replies to.
+    JumpToReplied,
+    /// Copy the message body.
+    CopyText,
+    /// Copy a discord.com link to the message.
+    CopyLink,
+    /// Show who reacted, by index into the row's reactions.
+    ShowReactionUsers(usize),
     /// Toggle an existing reaction, identified by its index in the row's
     /// reaction list. Carrying the index avoids threading emoji identity
     /// through the callback.
@@ -205,7 +217,9 @@ fn action_bar(
 
     bar = bar
         .child(button("reply", MessageAction::Reply, false))
-        .child(button("react", MessageAction::React, false));
+        .child(button("react", MessageAction::React, false))
+        .child(button("copy", MessageAction::CopyText, false))
+        .child(button("link", MessageAction::CopyLink, false));
 
     // Edit and delete are only offered on the user's own messages; showing
     // them otherwise would invite a request the server will reject.
@@ -232,8 +246,14 @@ fn message_block(
         .when(!message.continues, |d| d.pt(px(space::MD)))
         .when(message.continues, |d| d.pt(px(2.)));
 
-    if let Some((author, content)) = &message.reply_to {
-        block = block.child(reply_context(author, content));
+    if let Some((author, content, target)) = &message.reply_to {
+        block = block.child(reply_context(
+            index,
+            author,
+            content,
+            *target,
+            on_action.clone(),
+        ));
     }
 
     if message.continues {
@@ -558,17 +578,33 @@ fn rich_text(parsed: &markdown::Parsed, reveal_spoilers: bool) -> impl IntoEleme
         .child(StyledText::new(parsed.text.clone()).with_highlights(highlights.collect::<Vec<_>>()))
 }
 
-fn reply_context(author: &str, content: &str) -> Div {
+fn reply_context(
+    index: usize,
+    author: &str,
+    content: &str,
+    target: Option<concord::discord::Id<concord::discord::marker::MessageMarker>>,
+    on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
+) -> impl IntoElement {
     // Replies are truncated to a single line: the full message is one click
     // away in the log itself.
     let preview: String = content.chars().take(120).collect();
 
     row()
+        .id(("reply-context", index))
         .w_full()
         .gap(px(space::SM))
         .pl(px(GUTTER))
         .text_size(px(text::XS))
         .text_color(rgb(active().text_subtle))
+        // Only clickable when the target is known: a reply whose reference
+        // Discord did not supply would jump nowhere.
+        .when(target.is_some(), |d| {
+            d.cursor_pointer()
+                .hover(|style| style.text_color(rgb(active().text_muted)))
+                .on_click(move |_event, _window, cx| {
+                    on_action(index, MessageAction::JumpToReplied, cx)
+                })
+        })
         .child(gpui::div().child("\u{21b3}"))
         .child(
             gpui::div()
@@ -625,6 +661,18 @@ fn reaction_bar(
                         MessageAction::ToggleReaction(reaction_index),
                         cx,
                     )
+                })
+                // Right-click asks who reacted. Left-click already toggles,
+                // and overloading it would make one of the two unreachable.
+                .on_mouse_down(gpui::MouseButton::Right, {
+                    let handler = on_action.clone();
+                    move |_event, _window, cx| {
+                        handler(
+                            message_index,
+                            MessageAction::ShowReactionUsers(reaction_index),
+                            cx,
+                        )
+                    }
                 })
                 .gap(px(space::XS))
                 .px(px(6.))

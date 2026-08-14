@@ -176,7 +176,7 @@ fn replies_break_grouping_and_carry_context() {
         !reply.continues,
         "a reply must start its own block even from the same author"
     );
-    let (author, content) = reply.reply_to.as_ref().unwrap();
+    let (author, content, _target) = reply.reply_to.as_ref().unwrap();
     assert_eq!(author, "turing");
     assert!(!content.is_empty());
 }
@@ -710,4 +710,27 @@ fn switcher_selection_wraps_and_survives_empty_results() {
     assert!(switcher.results.is_empty());
     switcher.move_selection(1);
     assert!(switcher.selection().is_none());
+}
+
+#[test]
+fn replies_carry_their_target_id_for_jumping() {
+    let state = demo_state();
+    let rows = project_messages(
+        &state,
+        concord::discord::Id::new(111),
+        state.current_user_id(),
+    );
+
+    let reply = rows
+        .iter()
+        .find(|row| row.reply_to.is_some())
+        .expect("fixture defines a reply");
+
+    // The preview alone is not enough: without the referenced id the reply
+    // context cannot be clicked through to its target.
+    let (_, _, target) = reply.reply_to.as_ref().unwrap();
+    assert!(
+        target.is_some(),
+        "a reply must carry the id of the message it answers"
+    );
 }

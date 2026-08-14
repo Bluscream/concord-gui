@@ -197,6 +197,11 @@ pub struct Workspace {
     pub editing: Option<Id<marker::MessageMarker>>,
     /// Channel the user is connected to by voice, if any.
     pub voice_channel: Option<(Id<marker::ChannelMarker>, String)>,
+    /// Text queued for the clipboard, written on the next render pass where
+    /// an `App` context is available.
+    pub pending_copy: Option<String>,
+    /// Reaction the user asked about: message, emoji, and who reacted.
+    pub reaction_users: Option<(Id<marker::MessageMarker>, String, Vec<String>)>,
     /// Quick switcher, open while jumping to a channel.
     pub switcher: Option<Switcher>,
     /// Forum being browsed, when the open channel is a forum.
@@ -251,6 +256,8 @@ impl Workspace {
             editing: None,
             voice_channel: None,
             voice_scope_joined: None,
+            pending_copy: None,
+            reaction_users: None,
             switcher: None,
             forum: None,
             stream_picker: None,
@@ -1075,6 +1082,29 @@ impl Workspace {
             MessageAction::Edit => self.start_edit(message_id),
             MessageAction::Delete => self.delete_message(message_id),
             MessageAction::LoadOlder => self.load_older_messages(),
+            MessageAction::JumpToReplied => {
+                if let Some(target) = self
+                    .messages
+                    .get(index)
+                    .and_then(|row| row.reply_to.as_ref())
+                    .and_then(|(_, _, target)| *target)
+                    && let Some(channel_id) = self.nav.channel
+                {
+                    self.jump_to(channel_id, target);
+                }
+            }
+            MessageAction::CopyText => {
+                self.pending_copy = self.messages.get(index).map(|row| row.content.clone())
+            }
+            MessageAction::CopyLink => {
+                self.pending_copy = self
+                    .messages
+                    .get(index)
+                    .map(|row| self.message_link(row.id));
+            }
+            MessageAction::ShowReactionUsers(reaction) => {
+                self.show_reaction_users(index, reaction);
+            }
             MessageAction::React => self.open_emoji_picker(message_id),
             MessageAction::OpenProfile => {
                 if let Some(row) = self.messages.get(index) {
@@ -1867,6 +1897,54 @@ impl Workspace {
         matches!(self.nav.selection, Selection::Guild(_)) && self.nav.channel.is_some()
     }
 
+    /// A discord.com link to a message in the open channel.
+    ///
+    /// DMs use the `@me` sentinel in place of a guild id, matching Discord's
+    /// own link format - a DM link built with a guild id resolves to nothing.
+    fn message_link(&self, message_id: Id<marker::MessageMarker>) -> String {
+        let guild = match self.nav.selection {
+            Selection::Guild(id) => id.get().to_string(),
+            Selection::DirectMessages => "@me".to_string(),
+        };
+        let channel = self
+            .nav
+            .channel
+            .map(|id| id.get().to_string())
+            .unwrap_or_default();
+
+        format!(
+            "https://discord.com/channels/{guild}/{channel}/{}",
+            message_id.get()
+        )
+    }
+
+    /// Ask who reacted with a given emoji.
+    fn show_reaction_users(&mut self, message: usize, reaction: usize) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        let Some(row) = self.messages.get(message) else {
+            return;
+        };
+        let Some((glyph, _, _)) = row.reactions.get(reaction) else {
+            return;
+        };
+
+        // Custom emoji round-trip as :name:, which is not a reaction identity
+        // the API accepts, so only unicode reactions can be queried.
+        if glyph.starts_with(':') {
+            return;
+        }
+
+        self.reaction_users = Some((row.id, glyph.clone(), Vec::new()));
+        handle.send(AppCommand::LoadReactionUsers {
+            channel_id,
+            message_id: row.id,
+            emoji: ReactionEmoji::Unicode(glyph.clone()),
+            after: None,
+        });
+    }
+
     /// Open the quick switcher, seeded with the full candidate list.
     pub fn open_switcher(&mut self) {
         let mut switcher = Switcher::default();
@@ -2047,6 +2125,26 @@ impl Workspace {
                     forum.error = Some("Could not load posts".to_string());
                 }
             }
+            AppEvent::ReactionUsersLoaded {
+                message_id,
+                users,
+                after,
+                ..
+            } => {
+                if let Some((target, _, existing)) = &mut self.reaction_users
+                    && *target == message_id
+                {
+                    let names = users.into_iter().map(|user| user.display_name);
+                    // `after: None` is the first page and replaces; a cursor
+                    // means this is a continuation and appends.
+                    if after.is_none() {
+                        *existing = names.collect();
+                    } else {
+                        existing.extend(names);
+                    }
+                }
+            }
+            AppEvent::ReactionUsersLoadFailed { .. } => self.reaction_users = None,
             AppEvent::StreamCaptureTargetsLoaded { targets, error, .. } => {
                 if let Some(picker) = &mut self.stream_picker {
                     picker.loading = false;
@@ -2502,6 +2600,12 @@ impl Render for Workspace {
         // Sampled per render rather than observed: GPUI re-renders on
         // activation changes, so this stays current without a second channel.
         self.window_focused = window.is_window_active();
+
+        // Copies are queued by action handlers, which have no clipboard
+        // access, and flushed here where the context is available.
+        if let Some(text) = self.pending_copy.take() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
 
         column()
             .track_focus(&self.focus)

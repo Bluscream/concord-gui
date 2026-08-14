@@ -440,6 +440,13 @@ pub fn demo_state() -> DiscordState {
         "finishing the member list",
         5900,
     );
+    // Discord sends both the preview and a reference carrying the target id;
+    // the preview alone cannot be jumped to.
+    reply.reference = Some(crate::discord::MessageReferenceInfo {
+        guild_id: Some(guild_id(10)),
+        channel_id: Some(channel_id(111)),
+        message_id: Some(message_id(snowflake_at(6000).max(5))),
+    });
     reply.reply = Some(ReplyInfo {
         author_id: Some(user_id(1003)),
         author: "turing".into(),

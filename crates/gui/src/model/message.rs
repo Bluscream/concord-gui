@@ -53,8 +53,9 @@ pub struct MessageRow {
     pub continues: bool,
     pub edited: bool,
     pub pinned: bool,
-    /// Author and content of the message this one replies to.
-    pub reply_to: Option<(String, String)>,
+    /// Author, content and id of the message this one replies to. The id lets
+    /// the reply context be clicked through to its target.
+    pub reply_to: Option<(String, String, Option<Id<marker::MessageMarker>>)>,
     pub attachments: Vec<AttachmentRow>,
     /// `(emoji, count, me_reacted)`.
     pub reactions: Vec<(String, u64, bool)>,
@@ -130,6 +131,12 @@ pub fn project_messages(
                 (
                     reply.author.clone(),
                     reply.content.clone().unwrap_or_default(),
+                    // The referenced id lives on the reference, not the reply
+                    // preview; without it the context cannot be jumped to.
+                    message
+                        .reference
+                        .as_ref()
+                        .and_then(|reference| reference.message_id),
                 )
             }),
             attachments: message

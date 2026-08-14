@@ -19,7 +19,8 @@ send · reply · edit · delete · react · emoji picker · spoilers · attachme
 indicators · guild voice · DM calls · mute/deafen · screenshare controls ·
 search with jump · desktop notifications · settings · history paging ·
 composer with selection, undo, clipboard, multi-line · mark read / mark all
-read · quick switcher
+read · quick switcher · jump to replied message · copy message text and link ·
+reaction users
 
 ### Missing
 
@@ -27,12 +28,9 @@ Ordered roughly by how much a daily driver misses them.
 
 | Feature | TUI action | Notes |
 |---|---|---|
-| Jump to replied message | `GoToReferencedMessage` | Reply context is shown but not clickable. |
-| Copy message text / link | `CopyMessage`, `CopyContent`, `CopyUrl` | |
 | Pin / unpin, view pins | `PinMessage`, `OpenPinConfirmation` | |
 | Notification inbox | `OpenNotificationInbox` | Mentions across all guilds in one place. |
 | Mute channel / guild | `ToggleMuted` | Core has the notification-settings commands. |
-| Reaction users | `ShowReactionUsers` | Who reacted with what. `ReactionUsersPage` exists. |
 | Polls | `OpenPollVotePicker` | `PollInfo` is already projected but not rendered. |
 | Attachment download / view | `DownloadSelected`, `ViewAttachment` | Chips render; nothing opens or saves. |
 | Media playback | `PlayMedia` | Upstream shells out to mpv. |
