@@ -5,4 +5,5 @@ pub mod login;
 pub mod messages;
 pub mod profile;
 pub mod settings;
+pub mod stream;
 pub mod workspace;

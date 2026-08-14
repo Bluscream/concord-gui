@@ -8,7 +8,8 @@
 use concord::config::{self, AppOptions, CredentialStoreMode};
 use concord::discord::{
     AppCommand, AppEvent, Id, MAX_UPLOAD_ATTACHMENT_COUNT, MessageAttachmentUpload,
-    MessageSearchQuery, ReactionEmoji, ReplyReference, VoiceScope, marker, next_message_nonce,
+    MessageSearchQuery, ReactionEmoji, ReplyReference, StreamCaptureTargetsRequestId, VoiceScope,
+    marker, next_message_nonce,
     password_auth::{MfaMethod, PasswordAuthEvent},
     qr_auth::QrEvent,
 };
@@ -35,6 +36,7 @@ use crate::ui::login::{Login, LoginEvent, LoginHandle, LoginScreen, PasswordFiel
 use crate::ui::messages::{MessageAction, message_list};
 use crate::ui::profile::{ProfileView, profile_view};
 use crate::ui::settings::{OnChange, SettingsWindow};
+use crate::ui::stream::{self, StreamPicker, share_button};
 
 /// Everything the workspace renders, projected from the core's state store.
 pub struct WorkspaceModel {
@@ -191,6 +193,10 @@ pub struct Workspace {
     pub editing: Option<Id<marker::MessageMarker>>,
     /// Channel the user is connected to by voice, if any.
     pub voice_channel: Option<(Id<marker::ChannelMarker>, String)>,
+    /// Capture-source picker, open while choosing what to share.
+    pub stream_picker: Option<StreamPicker>,
+    /// True while this client is broadcasting.
+    pub broadcasting: bool,
     /// Scope of the joined connection, retained so leaving works after the
     /// user navigates away from the channel they joined.
     voice_scope_joined: Option<VoiceScope>,
@@ -237,6 +243,8 @@ impl Workspace {
             editing: None,
             voice_channel: None,
             voice_scope_joined: None,
+            stream_picker: None,
+            broadcasting: false,
             self_mute: false,
             self_deaf: false,
             search: None,
@@ -1693,6 +1701,85 @@ impl Workspace {
             )
     }
 
+    /// Whether this build can capture a screen at all.
+    ///
+    /// Capture lives behind the core's `stream-broadcast` feature; without it
+    /// there is no capture path, so the control says so rather than issuing a
+    /// command that cannot succeed.
+    pub fn can_broadcast(&self) -> bool {
+        cfg!(feature = "media")
+    }
+
+    /// Ask the core to enumerate screens and windows.
+    pub fn open_stream_picker(&mut self) {
+        let (Some(handle), Some((channel_id, _)), Some(scope)) = (
+            &self.handle,
+            self.voice_channel.as_ref(),
+            self.voice_scope_joined,
+        ) else {
+            return;
+        };
+
+        self.stream_picker = Some(StreamPicker::loading());
+        handle.send(AppCommand::LoadStreamCaptureTargets {
+            // One outstanding request at a time, so a fixed id is enough to
+            // recognise the reply as ours.
+            request_id: StreamCaptureTargetsRequestId::new(1),
+            scope,
+            channel_id: *channel_id,
+        });
+    }
+
+    /// Begin broadcasting the chosen source.
+    pub fn start_stream(&mut self, index: usize) {
+        let Some(picker) = &self.stream_picker else {
+            return;
+        };
+        let Some(target) = picker.targets.get(index).cloned() else {
+            return;
+        };
+        let (Some(handle), Some((channel_id, _)), Some(scope)) = (
+            &self.handle,
+            self.voice_channel.as_ref(),
+            self.voice_scope_joined,
+        ) else {
+            return;
+        };
+
+        handle.send(AppCommand::StartVoiceStream {
+            scope,
+            channel_id: *channel_id,
+            target,
+        });
+        self.stream_picker = None;
+    }
+
+    pub fn stop_stream(&mut self) {
+        let (Some(handle), Some((channel_id, _)), Some(scope)) = (
+            &self.handle,
+            self.voice_channel.as_ref(),
+            self.voice_scope_joined,
+        ) else {
+            return;
+        };
+        handle.send(AppCommand::StopVoiceStream {
+            scope,
+            channel_id: *channel_id,
+        });
+    }
+
+    /// Toggle sharing from the voice bar.
+    pub fn toggle_stream(&mut self) {
+        if !self.can_broadcast() {
+            return;
+        }
+        if self.broadcasting {
+            self.stop_stream();
+        } else {
+            self.open_stream_picker();
+        }
+    }
+
     /// A DM or group DM with no call already running can be called.
     fn can_call(&self) -> bool {
         matches!(self.nav.selection, Selection::DirectMessages)
@@ -1730,6 +1817,30 @@ impl Workspace {
         match event {
             AppEvent::GatewayError { message } => {
                 self.model.status_line = message;
+            }
+            AppEvent::StreamCaptureTargetsLoaded { targets, error, .. } => {
+                if let Some(picker) = &mut self.stream_picker {
+                    picker.loading = false;
+                    picker.targets = targets;
+                    picker.error = error;
+                }
+            }
+            AppEvent::StreamBroadcastStarted { .. } => {
+                self.broadcasting = true;
+                self.stream_picker = None;
+            }
+            AppEvent::StreamBroadcastEnded { .. } => self.broadcasting = false,
+            AppEvent::StreamBroadcastStartFailed { .. } => {
+                self.broadcasting = false;
+                self.stream_picker = None;
+                // The event carries no reason, so the message stays generic
+                // rather than inventing a cause.
+                self.model.status_line = "Screen share failed to start".to_string();
+            }
+            AppEvent::StreamBroadcastAudioUnavailable { .. } => {
+                // Video still works, so this is a note rather than a failure.
+                self.model.status_line =
+                    "Sharing without audio - system audio capture unavailable".to_string();
             }
             AppEvent::MessageSearchLoaded { page } => {
                 if let Some(search) = &mut self.search {
@@ -2288,7 +2399,9 @@ impl Render for Workspace {
                     Screen::Ready => {
                         let key = event.keystroke.key.as_str();
 
-                        if this.picker.is_some() {
+                        if this.stream_picker.is_some() && key == "escape" {
+                            this.stream_picker = None;
+                        } else if this.picker.is_some() {
                             // The picker owns the keyboard while open.
                             match key {
                                 "escape" => this.picker = None,
