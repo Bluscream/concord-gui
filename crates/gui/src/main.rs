@@ -13,6 +13,7 @@
 // Status: bootstrap shell. Proves linkage against the core and opens a window.
 // Wiring the command/event loop is the next step; see docs/REWRITE.md.
 
+mod model;
 mod theme;
 mod ui;
 

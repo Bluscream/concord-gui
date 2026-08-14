@@ -5,6 +5,7 @@
 //! session already publishes on every state revision - no new plumbing needed,
 //! only mapping.
 
+use concord::discord::{Id, marker};
 use gpui::{Context, Window, prelude::*, px, rgb};
 
 use crate::theme::{DARK, Presence, layout, space, text};
@@ -25,11 +26,14 @@ pub struct WorkspaceModel {
 }
 
 pub struct GuildEntry {
+    /// `None` for the Direct Messages pseudo-guild.
+    pub id: Option<Id<marker::GuildMarker>>,
     pub name: String,
     pub unread: bool,
 }
 
 pub struct ChannelEntry {
+    pub id: Option<Id<marker::ChannelMarker>>,
     pub name: String,
     pub kind: ChannelKind,
     pub unread: bool,
@@ -67,40 +71,47 @@ impl WorkspaceModel {
         Self {
             guilds: vec![
                 GuildEntry {
+                    id: None,
                     name: "Direct Messages".into(),
                     unread: false,
                 },
                 GuildEntry {
+                    id: None,
                     name: "RostFaden".into(),
                     unread: true,
                 },
             ],
             channels: vec![
                 ChannelEntry {
+                    id: None,
                     name: "TEXT CHANNELS".into(),
                     kind: ChannelKind::Category,
                     unread: false,
                     mentions: 0,
                 },
                 ChannelEntry {
+                    id: None,
                     name: "general".into(),
                     kind: ChannelKind::Text,
                     unread: true,
                     mentions: 2,
                 },
                 ChannelEntry {
+                    id: None,
                     name: "development".into(),
                     kind: ChannelKind::Text,
                     unread: false,
                     mentions: 0,
                 },
                 ChannelEntry {
+                    id: None,
                     name: "VOICE".into(),
                     kind: ChannelKind::Category,
                     unread: false,
                     mentions: 0,
                 },
                 ChannelEntry {
+                    id: None,
                     name: "General".into(),
                     kind: ChannelKind::Voice,
                     unread: false,
