@@ -13,7 +13,9 @@ use concord::discord::{
 };
 
 use crate::theme::Presence;
-use crate::ui::workspace::{ChannelEntry, ChannelKind, GuildEntry, MemberEntry, WorkspaceModel};
+use crate::ui::workspace::{
+    ChannelEntry, ChannelKind, GuildEntry, MemberEntry, VoiceMember, WorkspaceModel,
+};
 
 /// Identifies what the user currently has open.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -158,6 +160,11 @@ fn project_channels(state: &DiscordState, nav: &Navigation) -> Vec<ChannelEntry>
         .filter(|c| !c.is_thread())
         .map(|channel| {
             let unread = state.channel_sidebar_unread(channel.id);
+            let voice = match (channel.is_voice(), guild_id) {
+                (true, Some(guild_id)) => voice_participants(state, guild_id, channel.id),
+                _ => Vec::new(),
+            };
+
             ChannelEntry {
                 id: Some(channel.id),
                 name: if channel.is_category() {
@@ -168,6 +175,7 @@ fn project_channels(state: &DiscordState, nav: &Navigation) -> Vec<ChannelEntry>
                 kind: channel_kind(channel),
                 unread: !matches!(unread, ChannelUnreadState::Seen),
                 mentions: mention_count(unread),
+                voice,
             }
         })
         .collect()
@@ -211,6 +219,28 @@ fn project_members(state: &DiscordState, nav: &Navigation) -> Vec<MemberEntry> {
                         .filter(|color| *color != 0),
                 })
             }
+        })
+        .collect()
+}
+
+/// Who is sitting in a voice channel, for the sidebar's nested participant
+/// rows. Empty for non-voice channels.
+pub fn voice_participants(
+    state: &DiscordState,
+    guild_id: Id<marker::GuildMarker>,
+    channel_id: Id<marker::ChannelMarker>,
+) -> Vec<VoiceMember> {
+    state
+        .voice_participants_for_channel(guild_id, channel_id)
+        .into_iter()
+        .map(|participant| VoiceMember {
+            name: participant.display_name,
+            // Server mute/deafen and self mute/deafen are shown identically:
+            // from the listener's side the audible result is the same.
+            muted: participant.mute || participant.self_mute,
+            deafened: participant.deaf || participant.self_deaf,
+            streaming: participant.self_stream,
+            speaking: participant.speaking,
         })
         .collect()
 }

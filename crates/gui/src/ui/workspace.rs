@@ -7,7 +7,7 @@
 
 use concord::config::CredentialStoreMode;
 use concord::discord::{
-    AppCommand, AppEvent, Id, ReactionEmoji, ReplyReference, marker, next_message_nonce,
+    AppCommand, AppEvent, Id, ReactionEmoji, ReplyReference, VoiceScope, marker, next_message_nonce,
 };
 use concord::token_store;
 use gpui::{Context, FocusHandle, KeyDownEvent, Window, WindowHandle, prelude::*, px, rgb};
@@ -20,6 +20,7 @@ use crate::session::{SessionHandle, Update};
 use crate::theme::{DARK, Presence, layout, space, text};
 use crate::ui::chrome::{
     avatar, column, header, hint, panel_sunken, presence_dot, row, section_label, sidebar_row,
+    voice_participant_row,
 };
 use crate::ui::composer::{Composer, composer_view};
 use crate::ui::login::{Login, login_view};
@@ -51,9 +52,11 @@ pub struct ChannelEntry {
     pub kind: ChannelKind,
     pub unread: bool,
     pub mentions: u32,
+    /// Occupants, for voice channels only.
+    pub voice: Vec<VoiceMember>,
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum ChannelKind {
     Text,
     Voice,
@@ -72,6 +75,15 @@ impl ChannelKind {
     }
 }
 
+/// A participant in a voice channel.
+pub struct VoiceMember {
+    pub name: String,
+    pub muted: bool,
+    pub deafened: bool,
+    pub streaming: bool,
+    pub speaking: bool,
+}
+
 pub struct MemberEntry {
     pub name: String,
     pub presence: Presence,
@@ -82,66 +94,21 @@ pub struct MemberEntry {
 }
 
 impl WorkspaceModel {
-    /// Placeholder content so the layout can be evaluated before the snapshot
-    /// projection lands. Explicitly not real data.
-    pub fn placeholder() -> Self {
+    /// An empty model, shown before a session delivers state.
+    ///
+    /// Deliberately empty rather than populated with sample content: fake
+    /// guilds on screen during connect would be indistinguishable from real
+    /// ones that failed to load. For sample content, run with the `fixtures`
+    /// feature and the token "test".
+    pub fn empty() -> Self {
         Self {
-            guilds: vec![
-                GuildEntry {
-                    id: None,
-                    name: "Direct Messages".into(),
-                    unread: false,
-                    mentions: 0,
-                },
-                GuildEntry {
-                    id: None,
-                    name: "RostFaden".into(),
-                    unread: true,
-                    mentions: 0,
-                },
-            ],
-            channels: vec![
-                ChannelEntry {
-                    id: None,
-                    name: "TEXT CHANNELS".into(),
-                    kind: ChannelKind::Category,
-                    unread: false,
-                    mentions: 0,
-                },
-                ChannelEntry {
-                    id: None,
-                    name: "general".into(),
-                    kind: ChannelKind::Text,
-                    unread: true,
-                    mentions: 2,
-                },
-                ChannelEntry {
-                    id: None,
-                    name: "development".into(),
-                    kind: ChannelKind::Text,
-                    unread: false,
-                    mentions: 0,
-                },
-                ChannelEntry {
-                    id: None,
-                    name: "VOICE".into(),
-                    kind: ChannelKind::Category,
-                    unread: false,
-                    mentions: 0,
-                },
-                ChannelEntry {
-                    id: None,
-                    name: "General".into(),
-                    kind: ChannelKind::Voice,
-                    unread: false,
-                    mentions: 0,
-                },
-            ],
-            members: vec![],
-            selected_guild: 1,
-            selected_channel: 1,
+            guilds: Vec::new(),
+            channels: Vec::new(),
+            members: Vec::new(),
+            selected_guild: usize::MAX,
+            selected_channel: usize::MAX,
             connected: false,
-            status_line: "not connected - no session".into(),
+            status_line: String::new(),
         }
     }
 }
@@ -168,6 +135,10 @@ pub struct Workspace {
     pub replying_to: Option<(Id<marker::MessageMarker>, String)>,
     /// Message being edited. While set, the composer edits instead of sends.
     pub editing: Option<Id<marker::MessageMarker>>,
+    /// Channel the user is connected to by voice, if any.
+    pub voice_channel: Option<(Id<marker::ChannelMarker>, String)>,
+    pub self_mute: bool,
+    pub self_deaf: bool,
     focus: FocusHandle,
 }
 
@@ -183,6 +154,9 @@ impl Workspace {
             typing: Vec::new(),
             replying_to: None,
             editing: None,
+            voice_channel: None,
+            self_mute: false,
+            self_deaf: false,
             focus: cx.focus_handle(),
         }
     }
@@ -361,6 +335,88 @@ impl Workspace {
         }
     }
 
+    /// Join a voice channel, leaving any current one first.
+    ///
+    /// Only guild voice is wired: DM calls use VoiceScope::Private and a
+    /// different entry point in the sidebar, which does not exist yet.
+    pub fn join_voice(&mut self, channel_id: Id<marker::ChannelMarker>, name: String) {
+        let Selection::Guild(guild_id) = self.nav.selection else {
+            return;
+        };
+
+        // Leave first, while nothing else borrows the handle.
+        if self.voice_channel.is_some() {
+            self.leave_voice();
+        }
+
+        let Some(handle) = &self.handle else {
+            return;
+        };
+
+        handle.send(AppCommand::JoinVoiceChannel {
+            scope: VoiceScope::Guild(guild_id),
+            channel_id,
+            self_mute: self.self_mute,
+            self_deaf: self.self_deaf,
+            input_source: None,
+            output_source: None,
+            allow_microphone_transmit: true,
+            // Audio tuning lives in settings, which does not exist yet; the
+            // core's defaults are the right starting point.
+            noise_suppression: true,
+            microphone_sensitivity: Default::default(),
+            microphone_volume: Default::default(),
+            voice_output_volume: Default::default(),
+            participant_playback_settings: Vec::new(),
+        });
+        self.voice_channel = Some((channel_id, name));
+    }
+
+    pub fn leave_voice(&mut self) {
+        let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
+            return;
+        };
+        handle.send(AppCommand::LeaveVoiceChannel {
+            scope: VoiceScope::Guild(guild_id),
+            self_mute: self.self_mute,
+            self_deaf: self.self_deaf,
+        });
+        self.voice_channel = None;
+    }
+
+    /// Toggle mute or deafen on the live connection.
+    ///
+    /// Deafening implies muting, matching Discord: a deafened user who could
+    /// still transmit would be talking into a conversation they cannot hear.
+    pub fn toggle_voice_flag(&mut self, deafen: bool) {
+        if deafen {
+            self.self_deaf = !self.self_deaf;
+            if self.self_deaf {
+                self.self_mute = true;
+            }
+        } else {
+            self.self_mute = !self.self_mute;
+            if !self.self_mute {
+                self.self_deaf = false;
+            }
+        }
+
+        let (Some(handle), Selection::Guild(guild_id), Some((channel_id, _))) = (
+            &self.handle,
+            self.nav.selection,
+            self.voice_channel.as_ref(),
+        ) else {
+            return;
+        };
+
+        handle.send(AppCommand::UpdateVoiceState {
+            scope: VoiceScope::Guild(guild_id),
+            channel_id: *channel_id,
+            self_mute: self.self_mute,
+            self_deaf: self.self_deaf,
+        });
+    }
+
     /// Route a toolbar action for the row at `index`.
     fn handle_message_action(&mut self, index: usize, action: MessageAction) {
         let Some(row) = self.messages.get(index) else {
@@ -426,6 +482,89 @@ impl Workspace {
             message_id,
             emoji: ReactionEmoji::Unicode(emoji.to_string()),
         });
+    }
+
+    /// Connection bar, shown only while connected to voice.
+    fn voice_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some((_, name)) = &self.voice_channel else {
+            return gpui::div();
+        };
+
+        gpui::div().w_full().child(
+            row()
+                .w_full()
+                .h(px(40.))
+                .px(px(space::MD))
+                .gap(px(space::SM))
+                .bg(rgb(DARK.surface))
+                .border_t_1()
+                .border_color(rgb(DARK.border))
+                .child(presence_dot(Presence::Online))
+                .child(
+                    column()
+                        .flex_1()
+                        .child(
+                            gpui::div()
+                                .text_size(px(text::SM))
+                                .text_color(rgb(DARK.success))
+                                .child("Voice connected"),
+                        )
+                        .child(
+                            gpui::div()
+                                .text_size(px(text::XS))
+                                .text_color(rgb(DARK.text_subtle))
+                                .child(name.clone()),
+                        ),
+                )
+                .child(
+                    self.voice_button("mute", self.self_mute)
+                        .id("voice-mute")
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            this.toggle_voice_flag(false);
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    self.voice_button("deafen", self.self_deaf)
+                        .id("voice-deafen")
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            this.toggle_voice_flag(true);
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    self.voice_button("leave", false)
+                        .id("voice-leave")
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            this.leave_voice();
+                            cx.notify();
+                        })),
+                ),
+        )
+    }
+
+    /// One control in the voice bar. Active toggles are filled, so state is
+    /// readable at a glance rather than needing a colour comparison.
+    fn voice_button(&self, label: &'static str, active: bool) -> gpui::Div {
+        gpui::div()
+            .px(px(space::SM))
+            .py(px(space::XS))
+            .rounded(px(layout::RADIUS))
+            .text_size(px(text::XS))
+            .bg(rgb(if active {
+                DARK.danger
+            } else {
+                DARK.surface_hover
+            }))
+            .text_color(rgb(if active {
+                DARK.on_accent
+            } else {
+                DARK.text_muted
+            }))
+            .child(label)
     }
 
     /// The member pane only applies to guild channels.
@@ -559,10 +698,20 @@ impl Workspace {
                 );
             }
 
-            // Voice channels need a join, not a channel switch; only text-like
-            // channels are click-to-open until voice controls land.
+            // Text channels switch the view; voice channels join a call.
             let entry = match channel.id {
-                Some(channel_id) if channel.kind != ChannelKind::Voice => entry
+                Some(channel_id) if channel.kind == ChannelKind::Voice => {
+                    let name = channel.name.clone();
+                    entry
+                        .id(("channel", index))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.join_voice(channel_id, name.clone());
+                            cx.notify();
+                        }))
+                        .into_any_element()
+                }
+                Some(channel_id) => entry
                     .id(("channel", index))
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -570,10 +719,21 @@ impl Workspace {
                         cx.notify();
                     }))
                     .into_any_element(),
-                _ => entry.into_any_element(),
+                None => entry.into_any_element(),
             };
 
             list = list.child(entry);
+
+            // Occupants render nested under their voice channel.
+            for participant in &channel.voice {
+                list = list.child(voice_participant_row(
+                    &participant.name,
+                    participant.muted,
+                    participant.deafened,
+                    participant.streaming,
+                    participant.speaking,
+                ));
+            }
         }
 
         sidebar.child(list)
@@ -761,6 +921,7 @@ impl Render for Workspace {
                         .child(self.content(window, cx))
                         .when(self.shows_members(), |d| d.child(self.member_pane())),
                 )
+                .child(self.voice_bar(cx))
                 .child(self.status_bar())
             })
     }

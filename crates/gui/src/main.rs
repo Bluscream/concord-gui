@@ -96,7 +96,7 @@ fn main() {
                     ..Default::default()
                 },
                 |_window, cx| {
-                    let mut model = WorkspaceModel::placeholder();
+                    let mut model = WorkspaceModel::empty();
                     model.status_line = "connecting…".to_string();
                     // With a stored credential the workspace opens directly;
                     // otherwise the login screen is the entry point.

@@ -120,3 +120,43 @@ pub fn hint(message: impl Into<gpui::SharedString>) -> Div {
         .text_color(rgb(DARK.text_subtle))
         .child(message.into())
 }
+
+/// A voice participant nested under its channel in the sidebar.
+pub fn voice_participant_row(
+    name: &str,
+    muted: bool,
+    deafened: bool,
+    streaming: bool,
+    speaking: bool,
+) -> Div {
+    row()
+        .w_full()
+        .h(px(24.))
+        .pl(px(space::XL))
+        .pr(px(space::SM))
+        .gap(px(space::SM))
+        .text_size(px(text::XS))
+        .child(avatar(layout::AVATAR_SM, name))
+        .child(
+            gpui::div()
+                .flex_1()
+                // Speaking is shown by brightening the name rather than by a
+                // ring, which would reflow the row on every voice activity.
+                .text_color(rgb(if speaking {
+                    DARK.success
+                } else {
+                    DARK.text_muted
+                }))
+                .child(name.to_string()),
+        )
+        .when(streaming, |d| {
+            d.child(gpui::div().text_color(rgb(DARK.accent)).child("live"))
+        })
+        .when(muted || deafened, |d| {
+            d.child(gpui::div().text_color(rgb(DARK.danger)).child(if deafened {
+                "deaf"
+            } else {
+                "mute"
+            }))
+        })
+}

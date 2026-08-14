@@ -134,7 +134,11 @@ fn member_list_preserves_groups_and_order() {
 #[test]
 fn messages_project_in_order_with_grouping() {
     let state = demo_state();
-    let rows = project_messages(&state, concord::discord::Id::new(111), state.current_user_id());
+    let rows = project_messages(
+        &state,
+        concord::discord::Id::new(111),
+        state.current_user_id(),
+    );
 
     assert!(rows.len() >= 8, "fixture defines a full conversation");
 
@@ -157,7 +161,11 @@ fn messages_project_in_order_with_grouping() {
 #[test]
 fn replies_break_grouping_and_carry_context() {
     let state = demo_state();
-    let rows = project_messages(&state, concord::discord::Id::new(111), state.current_user_id());
+    let rows = project_messages(
+        &state,
+        concord::discord::Id::new(111),
+        state.current_user_id(),
+    );
 
     let reply = rows
         .iter()
@@ -176,7 +184,11 @@ fn replies_break_grouping_and_carry_context() {
 #[test]
 fn reactions_and_edits_project() {
     let state = demo_state();
-    let rows = project_messages(&state, concord::discord::Id::new(111), state.current_user_id());
+    let rows = project_messages(
+        &state,
+        concord::discord::Id::new(111),
+        state.current_user_id(),
+    );
 
     let reacted = rows
         .iter()
@@ -203,7 +215,11 @@ fn reactions_and_edits_project() {
 #[test]
 fn message_timestamps_are_recent_not_epoch() {
     let state = demo_state();
-    let rows = project_messages(&state, concord::discord::Id::new(111), state.current_user_id());
+    let rows = project_messages(
+        &state,
+        concord::discord::Id::new(111),
+        state.current_user_id(),
+    );
 
     // Snowflakes encode time; a naive small id would render as 2015.
     let newest = rows.last().expect("fixture defines messages");
@@ -235,4 +251,45 @@ fn selection_is_identity_based_not_positional() {
     let selected = &model.channels[model.selected_channel];
     assert_eq!(selected.name, "gui-rewrite");
     assert_eq!(selected.id, Some(concord::discord::Id::new(112)));
+}
+
+#[test]
+fn voice_participants_project_with_state_flags() {
+    let state = demo_state();
+    let model = project(&state, &guild_nav(10, Some(111)), true);
+
+    let standup = model
+        .channels
+        .iter()
+        .find(|c| c.name == "Standup")
+        .expect("fixture defines a voice channel");
+
+    assert_eq!(standup.kind, ChannelKind::Voice);
+    assert_eq!(standup.voice.len(), 3, "occupants should project");
+
+    assert!(
+        standup.voice.iter().any(|p| p.speaking),
+        "speaking flag should survive"
+    );
+    assert!(
+        standup.voice.iter().any(|p| p.muted),
+        "muted flag should survive"
+    );
+    assert!(
+        standup.voice.iter().any(|p| p.streaming),
+        "streaming flag should survive"
+    );
+}
+
+#[test]
+fn text_channels_have_no_voice_occupants() {
+    let state = demo_state();
+    let model = project(&state, &guild_nav(10, None), true);
+
+    let general = model
+        .channels
+        .iter()
+        .find(|c| c.name == "general")
+        .expect("fixture defines #general");
+    assert!(general.voice.is_empty());
 }

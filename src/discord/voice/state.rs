@@ -566,3 +566,34 @@ fn sort_voice_participants(participants: &mut [VoiceParticipantState]) {
         (participant.display_name.to_lowercase(), participant.user_id)
     });
 }
+
+#[cfg(feature = "fixtures")]
+impl crate::discord::state::caches::VoiceStateCache {
+    /// Seat participants in a guild voice channel.
+    ///
+    /// Tuples are `(user, name, speaking, muted, streaming)`. Display names
+    /// come from the member cache at read time, so `name` is unused here and
+    /// kept only to make call sites readable.
+    pub(in crate::discord) fn set_fixture_participants(
+        &mut self,
+        guild_id: Id<GuildMarker>,
+        channel_id: Id<ChannelMarker>,
+        participants: &[(Id<UserMarker>, &str, bool, bool, bool)],
+    ) {
+        for (user_id, _name, speaking, muted, streaming) in participants {
+            self.states.insert(
+                (VoiceScope::Guild(guild_id), *user_id),
+                VoiceState {
+                    channel_id,
+                    user_id: *user_id,
+                    deaf: false,
+                    mute: false,
+                    self_deaf: false,
+                    self_mute: *muted,
+                    self_stream: *streaming,
+                    speaking: *speaking,
+                },
+            );
+        }
+    }
+}

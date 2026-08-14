@@ -107,7 +107,7 @@ fn action_bar(
         .border_1()
         .border_color(rgb(DARK.border));
 
-    let mut button = |label: &'static str, action: MessageAction, danger: bool| {
+    let button = |label: &'static str, action: MessageAction, danger: bool| {
         let handler = on_action.clone();
         gpui::div()
             .id(("action", index * 8 + action as usize))

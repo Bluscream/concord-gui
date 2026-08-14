@@ -348,6 +348,18 @@ pub fn demo_state() -> DiscordState {
     // Someone typing in #gui-rewrite, to exercise the indicator.
     presence.set_fixture_typing(channel_id(112), &[user_id(1002)]);
 
+    // Occupants in a voice channel, covering speaking/muted/streaming rows.
+    let voice = Arc::make_mut(&mut state.voice);
+    voice.set_fixture_participants(
+        guild_id(10),
+        channel_id(121),
+        &[
+            (user_id(1001), "blu", true, false, false),
+            (user_id(1002), "ferris", false, true, false),
+            (user_id(1005), "ci-bot", false, false, true),
+        ],
+    );
+
     // ---- messages ----------------------------------------------------------
     let message_cache = Arc::make_mut(&mut state.message_cache);
 
