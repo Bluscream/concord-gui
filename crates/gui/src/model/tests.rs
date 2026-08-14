@@ -485,3 +485,44 @@ fn forum_channels_are_classified_not_treated_as_text() {
     // Text would silently route it to the wrong view.
     assert_eq!(forum.kind, ChannelKind::Forum);
 }
+
+#[test]
+fn animated_emoji_are_distinguished_from_static_ones() {
+    use crate::model::markdown::{self, Kind};
+
+    // Animated emoji need a different CDN form, so the flag must survive
+    // parsing rather than being inferred at render time.
+    let animated = markdown::parse("<a:party:123>");
+    assert!(
+        animated
+            .runs
+            .iter()
+            .any(|(_, s)| matches!(s.kind, Kind::Emoji { animated: true, .. })),
+        "the `a:` prefix marks an animated emoji"
+    );
+
+    let still = markdown::parse("<:ferris:456>");
+    assert!(
+        still.runs.iter().any(|(_, s)| matches!(
+            s.kind,
+            Kind::Emoji {
+                animated: false,
+                ..
+            }
+        )),
+        "a plain emoji must not be marked animated"
+    );
+}
+
+#[test]
+fn emoji_ids_survive_parsing_for_cdn_lookup() {
+    use crate::model::markdown::{self, Kind};
+
+    let parsed = markdown::parse("<:ferris:987654321>");
+    let id = parsed.runs.iter().find_map(|(_, s)| match s.kind {
+        Kind::Emoji { id, .. } => Some(id),
+        _ => None,
+    });
+
+    assert_eq!(id, Some(987_654_321));
+}

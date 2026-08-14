@@ -2312,6 +2312,7 @@ impl Workspace {
                 self.options.display.show_avatars,
                 self.options.display.circular_avatars,
                 self.options.display.hour_format_24,
+                self.options.display.show_custom_emoji,
                 {
                     // Click handlers run with only an `App`, so the workspace is
                     // reached through its entity handle rather than captured.

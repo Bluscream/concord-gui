@@ -44,8 +44,12 @@ pub enum Kind {
     Channel(u64),
     /// `<@&id>` - a role mention.
     Role(u64),
-    /// `<:name:id>` - a custom emoji.
-    Emoji(u64),
+    /// `<:name:id>` - a custom emoji. Animated emoji need a different CDN
+    /// form, so the flag travels with the id.
+    Emoji {
+        id: u64,
+        animated: bool,
+    },
     Url,
     /// `<t:unix:style>` - a rendered timestamp.
     Timestamp,
@@ -326,6 +330,7 @@ fn entity(rest: &str, mentions: &dyn Mentions) -> Option<(usize, String, Kind)> 
     let consumed = close + 1;
 
     // Custom emoji: <:name:id> or <a:name:id>
+    let animated = body.starts_with("a:");
     if let Some(inner) = body.strip_prefix(':').or_else(|| body.strip_prefix("a:")) {
         let mut parts = inner.split(':');
         let name = parts.next()?;
@@ -334,7 +339,7 @@ fn entity(rest: &str, mentions: &dyn Mentions) -> Option<(usize, String, Kind)> 
         }
         let id: u64 = parts.next()?.parse().ok()?;
         let name = mentions.emoji(id).unwrap_or_else(|| name.to_string());
-        return Some((consumed, format!(":{name}:"), Kind::Emoji(id)));
+        return Some((consumed, format!(":{name}:"), Kind::Emoji { id, animated }));
     }
 
     // Role: <@&id>
@@ -487,7 +492,7 @@ mod tests {
             parsed
                 .runs
                 .iter()
-                .any(|(_, s)| matches!(s.kind, Kind::Emoji(_)))
+                .any(|(_, s)| matches!(s.kind, Kind::Emoji { .. }))
         );
     }
 

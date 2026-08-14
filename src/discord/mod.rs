@@ -80,7 +80,7 @@ pub use commands::{
     MAX_PROFILE_AVATAR_BYTES, MAX_UPLOAD_ATTACHMENT_COUNT, MAX_UPLOAD_PREVIEW_BYTES,
     MessageAttachmentUpload, ReactionEmoji,
 };
-pub(crate) use emoji::custom_emoji_image_url;
+pub use emoji::custom_emoji_image_url;
 #[cfg(test)]
 pub(crate) use events::test_builders;
 pub use events::{

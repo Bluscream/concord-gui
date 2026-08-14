@@ -16,6 +16,7 @@ use crate::ui::composer::Composer;
 pub enum Toggle {
     Hour24,
     ShowAvatars,
+    ShowCustomEmoji,
     CircularAvatars,
     DesktopNotifications,
     NoiseSuppression,
@@ -29,11 +30,11 @@ impl Toggle {
             Toggle::LightMode => "Light theme",
             Toggle::Hour24 => "24-hour timestamps",
             Toggle::ShowAvatars => "Show avatars",
+            Toggle::ShowCustomEmoji => "Show custom emoji",
             Toggle::CircularAvatars => "Circular avatars",
             Toggle::DesktopNotifications => "Desktop notifications",
             Toggle::NoiseSuppression => "Noise suppression",
             Toggle::ShareRichPresence => "Share rich presence",
-            Toggle::LightMode => "Light Mode Theme",
         }
     }
 
@@ -51,11 +52,11 @@ impl Toggle {
             Toggle::LightMode => 0,
             Toggle::Hour24 => 1,
             Toggle::ShowAvatars => 2,
-            Toggle::CircularAvatars => 3,
-            Toggle::DesktopNotifications => 4,
-            Toggle::NoiseSuppression => 5,
-            Toggle::ShareRichPresence => 6,
-            Toggle::LightMode => 5,
+            Toggle::ShowCustomEmoji => 3,
+            Toggle::CircularAvatars => 4,
+            Toggle::DesktopNotifications => 5,
+            Toggle::NoiseSuppression => 6,
+            Toggle::ShareRichPresence => 7,
         }
     }
 }

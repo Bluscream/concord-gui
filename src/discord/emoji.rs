@@ -7,7 +7,8 @@ const CUSTOM_EMOJI_CDN_BASE: &str = "https://cdn.discordapp.com/emojis";
 /// Animated emoji may originate as WebP or AVIF and Discord does not convert
 /// those uploads to GIF. Requesting animated WebP works for every supported
 /// source format and matches the format used by Discord's own client.
-pub(crate) fn custom_emoji_image_url(id: impl fmt::Display, animated: bool) -> String {
+/// Public so front-ends can render custom emoji inline.
+pub fn custom_emoji_image_url(id: impl fmt::Display, animated: bool) -> String {
     if animated {
         format!("{CUSTOM_EMOJI_CDN_BASE}/{id}.webp?animated=true")
     } else {

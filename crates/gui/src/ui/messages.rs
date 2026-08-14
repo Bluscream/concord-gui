@@ -12,6 +12,7 @@ use gpui::{
 };
 
 use crate::model::markdown::{self, Kind};
+use concord::discord::custom_emoji_image_url;
 
 use crate::model::message::{MessageRow, format_bytes};
 use crate::theme::{active, layout, space, text};
@@ -20,6 +21,10 @@ use crate::ui::chrome::{avatar_with_url, column, row};
 /// Width reserved to the left of message bodies, so continuation rows align
 /// with the avatar column above them.
 const GUTTER: f32 = layout::AVATAR + space::MD;
+
+/// Inline custom emoji are sized to the line rather than to the text height,
+/// so a line containing one does not grow taller than its neighbours.
+const EMOJI_SIZE: f32 = 20.;
 
 impl MessageAction {
     /// A stable small number, used only to build unique element ids.
@@ -63,6 +68,7 @@ pub fn message_list(
     show_avatars: bool,
     circular_avatars: bool,
     hour24: bool,
+    show_emoji: bool,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> impl IntoElement {
     let mut list = column()
@@ -91,6 +97,7 @@ pub fn message_list(
             show_avatars,
             circular_avatars,
             hour24,
+            show_emoji,
             on_action.clone(),
         ));
     }
@@ -109,6 +116,7 @@ fn message_row(
     show_avatars: bool,
     circular_avatars: bool,
     hour24: bool,
+    show_emoji: bool,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> impl IntoElement {
     let own = message.own;
@@ -125,6 +133,7 @@ fn message_row(
             show_avatars,
             circular_avatars,
             hour24,
+            show_emoji,
             on_action.clone(),
         ))
         .child(
@@ -191,6 +200,7 @@ fn message_block(
     show_avatars: bool,
     circular_avatars: bool,
     hour24: bool,
+    show_emoji: bool,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> Div {
     let mut block = column()
@@ -216,7 +226,7 @@ fn message_block(
                         .text_color(rgb(active().text_subtle))
                         .child(message.short_time(hour24)),
                 )
-                .child(message_body(index, message, on_action)),
+                .child(message_body(index, message, show_emoji, on_action)),
         )
     } else {
         block
@@ -251,7 +261,7 @@ fn message_block(
                     .w_full()
                     .items_start()
                     .child(gpui::div().w(px(GUTTER)).flex_none())
-                    .child(message_body(index, message, on_action)),
+                    .child(message_body(index, message, show_emoji, on_action)),
             )
     }
 }
@@ -300,6 +310,7 @@ fn author_line(message: &MessageRow, hour24: bool) -> Div {
 fn message_body(
     index: usize,
     message: &MessageRow,
+    show_emoji: bool,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> Div {
     let mut body = column().flex_1().gap(px(space::XS));
@@ -316,7 +327,11 @@ fn message_body(
                         handler(index, MessageAction::RevealSpoiler, cx)
                     })
                 })
-                .child(rich_text(&message.body, message.spoiler_revealed)),
+                .child(rich_body(
+                    &message.body,
+                    message.spoiler_revealed,
+                    show_emoji,
+                )),
         );
 
         if message.edited {
@@ -361,6 +376,103 @@ fn message_body(
 ///
 /// One element rather than a row of styled spans, so wrapping happens at word
 /// boundaries across style changes instead of at segment boundaries.
+/// Split a parsed body at custom-emoji runs.
+///
+/// Emoji are the only thing that cannot live inside a `StyledText`, so the
+/// body is cut around them and reassembled as a wrapping row. Text between
+/// emoji is still handed to `StyledText` whole, so it wraps at word
+/// boundaries as before; only the emoji themselves are atomic.
+///
+/// A message with no custom emoji produces exactly one segment, which is the
+/// common case and is rendered identically to before.
+fn segments(parsed: &markdown::Parsed) -> Vec<Segment> {
+    let mut emoji: Vec<(std::ops::Range<usize>, u64, bool)> = parsed
+        .runs
+        .iter()
+        .filter_map(|(range, style)| match style.kind {
+            Kind::Emoji { id, animated } => Some((range.clone(), id, animated)),
+            _ => None,
+        })
+        .collect();
+    emoji.sort_by_key(|(range, _, _)| range.start);
+
+    if emoji.is_empty() {
+        return vec![Segment::Text(0..parsed.text.len())];
+    }
+
+    let mut out = Vec::new();
+    let mut cursor = 0usize;
+
+    for (range, id, animated) in emoji {
+        if range.start > cursor {
+            out.push(Segment::Text(cursor..range.start));
+        }
+        out.push(Segment::Emoji { id, animated });
+        cursor = range.end;
+    }
+
+    if cursor < parsed.text.len() {
+        out.push(Segment::Text(cursor..parsed.text.len()));
+    }
+
+    out
+}
+
+enum Segment {
+    Text(std::ops::Range<usize>),
+    Emoji { id: u64, animated: bool },
+}
+
+/// Render a body, drawing custom emoji as images.
+fn rich_body(parsed: &markdown::Parsed, reveal_spoilers: bool, show_emoji: bool) -> Div {
+    let parts = segments(parsed);
+
+    // Fast path: no custom emoji, so no need to wrap in a row.
+    if !show_emoji || parts.len() == 1 {
+        return gpui::div().child(rich_text(parsed, reveal_spoilers));
+    }
+
+    let mut wrapper = row().flex_wrap().items_center().gap(px(2.));
+
+    for part in parts {
+        match part {
+            Segment::Text(range) => {
+                let slice = sub_parsed(parsed, range);
+                if !slice.text.trim().is_empty() {
+                    wrapper = wrapper.child(rich_text(&slice, reveal_spoilers));
+                }
+            }
+            Segment::Emoji { id, animated } => {
+                wrapper = wrapper.child(
+                    gpui::img(gpui::SharedUri::from(custom_emoji_image_url(id, animated)))
+                        .w(px(EMOJI_SIZE))
+                        .h(px(EMOJI_SIZE)),
+                );
+            }
+        }
+    }
+
+    gpui::div().child(wrapper)
+}
+
+/// Extract a sub-range of a parsed body, rebasing its style runs.
+fn sub_parsed(parsed: &markdown::Parsed, range: std::ops::Range<usize>) -> markdown::Parsed {
+    let runs = parsed
+        .runs
+        .iter()
+        .filter_map(|(run, style)| {
+            let start = run.start.max(range.start);
+            let end = run.end.min(range.end);
+            (start < end).then(|| ((start - range.start)..(end - range.start), *style))
+        })
+        .collect();
+
+    markdown::Parsed {
+        text: parsed.text[range].to_string(),
+        runs,
+    }
+}
+
 fn rich_text(parsed: &markdown::Parsed, reveal_spoilers: bool) -> impl IntoElement {
     let highlights = parsed.runs.iter().map(|(range, style)| {
         let mut highlight = HighlightStyle::default();
@@ -389,7 +501,7 @@ fn rich_text(parsed: &markdown::Parsed, reveal_spoilers: bool) -> impl IntoEleme
             match style.kind {
                 Kind::Mention(_) | Kind::Role(_) => rgb(active().accent),
                 Kind::Channel(_) | Kind::Url => rgb(active().accent_hover),
-                Kind::Emoji(_) | Kind::Timestamp => rgb(active().text_muted),
+                Kind::Emoji { .. } | Kind::Timestamp => rgb(active().text_muted),
                 Kind::Text => {
                     if style.code {
                         rgb(active().warning)
