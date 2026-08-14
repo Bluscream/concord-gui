@@ -137,6 +137,15 @@ impl WorkspaceModel {
     }
 }
 
+/// One entry in the mention inbox.
+pub struct InboxMention {
+    pub channel_id: Id<marker::ChannelMarker>,
+    pub message_id: Id<marker::MessageMarker>,
+    pub guild_id: Option<Id<marker::GuildMarker>>,
+    pub author: String,
+    pub content: String,
+}
+
 /// Message-search state.
 #[derive(Default)]
 pub struct Search {
@@ -201,6 +210,8 @@ pub struct Workspace {
     pub channel_muted: bool,
     /// Whether the open guild is muted.
     pub guild_muted: bool,
+    /// Recent mentions across every guild. `None` when the panel is closed.
+    pub inbox: Option<Vec<InboxMention>>,
     /// Pinned messages for the open channel, shown in a panel when requested.
     pub pins: Option<Vec<(Id<marker::MessageMarker>, String, String)>>,
     /// Text queued for the clipboard, written on the next render pass where
@@ -264,6 +275,7 @@ impl Workspace {
             voice_scope_joined: None,
             channel_muted: false,
             guild_muted: false,
+            inbox: None,
             pins: None,
             pending_copy: None,
             reaction_users: None,
@@ -1914,6 +1926,63 @@ impl Workspace {
         matches!(self.nav.selection, Selection::Guild(_)) && self.nav.channel.is_some()
     }
 
+    /// Open the mention inbox.
+    ///
+    /// Mentions arrive from every guild at once, which is the point: it is the
+    /// surface for "what needs me", not for browsing a channel.
+    pub fn open_inbox(&mut self) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        self.inbox = Some(Vec::new());
+        handle.send(AppCommand::LoadInboxMentions {
+            request_id: 1,
+            before: None,
+        });
+    }
+
+    /// Jump to a mention and dismiss it.
+    fn open_mention(&mut self, index: usize) {
+        let Some(mention) = self
+            .inbox
+            .as_ref()
+            .and_then(|mentions| mentions.get(index))
+            .map(|mention| (mention.channel_id, mention.message_id, mention.guild_id))
+        else {
+            return;
+        };
+
+        let (channel_id, message_id, guild_id) = mention;
+        self.inbox = None;
+
+        // A mention can be in any guild, so the guild has to change with it or
+        // the sidebar would show the wrong channel list.
+        let target = guild_id.map_or(Selection::DirectMessages, Selection::Guild);
+        if self.nav.selection != target {
+            self.open_guild(guild_id);
+        }
+        self.forum = None;
+        self.jump_to(channel_id, message_id);
+    }
+
+    /// Dismiss a mention without visiting it.
+    fn dismiss_mention(&mut self, index: usize) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(mentions) = &mut self.inbox else {
+            return;
+        };
+        if index >= mentions.len() {
+            return;
+        }
+
+        let mention = mentions.remove(index);
+        handle.send(AppCommand::DeleteInboxMention {
+            message_id: mention.message_id,
+        });
+    }
+
     /// Pin or unpin a message.
     fn set_pinned(&mut self, index: usize, pinned: bool) {
         let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
@@ -2209,6 +2278,21 @@ impl Workspace {
                     forum.error = Some("Could not load posts".to_string());
                 }
             }
+            AppEvent::InboxMentionsLoaded { messages, .. } => {
+                self.inbox = Some(
+                    messages
+                        .into_iter()
+                        .map(|message| InboxMention {
+                            channel_id: message.channel_id,
+                            message_id: message.message_id,
+                            guild_id: message.guild_id,
+                            author: message.author,
+                            content: message.content.unwrap_or_default(),
+                        })
+                        .collect(),
+                );
+            }
+            AppEvent::InboxMentionsLoadFailed { .. } => self.inbox = None,
             AppEvent::PinnedMessagesLoaded { messages, .. } => {
                 self.pins = Some(
                     messages
@@ -2981,6 +3065,8 @@ impl Render for Workspace {
                             this.mark_all_read();
                         } else if key == "o" && event.keystroke.modifiers.control {
                             this.attach_files(cx);
+                        } else if key == "i" && event.keystroke.modifiers.control {
+                            this.open_inbox();
                         } else if key == "f" && event.keystroke.modifiers.control {
                             this.toggle_search();
                         } else if this.profile.is_some() && key == "escape" {

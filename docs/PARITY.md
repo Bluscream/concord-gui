@@ -20,7 +20,7 @@ indicators · guild voice · DM calls · mute/deafen · screenshare controls ·
 search with jump · desktop notifications · settings · history paging ·
 composer with selection, undo, clipboard, multi-line · mark read / mark all
 read · quick switcher · jump to replied message · copy message text and link ·
-reaction users · pins · mute channel
+reaction users · pins · mute channel · notification inbox
 
 ### Missing
 
@@ -28,7 +28,6 @@ Ordered roughly by how much a daily driver misses them.
 
 | Feature | TUI action | Notes |
 |---|---|---|
-| Notification inbox | `OpenNotificationInbox` | Mentions across all guilds in one place. |
 | Polls | `OpenPollVotePicker` | `PollInfo` is already projected but not rendered. |
 | Attachment download / view | `DownloadSelected`, `ViewAttachment` | Chips render; nothing opens or saves. |
 | Media playback | `PlayMedia` | Upstream shells out to mpv. |

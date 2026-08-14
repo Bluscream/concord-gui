@@ -350,6 +350,27 @@ fn handle_command(
             });
         }
 
+        AppCommand::LoadInboxMentions { request_id, before } => {
+            // Mentions of the demo user, gathered from the fixture's own
+            // messages so the inbox agrees with what the channels contain.
+            let mut messages = Vec::new();
+            for channel in fixtures::demo_channel_ids() {
+                for message in state.messages_for_channel(channel) {
+                    let body = message.content.clone().unwrap_or_default();
+                    if body.contains("<@1001>") || body.contains("@blu") {
+                        messages.push(fixtures::message_info(message));
+                    }
+                }
+            }
+
+            publish_event!(AppEvent::InboxMentionsLoaded {
+                request_id,
+                before,
+                messages,
+                has_more: false,
+            });
+        }
+
         AppCommand::LoadUserProfile { user_id, guild_id } => {
             fixtures::add_profile(state, user_id, guild_id);
             publish_state!();
