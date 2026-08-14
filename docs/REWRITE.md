@@ -180,6 +180,35 @@ Arch distrobox:
 distrobox enter arch -- cargo check -p concord-gui
 ```
 
+## Known limitation: the `media` feature
+
+`--media` enables the core's `voice-playback` and `stream-broadcast`
+features. It builds and the client runs, but a zbus worker thread panics at
+startup:
+
+```
+thread 'Worker-0' panicked: there is no reactor running,
+must be called from the context of a Tokio 1.x runtime
+```
+
+The panic is non-fatal - the app stays up - but it means D-Bus dependent
+behaviour, including the xdg-desktop-portal screencast path, is unreliable in
+that build. **Screenshare is therefore compile-verified only; it has not been
+observed working.**
+
+The cause is not a call site in this codebase. zbus 5 is built against tokio
+and spawns its own executor thread, which then calls `tokio::spawn` with no
+reactor present. It arrives through three independent paths - `ashpd` and
+`oo7` pulled in by GPUI itself, and `ashpd` pulled in by concord - so
+installing an ambient context on the main thread does not help: the panicking
+thread is created by zbus and inherits nothing.
+
+Fixing it properly means aligning the async backend across those
+dependencies (for instance building zbus against `async-io` rather than
+tokio), which is dependency surgery rather than an application change.
+
+Builds without `--media` are unaffected and show no such panic.
+
 ## Deploying for testing
 
 `scripts/deploy.sh` builds, installs and launches, and adds a launcher to the

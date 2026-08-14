@@ -87,6 +87,10 @@ fn existing_token() -> Option<String> {
 }
 
 fn main() {
+    // Held for the life of the process: GPUI's main thread needs an ambient
+    // tokio context because several dependencies spawn onto one from here.
+    let _runtime_guard = runtime::enter();
+
     let status = CoreStatus::probe();
 
     // GPUI needs an HTTP client before it will load images from a URI.

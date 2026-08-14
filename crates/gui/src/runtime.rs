@@ -69,6 +69,20 @@ pub fn is_available() -> bool {
     shared().is_some()
 }
 
+/// Install the shared runtime as the calling thread's ambient context.
+///
+/// Needed because several dependencies - zbus via ashpd and oo7, which GPUI
+/// itself pulls in, and notify-rust - create D-Bus connections from whichever
+/// thread calls them and then expect `tokio::spawn` to work. Without a context
+/// on GPUI's main thread they panic with "there is no reactor running" from
+/// inside a worker, which is neither our call site nor fixable there.
+///
+/// The returned guard must be held for as long as that thread runs; dropping
+/// it removes the context.
+pub fn enter() -> Option<tokio::runtime::EnterGuard<'static>> {
+    shared().map(|runtime| runtime.enter())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -6,6 +6,8 @@
 #
 #   ./scripts/deploy.sh              build release, install, launch
 #   ./scripts/deploy.sh --test       build WITH demo data and launch offline
+#   ./scripts/deploy.sh --media      build WITH voice playback and screenshare
+#                                    (experimental - see docs/REWRITE.md)
 #   ./scripts/deploy.sh --debug      build the debug profile (much faster to compile)
 #   ./scripts/deploy.sh --no-run     install without launching
 #   ./scripts/deploy.sh --run-only   skip the build, just launch what is installed
@@ -53,7 +55,11 @@ uninstall() {
 
 for arg in "$@"; do
     case "$arg" in
-        --test)      TEST_MODE=1; FEATURES="fixtures" ;;
+        --test)      TEST_MODE=1; FEATURES="${FEATURES:+$FEATURES,}fixtures" ;;
+        # Pulls in pipewire, openh264 and cpal, so it is opt-in: the default
+        # build stays quick and dependency-light.
+        --media)     FEATURES="${FEATURES:+$FEATURES,}media"
+                     warn "--media is experimental: a zbus worker panics at startup (non-fatal, portal features affected)" ;;
         --debug)     PROFILE="debug" ;;
         --no-run)    RUN=0 ;;
         --run-only)  BUILD=0 ;;
@@ -83,6 +89,15 @@ if [[ $BUILD -eq 1 ]]; then
     CARGO_CONFIG="$HOME/.cargo/config.toml"
     if [[ -f "$CARGO_CONFIG" ]] && [[ $(grep -c '^\[build\]' "$CARGO_CONFIG") -gt 1 ]]; then
         die "$CARGO_CONFIG has duplicate [build] tables (invalid TOML). Fix it, then re-run."
+    fi
+
+    # The media feature binds to PipeWire. Without its headers the failure is
+    # a build-script panic deep in libspa-sys, which says nothing useful.
+    if [[ "$FEATURES" == *media* ]]; then
+        if ! distrobox enter "$BOX" -- pkg-config --exists libpipewire-0.3 2>/dev/null; then
+            die "--media needs PipeWire headers in '$BOX'. Install them with:
+       distrobox enter $BOX -- sudo pacman -S --needed pipewire clang"
+        fi
     fi
 
     BUILD_ARGS=(build -p concord-gui)
