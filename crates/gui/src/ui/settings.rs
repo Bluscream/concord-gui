@@ -107,7 +107,7 @@ impl Render for SettingsWindow {
             self.url_composer.text()
         };
 
-        column()
+        row()
             .id("settings-window-view")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
@@ -123,240 +123,297 @@ impl Render for SettingsWindow {
                 }
             }))
             .size_full()
-            .bg(rgb(theme.surface))
+            .bg(rgb(theme.bg))
             .overflow_hidden()
-            // Header Bar
+            // --- Left Navigation Sidebar Column ---
             .child(
-                row()
-                    .w_full()
-                    .h(px(layout::HEADER))
-                    .px(px(space::LG))
-                    .items_center()
-                    .justify_between()
-                    .border_b_1()
-                    .border_color(rgb(theme.border))
+                column()
+                    .w(px(220.))
+                    .h_full()
                     .bg(rgb(theme.surface_sunken))
+                    .border_r_1()
+                    .border_color(rgb(theme.border))
+                    .px(px(space::MD))
+                    .py(px(space::LG))
+                    .gap(px(space::XS))
+                    .child(
+                        gpui::div()
+                            .px(px(space::SM))
+                            .pb(px(space::SM))
+                            .text_size(px(text::XS))
+                            .text_color(rgb(theme.text_subtle))
+                            .child("APP SETTINGS"),
+                    )
+                    .child(sidebar_nav_item("⚙ Appearance", true, theme))
+                    .child(sidebar_nav_item("🌐 Server Endpoint", false, theme))
+                    .child(sidebar_nav_item("📺 Display & UI", false, theme))
+                    .child(sidebar_nav_item("🔔 Notifications", false, theme))
+                    .child(sidebar_nav_item("🎤 Voice & Audio", false, theme))
+                    .child(sidebar_nav_item("🟢 Presence", false, theme))
                     .child(
                         column()
+                            .flex_1()
+                            .justify_end()
+                            .px(px(space::SM))
+                            .pt(px(space::MD))
+                            .border_t_1()
+                            .border_color(rgb(theme.border))
+                            .child(
+                                gpui::div()
+                                    .text_size(px(text::XS))
+                                    .text_color(rgb(theme.text_subtle))
+                                    .child("concord v0.1.0"),
+                            ),
+                    ),
+            )
+            // --- Right Content Column ---
+            .child(
+                column()
+                    .flex_1()
+                    .h_full()
+                    .bg(rgb(theme.surface))
+                    .overflow_hidden()
+                    // Content Header
+                    .child(
+                        row()
+                            .w_full()
+                            .h(px(layout::HEADER))
+                            .px(px(space::XL))
+                            .items_center()
+                            .justify_between()
+                            .border_b_1()
+                            .border_color(rgb(theme.border))
                             .child(
                                 gpui::div()
                                     .text_size(px(text::LG))
                                     .text_color(rgb(theme.text))
-                                    .child("⚙ concord — Settings"),
-                            )
-                            .child(
-                                gpui::div()
-                                    .text_size(px(text::XS))
-                                    .text_color(rgb(theme.text_subtle))
-                                    .child("Appearance, Server Endpoints & Client Options"),
-                            ),
-                    ),
-            )
-            // Scrollable Body
-            .child(
-                column()
-                    .id("settings-window-body")
-                    .flex_1()
-                    .w_full()
-                    .p(px(space::LG))
-                    .gap(px(space::LG))
-                    .overflow_y_scroll()
-                    // --- Section 1: Appearance & Theme ---
-                    .child(section_title("Appearance & Theme", theme))
-                    .child(
-                        row()
-                            .w_full()
-                            .gap(px(space::MD))
-                            .child(
-                                column()
-                                    .id("card-theme-dark")
-                                    .flex_1()
-                                    .p(px(space::MD))
-                                    .gap(px(2.))
-                                    .rounded(px(layout::RADIUS))
-                                    .bg(rgb(if !options.display.light_mode {
-                                        theme.surface_active
-                                    } else {
-                                        theme.surface_sunken
-                                    }))
-                                    .border_2()
-                                    .border_color(rgb(if !options.display.light_mode {
-                                        theme.accent
-                                    } else {
-                                        theme.border
-                                    }))
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(rgb(theme.surface_hover)))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.options.display.light_mode = false;
-                                        this.save_options();
-                                        cx.notify();
-                                    }))
-                                    .child(
-                                        gpui::div()
-                                            .text_size(px(text::BASE))
-                                            .text_color(rgb(theme.text))
-                                            .child("🌙 Dark Mode"),
-                                    )
-                                    .child(
-                                        gpui::div()
-                                            .text_size(px(text::XS))
-                                            .text_color(rgb(theme.text_subtle))
-                                            .child("Neutral dark theme (default)"),
-                                    ),
-                            )
-                            .child(
-                                column()
-                                    .id("card-theme-light")
-                                    .flex_1()
-                                    .p(px(space::MD))
-                                    .gap(px(2.))
-                                    .rounded(px(layout::RADIUS))
-                                    .bg(rgb(if options.display.light_mode {
-                                        theme.surface_active
-                                    } else {
-                                        theme.surface_sunken
-                                    }))
-                                    .border_2()
-                                    .border_color(rgb(if options.display.light_mode {
-                                        theme.accent
-                                    } else {
-                                        theme.border
-                                    }))
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(rgb(theme.surface_hover)))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.options.display.light_mode = true;
-                                        this.save_options();
-                                        cx.notify();
-                                    }))
-                                    .child(
-                                        gpui::div()
-                                            .text_size(px(text::BASE))
-                                            .text_color(rgb(theme.text))
-                                            .child("☀️ Light Mode"),
-                                    )
-                                    .child(
-                                        gpui::div()
-                                            .text_size(px(text::XS))
-                                            .text_color(rgb(theme.text_subtle))
-                                            .child("Bright light mode theme"),
-                                    ),
+                                    .child("Client Settings"),
                             ),
                     )
-                    // --- Section 2: Server & Connection Endpoint ---
-                    .child(section_title("Server & API Connection", theme))
+                    // Scrollable Settings Sections Body
                     .child(
                         column()
+                            .id("settings-sections")
+                            .flex_1()
                             .w_full()
-                            .gap(px(space::XS))
-                            .child(
-                                gpui::div()
-                                    .text_size(px(text::SM))
-                                    .text_color(rgb(theme.text))
-                                    .child("Discord API Base URL"),
-                            )
-                            .child(
-                                gpui::div()
-                                    .text_size(px(text::XS))
-                                    .text_color(rgb(theme.text_subtle))
-                                    .child("Default: https://discord.com — set custom URL for self-hosted instances (Spacebar, protocol-server, etc.)"),
-                            )
+                            .px(px(space::XL))
+                            .py(px(space::LG))
+                            .gap(px(space::XL))
+                            .overflow_y_scroll()
+                            // --- Section 1: Appearance & Theme ---
+                            .child(section_title("Appearance & Theme", theme))
                             .child(
                                 row()
                                     .w_full()
-                                    .min_h(px(38.))
-                                    .px(px(space::MD))
-                                    .py(px(space::SM))
-                                    .rounded(px(layout::RADIUS))
-                                    .bg(rgb(theme.surface_sunken))
-                                    .border_1()
-                                    .border_color(rgb(theme.border))
-                                    .text_size(px(text::BASE))
-                                    .text_color(rgb(theme.text))
-                                    .child(display_url.to_string()),
-                            ),
+                                    .gap(px(space::MD))
+                                    .child(
+                                        column()
+                                            .id("card-theme-dark")
+                                            .flex_1()
+                                            .p(px(space::LG))
+                                            .gap(px(space::XS))
+                                            .rounded(px(layout::RADIUS))
+                                            .bg(rgb(if !options.display.light_mode {
+                                                theme.surface_active
+                                            } else {
+                                                theme.surface_sunken
+                                            }))
+                                            .border_2()
+                                            .border_color(rgb(if !options.display.light_mode {
+                                                theme.accent
+                                            } else {
+                                                theme.border
+                                            }))
+                                            .cursor_pointer()
+                                            .hover(|s| s.bg(rgb(theme.surface_hover)))
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.options.display.light_mode = false;
+                                                this.save_options();
+                                                cx.notify();
+                                            }))
+                                            .child(
+                                                gpui::div()
+                                                    .text_size(px(text::BASE))
+                                                    .text_color(rgb(theme.text))
+                                                    .child("🌙 Dark Mode"),
+                                            )
+                                            .child(
+                                                gpui::div()
+                                                    .text_size(px(text::XS))
+                                                    .text_color(rgb(theme.text_subtle))
+                                                    .child("Neutral dark theme tuned for long reading sessions"),
+                                            ),
+                                    )
+                                    .child(
+                                        column()
+                                            .id("card-theme-light")
+                                            .flex_1()
+                                            .p(px(space::LG))
+                                            .gap(px(space::XS))
+                                            .rounded(px(layout::RADIUS))
+                                            .bg(rgb(if options.display.light_mode {
+                                                theme.surface_active
+                                            } else {
+                                                theme.surface_sunken
+                                            }))
+                                            .border_2()
+                                            .border_color(rgb(if options.display.light_mode {
+                                                theme.accent
+                                            } else {
+                                                theme.border
+                                            }))
+                                            .cursor_pointer()
+                                            .hover(|s| s.bg(rgb(theme.surface_hover)))
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.options.display.light_mode = true;
+                                                this.save_options();
+                                                cx.notify();
+                                            }))
+                                            .child(
+                                                gpui::div()
+                                                    .text_size(px(text::BASE))
+                                                    .text_color(rgb(theme.text))
+                                                    .child("☀️ Light Mode"),
+                                            )
+                                            .child(
+                                                gpui::div()
+                                                    .text_size(px(text::XS))
+                                                    .text_color(rgb(theme.text_subtle))
+                                                    .child("Bright light mode theme"),
+                                            ),
+                                    ),
+                            )
+                            // --- Section 2: Server & API Connection ---
+                            .child(section_title("Server & API Connection", theme))
+                            .child(
+                                column()
+                                    .w_full()
+                                    .gap(px(space::SM))
+                                    .child(
+                                        gpui::div()
+                                            .text_size(px(text::SM))
+                                            .text_color(rgb(theme.text))
+                                            .child("Discord API Base URL"),
+                                    )
+                                    .child(
+                                        gpui::div()
+                                            .text_size(px(text::XS))
+                                            .text_color(rgb(theme.text_subtle))
+                                            .child("Default: https://discord.com — set custom URL for self-hosted instances (Spacebar, protocol-server)"),
+                                    )
+                                    .child(
+                                        row()
+                                            .w_full()
+                                            .h(px(40.))
+                                            .px(px(space::MD))
+                                            .items_center()
+                                            .rounded(px(layout::RADIUS))
+                                            .bg(rgb(theme.surface_sunken))
+                                            .border_1()
+                                            .border_color(rgb(theme.border))
+                                            .text_size(px(text::BASE))
+                                            .text_color(rgb(theme.text))
+                                            .child(display_url.to_string()),
+                                    ),
+                            )
+                            // --- Section 3: Interface & Display ---
+                            .child(section_title("Interface & Display", theme))
+                            .child(toggle_row(
+                                Toggle::ShowAvatars,
+                                options.display.show_avatars,
+                                theme,
+                                cx.listener(|this, _, _, cx| {
+                                    this.options.display.show_avatars = !this.options.display.show_avatars;
+                                    this.save_options();
+                                    cx.notify();
+                                }),
+                            ))
+                            .child(toggle_row(
+                                Toggle::CircularAvatars,
+                                options.display.circular_avatars,
+                                theme,
+                                cx.listener(|this, _, _, cx| {
+                                    this.options.display.circular_avatars = !this.options.display.circular_avatars;
+                                    this.save_options();
+                                    cx.notify();
+                                }),
+                            ))
+                            // --- Section 4: Notifications ---
+                            .child(section_title("Notifications", theme))
+                            .child(toggle_row(
+                                Toggle::DesktopNotifications,
+                                options.notifications.desktop_notifications,
+                                theme,
+                                cx.listener(|this, _, _, cx| {
+                                    this.options.notifications.desktop_notifications =
+                                        !this.options.notifications.desktop_notifications;
+                                    this.save_options();
+                                    cx.notify();
+                                }),
+                            ))
+                            // --- Section 5: Voice & Audio ---
+                            .child(section_title("Voice & Audio", theme))
+                            .child(toggle_row(
+                                Toggle::NoiseSuppression,
+                                options.voice.noise_suppression,
+                                theme,
+                                cx.listener(|this, _, _, cx| {
+                                    this.options.voice.noise_suppression = !this.options.voice.noise_suppression;
+                                    this.save_options();
+                                    cx.notify();
+                                }),
+                            ))
+                            // --- Section 6: Presence ---
+                            .child(section_title("Presence", theme))
+                            .child(toggle_row(
+                                Toggle::ShareRichPresence,
+                                options.presence.share_rich_presence,
+                                theme,
+                                cx.listener(|this, _, _, cx| {
+                                    this.options.presence.share_rich_presence =
+                                        !this.options.presence.share_rich_presence;
+                                    this.save_options();
+                                    cx.notify();
+                                }),
+                            )),
                     )
-                    // --- Section 3: Interface & Display ---
-                    .child(section_title("Interface & Display", theme))
-                    .child(toggle_row(
-                        Toggle::ShowAvatars,
-                        options.display.show_avatars,
-                        theme,
-                        cx.listener(|this, _, _, cx| {
-                            this.options.display.show_avatars = !this.options.display.show_avatars;
-                            this.save_options();
-                            cx.notify();
-                        }),
-                    ))
-                    .child(toggle_row(
-                        Toggle::CircularAvatars,
-                        options.display.circular_avatars,
-                        theme,
-                        cx.listener(|this, _, _, cx| {
-                            this.options.display.circular_avatars = !this.options.display.circular_avatars;
-                            this.save_options();
-                            cx.notify();
-                        }),
-                    ))
-                    // --- Section 4: Notifications ---
-                    .child(section_title("Notifications", theme))
-                    .child(toggle_row(
-                        Toggle::DesktopNotifications,
-                        options.notifications.desktop_notifications,
-                        theme,
-                        cx.listener(|this, _, _, cx| {
-                            this.options.notifications.desktop_notifications =
-                                !this.options.notifications.desktop_notifications;
-                            this.save_options();
-                            cx.notify();
-                        }),
-                    ))
-                    // --- Section 5: Voice & Audio ---
-                    .child(section_title("Voice & Audio", theme))
-                    .child(toggle_row(
-                        Toggle::NoiseSuppression,
-                        options.voice.noise_suppression,
-                        theme,
-                        cx.listener(|this, _, _, cx| {
-                            this.options.voice.noise_suppression = !this.options.voice.noise_suppression;
-                            this.save_options();
-                            cx.notify();
-                        }),
-                    ))
-                    // --- Section 6: Presence ---
-                    .child(section_title("Presence", theme))
-                    .child(toggle_row(
-                        Toggle::ShareRichPresence,
-                        options.presence.share_rich_presence,
-                        theme,
-                        cx.listener(|this, _, _, cx| {
-                            this.options.presence.share_rich_presence =
-                                !this.options.presence.share_rich_presence;
-                            this.save_options();
-                            cx.notify();
-                        }),
-                    )),
-            )
-            // Footer
-            .child(
-                row()
-                    .w_full()
-                    .h(px(48.))
-                    .px(px(space::LG))
-                    .items_center()
-                    .justify_between()
-                    .border_t_1()
-                    .border_color(rgb(theme.border))
-                    .bg(rgb(theme.surface_sunken))
+                    // Footer Bar
                     .child(
-                        gpui::div()
-                            .text_size(px(text::XS))
-                            .text_color(rgb(theme.text_subtle))
-                            .child(saved_note.unwrap_or("Settings saved automatically").to_string()),
+                        row()
+                            .w_full()
+                            .h(px(44.))
+                            .px(px(space::XL))
+                            .items_center()
+                            .border_t_1()
+                            .border_color(rgb(theme.border))
+                            .bg(rgb(theme.surface_sunken))
+                            .child(
+                                gpui::div()
+                                    .text_size(px(text::XS))
+                                    .text_color(rgb(theme.text_subtle))
+                                    .child(saved_note.unwrap_or("Settings saved automatically").to_string()),
+                            ),
                     ),
             )
     }
+}
+
+fn sidebar_nav_item(label: &'static str, active: bool, theme: &Palette) -> Div {
+    gpui::div()
+        .w_full()
+        .px(px(space::MD))
+        .py(px(space::SM))
+        .rounded(px(layout::RADIUS))
+        .bg(rgb(if active {
+            theme.surface_active
+        } else {
+            theme.surface_sunken
+        }))
+        .text_size(px(text::SM))
+        .text_color(rgb(if active { theme.text } else { theme.text_muted }))
+        .cursor_pointer()
+        .hover(|s| s.bg(rgb(theme.surface_hover)).text_color(rgb(theme.text)))
+        .child(label)
 }
 
 fn section_title(title: &'static str, theme: &Palette) -> Div {
