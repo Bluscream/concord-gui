@@ -8,7 +8,9 @@
 //! bridge reprojects on each revision rather than diffing, because
 //! `DiscordState` is already an immutable snapshot behind `Arc`s.
 
-use concord::discord::{DiscordState, GuildMemberListEntry, Id, PresenceStatus, marker};
+use concord::discord::{
+    ChannelUnreadState, DiscordState, GuildMemberListEntry, Id, PresenceStatus, marker,
+};
 
 use crate::theme::Presence;
 use crate::ui::workspace::{ChannelEntry, ChannelKind, GuildEntry, MemberEntry, WorkspaceModel};
@@ -27,6 +29,33 @@ pub enum Selection {
 pub struct Navigation {
     pub selection: Selection,
     pub channel: Option<Id<marker::ChannelMarker>>,
+}
+
+/// Badge count for an unread state. `Unread` shows a dot, not a number, so
+/// only explicit mention/notify counts produce a badge.
+fn mention_count(unread: ChannelUnreadState) -> u32 {
+    match unread {
+        ChannelUnreadState::Mentioned(count) | ChannelUnreadState::Notified(count) => count,
+        _ => 0,
+    }
+}
+
+/// Users currently typing in a channel, resolved to display names.
+pub fn typing_names(
+    state: &DiscordState,
+    channel_id: Id<marker::ChannelMarker>,
+    guild_id: Option<Id<marker::GuildMarker>>,
+) -> Vec<String> {
+    state
+        .typing_users(channel_id)
+        .into_iter()
+        .map(|typer| {
+            guild_id
+                .and_then(|guild_id| state.member_for_guild(guild_id, typer.user_id))
+                .map(|member| member.display_name.clone())
+                .unwrap_or_else(|| "someone".to_string())
+        })
+        .collect()
 }
 
 fn presence_of(status: Option<PresenceStatus>) -> Presence {
@@ -89,19 +118,25 @@ pub fn project(state: &DiscordState, nav: &Navigation, connected: bool) -> Works
 fn project_guilds(state: &DiscordState) -> Vec<GuildEntry> {
     // Index 0 is always the DM pseudo-guild, mirroring how the sidebar treats
     // direct messages as a peer of servers.
+    let dm_unread = state.direct_message_unread_count();
     let mut entries = vec![GuildEntry {
         id: None,
         name: "Direct Messages".to_string(),
-        unread: false,
+        unread: dm_unread > 0,
+        mentions: dm_unread as u32,
     }];
 
     let mut guilds = state.guilds();
     guilds.sort_by(|a, b| a.name.cmp(&b.name));
 
-    entries.extend(guilds.into_iter().map(|guild| GuildEntry {
-        id: Some(guild.id),
-        name: guild.name.clone(),
-        unread: false,
+    entries.extend(guilds.into_iter().map(|guild| {
+        let unread = state.guild_sidebar_unread(guild.id);
+        GuildEntry {
+            id: Some(guild.id),
+            name: guild.name.clone(),
+            unread: !matches!(unread, ChannelUnreadState::Seen),
+            mentions: mention_count(unread),
+        }
     }));
 
     entries
@@ -121,16 +156,19 @@ fn project_channels(state: &DiscordState, nav: &Navigation) -> Vec<ChannelEntry>
     channels
         .into_iter()
         .filter(|c| !c.is_thread())
-        .map(|channel| ChannelEntry {
-            id: Some(channel.id),
-            name: if channel.is_category() {
-                channel.name.to_uppercase()
-            } else {
-                channel.name.clone()
-            },
-            kind: channel_kind(channel),
-            unread: false,
-            mentions: 0,
+        .map(|channel| {
+            let unread = state.channel_sidebar_unread(channel.id);
+            ChannelEntry {
+                id: Some(channel.id),
+                name: if channel.is_category() {
+                    channel.name.to_uppercase()
+                } else {
+                    channel.name.clone()
+                },
+                kind: channel_kind(channel),
+                unread: !matches!(unread, ChannelUnreadState::Seen),
+                mentions: mention_count(unread),
+            }
         })
         .collect()
 }

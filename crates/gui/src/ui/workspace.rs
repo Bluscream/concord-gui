@@ -40,6 +40,7 @@ pub struct GuildEntry {
     pub id: Option<Id<marker::GuildMarker>>,
     pub name: String,
     pub unread: bool,
+    pub mentions: u32,
 }
 
 pub struct ChannelEntry {
@@ -88,11 +89,13 @@ impl WorkspaceModel {
                     id: None,
                     name: "Direct Messages".into(),
                     unread: false,
+                    mentions: 0,
                 },
                 GuildEntry {
                     id: None,
                     name: "RostFaden".into(),
                     unread: true,
+                    mentions: 0,
                 },
             ],
             channels: vec![
@@ -157,6 +160,8 @@ pub struct Workspace {
     /// Projected rows for the open channel.
     pub messages: Vec<MessageRow>,
     pub composer: Composer,
+    /// Display names of users currently typing in the open channel.
+    pub typing: Vec<String>,
     focus: FocusHandle,
 }
 
@@ -169,6 +174,7 @@ impl Workspace {
             nav: Navigation::default(),
             messages: Vec::new(),
             composer: Composer::default(),
+            typing: Vec::new(),
             focus: cx.focus_handle(),
         }
     }
@@ -214,9 +220,16 @@ impl Workspace {
                     match update {
                         Update::State(state) => {
                             workspace.model = projection::project(&state, &workspace.nav, true);
-                            workspace.messages = match workspace.nav.channel {
-                                Some(channel_id) => message::project_messages(&state, channel_id),
-                                None => Vec::new(),
+                            let guild_id = match workspace.nav.selection {
+                                Selection::Guild(id) => Some(id),
+                                Selection::DirectMessages => None,
+                            };
+                            (workspace.messages, workspace.typing) = match workspace.nav.channel {
+                                Some(channel_id) => (
+                                    message::project_messages(&state, channel_id),
+                                    projection::typing_names(&state, channel_id, guild_id),
+                                ),
+                                None => (Vec::new(), Vec::new()),
                             };
                         }
                         Update::Event(event) => workspace.absorb(*event),
@@ -429,7 +442,14 @@ impl Workspace {
                         .text_color(rgb(DARK.text_subtle))
                         .child(channel.kind.glyph()),
                 )
-                .child(gpui::div().flex_1().child(channel.name.clone()));
+                .child(
+                    gpui::div()
+                        .flex_1()
+                        .when(channel.unread && !selected, |d| {
+                            d.text_color(rgb(DARK.text))
+                        })
+                        .child(channel.name.clone()),
+                );
 
             if channel.mentions > 0 {
                 entry = entry.child(
