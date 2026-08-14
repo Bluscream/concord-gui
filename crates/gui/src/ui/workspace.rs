@@ -156,9 +156,9 @@ pub enum Screen {
     Ready,
 }
 
-/// Actions the login key handler can request from the workspace.
-#[derive(Debug)]
-enum LoginAction {
+/// Actions the login key handler or mouse click handlers can request from the workspace.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum LoginAction {
     // Picker selections
     PickPassword,
     PickToken,
@@ -413,7 +413,7 @@ impl Workspace {
     ///
     /// Called from the key handler with a `LoginAction` that describes what
     /// the user just did (submit, back, pick a method, etc.).
-    fn handle_login_action(&mut self, action: LoginAction, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn handle_login_action(&mut self, action: LoginAction, window: &mut Window, cx: &mut Context<Self>) {
         match action {
             // -- Picker: user chose a method --------------------------------
             LoginAction::PickPassword => {
@@ -2072,7 +2072,7 @@ impl Render for Workspace {
                 let Screen::Login(login) = &self.screen else {
                     return d;
                 };
-                d.child(login_view(login))
+                d.child(login_view(login, cx))
             })
             .when(matches!(self.screen, Screen::Ready), |d| {
                 d.child(

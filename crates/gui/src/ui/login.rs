@@ -13,13 +13,14 @@ use concord::discord::{
     password_auth::{MfaChallenge, MfaMethod},
     qr_auth::QrEvent,
 };
-use gpui::{Div, prelude::*, px, rgb};
+use gpui::{Context, Div, prelude::*, px, rgb};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::theme::{DARK, layout, space, text};
 use crate::ui::chrome::{column, row};
 use crate::ui::composer::Composer;
+use crate::ui::workspace::{LoginAction, Workspace};
 
 // ---------------------------------------------------------------------------
 // State
@@ -159,8 +160,15 @@ impl Login {
 // ---------------------------------------------------------------------------
 
 /// A full-width method button.
-fn method_btn(label: &str, subtitle: &str, accent_color: u32) -> Div {
+fn method_btn(
+    label: &'static str,
+    subtitle: &str,
+    accent_color: u32,
+    action: LoginAction,
+    cx: &mut Context<Workspace>,
+) -> gpui::Stateful<Div> {
     row()
+        .id(label)
         .w_full()
         .min_h(px(56.))
         .px(px(space::LG))
@@ -169,10 +177,14 @@ fn method_btn(label: &str, subtitle: &str, accent_color: u32) -> Div {
         .bg(rgb(DARK.surface_sunken))
         .border_1()
         .border_color(rgb(DARK.border))
+        .cursor_pointer()
         .hover(|d| {
             d.bg(rgb(DARK.surface_hover))
                 .border_color(rgb(accent_color))
         })
+        .on_click(cx.listener(move |this, _event, window, cx| {
+            this.handle_login_action(action, window, cx);
+        }))
         .child(
             gpui::div()
                 .w(px(4.))
@@ -246,21 +258,32 @@ fn input_row(label: &str, value: &str, focused: bool, masked: bool, error: bool)
 }
 
 /// Back button shown at the top-left of every sub-screen.
-fn back_button() -> Div {
+fn back_button(cx: &mut Context<Workspace>) -> gpui::Stateful<Div> {
     row()
+        .id("back_btn")
         .gap(px(space::XS))
         .py(px(space::XS))
         .px(px(space::SM))
         .rounded(px(layout::RADIUS))
         .text_size(px(text::SM))
         .text_color(rgb(DARK.text_muted))
+        .cursor_pointer()
         .hover(|d| d.bg(rgb(DARK.surface_hover)).text_color(rgb(DARK.text)))
+        .on_click(cx.listener(move |this, _event, window, cx| {
+            this.handle_login_action(LoginAction::Back, window, cx);
+        }))
         .child(gpui::div().child("← Back"))
 }
 
 /// Primary action button.
-fn action_btn(label: &str, enabled: bool) -> Div {
-    row()
+fn action_btn(
+    label: &'static str,
+    enabled: bool,
+    action: LoginAction,
+    cx: &mut Context<Workspace>,
+) -> gpui::Stateful<Div> {
+    let base = row()
+        .id(label)
         .w_full()
         .h(px(40.))
         .items_center()
@@ -269,7 +292,17 @@ fn action_btn(label: &str, enabled: bool) -> Div {
         .bg(rgb(if enabled { DARK.accent } else { DARK.surface_active }))
         .text_size(px(text::BASE))
         .text_color(rgb(if enabled { DARK.on_accent } else { DARK.text_subtle }))
-        .child(label.to_string())
+        .child(label.to_string());
+
+    if enabled {
+        base.cursor_pointer()
+            .hover(|s| s.bg(rgb(DARK.accent_hover)))
+            .on_click(cx.listener(move |this, _event, window, cx| {
+                this.handle_login_action(action, window, cx);
+            }))
+    } else {
+        base
+    }
 }
 
 /// Render the QR bitmap using half-block Unicode so each pair of rows becomes
@@ -316,14 +349,14 @@ fn qr_bitmap_view(bitmap: &[Vec<bool>]) -> Div {
 // Main render entry
 // ---------------------------------------------------------------------------
 
-pub fn login_view(login: &Login) -> Div {
+pub fn login_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
     let content = match login.screen {
-        LoginScreen::Picker    => picker_view(login),
-        LoginScreen::Password  => password_view(login),
-        LoginScreen::MfaSelect => mfa_select_view(login),
-        LoginScreen::MfaCode   => mfa_code_view(login),
-        LoginScreen::Token     => token_view(login),
-        LoginScreen::QrScan    => qr_view(login),
+        LoginScreen::Picker    => picker_view(login, cx),
+        LoginScreen::Password  => password_view(login, cx),
+        LoginScreen::MfaSelect => mfa_select_view(login, cx),
+        LoginScreen::MfaCode   => mfa_code_view(login, cx),
+        LoginScreen::Token     => token_view(login, cx),
+        LoginScreen::QrScan    => qr_view(login, cx),
     };
 
     column()
@@ -336,7 +369,7 @@ pub fn login_view(login: &Login) -> Div {
 
 // -- Picker ------------------------------------------------------------------
 
-fn picker_view(login: &Login) -> Div {
+fn picker_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
     let card = column()
         .w(px(400.))
         .gap(px(space::LG))
@@ -371,21 +404,29 @@ fn picker_view(login: &Login) -> Div {
                     "Username + Password",
                     "Email, phone, or username",
                     DARK.accent,
+                    LoginAction::PickPassword,
+                    cx,
                 ))
                 .child(method_btn(
                     "User / Bot Token",
                     "Paste a user or bot token directly",
                     0x7c6fe0,
+                    LoginAction::PickToken,
+                    cx,
                 ))
                 .child(method_btn(
                     "QR Code",
                     "Scan with the Discord mobile app",
                     DARK.success,
+                    LoginAction::PickQr,
+                    cx,
                 ))
                 .child(method_btn(
                     "Demo Mode",
                     "Offline fixture data — no account needed",
                     DARK.warning,
+                    LoginAction::PickDemo,
+                    cx,
                 )),
         );
 
@@ -401,7 +442,7 @@ fn picker_view(login: &Login) -> Div {
 
 // -- Password ----------------------------------------------------------------
 
-fn password_view(login: &Login) -> Div {
+fn password_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
     let pw = &login.password;
     let submittable = pw.is_submittable();
 
@@ -417,7 +458,7 @@ fn password_view(login: &Login) -> Div {
             row()
                 .w_full()
                 .gap(px(space::SM))
-                .child(back_button())
+                .child(back_button(cx))
                 .child(
                     gpui::div()
                         .flex_1()
@@ -445,7 +486,12 @@ fn password_view(login: &Login) -> Div {
                     false,
                 )),
         )
-        .child(action_btn(if pw.in_progress { "Connecting…" } else { "Log In" }, submittable));
+        .child(action_btn(
+            if pw.in_progress { "Connecting…" } else { "Log In" },
+            submittable,
+            LoginAction::SubmitPassword,
+            cx,
+        ));
 
     let card = maybe_error(card, &login.error);
 
@@ -467,7 +513,7 @@ fn password_view(login: &Login) -> Div {
 
 // -- MFA method select -------------------------------------------------------
 
-fn mfa_select_view(login: &Login) -> Div {
+fn mfa_select_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
     let pw = &login.password;
     let challenge = pw.mfa.as_ref();
 
@@ -509,7 +555,13 @@ fn mfa_select_view(login: &Login) -> Div {
                     "Receive a code by text message",
                 ),
             };
-            methods_col = methods_col.child(method_btn(label, subtitle, DARK.accent));
+            methods_col = methods_col.child(method_btn(
+                label,
+                subtitle,
+                DARK.accent,
+                LoginAction::PickMfaMethod(*method),
+                cx,
+            ));
         }
         card.child(methods_col)
     } else {
@@ -525,7 +577,7 @@ fn mfa_select_view(login: &Login) -> Div {
 
 // -- MFA code entry ----------------------------------------------------------
 
-fn mfa_code_view(login: &Login) -> Div {
+fn mfa_code_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
     let pw = &login.password;
     let submittable = pw.is_mfa_submittable();
     let method_name = match pw.mfa_method {
@@ -546,7 +598,7 @@ fn mfa_code_view(login: &Login) -> Div {
             row()
                 .w_full()
                 .gap(px(space::SM))
-                .child(back_button())
+                .child(back_button(cx))
                 .child(
                     gpui::div()
                         .flex_1()
@@ -570,14 +622,19 @@ fn mfa_code_view(login: &Login) -> Div {
             false,
             false,
         ))
-        .child(action_btn(if pw.in_progress { "Verifying…" } else { "Verify" }, submittable));
+        .child(action_btn(
+            if pw.in_progress { "Verifying…" } else { "Verify" },
+            submittable,
+            LoginAction::SubmitMfaCode,
+            cx,
+        ));
 
     maybe_error(card, &login.error)
 }
 
 // -- Token -------------------------------------------------------------------
 
-fn token_view(login: &Login) -> Div {
+fn token_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
     let submittable = login.token_submittable();
 
     let card = column()
@@ -592,7 +649,7 @@ fn token_view(login: &Login) -> Div {
             row()
                 .w_full()
                 .gap(px(space::SM))
-                .child(back_button())
+                .child(back_button(cx))
                 .child(
                     gpui::div()
                         .flex_1()
@@ -608,7 +665,7 @@ fn token_view(login: &Login) -> Div {
             true,
             login.error.is_some(),
         ))
-        .child(action_btn("Connect", submittable));
+        .child(action_btn("Connect", submittable, LoginAction::SubmitToken, cx));
 
     let card = maybe_error(card, &login.error);
 
@@ -626,7 +683,7 @@ fn token_view(login: &Login) -> Div {
 
 // -- QR scan -----------------------------------------------------------------
 
-fn qr_view(login: &Login) -> Div {
+fn qr_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
     let qr = &login.qr;
 
     let mut card = column()
@@ -641,7 +698,7 @@ fn qr_view(login: &Login) -> Div {
             row()
                 .w_full()
                 .gap(px(space::SM))
-                .child(back_button())
+                .child(back_button(cx))
                 .child(
                     gpui::div()
                         .flex_1()
