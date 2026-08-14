@@ -113,11 +113,7 @@ fn missing_members_for_effect(
         | AppEvent::MessageSearchLoaded {
             page: crate::discord::MessageSearchPage { messages, .. },
         }
-        | AppEvent::PinnedMessagesLoaded { messages, .. }
-        | AppEvent::ForumPostsLoaded {
-            first_messages: messages,
-            ..
-        } => Some(messages.as_slice()),
+        | AppEvent::PinnedMessagesLoaded { messages, .. } => Some(messages.as_slice()),
         _ => None,
     };
     if let Some(messages) = messages {
@@ -131,9 +127,6 @@ fn missing_members_for_effect(
             update.guild_id,
             mentions.iter().map(|mention| mention.user_id),
         ));
-    }
-    if let AppEvent::ForumPostsLoaded { threads, .. } = event {
-        missing.extend(state.missing_thread_owner_member_requests(threads));
     }
     if let AppEvent::ReactionUsersLoaded {
         channel_id, users, ..
@@ -431,14 +424,13 @@ mod tests {
 
     use crate::discord::ids::Id;
     use crate::discord::test_builders::{
-        ForumPostsLoadedFixture, GuildCreateFixture, MessageHistoryLoadedFixture,
-        ReactionUsersLoadedFixture, forum_posts_loaded_event, guild_create_event,
-        message_history_loaded_event, reaction_users_loaded_event,
+        GuildCreateFixture, MessageHistoryLoadedFixture, ReactionUsersLoadedFixture,
+        guild_create_event, message_history_loaded_event, reaction_users_loaded_event,
     };
     use crate::discord::{
-        AppCommand, AppEvent, ChannelInfo, ForumPostArchiveState, MemberInfo, MentionInfo,
-        MessageHistoryAfterMode, MessageInfo, MessageUpdateDispatchInfo, MessageUpdateEventFields,
-        ReactionEmoji, ReactionUserInfo, RoleInfo, SequencedAppEvent, VoiceStateInfo,
+        AppCommand, AppEvent, ChannelInfo, MemberInfo, MentionInfo, MessageHistoryAfterMode,
+        MessageInfo, MessageUpdateDispatchInfo, MessageUpdateEventFields, ReactionEmoji,
+        ReactionUserInfo, RoleInfo, SequencedAppEvent, VoiceStateInfo,
     };
 
     use super::*;
@@ -495,22 +487,11 @@ mod tests {
     fn events_carrying_unloaded_authors_enqueue_a_member_request() {
         let guild_id = Id::new(1);
         let channel_id = Id::new(2);
-        let thread_id = Id::new(3);
         let author_id = Id::new(99);
         let message_id = Id::new(20);
         let text_channel = || channel_info(guild_id, channel_id, None, "general", "GuildText");
-        let forum_channel = || channel_info(guild_id, channel_id, None, "forum", "forum");
-        let forum_thread = || {
-            channel_info(
-                guild_id,
-                thread_id,
-                Some(channel_id),
-                "welcome",
-                "GuildPublicThread",
-            )
-        };
 
-        // Every route that surfaces a message or thread authored by someone the
+        // Every route that surfaces a message authored by someone the
         // member cache has never seen must ask for that member, or the row
         // renders with a raw id instead of a name.
         let cases = [
@@ -548,32 +529,6 @@ mod tests {
                     channel_id,
                     messages: vec![message_info(guild_id, channel_id, message_id, author_id)],
                 },
-            ),
-            (
-                "forum post preview author",
-                forum_channel(),
-                forum_posts_loaded_event(ForumPostsLoadedFixture {
-                    channel_id,
-                    archive_state: ForumPostArchiveState::Active,
-                    next_offset: 1,
-                    threads: vec![forum_thread()],
-                    first_messages: vec![message_info(guild_id, thread_id, message_id, author_id)],
-                    ..ForumPostsLoadedFixture::new()
-                }),
-            ),
-            (
-                "forum post thread owner",
-                forum_channel(),
-                forum_posts_loaded_event(ForumPostsLoadedFixture {
-                    channel_id,
-                    archive_state: ForumPostArchiveState::Active,
-                    next_offset: 1,
-                    threads: vec![ChannelInfo {
-                        owner_id: Some(author_id),
-                        ..forum_thread()
-                    }],
-                    ..ForumPostsLoadedFixture::new()
-                }),
             ),
             (
                 "reaction user",

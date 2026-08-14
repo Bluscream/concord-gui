@@ -237,121 +237,6 @@ fn muted_channel_does_not_add_numeric_notification_badge() {
 }
 
 #[test]
-fn explicit_channel_override_beats_a_muted_parent_category() {
-    struct Case {
-        name: &'static str,
-        channel_override: bool,
-        muted: bool,
-        unread_count: usize,
-        unread: ChannelUnreadState,
-        sidebar: ChannelUnreadState,
-        guild_sidebar: ChannelUnreadState,
-    }
-
-    let guild_id = Id::new(1);
-    let category_id = Id::new(2);
-    let channel_id = Id::new(3);
-    let current_user_id = Id::new(10);
-    let author_id = Id::new(20);
-
-    for case in [
-        Case {
-            name: "muted category only",
-            channel_override: false,
-            muted: true,
-            unread_count: 0,
-            unread: ChannelUnreadState::Unread,
-            sidebar: ChannelUnreadState::Seen,
-            guild_sidebar: ChannelUnreadState::Seen,
-        },
-        Case {
-            name: "channel override under a muted category",
-            channel_override: true,
-            muted: false,
-            unread_count: 1,
-            unread: ChannelUnreadState::Notified(1),
-            sidebar: ChannelUnreadState::Notified(1),
-            guild_sidebar: ChannelUnreadState::Notified(1),
-        },
-    ] {
-        let mut state = DiscordState::default();
-        let mut settings = notification_settings(guild_id, NotificationLevel::AllMessages);
-        settings
-            .channel_overrides
-            .push(ChannelNotificationOverrideInfo {
-                message_notifications: Some(NotificationLevel::AllMessages),
-                muted: true,
-                ..ChannelNotificationOverrideInfo::test(category_id)
-            });
-        if case.channel_override {
-            settings
-                .channel_overrides
-                .push(ChannelNotificationOverrideInfo {
-                    message_notifications: Some(NotificationLevel::AllMessages),
-                    ..ChannelNotificationOverrideInfo::test(channel_id)
-                });
-        }
-
-        state.apply_event(&AppEvent::Ready {
-            user: "me".to_owned(),
-            user_id: Some(current_user_id),
-        });
-        state.apply_event(&guild_create_event(GuildCreateFixture {
-            guild_id,
-            channels: vec![
-                guild_category_channel(guild_id, category_id, "category", 0),
-                ChannelInfo {
-                    last_message_id: Some(Id::new(30)),
-                    ..guild_child_text_channel(guild_id, channel_id, category_id, "general", 1)
-                },
-            ],
-            ..GuildCreateFixture::new(guild_id)
-        }));
-        state.apply_event(&user_guild_settings_init(vec![settings]));
-
-        state.apply_event(&message_create(
-            Some(guild_id),
-            channel_id,
-            Id::new(30),
-            author_id,
-            "hello",
-            Vec::new(),
-        ));
-
-        assert_eq!(
-            state.channel_notification_muted(channel_id),
-            case.muted,
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            state.channel_unread_message_count(channel_id),
-            case.unread_count,
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            state.channel_unread(channel_id),
-            case.unread,
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            state.channel_sidebar_unread(channel_id),
-            case.sidebar,
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            state.guild_sidebar_unread(guild_id),
-            case.guild_sidebar,
-            "{}",
-            case.name
-        );
-    }
-}
-
-#[test]
 fn thread_notification_settings_walk_the_full_channel_ancestry() {
     let guild_id = Id::new(1);
     let category_id = Id::new(2);
@@ -374,6 +259,17 @@ fn thread_notification_settings_walk_the_full_channel_ancestry() {
             guild_child_text_channel(guild_id, channel_id, category_id, "general", 0),
             guild_thread_channel(guild_id, thread_id, channel_id, "thread"),
         ],
+        current_user_thread_members: vec![ThreadMemberInfo {
+            thread_id: Some(thread_id),
+            user_id: Some(Id::new(10)),
+            join_timestamp: None,
+            flags: None,
+            muted: Some(false),
+            mute_end_time: None,
+            member: None,
+            presence: None,
+            extra_fields: BTreeMap::new(),
+        }],
         ..GuildCreateFixture::new(guild_id)
     }));
     state.apply_event(&user_guild_settings_init(vec![settings]));
@@ -506,6 +402,27 @@ fn thread_notification_policy_uses_membership_activity_permissions_mute_and_leve
         },
     ] {
         let parent_permissions = if case.can_view { VIEW_CHANNEL } else { 0 };
+        let mut thread = guild_thread_channel(guild_id, thread_id, parent_id, "post");
+        thread.kind = "GuildPublicThread".to_owned();
+        thread.thread_metadata = Some(crate::discord::ThreadMetadataInfo::test(
+            case.archived,
+            false,
+        ));
+        let current_user_thread_members = case
+            .joined
+            .then(|| ThreadMemberInfo {
+                thread_id: Some(thread_id),
+                user_id: Some(current_user_id),
+                join_timestamp: None,
+                flags: case.flags,
+                muted: Some(case.muted),
+                mute_end_time: None,
+                member: None,
+                presence: None,
+                extra_fields: BTreeMap::new(),
+            })
+            .into_iter()
+            .collect();
         let mut state = DiscordState::default();
         state.apply_event(&AppEvent::Ready {
             user: "me".to_owned(),
@@ -521,20 +438,9 @@ fn thread_notification_policy_uses_membership_activity_permissions_mute_and_leve
                     kind: "forum".to_owned(),
                     ..channel_info(parent_id, "forum", Vec::new())
                 },
-                ChannelInfo {
-                    guild_id: Some(guild_id),
-                    parent_id: Some(parent_id),
-                    name: "post".to_owned(),
-                    current_user_joined_thread: Some(case.joined),
-                    current_user_thread_notification_flags: case.flags,
-                    current_user_thread_muted: Some(false),
-                    thread_metadata: Some(crate::discord::ThreadMetadataInfo::test(
-                        case.archived,
-                        false,
-                    )),
-                    ..channel_info(thread_id, "GuildPublicThread", Vec::new())
-                },
+                thread,
             ],
+            current_user_thread_members,
             members: vec![member_with_roles(current_user_id, "me", Vec::new())],
             roles: vec![role_info(
                 Id::new(guild_id.get()),
@@ -547,13 +453,6 @@ fn thread_notification_policy_uses_membership_activity_permissions_mute_and_leve
             guild_id,
             NotificationLevel::AllMessages,
         )]));
-        if case.muted {
-            state.apply_event(&AppEvent::ThreadMuteUpdate {
-                channel_id: thread_id,
-                muted: true,
-                mute_end_time: None,
-            });
-        }
 
         let mentions = if case.mentions_current_user {
             vec![mention_info(current_user_id.get(), "me")]
@@ -934,4 +833,119 @@ fn user_guild_settings_updates_advance_the_cached_version() {
             .message_notifications,
         Some(NotificationLevel::OnlyMentions)
     );
+}
+
+#[test]
+fn explicit_channel_override_beats_a_muted_parent_category() {
+    struct Case {
+        name: &'static str,
+        channel_override: bool,
+        muted: bool,
+        unread_count: usize,
+        unread: ChannelUnreadState,
+        sidebar: ChannelUnreadState,
+        guild_sidebar: ChannelUnreadState,
+    }
+
+    let guild_id = Id::new(1);
+    let category_id = Id::new(2);
+    let channel_id = Id::new(3);
+    let current_user_id = Id::new(10);
+    let author_id = Id::new(20);
+
+    for case in [
+        Case {
+            name: "muted category only",
+            channel_override: false,
+            muted: true,
+            unread_count: 0,
+            unread: ChannelUnreadState::Unread,
+            sidebar: ChannelUnreadState::Seen,
+            guild_sidebar: ChannelUnreadState::Seen,
+        },
+        Case {
+            name: "channel override under a muted category",
+            channel_override: true,
+            muted: false,
+            unread_count: 1,
+            unread: ChannelUnreadState::Notified(1),
+            sidebar: ChannelUnreadState::Notified(1),
+            guild_sidebar: ChannelUnreadState::Notified(1),
+        },
+    ] {
+        let mut state = DiscordState::default();
+        let mut settings = notification_settings(guild_id, NotificationLevel::AllMessages);
+        settings
+            .channel_overrides
+            .push(ChannelNotificationOverrideInfo {
+                message_notifications: Some(NotificationLevel::AllMessages),
+                muted: true,
+                ..ChannelNotificationOverrideInfo::test(category_id)
+            });
+        if case.channel_override {
+            settings
+                .channel_overrides
+                .push(ChannelNotificationOverrideInfo {
+                    message_notifications: Some(NotificationLevel::AllMessages),
+                    ..ChannelNotificationOverrideInfo::test(channel_id)
+                });
+        }
+
+        state.apply_event(&AppEvent::Ready {
+            user: "me".to_owned(),
+            user_id: Some(current_user_id),
+        });
+        state.apply_event(&guild_create_event(GuildCreateFixture {
+            guild_id,
+            channels: vec![
+                guild_category_channel(guild_id, category_id, "category", 0),
+                ChannelInfo {
+                    last_message_id: Some(Id::new(30)),
+                    ..guild_child_text_channel(guild_id, channel_id, category_id, "general", 1)
+                },
+            ],
+            ..GuildCreateFixture::new(guild_id)
+        }));
+        state.apply_event(&user_guild_settings_init(vec![settings]));
+
+        state.apply_event(&message_create(
+            Some(guild_id),
+            channel_id,
+            Id::new(30),
+            author_id,
+            "hello",
+            Vec::new(),
+        ));
+
+        assert_eq!(
+            state.channel_notification_muted(channel_id),
+            case.muted,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            state.channel_unread_message_count(channel_id),
+            case.unread_count,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            state.channel_unread(channel_id),
+            case.unread,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            state.channel_sidebar_unread(channel_id),
+            case.sidebar,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            state.guild_sidebar_unread(guild_id),
+            case.guild_sidebar,
+            "{}",
+            case.name
+        );
+    }
 }

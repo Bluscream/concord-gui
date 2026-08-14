@@ -4,7 +4,8 @@ use std::sync::Arc;
 use crate::discord::{
     ChannelInfo, ChannelNotificationOverrideInfo, CustomEmojiInfo, GuildBoostTier,
     GuildNotificationSettingsInfo, GuildOnboardingInfo, GuildOnboardingMode,
-    GuildVerificationLevel, NotificationLevel, PremiumTier, RoleInfo, UserGuildSettingsInfo,
+    GuildVerificationLevel, NotificationLevel, PremiumTier, RoleInfo, ThreadMemberInfo,
+    UserGuildSettingsInfo,
     events::AppEvent,
     ids::{
         Id,
@@ -13,7 +14,7 @@ use crate::discord::{
 };
 
 use super::{
-    channels::parse_channel_info,
+    channels::{parse_channel_info, parse_thread_gateway_info},
     members::parse_member_info,
     presence::parse_presence_entry,
     shared::{parse_id, parse_nonnegative_i64},
@@ -40,12 +41,22 @@ pub(super) fn parse_guild_create(data: &Value) -> Option<AppEvent> {
                 .collect()
         })
         .unwrap_or_default();
-    if let Some(threads) = data.get("threads").and_then(Value::as_array) {
-        channels.extend(
-            threads
-                .iter()
-                .filter_map(|channel| parse_channel_info(channel, Some(guild_id))),
-        );
+    let mut current_user_thread_members: Vec<ThreadMemberInfo> = Vec::new();
+    let thread_snapshot = data.get("threads").and_then(Value::as_array);
+    let thread_snapshot_complete = thread_snapshot.is_some();
+    if let Some(threads) = thread_snapshot {
+        for raw_thread in threads {
+            let Some(thread) = parse_thread_gateway_info(raw_thread, Some(guild_id)) else {
+                continue;
+            };
+            let thread_id = thread.channel.channel_id;
+            current_user_thread_members.push(
+                thread
+                    .current_user_member
+                    .unwrap_or_else(|| ThreadMemberInfo::joined_snapshot(thread_id)),
+            );
+            channels.push(thread.channel);
+        }
     }
 
     let members = data
@@ -104,6 +115,8 @@ pub(super) fn parse_guild_create(data: &Value) -> Option<AppEvent> {
         features,
         onboarding,
         channels,
+        thread_snapshot_complete,
+        current_user_thread_members,
         members,
         presences,
         roles,

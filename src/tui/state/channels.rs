@@ -1,12 +1,15 @@
-use std::{collections::BTreeMap, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Instant,
+};
 
 use crate::discord::ids::{
     Id,
     marker::{ChannelMarker, GuildMarker},
 };
 use crate::discord::{
-    ChannelState, ChannelUnreadState, TypingUserState, VoiceParticipantState,
-    custom_emoji_image_url,
+    ArchivedThreadRequestTarget, ChannelState, ChannelUnreadState, ForumPostDataRequestTarget,
+    TypingUserState, VoiceParticipantState, custom_emoji_image_url,
 };
 
 use super::{ActiveGuildScope, DashboardState, MessagePaneSource, ThreadReturnTarget};
@@ -37,32 +40,32 @@ impl DashboardState {
         else {
             return Vec::new();
         };
-        let Some(list) = self.requests.forum_post_lists.get(&channel.id) else {
-            return Vec::new();
-        };
-        let mut items =
-            self.forum_post_section_items(&list.active_post_ids, channel.id, "Active posts", false);
-        items.extend(self.forum_post_section_items(
-            &list.archived_post_ids,
+        let active_post_ids = self.discord.cache.active_thread_ids_for_parent(channel.id);
+        let active_post_ids_set = active_post_ids.iter().copied().collect::<BTreeSet<_>>();
+        let archived_post_ids = self
+            .discord
+            .cache
+            .archived_thread_ids_for_parent(channel.id)
+            .into_iter()
+            .filter(|post_id| !active_post_ids_set.contains(post_id))
+            .collect::<Vec<_>>();
+        let mut items = self.forum_post_section_items(&active_post_ids, channel.id, "Active posts");
+        items.extend(self.archived_forum_post_section_items(
+            &archived_post_ids,
             channel.id,
             "Archived posts",
-            true,
         ));
         items
     }
 
     pub fn selected_forum_posts_loading(&self) -> bool {
-        // Both the forum post list and a channel's thread list fetch through the
-        // same `/threads/search` request, so the "loading" placeholder applies
-        // to either until the first page lands.
-        let channel_id = match self.message_pane_source() {
-            Some(
-                MessagePaneSource::ForumPosts { channel_id }
-                | MessagePaneSource::ChannelThreads { channel_id },
-            ) => channel_id,
-            _ => return false,
-        };
-        !self.requests.forum_post_lists.contains_key(&channel_id)
+        self.selected_forum_channel()
+            .is_some_and(|(_, channel_id)| {
+                !self
+                    .discord
+                    .cache
+                    .archived_threads_have_response(channel_id)
+            })
     }
 
     /// Card items for the message pane (forum posts or a channel's thread list);
@@ -234,28 +237,55 @@ impl DashboardState {
         Some((channel.guild_id?, channel_id))
     }
 
-    /// The `(guild, channel)` whose threads should be fetched via
-    /// `/threads/search`: a forum showing its posts, or any non-forum channel
-    /// whose thread-list view is open. `None` for every other pane source.
-    fn thread_card_fetch_channel(&self) -> Option<(Id<GuildMarker>, Id<ChannelMarker>)> {
-        let channel_id = match self.message_pane_source()? {
-            MessagePaneSource::ForumPosts { channel_id }
-            | MessagePaneSource::ChannelThreads { channel_id } => channel_id,
-            _ => return None,
-        };
-        let channel = self.discord.cache.channel(channel_id)?;
-        Some((channel.guild_id?, channel_id))
-    }
-
-    pub fn selected_forum_channel_with_load_more(
-        &self,
-    ) -> Option<(Id<GuildMarker>, Id<ChannelMarker>, bool)> {
-        let (guild_id, channel_id) = self.thread_card_fetch_channel()?;
-        Some((
+    pub(crate) fn selected_forum_post_data_target(&self) -> Option<ForumPostDataRequestTarget> {
+        let (guild_id, channel_id) = self.selected_forum_channel()?;
+        let active_thread_ids = self.discord.cache.active_thread_ids_for_parent(channel_id);
+        let missing_thread_ids = active_thread_ids
+            .into_iter()
+            .chain(
+                self.discord
+                    .cache
+                    .archived_thread_ids_for_parent(channel_id),
+            )
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter(|thread_id| !self.discord.cache.thread_post_data_loaded(*thread_id))
+            .collect();
+        Some(ForumPostDataRequestTarget {
             guild_id,
             channel_id,
-            self.should_load_more_forum_posts(channel_id),
-        ))
+            thread_ids: missing_thread_ids,
+        })
+    }
+
+    pub(crate) fn selected_archived_thread_request_target(
+        &self,
+    ) -> Option<ArchivedThreadRequestTarget> {
+        let (guild_id, channel_id) = self.selected_forum_channel()?;
+        let should_load_more = self.selected_forum_is_near_loaded_end();
+        let cursor = self
+            .discord
+            .cache
+            .next_archived_thread_page_cursor(channel_id, should_load_more)?;
+        Some(ArchivedThreadRequestTarget {
+            guild_id,
+            channel_id,
+            cursor,
+        })
+    }
+
+    fn selected_forum_is_near_loaded_end(&self) -> bool {
+        let items = self.selected_forum_post_items();
+        if items.is_empty() {
+            return true;
+        }
+        const PREFETCH_CARDS: usize = 3;
+        let visible_end = self
+            .messages
+            .message_scroll
+            .saturating_add(self.visible_thread_card_items_from(&items).len());
+        let selected_end = self.selected_forum_post().saturating_add(1);
+        visible_end.max(selected_end).saturating_add(PREFETCH_CARDS) >= items.len()
     }
 
     /// Open the selected card (a thread or forum post) as the active channel.
@@ -280,41 +310,15 @@ impl DashboardState {
         })
     }
 
-    /// Cards for a non-forum channel's thread list. Mirrors the forum post list:
-    /// the active and archived sections come from the `/threads/search` fetch
-    /// (`forum_post_lists`). Gateway-cached child threads the search has not
-    /// returned yet are merged in so joined or freshly created threads show
-    /// immediately, even before the fetch lands or if the search endpoint is
-    /// unavailable for this channel.
+    /// Cards for a non-forum channel's currently active threads. Discord's
+    /// Gateway owns this set, so inactive or archived threads disappear without
+    /// a separate REST search changing the list.
     pub(super) fn channel_thread_card_items(
         &self,
         channel_id: Id<ChannelMarker>,
     ) -> Vec<ChannelThreadItem> {
-        let (mut active_ids, mut archived_ids) = self
-            .requests
-            .forum_post_lists
-            .get(&channel_id)
-            .map(|list| (list.active_post_ids.clone(), list.archived_post_ids.clone()))
-            .unwrap_or_default();
-        for thread in channel_tree::sorted_child_threads(self.channels(), channel_id) {
-            if active_ids.contains(&thread.id) || archived_ids.contains(&thread.id) {
-                continue;
-            }
-            if thread.thread_archived().unwrap_or(false) {
-                archived_ids.push(thread.id);
-            } else {
-                active_ids.push(thread.id);
-            }
-        }
-        let mut items =
-            self.forum_post_section_items(&active_ids, channel_id, "Active threads", false);
-        items.extend(self.forum_post_section_items(
-            &archived_ids,
-            channel_id,
-            "Archived threads",
-            true,
-        ));
-        items
+        let active_ids = self.discord.cache.active_thread_ids_for_parent(channel_id);
+        self.forum_post_section_items(&active_ids, channel_id, "Active threads")
     }
 
     fn forum_post_section_items(
@@ -322,17 +326,10 @@ impl DashboardState {
         post_ids: &[Id<ChannelMarker>],
         forum_channel_id: Id<ChannelMarker>,
         section_label: &str,
-        archived: bool,
     ) -> Vec<ChannelThreadItem> {
-        // Two corrections versus the order Discord's `/threads/search` returns:
-        //
-        //  1. Pinned posts come back interleaved with everything else by
-        //     activity time, but the official client lifts them to the top.
-        //  2. The server-side `sort_by=last_message_time` index can be stale.
-        //     Posts with newer messages sometimes sit below older ones. The
-        //     `last_message_id` snowflake encodes the actual message
-        //     timestamp, and we keep it fresh via gateway updates, so a local
-        //     resort by that field tracks Discord's UI more closely.
+        // Discord displays pinned posts first, then orders the remaining active
+        // posts by recent activity. The last message snowflake is updated by
+        // Gateway events and gives this view a stable local ordering.
         let (mut pinned, mut rest): (Vec<_>, Vec<_>) = post_ids
             .iter()
             .filter_map(|post_id| self.discord.cache.channel(*post_id))
@@ -353,11 +350,32 @@ impl DashboardState {
             .chain(rest)
             .enumerate()
             .map(|(index, post)| {
-                self.forum_thread_item(
-                    post,
-                    (index == 0).then(|| section_label.to_owned()),
-                    archived,
-                )
+                self.forum_thread_item(post, (index == 0).then(|| section_label.to_owned()), false)
+            })
+            .collect()
+    }
+
+    fn archived_forum_post_section_items(
+        &self,
+        post_ids: &[Id<ChannelMarker>],
+        forum_channel_id: Id<ChannelMarker>,
+        section_label: &str,
+    ) -> Vec<ChannelThreadItem> {
+        // The archived endpoint already orders rows by archive timestamp,
+        // newest first. Preserve that order instead of re-sorting by message
+        // snowflake, which can differ from the time a post was archived.
+        post_ids
+            .iter()
+            .filter_map(|post_id| self.discord.cache.channel(*post_id))
+            .filter(|post| {
+                post.is_thread()
+                    && post.parent_id == Some(forum_channel_id)
+                    && post.thread_archived() == Some(true)
+                    && self.discord.cache.can_view_channel(post)
+            })
+            .enumerate()
+            .map(|(index, post)| {
+                self.forum_thread_item(post, (index == 0).then(|| section_label.to_owned()), true)
             })
             .collect()
     }
@@ -486,12 +504,7 @@ impl DashboardState {
     }
 
     fn forum_thread_new_message_count(&self, channel_id: Id<ChannelMarker>) -> usize {
-        if self
-            .discord
-            .cache
-            .channel(channel_id)
-            .is_some_and(|channel| channel.is_thread() && !channel.current_user_joined_thread)
-        {
+        if !self.discord.cache.thread_is_joined(channel_id) {
             return 0;
         }
         let last_acked = self.discord.cache.channel_last_acked_message_id(channel_id);
@@ -512,26 +525,6 @@ impl DashboardState {
             ChannelUnreadState::Unread => 1,
             ChannelUnreadState::Seen => 0,
         }
-    }
-
-    fn should_load_more_forum_posts(&self, channel_id: Id<ChannelMarker>) -> bool {
-        let Some(list) = self.requests.forum_post_lists.get(&channel_id) else {
-            return false;
-        };
-        if !list.has_more {
-            return false;
-        }
-        let visible_bottom = self
-            .messages
-            .message_scroll
-            .saturating_add(self.visible_thread_card_items().len().max(1))
-            .saturating_add(5);
-        let selected_bottom = self.selected_forum_post().saturating_add(5);
-        let len = list
-            .active_post_ids
-            .len()
-            .saturating_add(list.archived_post_ids.len());
-        visible_bottom >= len || selected_bottom >= len
     }
 
     pub(super) fn selected_channel_guild_id(&self) -> Option<Id<GuildMarker>> {
@@ -593,13 +586,10 @@ impl DashboardState {
         let mut joined_threads_by_parent: BTreeMap<Id<ChannelMarker>, Vec<&ChannelState>> =
             BTreeMap::new();
         for channel in &channels {
-            // Archived threads stay out of the sidebar even when joined; they
-            // live in the thread-list view's "Archived" section instead. The
-            // `/threads/search` fetch pulls archived joined threads into the
-            // cache, so without this filter they would leak into the pane.
-            if channel.is_thread()
-                && channel.current_user_joined_thread
-                && !channel.thread_archived().unwrap_or(false)
+            // Only threads that are both active and joined are projected into
+            // the channel tree. Active discovery and current-user membership
+            // remain independent in the Discord state cache.
+            if self.discord.cache.thread_is_sidebar_active(channel.id)
                 && let Some(parent_id) = channel.parent_id
             {
                 joined_threads_by_parent
@@ -733,7 +723,8 @@ impl DashboardState {
             .enumerate()
             .filter_map(|(index, channel)| {
                 if channel.is_category()
-                    || (channel.is_thread() && !channel.current_user_joined_thread)
+                    || (channel.is_thread()
+                        && !self.discord.cache.thread_is_sidebar_active(channel.id))
                 {
                     return None;
                 }

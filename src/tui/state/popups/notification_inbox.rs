@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::discord::{
-    AppCommand, ChannelInfo, ChannelState, ChannelUnreadState, ForumPostArchiveState, MessageInfo,
+    AppCommand, ChannelState, ChannelUnreadState, MessageInfo,
     ids::{
         Id,
         marker::{ChannelMarker, GuildMarker, MessageMarker, RoleMarker, UserMarker},
@@ -627,11 +627,9 @@ impl DashboardState {
         self.ensure_unread_inbox_requests();
     }
 
-    pub(in crate::tui) fn apply_inbox_forum_posts_loaded(
+    pub(in crate::tui) fn apply_inbox_forum_post_data_loaded(
         &mut self,
         channel_id: Id<ChannelMarker>,
-        threads: &[ChannelInfo],
-        first_messages: &[MessageInfo],
     ) {
         let is_requested_forum = self
             .popups
@@ -641,7 +639,31 @@ impl DashboardState {
             return;
         }
 
-        let previews = self.inbox_forum_post_previews(channel_id, threads, first_messages);
+        let missing_thread_ids = self
+            .discord
+            .cache
+            .active_thread_ids_for_parent(channel_id)
+            .into_iter()
+            .filter(|thread_id| !self.discord.cache.thread_post_data_loaded(*thread_id))
+            .take(10)
+            .collect::<Vec<_>>();
+        if !missing_thread_ids.is_empty() {
+            if let Some(guild_id) = self
+                .discord
+                .cache
+                .channel(channel_id)
+                .and_then(|channel| channel.guild_id)
+            {
+                self.enqueue_pending_command(AppCommand::LoadForumPostData {
+                    guild_id,
+                    channel_id,
+                    thread_ids: missing_thread_ids,
+                });
+            }
+            return;
+        }
+
+        let previews = self.inbox_forum_post_previews(channel_id);
         if let Some(inbox) = self.popups.notification_inbox_mut() {
             inbox.finish_unread_history_request(channel_id);
             if let Some(item) = inbox.unread_item_mut(channel_id) {
@@ -656,7 +678,7 @@ impl DashboardState {
         self.ensure_unread_inbox_requests();
     }
 
-    pub(in crate::tui) fn apply_inbox_forum_posts_load_failed(
+    pub(in crate::tui) fn apply_inbox_forum_post_data_load_failed(
         &mut self,
         channel_id: Id<ChannelMarker>,
     ) {
@@ -703,25 +725,36 @@ impl DashboardState {
         let Some((request_id, channel_id)) = request else {
             return;
         };
-        let command = self
+        let forum_guild_id = self
             .discord
             .cache
             .channel(channel_id)
             .filter(|channel| channel.is_forum())
-            .and_then(|channel| channel.guild_id)
-            .map_or(
-                AppCommand::LoadInboxChannelHistory {
-                    channel_id,
-                    request_id,
-                },
-                |guild_id| AppCommand::LoadForumPosts {
-                    guild_id,
-                    channel_id,
-                    archive_state: ForumPostArchiveState::Active,
-                    offset: 0,
-                },
-            );
-        self.enqueue_pending_command(command);
+            .and_then(|channel| channel.guild_id);
+        let Some(guild_id) = forum_guild_id else {
+            self.enqueue_pending_command(AppCommand::LoadInboxChannelHistory {
+                channel_id,
+                request_id,
+            });
+            return;
+        };
+        let missing_thread_ids = self
+            .discord
+            .cache
+            .active_thread_ids_for_parent(channel_id)
+            .into_iter()
+            .filter(|thread_id| !self.discord.cache.thread_post_data_loaded(*thread_id))
+            .take(10)
+            .collect::<Vec<_>>();
+        if missing_thread_ids.is_empty() {
+            self.apply_inbox_forum_post_data_loaded(channel_id);
+        } else {
+            self.enqueue_pending_command(AppCommand::LoadForumPostData {
+                guild_id,
+                channel_id,
+                thread_ids: missing_thread_ids,
+            });
+        }
     }
 
     fn ensure_mentions_inbox_request(&mut self) {
@@ -826,7 +859,9 @@ impl DashboardState {
 
     fn inbox_channels_in_display_order(&self) -> Vec<&ChannelState> {
         let mut ordered = self.discord.cache.channels_for_guild(None);
-        ordered.retain(|channel| !channel.is_thread() || channel.current_user_joined_thread);
+        ordered.retain(|channel| {
+            !channel.is_thread() || self.discord.cache.thread_is_sidebar_active(channel.id)
+        });
         sort_direct_message_channels(&mut ordered);
 
         for guild in self.guilds_in_display_order() {
@@ -834,20 +869,20 @@ impl DashboardState {
                 .discord
                 .cache
                 .viewable_channels_for_guild(Some(guild.id));
-            Self::extend_inbox_channels_in_tree_order(&mut ordered, &channels);
+            self.extend_inbox_channels_in_tree_order(&mut ordered, &channels);
         }
 
         ordered
     }
 
     fn extend_inbox_channels_in_tree_order<'a>(
+        &self,
         ordered: &mut Vec<&'a ChannelState>,
         channels: &[&'a ChannelState],
     ) {
         let mut joined_threads_by_parent: BTreeMap<_, Vec<&ChannelState>> = BTreeMap::new();
         for channel in channels {
-            if channel.is_thread()
-                && channel.current_user_joined_thread
+            if self.discord.cache.thread_is_sidebar_active(channel.id)
                 && let Some(parent_id) = channel.parent_id
             {
                 joined_threads_by_parent
@@ -993,19 +1028,20 @@ impl DashboardState {
     fn inbox_forum_post_previews(
         &self,
         forum_id: Id<ChannelMarker>,
-        threads: &[ChannelInfo],
-        first_messages: &[MessageInfo],
     ) -> Vec<NotificationInboxMessage> {
-        let mut ordered = threads
-            .iter()
-            .filter(|thread| thread.parent_id == Some(forum_id))
+        let mut ordered = self
+            .discord
+            .cache
+            .active_thread_ids_for_parent(forum_id)
+            .into_iter()
+            .filter_map(|thread_id| self.discord.cache.channel(thread_id))
             .collect::<Vec<_>>();
         ordered.sort_by_key(|thread| {
             Reverse(
                 thread
                     .last_message_id
                     .map(Id::get)
-                    .unwrap_or_else(|| thread.channel_id.get()),
+                    .unwrap_or_else(|| thread.id.get()),
             )
         });
 
@@ -1013,20 +1049,10 @@ impl DashboardState {
             .into_iter()
             .take(MAX_INBOX_MESSAGES_PER_CHANNEL)
             .filter_map(|thread| {
-                if let Some(starter) = first_messages
-                    .iter()
-                    .find(|message| message.channel_id == thread.channel_id)
-                {
-                    let mut preview = self.inbox_message_preview(starter);
-                    preview.content = thread.name.clone();
-                    return Some(preview);
-                }
-
-                let channel = self.discord.cache.channel(thread.channel_id)?;
-                let post = self.forum_thread_item(channel, None, false);
+                let post = self.forum_thread_item(thread, None, false);
                 Some(NotificationInboxMessage {
-                    channel_id: thread.channel_id,
-                    message_id: Id::new(thread.channel_id.get()),
+                    channel_id: thread.id,
+                    message_id: Id::new(thread.id.get()),
                     author_id: post.preview_author_id?,
                     author: post.preview_author?,
                     author_role_ids: Vec::new(),

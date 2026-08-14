@@ -4,7 +4,7 @@ use crate::discord::ids::{
     Id,
     marker::{ChannelMarker, MessageMarker, RoleMarker},
 };
-use crate::discord::{ChannelState, MessageHistoryAfterMode, MessageState, is_thread_kind};
+use crate::discord::{ChannelState, MessageHistoryAfterMode, MessageState};
 use crate::tui::text;
 use crate::tui::text::{
     MentionTarget, RenderedText, TextHighlightKind, render_user_mentions,
@@ -1524,95 +1524,6 @@ impl DashboardState {
             .source_channel_id
             .and_then(|channel_id| self.discord.cache.channel(channel_id))
             .and_then(|channel| channel.guild_id)
-    }
-
-    pub(super) fn record_thread_channel_upserted(&mut self, channel: &crate::discord::ChannelInfo) {
-        if !is_thread_kind(&channel.kind) {
-            return;
-        }
-        let Some(parent_id) = channel.parent_id else {
-            return;
-        };
-        let Some(list) = self.requests.forum_post_lists.get_mut(&parent_id) else {
-            return;
-        };
-        let id = channel.channel_id;
-        // Re-section the post when its archive state changes (our Archive action
-        // or someone else's THREAD_UPDATE), so an existing post moves between the
-        // active and archived sections instead of staying put. A payload without
-        // `thread_metadata` carries no archive info, so we only insert-if-new.
-        match channel.thread_archived() {
-            Some(true) => {
-                if list.archived_post_ids.contains(&id) {
-                    return;
-                }
-                list.active_post_ids.retain(|existing| *existing != id);
-                list.archived_post_ids.insert(0, id);
-            }
-            Some(false) => {
-                if list.active_post_ids.contains(&id) {
-                    return;
-                }
-                list.archived_post_ids.retain(|existing| *existing != id);
-                list.active_post_ids.insert(0, id);
-            }
-            None => {
-                if !list.active_post_ids.contains(&id) && !list.archived_post_ids.contains(&id) {
-                    list.active_post_ids.insert(0, id);
-                }
-            }
-        }
-    }
-
-    pub(super) fn record_forum_posts_loaded(
-        &mut self,
-        channel_id: Id<ChannelMarker>,
-        archive_state: ForumPostArchiveState,
-        offset: usize,
-        threads: &[crate::discord::ChannelInfo],
-        has_more: bool,
-    ) {
-        let list = self
-            .requests
-            .forum_post_lists
-            .entry(channel_id)
-            .or_default();
-        if archive_state == ForumPostArchiveState::Active && offset == 0 {
-            list.active_post_ids.clear();
-            if self.navigation.channels.active_channel_id == Some(channel_id) {
-                self.messages.selected_message = 0;
-                self.messages.message_scroll = 0;
-                self.messages.message_line_scroll = 0;
-                self.messages.message_auto_follow = false;
-            }
-        } else if archive_state == ForumPostArchiveState::Archived && offset == 0 {
-            list.archived_post_ids.clear();
-        }
-        for thread in threads {
-            let thread_id = thread.channel_id;
-            match archive_state {
-                ForumPostArchiveState::Active => {
-                    list.archived_post_ids.retain(|id| *id != thread_id);
-                    if !list.active_post_ids.contains(&thread_id) {
-                        list.active_post_ids.push(thread_id);
-                    }
-                }
-                ForumPostArchiveState::Archived => {
-                    if !list.active_post_ids.contains(&thread_id)
-                        && !list.archived_post_ids.contains(&thread_id)
-                    {
-                        list.archived_post_ids.push(thread_id);
-                    }
-                }
-            }
-        }
-        list.has_more = match archive_state {
-            // Once active search is exhausted, the archived search stream may
-            // still have old forum posts. Keep the UI asking for more until an
-            // archived page says it is exhausted.
-            ForumPostArchiveState::Active => true,
-            ForumPostArchiveState::Archived => has_more,
-        };
     }
 
     pub fn messages(&self) -> Vec<&MessageState> {

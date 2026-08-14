@@ -134,7 +134,7 @@ pub(super) fn is_direct_message_channel(channel: &ChannelState) -> bool {
     )
 }
 
-fn member_status_rank(status: PresenceStatus) -> u8 {
+pub(super) fn member_status_rank(status: PresenceStatus) -> u8 {
     match status {
         PresenceStatus::Online => 0,
         PresenceStatus::Idle => 1,

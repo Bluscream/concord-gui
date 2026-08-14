@@ -15,14 +15,14 @@ use reqwest::header::{AUTHORIZATION, ORIGIN};
 
 use crate::discord::ids::{
     Id,
-    marker::{ApplicationMarker, ChannelMarker, EmojiMarker, GuildMarker, UserMarker},
+    marker::{ApplicationMarker, EmojiMarker, GuildMarker, UserMarker},
 };
 
 use crate::{
     AppError,
     discord::{
         ApplicationCommandInfo, ApplicationCommandInteraction, ApplicationCommandInteractionOption,
-        BASE_ATTACHMENT_LIMIT_BYTES, BASE_MESSAGE_CHARACTER_LIMIT, ChannelInfo, GuildFolder,
+        BASE_ATTACHMENT_LIMIT_BYTES, BASE_MESSAGE_CHARACTER_LIMIT, GuildFolder,
         MessageAttachmentUpload, MessageSearchAuthorType, MessageSearchHas, MessageSearchQuery,
         MessageSendLimits, NITRO_MESSAGE_CHARACTER_LIMIT, ReactionEmoji, ReplyReference,
         application_commands::{
@@ -50,10 +50,8 @@ use super::{
     },
     apply_authenticated_method_headers,
     forum::{
-        ForumPostPage, ForumSearchSort, create_forum_post_request_body, forum_search_has_more,
-        forum_search_next_offset, forum_search_retry_after, merge_forum_pages,
-        merge_pinned_forum_posts, parse_create_forum_post_response, parse_forum_first_messages,
-        parse_forum_thread_search_response, parse_forum_threads,
+        create_forum_post_request_body, parse_create_forum_post_response,
+        parse_forum_post_data_response, parse_public_archived_threads_response,
     },
     messages::{
         MessageEditRequest, edit_message_request_body, message_multipart_form,
@@ -756,11 +754,18 @@ fn forum_post_create_response_parses_thread_and_nested_first_message() {
     let response = parse_create_forum_post_response(
         &serde_json::json!({
             "id": "30",
+            "guild_id": "1",
             "type": 11,
             "name": "Need help",
             "thread_metadata": {
                 "archived": false,
                 "locked": false
+            },
+            "member": {
+                "id": "30",
+                "user_id": "10",
+                "flags": 4,
+                "muted": false
             },
             "message": {
                 "id": "30",
@@ -788,8 +793,163 @@ fn forum_post_create_response_parses_thread_and_nested_first_message() {
     assert_eq!(response.thread.channel_id, Id::new(30));
     assert_eq!(response.thread.parent_id, Some(Id::new(20)));
     assert_eq!(
+        response
+            .current_user_member
+            .as_ref()
+            .and_then(|member| member.thread_id),
+        Some(Id::new(30))
+    );
+    assert_eq!(
         response.first_message.map(|message| message.message_id),
         Some(Id::new(30))
+    );
+}
+
+#[test]
+fn public_archived_thread_parser_preserves_order_members_and_cursor() {
+    let raw = serde_json::json!({
+        "threads": [
+            {
+                "id": "31",
+                "guild_id": "1",
+                "parent_id": "20",
+                "type": 11,
+                "name": "newer archive",
+                "thread_metadata": {
+                    "archived": true,
+                    "archive_timestamp": "2026-08-14T02:00:00.000000+00:00",
+                    "locked": false
+                }
+            },
+            {
+                "id": "30",
+                "type": 11,
+                "name": "older archive",
+                "thread_metadata": {
+                    "archived": true,
+                    "archive_timestamp": "2026-08-14T01:00:00.000000+00:00",
+                    "locked": true
+                }
+            },
+            {
+                "id": "29",
+                "type": 11,
+                "name": "not archived",
+                "thread_metadata": {
+                    "archived": false,
+                    "archive_timestamp": "2026-08-14T00:00:00.000000+00:00",
+                    "locked": false
+                }
+            }
+        ],
+        "members": [
+            {
+                "id": "30",
+                "user_id": "9",
+                "flags": 4,
+                "muted": true,
+                "future_member_field": "kept"
+            },
+            {
+                "id": "99",
+                "user_id": "9",
+                "flags": 8
+            }
+        ],
+        "has_more": true,
+        "future_page_field": 7
+    });
+
+    let page = parse_public_archived_threads_response(&raw, Id::new(1), Id::new(20));
+
+    assert_eq!(
+        page.threads
+            .iter()
+            .map(|thread| thread.channel_id)
+            .collect::<Vec<_>>(),
+        vec![Id::new(31), Id::new(30)]
+    );
+    assert_eq!(page.threads[1].parent_id, Some(Id::new(20)));
+    assert_eq!(page.members.len(), 1);
+    assert_eq!(page.members[0].thread_id, Some(Id::new(30)));
+    assert_eq!(
+        page.members[0].extra_fields.get("future_member_field"),
+        Some(&serde_json::json!("kept"))
+    );
+    assert!(page.has_more);
+    assert_eq!(
+        page.next_before.as_deref(),
+        Some("2026-08-14T00:00:00.000000+00:00")
+    );
+    assert_eq!(
+        page.extra_fields.get("future_page_field"),
+        Some(&serde_json::json!(7))
+    );
+}
+
+#[test]
+fn forum_post_data_parser_hydrates_only_requested_threads() {
+    let guild_id = Id::<GuildMarker>::new(1);
+    let requested = vec![Id::new(31), Id::new(30), Id::new(99)];
+    let message = |channel_id: &str, author_id: &str| {
+        serde_json::json!({
+            "id": channel_id,
+            "channel_id": channel_id,
+            "author": { "id": author_id, "username": "neo" },
+            "type": 0,
+            "content": "Body",
+            "timestamp": "2026-01-01T00:00:00.000000+00:00",
+            "edited_timestamp": null,
+            "pinned": false,
+            "mention_everyone": false,
+            "mentions": [],
+            "mention_roles": [],
+            "attachments": [],
+            "embeds": []
+        })
+    };
+    let raw = serde_json::json!({
+        "threads": {
+            "30": {
+                "owner": {
+                    "user": { "id": "10", "username": "neo" },
+                    "roles": []
+                },
+                "first_message": message("30", "10"),
+                "future_field": true
+            },
+            "31": {
+                "owner": null,
+                "first_message": message("999", "11")
+            },
+            "40": {
+                "owner": null,
+                "first_message": message("40", "12")
+            }
+        }
+    });
+
+    let posts = parse_forum_post_data_response(&raw, guild_id, &requested);
+
+    assert_eq!(
+        posts.iter().map(|post| post.thread_id).collect::<Vec<_>>(),
+        vec![Id::new(31), Id::new(30)]
+    );
+    assert_eq!(posts[0].first_message, None);
+    assert_eq!(
+        posts[1].owner.as_ref().map(|owner| owner.user_id),
+        Some(Id::new(10))
+    );
+    assert_eq!(
+        posts[1]
+            .first_message
+            .as_ref()
+            .map(|message| message.channel_id),
+        Some(Id::new(30))
+    );
+    assert_eq!(
+        posts[1].extra_fields.get("future_field"),
+        Some(&serde_json::Value::Bool(true))
     );
 }
 
@@ -1134,70 +1294,6 @@ fn reaction_user_pagination_continues_only_after_full_pages() {
 }
 
 #[test]
-fn forum_thread_page_filters_or_fills_parent_and_supplies_guild() {
-    let guild_id = Id::<GuildMarker>::new(1);
-    let forum_id = Id::<ChannelMarker>::new(20);
-    let raw = serde_json::json!({
-        "threads": [
-            {
-                "id": "30",
-                "parent_id": "20",
-                "guild_id": "1",
-                "owner_id": "88",
-                "type": 11,
-                "name": "welcome",
-                "thread_metadata": { "archived": false, "locked": false }
-            },
-            {
-                "id": "31",
-                "parent_id": "21",
-                "type": 11,
-                "name": "other-forum-post"
-            }
-        ],
-        "has_more": false
-    });
-
-    let response = parse_forum_thread_search_response(&raw, Some(guild_id), forum_id, false);
-    let threads = &response.threads;
-
-    assert_eq!(threads.len(), 1);
-    assert_eq!(threads[0].guild_id, Some(guild_id));
-    assert_eq!(threads[0].channel_id, Id::new(30));
-    assert_eq!(threads[0].parent_id, Some(forum_id));
-    assert_eq!(threads[0].name, "welcome");
-    assert_eq!(threads[0].owner_id, Some(Id::new(88)));
-    assert_eq!(response.raw_threads.len(), 2);
-    assert_eq!(forum_search_next_offset(25, &response), 27);
-    assert!(!forum_search_has_more(&response));
-
-    let empty_page = parse_forum_thread_search_response(
-        &serde_json::json!({ "threads": [], "has_more": true }),
-        Some(guild_id),
-        forum_id,
-        false,
-    );
-    assert!(!forum_search_has_more(&empty_page));
-
-    let raw = serde_json::json!({
-        "threads": [
-            {
-                "id": "30",
-                "type": 11,
-                "name": "welcome",
-                "thread_metadata": { "archived": false, "locked": false }
-            }
-        ],
-        "has_more": false
-    });
-
-    let threads = parse_forum_threads(&raw, Some(guild_id), forum_id, true);
-
-    assert_eq!(threads.len(), 1);
-    assert_eq!(threads[0].parent_id, Some(forum_id));
-}
-
-#[test]
 fn search_and_pin_pagination_follow_server_metadata() {
     let response = MessageSearchResponse {
         total_results: Some(1),
@@ -1262,175 +1358,6 @@ fn search_and_pin_pagination_follow_server_metadata() {
     assert_eq!(
         pins.next_before.as_deref(),
         Some("2026-07-24T01:00:00.000Z")
-    );
-}
-
-#[test]
-fn forum_first_messages_are_filtered_to_loaded_posts() {
-    let guild_id = Id::<GuildMarker>::new(1);
-    let forum_id = Id::<ChannelMarker>::new(20);
-    let threads = vec![forum_thread(forum_id, 30, "welcome")];
-    let raw = serde_json::json!({
-        "first_messages": [
-            {
-                "id": "300",
-                "channel_id": "30",
-                "guild_id": "1",
-                "author": { "id": "10", "username": "neo" },
-                "type": 0,
-                "pinned": false,
-                "content": "hello from the first post",
-                "mentions": [],
-                "attachments": [],
-                "embeds": []
-            },
-            {
-                "id": "301",
-                "channel_id": "31",
-                "guild_id": "1",
-                "author": { "id": "11", "username": "other" },
-                "type": 0,
-                "pinned": false,
-                "content": "other forum",
-                "mentions": [],
-                "attachments": [],
-                "embeds": []
-            }
-        ]
-    });
-
-    let messages = parse_forum_first_messages(&raw, &threads);
-
-    assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].guild_id, Some(guild_id));
-    assert_eq!(messages[0].channel_id, Id::new(30));
-    assert_eq!(messages[0].author, "neo");
-    assert_eq!(
-        messages[0].content.as_deref(),
-        Some("hello from the first post")
-    );
-}
-
-#[test]
-fn forum_first_messages_ignore_non_discord_alias_fields() {
-    let forum_id = Id::<ChannelMarker>::new(20);
-    let threads = vec![forum_thread(forum_id, 30, "welcome")];
-    let raw = serde_json::json!({
-        "messages": [
-            {
-                "id": "300",
-                "channel_id": "30",
-                "guild_id": "1",
-                "author": { "id": "10", "username": "neo" },
-                "type": 0,
-                "pinned": false,
-                "content": "archived search preview",
-                "mentions": [],
-                "attachments": [],
-                "embeds": []
-            }
-        ],
-        "most_recent_messages": [
-            {
-                "id": "300",
-                "channel_id": "30",
-                "guild_id": "1",
-                "author": { "id": "10", "username": "neo" },
-                "type": 0,
-                "pinned": false,
-                "content": "duplicate preview",
-                "mentions": [],
-                "attachments": [],
-                "embeds": []
-            }
-        ]
-    });
-
-    let messages = parse_forum_first_messages(&raw, &threads);
-
-    assert!(messages.is_empty());
-}
-
-#[test]
-fn forum_search_sort_serializes_to_discord_query_value() {
-    assert_eq!(
-        ForumSearchSort::LastMessageTime.as_str(),
-        "last_message_time"
-    );
-    assert_eq!(ForumSearchSort::CreationTime.as_str(), "creation_time");
-}
-
-#[test]
-fn merge_forum_pages_dedupes_threads_and_keeps_last_message_time_has_more() {
-    let forum_id = Id::<ChannelMarker>::new(20);
-    let active = ForumPostPage {
-        next_offset: 25,
-        threads: vec![
-            forum_thread_info(forum_id, 100, 10, "active-only"),
-            forum_thread_info(forum_id, 200, 20, "shared"),
-        ],
-        first_messages: Vec::new(),
-        has_more: true,
-    };
-    let recent = ForumPostPage {
-        next_offset: 25,
-        threads: vec![
-            forum_thread_info(forum_id, 200, 99, "shared-from-creation"),
-            forum_thread_info(forum_id, 300, 30, "creation-only"),
-        ],
-        first_messages: Vec::new(),
-        // Ignore `has_more` from the creation_time side. Pagination beyond
-        // the first page only follows last_message_time.
-        has_more: false,
-    };
-
-    let merged = merge_forum_pages(active, recent);
-
-    let names: Vec<_> = merged
-        .threads
-        .iter()
-        .map(|thread| thread.name.as_str())
-        .collect();
-    assert_eq!(names, vec!["active-only", "shared", "creation-only"]);
-    assert_eq!(
-        merged
-            .threads
-            .iter()
-            .map(|thread| (thread.channel_id.get(), thread.owner_id.map(Id::get)))
-            .collect::<Vec<_>>(),
-        vec![(100, Some(10)), (200, Some(20)), (300, Some(30))]
-    );
-    assert!(merged.has_more, "must follow last_message_time has_more");
-    assert_eq!(merged.next_offset, 25);
-}
-
-fn forum_thread_info(
-    parent_id: Id<ChannelMarker>,
-    thread_id: u64,
-    owner_id: u64,
-    name: &str,
-) -> ChannelInfo {
-    ChannelInfo {
-        owner_id: Some(Id::<UserMarker>::new(owner_id)),
-        ..forum_thread(parent_id, thread_id, name)
-    }
-}
-
-#[test]
-fn search_index_warming_error_is_detected() {
-    let warming = AppError::ForumSearchIndexWarming {
-        retry_after_millis: 5_000,
-    };
-    let other = AppError::DiscordRequest("forum post search failed: 500".to_owned());
-
-    assert_eq!(
-        forum_search_retry_after(&warming),
-        Some(Duration::from_secs(5))
-    );
-    assert_eq!(forum_search_retry_after(&other), None);
-    assert_eq!(
-        forum_search_retry_after(&AppError::EmptyMessageContent),
-        None
     );
 }
 
@@ -1576,105 +1503,4 @@ fn user_profile_parser_resolves_avatar_url() {
         guild_avatar.avatar_url.as_deref(),
         Some("https://cdn.discordapp.com/guilds/77/users/10/avatars/def456.png")
     );
-}
-
-fn forum_thread(parent_id: Id<ChannelMarker>, thread_id: u64, name: &str) -> ChannelInfo {
-    ChannelInfo {
-        guild_id: Some(Id::new(1)),
-        parent_id: Some(parent_id),
-        name: name.to_owned(),
-        thread_metadata: Some(crate::discord::ThreadMetadataInfo::test(false, false)),
-        ..ChannelInfo::test(Id::new(thread_id), "public_thread")
-    }
-}
-
-#[test]
-fn merge_pinned_forum_posts_lifts_pins_absent_from_the_activity_body() {
-    let forum_id = Id::<ChannelMarker>::new(20);
-    // Activity body with no pin loaded (the real pin sits beyond page 0).
-    let body = ForumPostPage {
-        next_offset: 25,
-        threads: vec![
-            forum_thread_info(forum_id, 100, 10, "recent-a"),
-            forum_thread_info(forum_id, 200, 20, "recent-b"),
-        ],
-        first_messages: Vec::new(),
-        has_more: true,
-    };
-    let pins = ForumPostPage {
-        next_offset: 22,
-        threads: vec![
-            pinned_forum_thread(forum_id, 999, "PIN: read first"),
-            forum_thread_info(forum_id, 100, 10, "recent-a-relevance-copy"),
-            forum_thread_info(forum_id, 300, 30, "relevance-noise"),
-        ],
-        first_messages: vec![crate::discord::MessageInfo::test(
-            Id::new(999),
-            Id::new(9990),
-        )],
-        has_more: false,
-    };
-
-    let merged = merge_pinned_forum_posts(body, pins);
-
-    // Pin prepended, body kept, and the duplicate (100) plus non-pinned noise
-    // (300) dropped.
-    assert_eq!(
-        merged
-            .threads
-            .iter()
-            .map(|thread| thread.channel_id.get())
-            .collect::<Vec<_>>(),
-        vec![999, 100, 200],
-    );
-    assert!(
-        merged.threads[0].thread_pinned().unwrap_or(false),
-        "pin must lead so the display layer can lift it"
-    );
-    // The pin's starter message is carried over so its preview renders.
-    assert_eq!(
-        merged
-            .first_messages
-            .iter()
-            .map(|message| message.channel_id.get())
-            .collect::<Vec<_>>(),
-        vec![999],
-    );
-    // Pagination keeps following the activity body, untouched by the harvest.
-    assert_eq!(merged.next_offset, 25);
-    assert!(merged.has_more);
-
-    // When relevance surfaces no new pin, the body is returned unchanged.
-    let body = ForumPostPage {
-        next_offset: 25,
-        threads: vec![pinned_forum_thread(forum_id, 999, "already-loaded pin")],
-        first_messages: Vec::new(),
-        has_more: false,
-    };
-    let pins = ForumPostPage {
-        next_offset: 22,
-        threads: vec![
-            pinned_forum_thread(forum_id, 999, "same pin from relevance"),
-            forum_thread_info(forum_id, 400, 40, "relevance-noise"),
-        ],
-        first_messages: Vec::new(),
-        has_more: false,
-    };
-    let merged = merge_pinned_forum_posts(body, pins);
-    assert_eq!(
-        merged
-            .threads
-            .iter()
-            .map(|thread| thread.channel_id.get())
-            .collect::<Vec<_>>(),
-        vec![999],
-        "an already-loaded pin is not duplicated and noise is ignored"
-    );
-}
-
-fn pinned_forum_thread(parent_id: Id<ChannelMarker>, thread_id: u64, name: &str) -> ChannelInfo {
-    ChannelInfo {
-        flags: Some(1 << 1),
-        ..forum_thread(parent_id, thread_id, name)
-    }
 }

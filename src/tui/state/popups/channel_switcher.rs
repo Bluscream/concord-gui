@@ -344,8 +344,7 @@ impl DashboardState {
             None => channel.name.clone(),
         };
         for thread in channel_tree::sorted_child_threads(channels.iter().copied(), channel.id) {
-            // Match the channel pane: only joined, non-archived threads appear.
-            if !thread.current_user_joined_thread || thread.thread_archived().unwrap_or(false) {
+            if !self.discord.cache.thread_is_sidebar_active(thread.id) {
                 continue;
             }
             push_channel_switcher_item(

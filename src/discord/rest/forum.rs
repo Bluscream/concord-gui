@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use reqwest::StatusCode;
 use serde_json::Value;
 use serde_json::json;
 
@@ -11,35 +10,57 @@ use crate::discord::ids::{
 use crate::{
     AppError, Result,
     discord::{
-        ChannelInfo, ForumPostArchiveState, ForumPostCreate, MessageAttachmentUpload, MessageInfo,
-        MessageSendLimits,
-        gateway::{parse_channel_info, parse_message_info},
+        ArchivedThreadsPage, ChannelInfo, ForumPostCreate, ForumPostDataInfo,
+        MessageAttachmentUpload, MessageInfo, MessageSendLimits, ThreadMemberInfo,
+        gateway::{
+            parse_channel_info, parse_member_info, parse_message_info, parse_thread_member_info,
+        },
         validate_message_payload,
     },
 };
 
 use super::messages::message_multipart_form;
-use super::{DiscordRest, clone_array, extra_fields};
+use super::{DiscordRest, extra_fields};
 
-const FORUM_POST_SEARCH_PAGE_LIMIT: u16 = 25;
-const FORUM_POST_SEARCH_MAX_ATTEMPTS: usize = 3;
-const FORUM_POST_SEARCH_DEFAULT_RETRY: Duration = Duration::from_secs(5);
+const ARCHIVED_THREAD_PAGE_LIMIT: u16 = 50;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ForumPostPage {
-    pub threads: Vec<ChannelInfo>,
-    pub first_messages: Vec<MessageInfo>,
-    pub has_more: bool,
-    pub next_offset: usize,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CreatedForumPost {
     pub thread: ChannelInfo,
+    pub current_user_member: Option<ThreadMemberInfo>,
     pub first_message: Option<MessageInfo>,
 }
 
 impl DiscordRest {
+    /// Load public archived threads in Discord's archive-time order. Forum and
+    /// media posts are public threads, so this is their normal archived-list
+    /// endpoint. Active rows continue to come from Gateway state.
+    pub async fn load_public_archived_threads(
+        &self,
+        guild_id: Id<GuildMarker>,
+        channel_id: Id<ChannelMarker>,
+        before: Option<&str>,
+    ) -> Result<ArchivedThreadsPage> {
+        let mut query = vec![("limit", ARCHIVED_THREAD_PAGE_LIMIT.to_string())];
+        if let Some(before) = before {
+            query.push(("before", before.to_owned()));
+        }
+        let raw: Value = self
+            .send_json(
+                self.raw_http
+                    .get(format!(
+                        "https://discord.com/api/v9/channels/{}/threads/archived/public",
+                        channel_id.get()
+                    ))
+                    .query(&query),
+                "public archived threads",
+            )
+            .await?;
+        Ok(parse_public_archived_threads_response(
+            &raw, guild_id, channel_id,
+        ))
+    }
+
     /// Follow a forum post by joining its thread, so the current user receives
     /// notifications (and can then mute it).
     pub async fn follow_thread(&self, thread_id: Id<ChannelMarker>) -> Result<()> {
@@ -213,182 +234,34 @@ impl DiscordRest {
         result
     }
 
-    pub async fn load_forum_posts(
+    pub async fn load_forum_post_data(
         &self,
         guild_id: Id<GuildMarker>,
         channel_id: Id<ChannelMarker>,
-        archive_state: ForumPostArchiveState,
-        offset: usize,
-    ) -> Result<ForumPostPage> {
-        // The `last_message_time` index excludes posts where nobody has
-        // replied yet (`message_count == 0`), and the `creation_time` index
-        // doesn't surface old-but-active threads in its first page. Discord's
-        // own client gets the union by querying both, so on the very first
-        // page we issue both calls in parallel and merge. Subsequent pages
-        // only need `last_message_time` because zero-reply posts are almost
-        // always recent and already covered by the first response.
-        if offset == 0 {
-            // `relevance` is the only sort that lifts pinned posts to the top.
-            // The activity/creation sorts bury an inactive pin below page 0, so
-            // we also harvest pins from a relevance page (active only, since
-            // archiving clears the pin flag). Best-effort, so a failed relevance
-            // call cannot break the list.
-            let harvest_pins = archive_state == ForumPostArchiveState::Active;
-            let (activity, recent, pins) = tokio::join!(
-                self.load_forum_post_search_page(
-                    guild_id,
-                    channel_id,
-                    archive_state,
-                    offset,
-                    ForumSearchSort::LastMessageTime,
-                ),
-                self.load_forum_post_search_page(
-                    guild_id,
-                    channel_id,
-                    archive_state,
-                    offset,
-                    ForumSearchSort::CreationTime,
-                ),
-                async {
-                    if harvest_pins {
-                        self.load_forum_post_search_page(
-                            guild_id,
-                            channel_id,
-                            archive_state,
-                            offset,
-                            ForumSearchSort::Relevance,
-                        )
-                        .await
-                        .ok()
-                    } else {
-                        None
-                    }
-                },
-            );
-            let page = merge_forum_pages(activity?, recent?);
-            return Ok(match pins {
-                Some(pins) => merge_pinned_forum_posts(page, pins),
-                None => page,
-            });
+        thread_ids: &[Id<ChannelMarker>],
+    ) -> Result<Vec<ForumPostDataInfo>> {
+        if thread_ids.is_empty() {
+            return Ok(Vec::new());
         }
-
-        self.load_forum_post_search_page(
-            guild_id,
-            channel_id,
-            archive_state,
-            offset,
-            ForumSearchSort::LastMessageTime,
-        )
-        .await
-    }
-
-    async fn load_forum_post_search_page(
-        &self,
-        guild_id: Id<GuildMarker>,
-        channel_id: Id<ChannelMarker>,
-        archive_state: ForumPostArchiveState,
-        offset: usize,
-        sort_by: ForumSearchSort,
-    ) -> Result<ForumPostPage> {
-        // `/threads/search` is the only Discord endpoint that ships
-        // `first_messages` alongside thread metadata, so we never want to
-        // fall back to the active or archived endpoints. They cannot supply
-        // previews and routinely 403 on user-account tokens. Instead retry
-        // according to Discord's response when the search index is warming up.
-        for attempt in 0..FORUM_POST_SEARCH_MAX_ATTEMPTS {
-            match self
-                .request_forum_post_search_page(
-                    guild_id,
-                    channel_id,
-                    archive_state,
-                    offset,
-                    sort_by,
-                )
-                .await
-            {
-                Ok(page) => return Ok(page),
-                Err(error) => {
-                    let Some(delay) = forum_search_retry_after(&error) else {
-                        return Err(error);
-                    };
-                    if attempt + 1 == FORUM_POST_SEARCH_MAX_ATTEMPTS {
-                        return Err(error);
-                    }
-                    tokio::time::sleep(delay).await;
-                }
-            }
-        }
-        unreachable!("forum search attempt loop always returns")
-    }
-
-    async fn request_forum_post_search_page(
-        &self,
-        guild_id: Id<GuildMarker>,
-        channel_id: Id<ChannelMarker>,
-        archive_state: ForumPostArchiveState,
-        offset: usize,
-        sort_by: ForumSearchSort,
-    ) -> Result<ForumPostPage> {
-        let request = self
-            .raw_http
-            .get(format!(
-                "https://discord.com/api/v9/channels/{}/threads/search",
-                channel_id.get()
-            ))
-            .query(&[
-                ("archived", archive_state.as_query_value().to_owned()),
-                ("sort_by", sort_by.as_str().to_owned()),
-                ("sort_order", "desc".to_owned()),
-                ("limit", FORUM_POST_SEARCH_PAGE_LIMIT.to_string()),
-                ("tag_setting", "match_some".to_owned()),
-                ("offset", offset.to_string()),
-            ]);
-        let response = self
-            .execute_authenticated(request, "forum post search")
+        let body = json!({
+            "thread_ids": thread_ids
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+        });
+        let raw: Value = self
+            .send_json(
+                self.raw_http
+                    .post(format!(
+                        "https://discord.com/api/v9/channels/{}/post-data",
+                        channel_id.get()
+                    ))
+                    .json(&body),
+                "forum post data",
+            )
             .await?;
-        if response.status() == StatusCode::ACCEPTED {
-            let raw = response.json::<Value>().await.unwrap_or(Value::Null);
-            let delay = raw
-                .get("retry_after")
-                .and_then(Value::as_f64)
-                .and_then(super::rate_limit_delay)
-                .filter(|delay| !delay.is_zero())
-                .unwrap_or(FORUM_POST_SEARCH_DEFAULT_RETRY);
-            return Err(AppError::ForumSearchIndexWarming {
-                retry_after_millis: super::duration_millis_ceil(delay),
-            });
-        }
-        if let Err(error) = response.error_for_status_ref() {
-            return Err(super::request_error(error, response, "forum post search").await);
-        }
-        let raw: Value = response.json().await.map_err(|error| {
-            AppError::DiscordRequest(format!("forum post search decode failed: {error}"))
-        })?;
-
-        let response = parse_forum_thread_search_response(&raw, Some(guild_id), channel_id, true);
-        let has_more = forum_search_has_more(&response);
-
-        Ok(ForumPostPage {
-            // Advance by Discord's raw result count. Local filtering can drop
-            // malformed or unrelated threads and must not make the cursor
-            // repeat those same server-side rows.
-            next_offset: forum_search_next_offset(offset, &response),
-            threads: response.threads,
-            first_messages: response.first_messages,
-            has_more,
-        })
+        Ok(parse_forum_post_data_response(&raw, guild_id, thread_ids))
     }
-}
-
-pub(super) fn forum_search_next_offset(
-    offset: usize,
-    response: &ForumThreadSearchResponse,
-) -> usize {
-    offset.saturating_add(response.raw_threads.len())
-}
-
-pub(super) fn forum_search_has_more(response: &ForumThreadSearchResponse) -> bool {
-    response.has_more && !response.raw_threads.is_empty()
 }
 
 pub(super) fn create_forum_post_request_body(
@@ -458,202 +331,116 @@ pub(super) fn parse_create_forum_post_response(
     if thread.parent_id.is_none() {
         thread.parent_id = parent_channel_id;
     }
+    let current_user_member = raw
+        .get("member")
+        .filter(|member| member.is_object())
+        .or_else(|| raw.get("thread_member").filter(|member| member.is_object()))
+        .and_then(|member| {
+            parse_thread_member_info(member, thread.guild_id, Some(thread.channel_id))
+        });
     let first_message = raw.get("message").and_then(parse_message_info);
     Ok(CreatedForumPost {
         thread,
+        current_user_member,
         first_message,
     })
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct ForumThreadSearchResponse {
-    pub(super) threads: Vec<ChannelInfo>,
-    pub(super) first_messages: Vec<MessageInfo>,
-    pub(super) has_more: bool,
-    pub(super) raw_threads: Vec<Value>,
-    pub(super) raw_first_messages: Vec<Value>,
-    pub(super) extra_fields: std::collections::BTreeMap<String, Value>,
-}
-
-pub(super) fn parse_forum_thread_search_response(
+pub(super) fn parse_public_archived_threads_response(
     raw: &Value,
-    guild_id: Option<Id<GuildMarker>>,
+    guild_id: Id<GuildMarker>,
     parent_channel_id: Id<ChannelMarker>,
-    fill_missing_parent: bool,
-) -> ForumThreadSearchResponse {
-    let threads = parse_forum_threads(raw, guild_id, parent_channel_id, fill_missing_parent);
-    let first_messages = parse_forum_first_messages(raw, &threads);
-    ForumThreadSearchResponse {
-        threads,
-        first_messages,
-        has_more: raw
-            .get("has_more")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        raw_threads: clone_array(raw.get("threads")),
-        raw_first_messages: clone_array(raw.get("first_messages")),
-        extra_fields: extra_fields(raw, &["threads", "first_messages", "has_more"]),
-    }
-}
-
-pub(super) fn parse_forum_threads(
-    raw: &Value,
-    guild_id: Option<Id<GuildMarker>>,
-    parent_channel_id: Id<ChannelMarker>,
-    fill_missing_parent: bool,
-) -> Vec<ChannelInfo> {
-    raw.get("threads")
+) -> ArchivedThreadsPage {
+    let raw_threads = raw
+        .get("threads")
         .and_then(Value::as_array)
-        .map(|threads| {
-            threads
-                .iter()
-                .filter_map(|thread| {
-                    let mut channel = parse_channel_info(thread, guild_id)?;
-                    if fill_missing_parent && channel.parent_id.is_none() {
-                        channel.parent_id = Some(parent_channel_id);
-                    }
-                    if channel.parent_id != Some(parent_channel_id) {
-                        return None;
-                    }
-                    Some(channel)
-                })
-                .collect()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let threads = raw_threads
+        .iter()
+        .filter_map(|raw_thread| {
+            let mut thread = parse_channel_info(raw_thread, Some(guild_id))?;
+            if thread.parent_id.is_none() {
+                thread.parent_id = Some(parent_channel_id);
+            }
+            (thread.parent_id == Some(parent_channel_id) && thread.thread_archived() == Some(true))
+                .then_some(thread)
         })
-        .unwrap_or_default()
-}
-
-pub(super) fn parse_forum_first_messages(raw: &Value, threads: &[ChannelInfo]) -> Vec<MessageInfo> {
-    let mut seen = std::collections::HashSet::new();
-    parse_forum_messages_from_field(raw, threads, "first_messages")
-        .into_iter()
-        .filter(|message| seen.insert(message.message_id))
-        .collect()
-}
-
-fn parse_forum_messages_from_field(
-    raw: &Value,
-    threads: &[ChannelInfo],
-    field: &str,
-) -> Vec<MessageInfo> {
-    raw.get(field)
-        .and_then(Value::as_array)
-        .map(|messages| {
-            messages
-                .iter()
-                .filter_map(parse_message_info)
-                .filter(|message| {
-                    threads
-                        .iter()
-                        .any(|thread| thread.channel_id == message.channel_id)
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-pub(super) fn forum_search_retry_after(error: &AppError) -> Option<Duration> {
-    match error {
-        AppError::ForumSearchIndexWarming { retry_after_millis } => {
-            Some(Duration::from_millis(*retry_after_millis))
-        }
-        _ => None,
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ForumSearchSort {
-    LastMessageTime,
-    CreationTime,
-    /// Only used to harvest pinned posts: it is the one sort under which
-    /// Discord lifts pins to the top of the results.
-    Relevance,
-}
-
-impl ForumSearchSort {
-    pub(super) fn as_str(self) -> &'static str {
-        match self {
-            Self::LastMessageTime => "last_message_time",
-            Self::CreationTime => "creation_time",
-            Self::Relevance => "relevance",
-        }
-    }
-}
-
-/// Combine the two first-page responses Discord uses to build the "Recent
-/// activity" view. `active` (last_message_time) carries threads with replies.
-/// `recent` (creation_time) carries the freshly-created zero-reply ones. We
-/// dedupe by `channel_id`. The order does not matter because the display layer
-/// re-sorts by `last_message_id` snowflake. `has_more` only follows the
-/// `last_message_time` cursor since subsequent pages use that sort alone.
-pub(super) fn merge_forum_pages(active: ForumPostPage, recent: ForumPostPage) -> ForumPostPage {
-    let mut seen_threads = std::collections::HashSet::new();
-    let mut threads = Vec::with_capacity(active.threads.len() + recent.threads.len());
-    for thread in active.threads.into_iter().chain(recent.threads) {
-        if seen_threads.insert(thread.channel_id) {
-            threads.push(thread);
-        }
-    }
-    let mut seen_first_messages = std::collections::HashSet::new();
-    let mut first_messages =
-        Vec::with_capacity(active.first_messages.len() + recent.first_messages.len());
-    for message in active
-        .first_messages
-        .into_iter()
-        .chain(recent.first_messages)
-    {
-        if seen_first_messages.insert(message.message_id) {
-            first_messages.push(message);
-        }
-    }
-    ForumPostPage {
-        next_offset: active.next_offset,
-        threads,
-        first_messages,
-        has_more: active.has_more,
-    }
-}
-
-/// Fold only the pinned posts from a `relevance`-sorted page into `page`,
-/// discarding relevance's reshuffle of everything else. The display layer
-/// re-sorts pinned-first, so the pins just need to be present. `next_offset`
-/// and `has_more` stay from `page` so pagination keeps following the activity
-/// sort.
-pub(super) fn merge_pinned_forum_posts(
-    mut page: ForumPostPage,
-    pins: ForumPostPage,
-) -> ForumPostPage {
-    let mut seen_threads = page
-        .threads
+        .collect::<Vec<_>>();
+    let thread_ids = threads
         .iter()
         .map(|thread| thread.channel_id)
-        .collect::<std::collections::HashSet<_>>();
-    let mut new_pin_ids = std::collections::HashSet::new();
-    let mut pinned_threads = Vec::new();
-    for thread in pins.threads {
-        if !thread.thread_pinned().unwrap_or(false) {
-            continue;
-        }
-        if seen_threads.insert(thread.channel_id) {
-            new_pin_ids.insert(thread.channel_id);
-            pinned_threads.push(thread);
-        }
-    }
-    if pinned_threads.is_empty() {
-        return page;
-    }
+        .collect::<std::collections::BTreeSet<_>>();
+    let members = raw
+        .get("members")
+        .and_then(Value::as_array)
+        .map(|members| {
+            members
+                .iter()
+                .filter_map(|member| parse_thread_member_info(member, Some(guild_id), None))
+                .filter(|member| {
+                    member
+                        .thread_id
+                        .is_some_and(|thread_id| thread_ids.contains(&thread_id))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
-    let mut seen_messages = page
-        .first_messages
+    // `before` is not returned as a separate cursor. Discord documents that
+    // the rows are sorted by archive timestamp descending, so the final raw
+    // row's timestamp is the next page cursor even if that row was malformed
+    // and could not become a local channel.
+    let next_before = raw_threads.iter().rev().find_map(|thread| {
+        thread
+            .get("thread_metadata")
+            .and_then(|metadata| metadata.get("archive_timestamp"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    });
+    let has_more = raw
+        .get("has_more")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && !raw_threads.is_empty()
+        && next_before.is_some();
+
+    ArchivedThreadsPage {
+        threads,
+        members,
+        has_more,
+        next_before,
+        extra_fields: extra_fields(raw, &["threads", "members", "has_more"]),
+    }
+}
+
+pub(super) fn parse_forum_post_data_response(
+    raw: &Value,
+    guild_id: Id<GuildMarker>,
+    requested_thread_ids: &[Id<ChannelMarker>],
+) -> Vec<ForumPostDataInfo> {
+    let Some(posts) = raw.get("threads").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    requested_thread_ids
         .iter()
-        .map(|message| message.message_id)
-        .collect::<std::collections::HashSet<_>>();
-    for message in pins.first_messages {
-        if new_pin_ids.contains(&message.channel_id) && seen_messages.insert(message.message_id) {
-            page.first_messages.push(message);
-        }
-    }
-
-    pinned_threads.extend(page.threads);
-    page.threads = pinned_threads;
-    page
+        .filter_map(|thread_id| {
+            let raw_post = posts.get(&thread_id.to_string())?;
+            let owner = raw_post
+                .get("owner")
+                .filter(|owner| !owner.is_null())
+                .and_then(|owner| parse_member_info(owner, Some(guild_id)));
+            let first_message = raw_post
+                .get("first_message")
+                .filter(|message| !message.is_null())
+                .and_then(parse_message_info)
+                .filter(|message| message.channel_id == *thread_id);
+            Some(ForumPostDataInfo {
+                thread_id: *thread_id,
+                owner,
+                first_message,
+                extra_fields: extra_fields(raw_post, &["owner", "first_message"]),
+            })
+        })
+        .collect()
 }

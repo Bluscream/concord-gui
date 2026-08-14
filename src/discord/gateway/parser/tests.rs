@@ -1530,212 +1530,32 @@ fn raw_presence_update_parses_rich_activity_fields() {
 }
 
 #[test]
-fn thread_channel_parser_keeps_counts_and_status() {
-    let channel = parse_channel_info(
-        &json!({
-            "id": "10",
-            "guild_id": "1",
-            "parent_id": "2",
-            "type": 11,
-            "name": "release notes",
-            "message_count": 12,
-            "total_message_sent": 14,
-            "thread_metadata": { "archived": true, "locked": false }
-        }),
-        None,
-    )
-    .expect("thread channel should parse");
-
-    assert_eq!(channel.kind, "GuildPublicThread");
-    assert_eq!(channel.message_count, Some(12));
-    assert_eq!(channel.total_message_sent, Some(14));
-    assert_eq!(channel.thread_archived(), Some(true));
-    assert_eq!(channel.thread_locked(), Some(false));
-}
-
-#[test]
-fn thread_channel_parser_uses_only_real_current_user_member_settings() {
-    let channel = parse_channel_info(
-        &json!({
-            "id": "10",
-            "guild_id": "1",
-            "parent_id": "2",
-            "type": 11,
-            "name": "release notes",
-            "member": {
-                "id": "10",
-                "user_id": "99",
-                "flags": 9,
-                "muted": true,
-                "mute_config": { "end_time": "2099-01-01T00:00:00.000Z" }
-            },
-            "thread_metadata": { "archived": false, "locked": false }
-        }),
-        None,
-    )
-    .expect("thread channel should parse");
-
-    assert_eq!(channel.current_user_joined_thread, Some(true));
-    assert_eq!(channel.current_user_thread_notification_flags, Some(9));
-    assert_eq!(channel.current_user_thread_muted, Some(true));
-    assert_eq!(
-        channel.current_user_thread_mute_end_time.as_deref(),
-        Some("2099-01-01T00:00:00.000Z")
-    );
-
-    for (name, member) in [("null", Some(Value::Null)), ("absent", None)] {
-        let mut payload = thread_payload(10, "release notes");
-        if let Some(member) = member {
-            payload["member"] = member;
+fn thread_gateway_events_keep_active_metadata_and_membership_separate() {
+    let mut joined = thread_payload(10, "joined");
+    joined["member"] = json!({
+        "id": "10",
+        "user_id": "99",
+        "flags": 4,
+        "muted": true,
+        "mute_config": { "end_time": "2099-01-01T00:00:00.000Z" }
+    });
+    for (payload, expected_member) in [(joined, true), (thread_payload(11, "not joined"), false)] {
+        let events =
+            parse_user_account_event(&json!({ "t": "THREAD_CREATE", "d": payload }).to_string());
+        let [AppEvent::ThreadUpsert { thread }] = events.as_slice() else {
+            panic!("expected one thread upsert, got {events:?}");
+        };
+        assert_eq!(thread.current_user_member.is_some(), expected_member);
+        if let Some(member) = &thread.current_user_member {
+            assert_eq!(member.thread_id, Some(thread.channel.channel_id));
+            assert_eq!(member.flags, Some(4));
+            assert_eq!(member.muted, Some(true));
         }
-        let channel = parse_channel_info(&payload, None).expect("thread channel should parse");
-        assert_eq!(channel.current_user_joined_thread, None, "{name}");
-        assert_eq!(
-            channel.current_user_thread_notification_flags, None,
-            "{name}"
-        );
-        assert_eq!(channel.current_user_thread_muted, None, "{name}");
-        assert_eq!(channel.current_user_thread_mute_end_time, None, "{name}");
     }
 }
 
 #[test]
-fn raw_thread_member_updates_keep_current_user_state() {
-    let joined = parse_user_account_event(
-        &json!({
-            "t": "THREAD_MEMBERS_UPDATE",
-            "d": {
-                "id": "10",
-                "guild_id": "1",
-                "added_members": [{ "user_id": "99" }]
-            }
-        })
-        .to_string(),
-    );
-    let left = parse_user_account_event(
-        &json!({
-            "t": "THREAD_MEMBERS_UPDATE",
-            "d": {
-                "id": "10",
-                "guild_id": "1",
-                "removed_member_ids": ["99"]
-            }
-        })
-        .to_string(),
-    );
-    let current_user = parse_user_account_event(
-        &json!({
-            "t": "THREAD_MEMBER_UPDATE",
-            "d": {
-                "id": "10",
-                "guild_id": "1",
-                "user_id": "99",
-                "flags": 9,
-                "muted": true,
-                "mute_config": { "end_time": "2099-01-01T00:00:00.000Z" }
-            }
-        })
-        .to_string(),
-    );
-
-    assert!(matches!(
-        joined.as_slice(),
-        [AppEvent::ThreadMembersUpdateDispatch { update }]
-            if update.channel_id == Id::new(10)
-                && update.guild_id == Some(Id::new(1))
-                && update.added_members.iter().map(|member| member.user_id).collect::<Vec<_>>()
-                    == vec![Id::new(99)]
-                && update.removed_user_ids.is_empty()
-    ));
-    assert!(matches!(
-        left.as_slice(),
-        [AppEvent::ThreadMembersUpdateDispatch { update }]
-            if update.channel_id == Id::new(10)
-                && update.added_members.is_empty()
-                && update.removed_user_ids == vec![Id::new(99)]
-    ));
-    assert!(matches!(
-        current_user.as_slice(),
-        [AppEvent::ThreadMemberUpdate {
-            guild_id,
-            channel_id,
-            flags: Some(9),
-            muted: Some(true),
-            mute_end_time,
-        }] if *guild_id == Some(Id::new(1))
-            && *channel_id == Id::new(10)
-            && mute_end_time.as_deref() == Some("2099-01-01T00:00:00.000Z")
-    ));
-
-    let mut state = DiscordState::default();
-    let thread = parse_channel_info(&thread_payload(10, "release notes"), None)
-        .expect("thread channel should parse");
-    state.apply_event(&AppEvent::ChannelUpsert(thread));
-    for event in &current_user {
-        state.apply_event(event);
-    }
-
-    let thread = state
-        .channel(Id::new(10))
-        .expect("thread should stay cached");
-    assert!(thread.current_user_joined_thread);
-    assert_eq!(thread.current_user_thread_notification_flags, Some(9));
-    assert!(thread.current_user_thread_muted);
-    assert_eq!(
-        thread.current_user_thread_mute_end_time.as_deref(),
-        Some("2099-01-01T00:00:00.000Z")
-    );
-}
-
-#[test]
-fn raw_thread_create_upserts_thread_channel() {
-    let events = parse_user_account_event(
-        &json!({
-            "t": "THREAD_CREATE",
-            "d": thread_payload(10, "release notes")
-        })
-        .to_string(),
-    );
-
-    assert!(matches!(
-        events.as_slice(),
-        [AppEvent::ChannelUpsert(channel)]
-            if channel.channel_id == Id::new(10)
-                && channel.guild_id == Some(Id::new(1))
-                && channel.parent_id == Some(Id::new(2))
-                && channel.name == "release notes"
-                && channel.kind == "GuildPublicThread"
-                && channel.message_count == Some(12)
-                && channel.total_message_sent == Some(14)
-                && channel.thread_archived() == Some(false)
-                && channel.thread_locked() == Some(false)
-    ));
-}
-
-#[test]
-fn raw_thread_delete_removes_thread_channel() {
-    let events = parse_user_account_event(
-        &json!({
-            "t": "THREAD_DELETE",
-            "d": {
-                "id": "10",
-                "guild_id": "1",
-                "parent_id": "2",
-                "type": 11
-            }
-        })
-        .to_string(),
-    );
-
-    assert!(matches!(
-        events.as_slice(),
-        [AppEvent::ChannelDelete { guild_id, channel_id }]
-            if *guild_id == Some(Id::new(1)) && *channel_id == Id::new(10)
-    ));
-}
-
-#[test]
-fn raw_thread_list_sync_upserts_all_threads() {
+fn thread_list_sync_keeps_all_active_threads_and_only_explicit_members() {
     let events = parse_user_account_event(
         &json!({
             "t": "THREAD_LIST_SYNC",
@@ -1743,62 +1563,157 @@ fn raw_thread_list_sync_upserts_all_threads() {
                 "guild_id": "1",
                 "channel_ids": ["2"],
                 "threads": [
-                    thread_payload(10, "release notes"),
-                    thread_payload(11, "bug reports")
+                    thread_payload(10, "joined"),
+                    thread_payload(11, "not joined")
                 ],
-                "members": [
-                    { "id": "10", "user_id": "99", "flags": 3 },
-                    { "id": "11", "user_id": "99", "flags": 8 }
-                ]
+                "members": [{
+                    "id": "10",
+                    "user_id": "99",
+                    "flags": 2,
+                    "muted": false
+                }]
             }
         })
         .to_string(),
     );
 
-    match events.as_slice() {
-        [AppEvent::ThreadListSync { sync }] => {
-            assert_eq!(sync.guild_id, Id::new(1));
-            assert_eq!(sync.channel_ids, Some(vec![Id::new(2)]));
-            assert_eq!(sync.threads.len(), 2);
-            assert_eq!(sync.threads[0].channel_id, Id::new(10));
-            assert_eq!(sync.threads[0].name, "release notes");
-            assert_eq!(
-                sync.threads[0].current_user_thread_notification_flags,
-                Some(3)
-            );
-            assert_eq!(sync.threads[1].channel_id, Id::new(11));
-            assert_eq!(sync.threads[1].name, "bug reports");
-            assert_eq!(
-                sync.threads[1].current_user_thread_notification_flags,
-                Some(8)
-            );
+    let [AppEvent::ThreadListSync { sync }] = events.as_slice() else {
+        panic!("expected one thread list sync, got {events:?}");
+    };
+    assert_eq!(
+        sync.threads
+            .iter()
+            .map(|thread| thread.channel_id)
+            .collect::<Vec<_>>(),
+        vec![Id::new(10), Id::new(11)]
+    );
+    let members = sync
+        .current_user_members
+        .as_ref()
+        .expect("present member array should be preserved");
+    assert_eq!(members.len(), 1);
+    assert_eq!(members[0].thread_id, Some(Id::new(10)));
+    assert_eq!(members[0].flags, Some(2));
+}
+
+#[test]
+fn thread_list_sync_distinguishes_omitted_and_empty_member_snapshots() {
+    for (members, expected) in [(None, None), (Some(json!([])), Some(0))] {
+        let mut data = json!({
+            "guild_id": "1",
+            "threads": [thread_payload(10, "thread")]
+        });
+        if let Some(members) = members {
+            data["members"] = members;
         }
-        other => panic!("expected one ThreadListSync, got {other:?}"),
+        let events =
+            parse_user_account_event(&json!({ "t": "THREAD_LIST_SYNC", "d": data }).to_string());
+        let [AppEvent::ThreadListSync { sync }] = events.as_slice() else {
+            panic!("expected one thread list sync, got {events:?}");
+        };
+        assert_eq!(sync.current_user_members.as_ref().map(Vec::len), expected);
     }
 }
 
 #[test]
-fn raw_empty_thread_list_sync_preserves_the_replacement_scope() {
+fn thread_participant_snapshot_parses_profiles_without_implying_current_membership() {
     let events = parse_user_account_event(
         &json!({
-            "t": "THREAD_LIST_SYNC",
+            "t": "THREAD_MEMBER_LIST_UPDATE",
             "d": {
                 "guild_id": "1",
-                "channel_ids": ["2"],
-                "threads": [],
-                "members": []
+                "thread_id": "10",
+                "members": [{
+                    "user_id": "20",
+                    "member": {
+                        "user": { "id": "20", "username": "alice" },
+                        "roles": []
+                    },
+                    "presence": { "status": "online" }
+                }]
             }
         })
         .to_string(),
     );
 
-    assert!(matches!(
-        events.as_slice(),
-        [AppEvent::ThreadListSync { sync }]
-            if sync.guild_id == Id::new(1)
-                && sync.channel_ids == Some(vec![Id::new(2)])
-                && sync.threads.is_empty()
-    ));
+    let [AppEvent::ThreadMemberListUpdate { update }] = events.as_slice() else {
+        panic!("expected one participant snapshot, got {events:?}");
+    };
+    assert_eq!(update.channel_id, Id::new(10));
+    assert_eq!(update.members.len(), 1);
+    assert_eq!(update.members[0].user_id, Some(Id::new(20)));
+    assert_eq!(
+        update.members[0]
+            .member
+            .as_ref()
+            .map(|member| member.display_name.as_str()),
+        Some("alice")
+    );
+    assert_eq!(
+        update.members[0]
+            .presence
+            .as_ref()
+            .map(|presence| presence.status),
+        Some(PresenceStatus::Online)
+    );
+}
+
+#[test]
+fn guild_create_marks_every_user_snapshot_thread_as_joined() {
+    let mut joined = thread_payload(10, "joined");
+    joined["member"] = json!({ "id": "10", "user_id": "99", "flags": 4 });
+    let event = parse_guild_create(&json!({
+        "id": "1",
+        "name": "guild",
+        "channels": [],
+        "threads": [joined, thread_payload(11, "not joined")],
+        "members": [],
+        "roles": [],
+        "emojis": []
+    }))
+    .expect("guild create should parse");
+
+    let AppEvent::GuildCreate {
+        channels,
+        current_user_thread_members,
+        ..
+    } = event
+    else {
+        panic!("expected guild create");
+    };
+    assert_eq!(channels.len(), 2);
+    assert_eq!(current_user_thread_members.len(), 2);
+    assert_eq!(current_user_thread_members[0].thread_id, Some(Id::new(10)));
+    assert_eq!(current_user_thread_members[0].flags, Some(4));
+    assert_eq!(current_user_thread_members[1].thread_id, Some(Id::new(11)));
+    assert_eq!(current_user_thread_members[1].flags, None);
+}
+
+#[test]
+fn ready_supplemental_marks_user_snapshot_threads_as_joined() {
+    let events = parse_user_account_event(
+        &json!({
+            "t": "READY_SUPPLEMENTAL",
+            "d": {
+                "guilds": [{ "id": "1", "threads": [thread_payload(10, "joined")] }]
+            }
+        })
+        .to_string(),
+    );
+
+    let thread = events.iter().find_map(|event| match event {
+        AppEvent::ThreadUpsert { thread } => Some(thread),
+        _ => None,
+    });
+    let thread = thread.expect("supplemental thread should use the thread event path");
+    assert_eq!(thread.channel.guild_id, Some(Id::new(1)));
+    assert_eq!(
+        thread
+            .current_user_member
+            .as_ref()
+            .and_then(|member| member.thread_id),
+        Some(Id::new(10))
+    );
 }
 
 #[test]
@@ -2209,29 +2124,6 @@ fn raw_guild_create_with_thin_current_member_keeps_role_based_access() {
         }
     );
     assert_eq!(state.viewable_channels_for_guild(Some(Id::new(1))).len(), 1);
-}
-
-#[test]
-fn guild_create_parser_keeps_active_threads() {
-    let event = parse_guild_create(&json!({
-        "id": "1",
-        "name": "guild",
-        "channels": [],
-        "threads": [thread_payload(10, "release notes")],
-        "members": [],
-        "presences": [],
-        "emojis": []
-    }))
-    .expect("guild create should parse");
-
-    let AppEvent::GuildCreate { channels, .. } = event else {
-        panic!("expected guild create event");
-    };
-
-    assert_eq!(channels.len(), 1);
-    assert_eq!(channels[0].channel_id, Id::new(10));
-    assert_eq!(channels[0].kind, "GuildPublicThread");
-    assert_eq!(channels[0].name, "release notes");
 }
 
 #[test]

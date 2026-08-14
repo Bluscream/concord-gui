@@ -1,4 +1,28 @@
 use super::*;
+
+#[test]
+fn poll_vote_actions_are_available_by_default() {
+    let mut state = state_with_messages(1);
+    state.focus_pane(FocusPane::Messages);
+    state.push_event(message_create_event(MessageCreateFixture {
+        guild_id: Some(Id::new(1)),
+        channel_id: Id::new(2),
+        message_id: Id::new(1),
+        author_id: Id::new(99),
+        poll: Some(poll_info(false)),
+        content: Some(String::new()),
+        ..guild_message_create_fixture()
+    }));
+
+    let actions = state.selected_message_action_items();
+    let poll_action = actions
+        .iter()
+        .find(|action| action.kind == MessageActionKind::OpenPollVotePicker)
+        .expect("poll action should exist");
+
+    assert_eq!(poll_action.label, "choose poll votes");
+    assert!(poll_action.is_enabled());
+}
 use crate::discord::test_builders::{
     AttachmentDownloadCompletedFixture, AttachmentDownloadFailedFixture,
     AttachmentDownloadProgressFixture, AttachmentDownloadStartedFixture,

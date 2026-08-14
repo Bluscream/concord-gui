@@ -124,8 +124,8 @@ pub(super) async fn set_thread_followed(
     } else {
         client.unfollow_thread(channel_id).await
     };
-    // Discord echoes a THREAD_MEMBERS_UPDATE for the join/leave, which
-    // updates `current_user_joined_thread`, so no optimistic event here.
+    // Discord echoes a THREAD_MEMBERS_UPDATE for the join or leave, which
+    // updates the current-user member cache, so no optimistic event is needed.
     if let Err(error) = result {
         let context = if followed {
             "follow post failed"

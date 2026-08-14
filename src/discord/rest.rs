@@ -40,7 +40,7 @@ mod search;
 mod streams;
 mod user_settings;
 
-pub use forum::{CreatedForumPost, ForumPostPage};
+pub use forum::CreatedForumPost;
 pub(in crate::discord) use messages::{MessageCreateRequest, MessageEditRequest};
 pub use reactions::ReactionUsersPage;
 

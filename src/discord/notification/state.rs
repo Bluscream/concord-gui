@@ -192,10 +192,10 @@ impl DiscordState {
             .channels
             .get(&channel_id)
             .filter(|channel| channel.is_thread())
-            .is_some_and(|channel| {
+            .is_some_and(|_| {
                 notification_setting_muted(
-                    channel.current_user_thread_muted,
-                    channel.current_user_thread_mute_end_time.as_deref(),
+                    self.thread_is_muted(channel_id),
+                    self.thread_mute_end_time(channel_id),
                 )
             })
     }
@@ -611,20 +611,18 @@ impl DiscordState {
         if !self.can_view_channel(channel) {
             return false;
         }
-        !channel.is_thread()
-            || channel.current_user_joined_thread && !channel.thread_archived().unwrap_or(false)
+        !channel.is_thread() || self.thread_is_sidebar_active(channel.id)
     }
 
     fn thread_notification_level(
         &self,
         channel_id: Id<ChannelMarker>,
     ) -> Option<NotificationLevel> {
-        let flags = self
-            .navigation
+        self.navigation
             .channels
             .get(&channel_id)
-            .filter(|channel| channel.is_thread())?
-            .current_user_thread_notification_flags?;
+            .filter(|channel| channel.is_thread())?;
+        let flags = self.thread_notification_level_flags(channel_id)?;
         if flags & THREAD_NOTIFICATIONS_NONE != 0 {
             Some(NotificationLevel::NoMessages)
         } else if flags & THREAD_NOTIFICATIONS_ONLY_MENTIONS != 0 {

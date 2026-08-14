@@ -8,8 +8,8 @@ use crate::{
         GuildOnboardingInfo, GuildParticipationDataGap, GuildParticipationRestriction,
         GuildVerificationLevel, MemberInfo, MentionInfo, MessageAttachmentUpload,
         PermissionDataGap, ReactionEmoji, ReplyReference, RoleInfo, StreamCreateInfo,
-        StreamUpdateInfo, ThreadMetadataInfo, UserProfileInfo, VoiceAudioSettings, VoiceScope,
-        VoiceSoundKind, VoiceStateInfo,
+        StreamUpdateInfo, ThreadGatewayInfo, ThreadMemberInfo, ThreadMetadataInfo, UserProfileInfo,
+        VoiceAudioSettings, VoiceScope, VoiceSoundKind, VoiceStateInfo,
         gateway::GatewayCommand,
         ids::{
             Id,
@@ -111,9 +111,17 @@ async fn publish_event_sends_matching_snapshot_and_effect_revisions() {
         .publish_event(AppEvent::ThreadMemberUpdate {
             guild_id: Some(Id::new(1)),
             channel_id: Id::new(2),
-            flags: Some(9),
-            muted: None,
-            mute_end_time: None,
+            member: ThreadMemberInfo {
+                thread_id: Some(Id::new(2)),
+                user_id: None,
+                join_timestamp: None,
+                flags: Some(9),
+                muted: None,
+                mute_end_time: None,
+                member: None,
+                presence: None,
+                extra_fields: Default::default(),
+            },
         })
         .await;
 
@@ -122,7 +130,7 @@ async fn publish_event_sends_matching_snapshot_and_effect_revisions() {
 
     assert_eq!(snapshot.global, 2);
     assert_eq!(snapshot.navigation, 2);
-    assert_eq!(snapshot.message, 1);
+    assert_eq!(snapshot.message, 2);
     assert_eq!(snapshot.detail, 0);
 
     client
@@ -137,7 +145,7 @@ async fn publish_event_sends_matching_snapshot_and_effect_revisions() {
 
     assert_eq!(snapshot.global, 3);
     assert_eq!(snapshot.navigation, 3);
-    assert_eq!(snapshot.message, 1);
+    assert_eq!(snapshot.message, 2);
     assert_eq!(snapshot.detail, 0);
 
     client
@@ -311,13 +319,20 @@ async fn normal_channel_upsert_updates_snapshot_without_effect_delivery() {
 }
 
 #[tokio::test]
-async fn thread_channel_upsert_is_delivered_as_effect_for_tui_derived_state() {
+async fn thread_upsert_updates_navigation_and_message_views_with_an_effect() {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
     let mut effects = client.take_effects();
     let mut snapshots = client.subscribe_snapshots();
 
-    client.publish_event(thread_channel_upsert_event()).await;
+    client
+        .publish_event(thread_upsert_event(
+            Id::new(3),
+            Some(ThreadMetadataInfo::test(false, false)),
+            None,
+            true,
+        ))
+        .await;
 
     snapshots.changed().await.expect("snapshot is published");
     let snapshot = *snapshots.borrow_and_update();
@@ -325,10 +340,10 @@ async fn thread_channel_upsert_is_delivered_as_effect_for_tui_derived_state() {
 
     assert_eq!(snapshot.global, 1);
     assert_eq!(snapshot.navigation, 1);
-    assert_eq!(snapshot.message, 0);
+    assert_eq!(snapshot.message, 1);
     assert_eq!(snapshot.detail, 0);
     assert_eq!(effect.revision, 1);
-    assert!(matches!(effect.event, AppEvent::ChannelUpsert(_)));
+    assert!(matches!(effect.event, AppEvent::ThreadUpsert { .. }));
 }
 
 #[tokio::test]
@@ -626,14 +641,12 @@ async fn mutation_validators_reject_incomplete_onboarding() {
         }))
         .await;
     client
-        .publish_event(AppEvent::ChannelUpsert(ChannelInfo {
-            guild_id: Some(Id::new(1)),
-            parent_id: Some(Id::new(2)),
-            name: "thread".to_owned(),
-            current_user_joined_thread: Some(true),
-            thread_metadata: Some(ThreadMetadataInfo::test(false, false)),
-            ..ChannelInfo::test(Id::new(3), "GuildPublicThread")
-        }))
+        .publish_event(thread_upsert_event(
+            Id::new(3),
+            Some(ThreadMetadataInfo::test(false, false)),
+            None,
+            true,
+        ))
         .await;
     publish_incomplete_community_onboarding(&client).await;
     let invocation = ApplicationCommandInvocation {
@@ -695,6 +708,188 @@ async fn mutation_validators_reject_incomplete_onboarding() {
             ),
         );
     }
+}
+
+#[tokio::test]
+async fn thread_message_requires_send_messages_in_threads() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
+    publish_permission_fixture(&client, "GuildText", VIEW_CHANNEL | SEND_MESSAGES).await;
+    client
+        .publish_event(thread_upsert_event(
+            Id::new(3),
+            Some(ThreadMetadataInfo::test(false, false)),
+            None,
+            true,
+        ))
+        .await;
+
+    let error = client
+        .send_message(Id::new(3), Id::new(99), "hello", None, &[])
+        .await
+        .expect_err("missing SEND_MESSAGES_IN_THREADS should stop before REST");
+
+    assert_action_blocked_error(
+        error,
+        DiscordAction::SendMessage,
+        ActionBlockReason::PermissionDenied(DiscordPermission::SendMessages),
+    );
+}
+
+#[tokio::test]
+async fn archived_and_locked_thread_guards_use_gateway_metadata() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
+    publish_permission_fixture(
+        &client,
+        "GuildText",
+        VIEW_CHANNEL
+            | SEND_MESSAGES_IN_THREADS
+            | READ_MESSAGE_HISTORY
+            | ADD_REACTIONS
+            | USE_APPLICATION_COMMANDS,
+    )
+    .await;
+    client
+        .publish_event(thread_upsert_event(
+            Id::new(3),
+            Some(ThreadMetadataInfo::test(true, false)),
+            Some(Id::new(99)),
+            true,
+        ))
+        .await;
+    let invocation = ApplicationCommandInvocation {
+        guild_id: Some(Id::new(1)),
+        channel_id: Id::new(3),
+        command_identity: None,
+        command_name: "test".to_owned(),
+        content: "/test".to_owned(),
+    };
+
+    let archived_cases = [
+        (
+            client.ensure_can_change_thread_membership(Id::new(3), true),
+            DiscordAction::ChangeThreadMembership,
+        ),
+        (
+            client.ensure_can_edit_message(Id::new(3), Id::new(20)),
+            DiscordAction::EditMessage,
+        ),
+        (
+            client.ensure_can_remove_current_user_reaction(Id::new(3)),
+            DiscordAction::RemoveReaction,
+        ),
+        (
+            client.ensure_can_run_application_command(&invocation),
+            DiscordAction::RunApplicationCommand,
+        ),
+        (
+            client
+                .ensure_can_edit_thread_settings(Id::new(3), &[], 0)
+                .map(|_| ()),
+            DiscordAction::EditThread,
+        ),
+        (
+            client.ensure_can_add_reaction(
+                Id::new(3),
+                Id::new(20),
+                &ReactionEmoji::Unicode("👍".to_owned()),
+            ),
+            DiscordAction::AddReaction,
+        ),
+    ];
+    for (result, action) in archived_cases {
+        assert_action_blocked(result, action, ActionBlockReason::ThreadArchived);
+    }
+
+    client
+        .publish_event(thread_upsert_event(
+            Id::new(3),
+            Some(ThreadMetadataInfo::test(false, true)),
+            Some(Id::new(99)),
+            true,
+        ))
+        .await;
+    client
+        .ensure_can_send_message(Id::new(3), None, &[])
+        .expect("an active locked thread still accepts messages");
+    client
+        .ensure_can_run_application_command(&invocation)
+        .expect("an active locked thread still accepts application commands");
+
+    client
+        .publish_event(thread_upsert_event(
+            Id::new(3),
+            Some(ThreadMetadataInfo::test(true, true)),
+            Some(Id::new(99)),
+            true,
+        ))
+        .await;
+    assert_action_blocked(
+        client.ensure_can_send_message(Id::new(3), None, &[]),
+        DiscordAction::SendMessage,
+        ActionBlockReason::PermissionDenied(DiscordPermission::ReopenThread),
+    );
+
+    client
+        .publish_event(thread_upsert_event(
+            Id::new(4),
+            None,
+            Some(Id::new(99)),
+            true,
+        ))
+        .await;
+    assert_action_blocked(
+        client.ensure_can_reopen_thread(Id::new(4)),
+        DiscordAction::ReopenThread,
+        ActionBlockReason::ThreadStateUnavailable,
+    );
+}
+
+#[tokio::test]
+async fn thread_creator_can_manage_creator_owned_state_without_manage_threads() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
+    publish_permission_fixture(
+        &client,
+        "GuildText",
+        VIEW_CHANNEL | SEND_MESSAGES_IN_THREADS,
+    )
+    .await;
+    client
+        .publish_event(thread_upsert_event(
+            Id::new(3),
+            Some(ThreadMetadataInfo::test(false, false)),
+            Some(Id::new(10)),
+            true,
+        ))
+        .await;
+
+    client
+        .ensure_can_manage_thread(Id::new(3), DiscordAction::ArchiveThread)
+        .expect("thread creator should be able to archive");
+    assert!(
+        !client
+            .ensure_can_edit_thread_settings(Id::new(3), &[], 0)
+            .expect("creator-owned fields should be editable")
+    );
+    assert_action_blocked(
+        client.ensure_can_edit_thread_settings(Id::new(3), &[], 5),
+        DiscordAction::EditThread,
+        ActionBlockReason::PermissionDenied(DiscordPermission::ManageThreads),
+    );
+
+    client
+        .publish_event(thread_upsert_event(
+            Id::new(3),
+            Some(ThreadMetadataInfo::test(true, true)),
+            Some(Id::new(10)),
+            true,
+        ))
+        .await;
+    client
+        .ensure_can_reopen_thread(Id::new(3))
+        .expect("thread creator should be able to reopen their locked thread");
 }
 
 #[tokio::test]
@@ -767,6 +962,59 @@ async fn channel_action_validators_reject_unknown_permission_data() {
         assert_eq!(action, expected_action);
         assert_eq!(reason, expected_reason);
     }
+}
+
+#[tokio::test]
+async fn channel_action_validators_require_action_specific_permissions() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
+    publish_permission_fixture(
+        &client,
+        "GuildText",
+        VIEW_CHANNEL | READ_MESSAGE_HISTORY | ADD_REACTIONS | MANAGE_CHANNELS,
+    )
+    .await;
+    client
+        .publish_event(thread_upsert_event(
+            Id::new(3),
+            Some(ThreadMetadataInfo::test(false, false)),
+            None,
+            true,
+        ))
+        .await;
+    let emoji = ReactionEmoji::Custom {
+        id: Id::new(999),
+        name: Some("foreign".to_owned()),
+        animated: false,
+    };
+    let invocation = ApplicationCommandInvocation {
+        guild_id: Some(Id::new(1)),
+        channel_id: Id::new(2),
+        command_identity: None,
+        command_name: "test".to_owned(),
+        content: "/test".to_owned(),
+    };
+
+    assert_action_blocked(
+        client.ensure_can_pin_message(Id::new(2)),
+        DiscordAction::PinMessage,
+        ActionBlockReason::PermissionDenied(DiscordPermission::PinMessages),
+    );
+    assert_action_blocked(
+        client.ensure_can_add_reaction(Id::new(2), Id::new(20), &emoji),
+        DiscordAction::AddReaction,
+        ActionBlockReason::PermissionDenied(DiscordPermission::UseExternalEmojis),
+    );
+    assert_action_blocked(
+        client.ensure_can_run_application_command(&invocation),
+        DiscordAction::RunApplicationCommand,
+        ActionBlockReason::PermissionDenied(DiscordPermission::UseApplicationCommands),
+    );
+    assert_action_blocked(
+        client.ensure_can_manage_thread(Id::new(3), DiscordAction::ChangeThreadLock),
+        DiscordAction::ChangeThreadLock,
+        ActionBlockReason::PermissionDenied(DiscordPermission::ManageThreads),
+    );
 }
 
 #[tokio::test]
@@ -978,286 +1226,6 @@ async fn forum_post_rejects_moderated_tag_without_manage_threads() {
         DiscordAction::ApplyModeratedForumTag,
         ActionBlockReason::PermissionDenied(DiscordPermission::ManageThreads),
     );
-}
-
-#[tokio::test]
-async fn thread_message_rejects_missing_send_messages_in_threads() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
-    publish_permission_fixture(&client, "GuildText", VIEW_CHANNEL | SEND_MESSAGES).await;
-    client
-        .publish_event(AppEvent::ChannelUpsert(ChannelInfo {
-            guild_id: Some(Id::new(1)),
-            parent_id: Some(Id::new(2)),
-            name: "thread".to_owned(),
-            current_user_joined_thread: Some(true),
-            thread_metadata: Some(ThreadMetadataInfo::test(false, false)),
-            ..ChannelInfo::test(Id::new(3), "GuildPublicThread")
-        }))
-        .await;
-
-    let error = client
-        .send_message(Id::new(3), Id::new(99), "hello", None, &[])
-        .await
-        .expect_err("missing SEND_MESSAGES_IN_THREADS should stop before REST");
-
-    assert_action_blocked_error(
-        error,
-        DiscordAction::SendMessage,
-        ActionBlockReason::PermissionDenied(DiscordPermission::SendMessages),
-    );
-}
-
-#[tokio::test]
-async fn channel_action_validators_require_action_specific_permissions() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
-    publish_permission_fixture(
-        &client,
-        "GuildText",
-        VIEW_CHANNEL | READ_MESSAGE_HISTORY | ADD_REACTIONS | MANAGE_CHANNELS,
-    )
-    .await;
-    client
-        .publish_event(AppEvent::ChannelUpsert(ChannelInfo {
-            guild_id: Some(Id::new(1)),
-            parent_id: Some(Id::new(2)),
-            name: "thread".to_owned(),
-            current_user_joined_thread: Some(true),
-            thread_metadata: Some(ThreadMetadataInfo::test(false, false)),
-            ..ChannelInfo::test(Id::new(3), "GuildPublicThread")
-        }))
-        .await;
-    let emoji = ReactionEmoji::Custom {
-        id: Id::new(999),
-        name: Some("foreign".to_owned()),
-        animated: false,
-    };
-    let invocation = ApplicationCommandInvocation {
-        guild_id: Some(Id::new(1)),
-        channel_id: Id::new(2),
-        command_identity: None,
-        command_name: "test".to_owned(),
-        content: "/test".to_owned(),
-    };
-
-    assert_action_blocked(
-        client.ensure_can_pin_message(Id::new(2)),
-        DiscordAction::PinMessage,
-        ActionBlockReason::PermissionDenied(DiscordPermission::PinMessages),
-    );
-    assert_action_blocked(
-        client.ensure_can_add_reaction(Id::new(2), Id::new(20), &emoji),
-        DiscordAction::AddReaction,
-        ActionBlockReason::PermissionDenied(DiscordPermission::UseExternalEmojis),
-    );
-    assert_action_blocked(
-        client.ensure_can_run_application_command(&invocation),
-        DiscordAction::RunApplicationCommand,
-        ActionBlockReason::PermissionDenied(DiscordPermission::UseApplicationCommands),
-    );
-    assert_action_blocked(
-        client.ensure_can_manage_thread(Id::new(3), DiscordAction::ChangeThreadLock),
-        DiscordAction::ChangeThreadLock,
-        ActionBlockReason::PermissionDenied(DiscordPermission::ManageThreads),
-    );
-}
-
-#[tokio::test]
-async fn archived_thread_rejects_mutations_before_rest() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
-    publish_permission_fixture(
-        &client,
-        "GuildText",
-        VIEW_CHANNEL | SEND_MESSAGES_IN_THREADS | READ_MESSAGE_HISTORY | ADD_REACTIONS,
-    )
-    .await;
-    client
-        .publish_event(AppEvent::ChannelUpsert(ChannelInfo {
-            guild_id: Some(Id::new(1)),
-            parent_id: Some(Id::new(2)),
-            name: "thread".to_owned(),
-            current_user_joined_thread: Some(true),
-            thread_metadata: Some(ThreadMetadataInfo::test(true, false)),
-            ..ChannelInfo::test(Id::new(3), "GuildPublicThread")
-        }))
-        .await;
-
-    let invocation = ApplicationCommandInvocation {
-        guild_id: Some(Id::new(1)),
-        channel_id: Id::new(3),
-        command_identity: None,
-        command_name: "test".to_owned(),
-        content: "/test".to_owned(),
-    };
-    let cases = [
-        (
-            client.ensure_can_change_thread_membership(Id::new(3), true),
-            DiscordAction::ChangeThreadMembership,
-        ),
-        (
-            client.ensure_can_edit_message(Id::new(3), Id::new(20)),
-            DiscordAction::EditMessage,
-        ),
-        (
-            client.ensure_can_remove_current_user_reaction(Id::new(3)),
-            DiscordAction::RemoveReaction,
-        ),
-        (
-            client.ensure_can_run_application_command(&invocation),
-            DiscordAction::RunApplicationCommand,
-        ),
-        (
-            client.ensure_can_manage_thread(Id::new(3), DiscordAction::ChangeThreadLock),
-            DiscordAction::ChangeThreadLock,
-        ),
-        (
-            client.ensure_can_manage_thread(Id::new(3), DiscordAction::PinForumPost),
-            DiscordAction::PinForumPost,
-        ),
-        (
-            client
-                .ensure_can_edit_thread_settings(Id::new(3), &[], 0)
-                .map(|_| ()),
-            DiscordAction::EditThread,
-        ),
-        (
-            client.ensure_can_add_reaction(
-                Id::new(3),
-                Id::new(20),
-                &ReactionEmoji::Unicode("👍".to_owned()),
-            ),
-            DiscordAction::AddReaction,
-        ),
-    ];
-    for (result, action) in cases {
-        assert_action_blocked(result, action, ActionBlockReason::ThreadArchived);
-    }
-}
-
-#[tokio::test]
-async fn active_locked_thread_allows_normal_activity_but_archived_locked_thread_cannot_auto_reopen()
-{
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
-    publish_permission_fixture(
-        &client,
-        "GuildText",
-        VIEW_CHANNEL | SEND_MESSAGES_IN_THREADS | READ_MESSAGE_HISTORY | USE_APPLICATION_COMMANDS,
-    )
-    .await;
-    client
-        .publish_event(AppEvent::ChannelUpsert(ChannelInfo {
-            guild_id: Some(Id::new(1)),
-            parent_id: Some(Id::new(2)),
-            owner_id: Some(Id::new(99)),
-            name: "thread".to_owned(),
-            current_user_joined_thread: Some(true),
-            thread_metadata: Some(ThreadMetadataInfo::test(false, true)),
-            ..ChannelInfo::test(Id::new(3), "GuildPublicThread")
-        }))
-        .await;
-    let invocation = ApplicationCommandInvocation {
-        guild_id: Some(Id::new(1)),
-        channel_id: Id::new(3),
-        command_identity: None,
-        command_name: "test".to_owned(),
-        content: "/test".to_owned(),
-    };
-
-    client
-        .ensure_can_send_message(Id::new(3), None, &[])
-        .expect("an active locked thread still accepts messages");
-    client
-        .ensure_can_run_application_command(&invocation)
-        .expect("an active locked thread still accepts application commands");
-
-    client
-        .publish_event(AppEvent::ChannelUpsert(ChannelInfo {
-            guild_id: Some(Id::new(1)),
-            parent_id: Some(Id::new(2)),
-            owner_id: Some(Id::new(99)),
-            name: "thread".to_owned(),
-            current_user_joined_thread: Some(true),
-            thread_metadata: Some(ThreadMetadataInfo::test(true, true)),
-            ..ChannelInfo::test(Id::new(3), "GuildPublicThread")
-        }))
-        .await;
-    assert_action_blocked(
-        client.ensure_can_send_message(Id::new(3), None, &[]),
-        DiscordAction::SendMessage,
-        ActionBlockReason::PermissionDenied(DiscordPermission::ReopenThread),
-    );
-
-    client
-        .publish_event(AppEvent::ChannelUpsert(ChannelInfo {
-            guild_id: Some(Id::new(1)),
-            parent_id: Some(Id::new(2)),
-            owner_id: Some(Id::new(99)),
-            name: "thread".to_owned(),
-            current_user_joined_thread: Some(true),
-            thread_metadata: None,
-            ..ChannelInfo::test(Id::new(4), "GuildPublicThread")
-        }))
-        .await;
-    assert_action_blocked(
-        client.ensure_can_reopen_thread(Id::new(4)),
-        DiscordAction::ReopenThread,
-        ActionBlockReason::ThreadStateUnavailable,
-    );
-}
-
-#[tokio::test]
-async fn thread_creator_can_archive_reopen_and_edit_creator_owned_fields() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let client = DiscordClient::new("test-token".to_owned()).expect("token is valid header");
-    publish_permission_fixture(
-        &client,
-        "GuildText",
-        VIEW_CHANNEL | SEND_MESSAGES_IN_THREADS,
-    )
-    .await;
-    client
-        .publish_event(AppEvent::ChannelUpsert(ChannelInfo {
-            guild_id: Some(Id::new(1)),
-            parent_id: Some(Id::new(2)),
-            owner_id: Some(Id::new(10)),
-            name: "thread".to_owned(),
-            current_user_joined_thread: Some(true),
-            thread_metadata: Some(ThreadMetadataInfo::test(false, false)),
-            ..ChannelInfo::test(Id::new(3), "GuildPublicThread")
-        }))
-        .await;
-
-    client
-        .ensure_can_manage_thread(Id::new(3), DiscordAction::ArchiveThread)
-        .expect("thread creator should be able to archive");
-    assert!(
-        !client
-            .ensure_can_edit_thread_settings(Id::new(3), &[], 0)
-            .expect("creator-owned fields should be editable")
-    );
-    assert_action_blocked(
-        client.ensure_can_edit_thread_settings(Id::new(3), &[], 5),
-        DiscordAction::EditThread,
-        ActionBlockReason::PermissionDenied(DiscordPermission::ManageThreads),
-    );
-
-    client
-        .publish_event(AppEvent::ChannelUpsert(ChannelInfo {
-            guild_id: Some(Id::new(1)),
-            parent_id: Some(Id::new(2)),
-            owner_id: Some(Id::new(10)),
-            name: "thread".to_owned(),
-            current_user_joined_thread: Some(true),
-            thread_metadata: Some(ThreadMetadataInfo::test(true, true)),
-            ..ChannelInfo::test(Id::new(3), "GuildPublicThread")
-        }))
-        .await;
-    client
-        .ensure_can_reopen_thread(Id::new(3))
-        .expect("thread creator should be able to reopen their locked thread");
 }
 
 #[test]
@@ -1799,6 +1767,37 @@ fn message_create_event(message_id: u64) -> AppEvent {
     })
 }
 
+fn thread_upsert_event(
+    thread_id: Id<ChannelMarker>,
+    metadata: Option<ThreadMetadataInfo>,
+    owner_id: Option<Id<UserMarker>>,
+    joined: bool,
+) -> AppEvent {
+    AppEvent::ThreadUpsert {
+        thread: ThreadGatewayInfo {
+            channel: ChannelInfo {
+                guild_id: Some(Id::new(1)),
+                parent_id: Some(Id::new(2)),
+                owner_id,
+                name: "thread".to_owned(),
+                thread_metadata: metadata,
+                ..ChannelInfo::test(thread_id, "GuildPublicThread")
+            },
+            current_user_member: joined.then(|| ThreadMemberInfo {
+                thread_id: Some(thread_id),
+                user_id: Some(Id::new(10)),
+                join_timestamp: None,
+                flags: None,
+                muted: Some(false),
+                mute_end_time: None,
+                member: None,
+                presence: None,
+                extra_fields: Default::default(),
+            }),
+        },
+    }
+}
+
 fn assert_action_blocked<T>(
     result: crate::Result<T>,
     expected_action: DiscordAction,
@@ -1824,17 +1823,17 @@ fn assert_action_blocked_error(
 }
 
 const VIEW_CHANNEL: u64 = 0x0000_0000_0000_0400;
+const MANAGE_CHANNELS: u64 = 0x0000_0000_0000_0010;
+const ADD_REACTIONS: u64 = 0x0000_0000_0000_0040;
 const SEND_MESSAGES: u64 = 0x0000_0000_0000_0800;
 const MANAGE_MESSAGES: u64 = 0x0000_0000_0000_2000;
-const ADD_REACTIONS: u64 = 0x0000_0000_0000_0040;
 const READ_MESSAGE_HISTORY: u64 = 0x0000_0000_0001_0000;
 const CONNECT: u64 = 0x0000_0000_0010_0000;
 const SPEAK: u64 = 0x0000_0000_0020_0000;
-const MANAGE_CHANNELS: u64 = 0x0000_0000_0000_0010;
 const USE_APPLICATION_COMMANDS: u64 = 0x0000_0000_8000_0000;
 const MANAGE_THREADS: u64 = 0x0000_0004_0000_0000;
-const PIN_MESSAGES: u64 = 0x0008_0000_0000_0000;
 const SEND_MESSAGES_IN_THREADS: u64 = 0x0000_0040_0000_0000;
+const PIN_MESSAGES: u64 = 0x0008_0000_0000_0000;
 
 async fn publish_permission_fixture(
     client: &DiscordClient,
@@ -1883,6 +1882,8 @@ async fn publish_permission_authorization_fixture(
                 Id::new(2),
                 channel_kind,
             )],
+            thread_snapshot_complete: true,
+            current_user_thread_members: Vec::new(),
             members: vec![permission_fixture_member(Id::new(10))],
             presences: Vec::new(),
             roles,
@@ -2083,13 +2084,4 @@ fn assert_voice_join_rejected(client: &DiscordClient, expected_error: &str) {
         gateway_commands.try_recv(),
         Err(tokio::sync::mpsc::error::TryRecvError::Empty)
     ));
-}
-
-fn thread_channel_upsert_event() -> AppEvent {
-    AppEvent::ChannelUpsert(ChannelInfo {
-        guild_id: Some(Id::new(1)),
-        parent_id: Some(Id::new(2)),
-        name: "new-thread".to_owned(),
-        ..ChannelInfo::test(Id::new(3), "GuildPublicThread")
-    })
 }

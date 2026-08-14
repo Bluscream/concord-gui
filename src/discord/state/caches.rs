@@ -26,17 +26,10 @@ pub(in crate::discord) fn drain_over_limit<T>(order: &mut VecDeque<T>, limit: us
 pub(in crate::discord) struct NavigationIndex {
     pub(in crate::discord) guilds: BTreeMap<Id<GuildMarker>, GuildState>,
     pub(in crate::discord) channels: BTreeMap<Id<ChannelMarker>, ChannelState>,
-    pub(in crate::discord) thread_creators: BTreeMap<Id<ChannelMarker>, ThreadCreatorState>,
     pub(in crate::discord) custom_emojis: BTreeMap<Id<GuildMarker>, Vec<CustomEmojiInfo>>,
     /// User's `guild_folders` setting in display order. Empty until READY
     /// delivers it. The dashboard falls back to a flat guild list.
     pub(in crate::discord) guild_folders: Vec<GuildFolder>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ThreadCreatorState {
-    pub guild_id: Option<Id<GuildMarker>>,
-    pub user_id: Id<UserMarker>,
 }
 
 #[derive(Clone, Debug)]

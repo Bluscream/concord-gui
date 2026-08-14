@@ -236,29 +236,6 @@ pub enum ReactionEmoji {
     },
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum ForumPostArchiveState {
-    #[default]
-    Active,
-    Archived,
-}
-
-impl ForumPostArchiveState {
-    pub fn as_query_value(self) -> &'static str {
-        match self {
-            Self::Active => "false",
-            Self::Archived => "true",
-        }
-    }
-
-    pub fn as_log_label(self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::Archived => "archived",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MuteDuration {
     Minutes(u64),
@@ -468,11 +445,15 @@ pub enum AppCommand {
         channel_id: Id<ChannelMarker>,
         message_id: Id<MessageMarker>,
     },
-    LoadForumPosts {
+    LoadForumPostData {
         guild_id: Id<GuildMarker>,
         channel_id: Id<ChannelMarker>,
-        archive_state: ForumPostArchiveState,
-        offset: usize,
+        thread_ids: Vec<Id<ChannelMarker>>,
+    },
+    LoadArchivedThreads {
+        guild_id: Id<GuildMarker>,
+        channel_id: Id<ChannelMarker>,
+        before: Option<String>,
     },
     SearchMessages {
         query: MessageSearchQuery,
@@ -511,6 +492,7 @@ pub enum AppCommand {
     UpdateMemberListSubscription {
         guild_id: Id<GuildMarker>,
         channel_id: Id<ChannelMarker>,
+        thread_id: Option<Id<ChannelMarker>>,
         ranges: Vec<(u32, u32)>,
     },
     JoinVoiceChannel {

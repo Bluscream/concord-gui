@@ -62,23 +62,22 @@ fn question_mark_opens_current_keymap_popup_and_scrolls_within_bounds() {
 #[test]
 fn forum_blank_bottom_rows_do_not_select_hidden_posts() {
     let mut state = state_with_forum_channel_posts();
-    state.push_event(forum_posts_loaded_event(ForumPostsLoadedFixture {
-        channel_id: Id::new(20),
-        archive_state: crate::discord::ForumPostArchiveState::Active,
-        offset: 2,
-        next_offset: 3,
-        threads: vec![ChannelInfo {
-            guild_id: Some(Id::new(1)),
-            parent_id: Some(Id::new(20)),
-            position: Some(2),
-            name: "hidden by remainder rows".to_owned(),
-            message_count: Some(1),
-            total_message_sent: Some(1),
-            thread_metadata: Some(crate::discord::ThreadMetadataInfo::test(false, false)),
-            ..ChannelInfo::test(Id::new(29), "GuildPublicThread")
-        }],
-        ..ForumPostsLoadedFixture::new()
-    }));
+    state.push_event(AppEvent::ThreadUpsert {
+        thread: ThreadGatewayInfo {
+            channel: ChannelInfo {
+                guild_id: Some(Id::new(1)),
+                parent_id: Some(Id::new(20)),
+                position: Some(2),
+                last_message_id: Some(Id::new(29)),
+                name: "hidden by remainder rows".to_owned(),
+                message_count: Some(1),
+                total_message_sent: Some(1),
+                thread_metadata: Some(crate::discord::ThreadMetadataInfo::test(false, false)),
+                ..ChannelInfo::test(Id::new(29), "GuildPublicThread")
+            },
+            current_user_member: None,
+        },
+    });
     state.focus_pane(FocusPane::Messages);
     state.set_message_view_height(14);
     let (column, row) = message_row_point(13);

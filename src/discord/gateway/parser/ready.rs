@@ -4,6 +4,7 @@ use serde_json::Value;
 
 use crate::discord::{
     ChannelInfo, ChannelRecipientInfo, PresenceStatus, ReadStateInfo, RelationshipInfo, RoleInfo,
+    ThreadMemberInfo,
     events::{AppEvent, PresenceEventFields, ReadySnapshotInfo},
     ids::{
         Id,
@@ -369,12 +370,15 @@ fn parse_supplemental_guild_events(data: &Value) -> Vec<AppEvent> {
             );
         }
         if let Some(threads) = guild.get("threads").and_then(Value::as_array) {
-            events.extend(
-                threads
-                    .iter()
-                    .filter_map(|channel| parse_channel_info(channel, Some(guild_id)))
-                    .map(AppEvent::ChannelUpsert),
-            );
+            events.extend(threads.iter().filter_map(|thread| {
+                let mut thread =
+                    super::channels::parse_thread_gateway_info(thread, Some(guild_id))?;
+                if thread.current_user_member.is_none() {
+                    thread.current_user_member =
+                        Some(ThreadMemberInfo::joined_snapshot(thread.channel.channel_id));
+                }
+                Some(AppEvent::ThreadUpsert { thread })
+            }));
         }
         if let Some(members) = guild.get("members").and_then(Value::as_array) {
             events.extend(guild_member_upsert_events(guild_id, members));

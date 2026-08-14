@@ -876,6 +876,7 @@ fn guild_channel_subscribe_payload_matches_shape_and_member_ranges() {
             Id::<GuildMarker>::new(10),
             Id::<ChannelMarker>::new(20),
             ranges,
+            None,
         ))
         .expect("payload should be valid json");
 
@@ -886,6 +887,16 @@ fn guild_channel_subscribe_payload_matches_shape_and_member_ranges() {
             json!(true)
         );
         assert_eq!(payload["d"]["subscriptions"]["10"]["threads"], json!(true));
+        assert_eq!(
+            payload["d"]["subscriptions"]["10"]["member_updates"],
+            json!(true)
+        );
+        assert_eq!(payload["d"]["subscriptions"]["10"]["members"], json!([]));
+        assert!(
+            payload["d"]["subscriptions"]["10"]
+                .get("thread_member_lists")
+                .is_none()
+        );
         assert_eq!(
             payload["d"]["subscriptions"]["10"]["channels"]["20"],
             expected_ranges
@@ -901,6 +912,8 @@ fn guild_channel_subscribe_payload_matches_shape_and_member_ranges() {
                                 "typing": true,
                                 "activities": true,
                                 "threads": true,
+                                "member_updates": true,
+                                "members": [],
                                 "channels": {
                                     "20": [[0, 99]]
                                 }
@@ -911,6 +924,104 @@ fn guild_channel_subscribe_payload_matches_shape_and_member_ranges() {
             );
         }
     }
+}
+
+#[test]
+fn guild_channel_subscribe_payload_requests_the_selected_thread_member_list() {
+    let thread_ids = [Id::<ChannelMarker>::new(30)];
+    let payload: serde_json::Value = serde_json::from_str(&guild_channel_subscribe_payload(
+        Id::<GuildMarker>::new(10),
+        Id::<ChannelMarker>::new(20),
+        &[(0, 99)],
+        Some(&thread_ids),
+    ))
+    .expect("payload should be valid json");
+
+    assert_eq!(
+        payload["d"]["subscriptions"]["10"]["thread_member_lists"],
+        json!(["30"])
+    );
+
+    let cleared: serde_json::Value = serde_json::from_str(&guild_channel_subscribe_payload(
+        Id::<GuildMarker>::new(10),
+        Id::<ChannelMarker>::new(20),
+        &[(0, 99)],
+        Some(&[]),
+    ))
+    .expect("payload should be valid json");
+    assert_eq!(
+        cleared["d"]["subscriptions"]["10"]["thread_member_lists"],
+        json!([]),
+        "an explicit empty list unsubscribes the previously selected thread"
+    );
+}
+
+#[test]
+fn guild_subscription_sends_only_the_requested_thread_enabled_payload() {
+    let (urgent_tx, _urgent_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (normal_tx, mut normal_rx) = tokio::sync::mpsc::unbounded_channel();
+    let sender = GatewaySender {
+        urgent_tx,
+        normal_tx,
+    };
+    let mut deduper = SubscriptionDeduper::default();
+    let mut resources = GatewaySessionResources::default();
+    let guild_id = Id::new(10);
+    let channel_id = Id::new(20);
+
+    dispatch_command(
+        &sender,
+        GatewayCommand::SubscribeGuildChannel {
+            guild_id,
+            channel_id,
+        },
+        &mut deduper,
+        &mut resources,
+    )
+    .expect("initial guild subscription should enter the gateway queue");
+
+    let subscription: serde_json::Value = serde_json::from_str(
+        &normal_rx
+            .try_recv()
+            .expect("initial subscription should then enable thread sync")
+            .payload,
+    )
+    .expect("guild subscription payload should be valid json");
+
+    assert_eq!(
+        subscription["d"]["subscriptions"]["10"]["threads"],
+        json!(true)
+    );
+    assert!(
+        normal_rx.try_recv().is_err(),
+        "a guild subscription must not inject a synthetic unsubscribe"
+    );
+
+    dispatch_command(
+        &sender,
+        GatewayCommand::UpdateMemberListSubscription {
+            guild_id,
+            channel_id,
+            thread_id: None,
+            ranges: vec![(0, 99)],
+        },
+        &mut deduper,
+        &mut resources,
+    )
+    .expect("later range subscription should enter the gateway queue");
+
+    let refresh: serde_json::Value = serde_json::from_str(
+        &normal_rx
+            .try_recv()
+            .expect("later range subscription should send one payload")
+            .payload,
+    )
+    .expect("range subscription payload should be valid json");
+    assert_eq!(refresh["d"]["subscriptions"]["10"]["threads"], json!(true));
+    assert!(
+        normal_rx.try_recv().is_err(),
+        "the range update should emit exactly one subscription payload"
+    );
 }
 
 #[test]
@@ -941,6 +1052,7 @@ fn subscription_deduper_allows_guild_range_refreshes() {
         deduper.should_send(&GatewayCommand::UpdateMemberListSubscription {
             guild_id,
             channel_id,
+            thread_id: None,
             ranges: vec![(0, 99), (100, 199)],
         })
     );
@@ -948,6 +1060,7 @@ fn subscription_deduper_allows_guild_range_refreshes() {
         deduper.should_send(&GatewayCommand::UpdateMemberListSubscription {
             guild_id,
             channel_id,
+            thread_id: None,
             ranges: vec![(0, 99), (100, 199)],
         })
     );
@@ -955,6 +1068,7 @@ fn subscription_deduper_allows_guild_range_refreshes() {
         deduper.should_send(&GatewayCommand::UpdateMemberListSubscription {
             guild_id,
             channel_id,
+            thread_id: None,
             ranges: vec![(0, 99)],
         })
     );
@@ -962,6 +1076,7 @@ fn subscription_deduper_allows_guild_range_refreshes() {
         deduper.should_send(&GatewayCommand::UpdateMemberListSubscription {
             guild_id,
             channel_id,
+            thread_id: None,
             ranges: vec![(0, 99)],
         })
     );

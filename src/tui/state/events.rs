@@ -419,36 +419,14 @@ impl DashboardState {
                 self.record_latest_message_history_failed(*channel_id);
             }
             AppEvent::MessageHistoryLoadFailed { .. } => {}
-            AppEvent::ForumPostsLoaded {
-                channel_id,
-                archive_state,
-                offset,
-                next_offset: _,
-                threads,
-                first_messages,
-                has_more,
-                ..
-            } => {
-                self.record_forum_posts_loaded(
-                    *channel_id,
-                    *archive_state,
-                    *offset,
-                    threads,
-                    *has_more,
-                );
-                if *archive_state == crate::discord::ForumPostArchiveState::Active && *offset == 0 {
-                    self.apply_inbox_forum_posts_loaded(*channel_id, threads, first_messages);
-                }
+            AppEvent::ForumPostDataLoaded { channel_id, .. } => {
+                self.apply_inbox_forum_post_data_loaded(*channel_id);
             }
-            AppEvent::ForumPostsLoadFailed {
-                channel_id,
-                archive_state,
-                offset,
-                ..
-            } => {
-                if *archive_state == crate::discord::ForumPostArchiveState::Active && *offset == 0 {
-                    self.apply_inbox_forum_posts_load_failed(*channel_id);
-                }
+            AppEvent::ForumPostDataLoadFailed { channel_id, .. } => {
+                self.apply_inbox_forum_post_data_load_failed(*channel_id);
+            }
+            AppEvent::ArchivedThreadsLoadFailed { message, .. } => {
+                self.show_error_toast(message, Instant::now());
             }
             AppEvent::MessageSearchLoaded { .. } | AppEvent::MessageSearchLoadFailed { .. } => {
                 self.record_search_event(event);
@@ -535,9 +513,6 @@ impl DashboardState {
                 message,
             } => {
                 self.record_voice_connection_status(*scope, *channel_id, *status, message);
-            }
-            AppEvent::ChannelUpsert(channel) => {
-                self.record_thread_channel_upserted(channel);
             }
             AppEvent::MessageCreate { message } => {
                 if let Some(nonce) = message.nonce {

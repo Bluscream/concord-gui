@@ -34,6 +34,7 @@ pub struct NavigationSnapshot {
     pub(in crate::discord) presence: Arc<PresenceCache>,
     pub(in crate::discord) voice: Arc<VoiceStateCache>,
     pub(in crate::discord) session: Arc<SessionState>,
+    pub(in crate::discord) threads: Arc<ThreadCache>,
 }
 
 #[derive(Clone, Debug)]

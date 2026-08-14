@@ -7,7 +7,7 @@ use crate::discord::{
     ChannelRecipientState, ChannelState, GuildMemberListEntry, GuildMemberState, RoleState,
 };
 
-use super::presentation::{is_direct_message_channel, sort_recipient_entries};
+use super::presentation::{is_direct_message_channel, member_status_rank, sort_recipient_entries};
 
 #[derive(Debug)]
 pub struct MemberGroup<'a> {
@@ -166,6 +166,24 @@ pub(super) fn channel_recipient_group(channel: &ChannelState) -> Vec<MemberGroup
         color: None,
         count: recipients.len() as u64,
         entries: recipients.into_iter().map(MemberEntry::Recipient).collect(),
+    }]
+}
+
+pub(super) fn thread_member_group(mut members: Vec<&GuildMemberState>) -> Vec<MemberGroup<'_>> {
+    if members.is_empty() {
+        return Vec::new();
+    }
+    members.sort_by_cached_key(|member| {
+        (
+            member_status_rank(member.status),
+            member.display_name.to_lowercase(),
+        )
+    });
+    vec![MemberGroup {
+        label: "Members".to_owned(),
+        color: None,
+        count: u64::try_from(members.len()).unwrap_or(u64::MAX),
+        entries: members.into_iter().map(MemberEntry::Guild).collect(),
     }]
 }
 
