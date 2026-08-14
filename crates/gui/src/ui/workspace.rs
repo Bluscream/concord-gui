@@ -217,6 +217,9 @@ pub struct Workspace {
     pub attachments: Vec<MessageAttachmentUpload>,
     /// Reason the last staging attempt failed, shown above the composer.
     pub attachment_error: Option<String>,
+    /// Last snapshot of core state, stored so local navigation (guild/channel switching)
+    /// can immediately re-project the model without waiting for an async roundtrip.
+    pub last_state: Option<std::sync::Arc<concord::discord::DiscordState>>,
     focus: FocusHandle,
 }
 
@@ -247,6 +250,7 @@ impl Workspace {
             settings_note: None,
             attachments: Vec::new(),
             attachment_error: None,
+            last_state: None,
             focus: cx.focus_handle(),
         }
     }
@@ -299,6 +303,35 @@ impl Workspace {
         self.handle = Some(handle);
     }
 
+    /// Reproject the view model and message list from the cached core state.
+    pub fn reproject(&mut self) {
+        let Some(state) = &self.last_state else {
+            return;
+        };
+        self.model = projection::project(state, &self.nav, true);
+        let guild_id = match self.nav.selection {
+            Selection::Guild(id) => Some(id),
+            Selection::DirectMessages => None,
+        };
+
+        if let Some((user_id, _)) = self.profile {
+            let view = projection::project_profile(state, user_id, guild_id);
+            self.profile = Some((user_id, view));
+        }
+
+        (self.messages, self.typing) = match self.nav.channel {
+            Some(channel_id) => (
+                message::project_messages(
+                    state,
+                    channel_id,
+                    state.current_user_id(),
+                ),
+                projection::typing_names(state, channel_id, guild_id),
+            ),
+            None => (Vec::new(), Vec::new()),
+        };
+    }
+
     /// Drain the bridge's update stream on the foreground executor, reprojecting
     /// the view model whenever the core's state store advances.
     pub fn pump(
@@ -311,28 +344,8 @@ impl Workspace {
                 let applied = window.update(cx, |workspace, _window, cx| {
                     match update {
                         Update::State(state) => {
-                            workspace.model = projection::project(&state, &workspace.nav, true);
-                            let guild_id = match workspace.nav.selection {
-                                Selection::Guild(id) => Some(id),
-                                Selection::DirectMessages => None,
-                            };
-
-                            if let Some((user_id, _)) = workspace.profile {
-                                let view = projection::project_profile(&state, user_id, guild_id);
-                                workspace.profile = Some((user_id, view));
-                            }
-
-                            (workspace.messages, workspace.typing) = match workspace.nav.channel {
-                                Some(channel_id) => (
-                                    message::project_messages(
-                                        &state,
-                                        channel_id,
-                                        state.current_user_id(),
-                                    ),
-                                    projection::typing_names(&state, channel_id, guild_id),
-                                ),
-                                None => (Vec::new(), Vec::new()),
-                            };
+                            workspace.last_state = Some(state);
+                            workspace.reproject();
                         }
                         Update::Event(event, state) => {
                             // The core owns the mute/mention rules; the GUI
@@ -377,36 +390,36 @@ impl Workspace {
         self.nav.channel = Some(channel_id);
         self.messages.clear();
 
-        let Some(handle) = &self.handle else {
-            return;
-        };
+        if let Some(handle) = &self.handle {
+            handle.send(AppCommand::SetSelectedMessageChannel {
+                channel_id: Some(channel_id),
+            });
+            handle.send(AppCommand::LoadMessageHistory {
+                channel_id,
+                before: None,
+            });
 
-        handle.send(AppCommand::SetSelectedMessageChannel {
-            channel_id: Some(channel_id),
-        });
-        handle.send(AppCommand::LoadMessageHistory {
-            channel_id,
-            before: None,
-        });
-
-        match self.nav.selection {
-            Selection::Guild(guild_id) => {
-                handle.send(AppCommand::SubscribeGuildChannel {
-                    guild_id,
-                    channel_id,
-                });
-                // Discord streams the member list in windowed ranges; the
-                // first two cover what fits on screen without over-fetching.
-                handle.send(AppCommand::UpdateMemberListSubscription {
-                    guild_id,
-                    channel_id,
-                    ranges: vec![(0, 99), (100, 199)],
-                });
-            }
-            Selection::DirectMessages => {
-                handle.send(AppCommand::SubscribeDirectMessage { channel_id });
+            match self.nav.selection {
+                Selection::Guild(guild_id) => {
+                    handle.send(AppCommand::SubscribeGuildChannel {
+                        guild_id,
+                        channel_id,
+                    });
+                    // Discord streams the member list in windowed ranges; the
+                    // first two cover what fits on screen without over-fetching.
+                    handle.send(AppCommand::UpdateMemberListSubscription {
+                        guild_id,
+                        channel_id,
+                        ranges: vec![(0, 99), (100, 199)],
+                    });
+                }
+                Selection::DirectMessages => {
+                    handle.send(AppCommand::SubscribeDirectMessage { channel_id });
+                }
             }
         }
+
+        self.reproject();
     }
 
     /// Advance the login state machine based on a user action in the current sub-screen.
@@ -1478,6 +1491,7 @@ impl Workspace {
                 guild_id: Some(guild_id),
             });
         }
+        self.reproject();
     }
 
     /// Fold a discrete event into the model.
