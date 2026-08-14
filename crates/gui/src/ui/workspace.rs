@@ -36,7 +36,7 @@ use crate::ui::login::{
 };
 use crate::ui::messages::{MessageAction, message_list};
 use crate::ui::profile::{ProfileView, profile_view};
-use crate::ui::settings::settings_modal_view;
+use crate::ui::settings::SettingsWindow;
 
 /// Everything the workspace renders, projected from the core's state store.
 pub struct WorkspaceModel {
@@ -258,6 +258,21 @@ impl Workspace {
             last_state: None,
             focus: cx.focus_handle(),
         }
+    }
+
+    pub fn open_settings_window(&mut self, cx: &mut Context<Self>) {
+        let options = self.options.clone();
+        let bounds = gpui::Bounds::centered(None, gpui::size(px(600.), px(650.)), cx);
+
+        let _ = cx.open_window(
+            gpui::WindowOptions {
+                window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+                ..Default::default()
+            },
+            |_window, cx| {
+                cx.new(|cx| SettingsWindow::new(options, cx))
+            },
+        );
     }
 
     pub fn save_options(&mut self) {
@@ -1608,8 +1623,7 @@ impl Workspace {
                             .cursor_pointer()
                             .hover(|s| s.bg(rgb(DARK.surface_hover)).text_color(rgb(DARK.text)))
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.settings_open = !this.settings_open;
-                                cx.notify();
+                                this.open_settings_window(cx);
                             }))
                             .child("⚙"),
                     ),
@@ -2224,6 +2238,11 @@ impl Render for Workspace {
                                     this.save_options();
                                 }
                             }
+                        } else if key == "comma"
+                            && (event.keystroke.modifiers.control
+                                || event.keystroke.modifiers.platform)
+                        {
+                            this.open_settings_window(cx);
                         } else if key == "o" && event.keystroke.modifiers.control {
                             this.attach_files(cx);
                         } else if key == "f" && event.keystroke.modifiers.control {
@@ -2292,9 +2311,6 @@ impl Render for Workspace {
                         ),
                 )
                 .child(self.status_bar())
-                .when(self.settings_open, |d| {
-                    d.child(settings_modal_view(self, cx))
-                })
             })
     }
 }
