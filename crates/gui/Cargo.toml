@@ -1,0 +1,30 @@
+[package]
+name = "concord-gui"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+description = "GPUI front-end for the concord Discord client core"
+license = "GPL-3.0-only"
+publish = false
+
+[dependencies]
+# The upstream concord crate, consumed purely as a library. Everything under
+# `concord::discord` and `concord::app` is UI-agnostic (verified: zero
+# ratatui/crossterm references), so the GUI links against it unmodified.
+#
+# `default-features = false` keeps the initial shell buildable without the
+# system media stack (pipewire/openh264/cpal). Voice and screenshare are
+# re-enabled via the `media` feature below once the shell is wired up.
+concord = { path = "../..", default-features = false }
+
+gpui = "0.2.2"
+
+anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
+tracing = "0.1"
+
+[features]
+default = []
+# Mirrors the upstream feature of the same purpose; enables voice playback and
+# screenshare broadcast by turning the core's default features back on.
+media = ["concord/voice-playback", "concord/stream-broadcast"]
