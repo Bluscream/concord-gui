@@ -69,7 +69,6 @@ pub type OnChange = std::rc::Rc<dyn Fn(&concord::config::AppOptions, &mut gpui::
 pub struct SettingsWindow {
     pub options: concord::config::AppOptions,
     pub settings_note: Option<String>,
-    pub url_composer: Composer,
     on_change: Option<OnChange>,
     focus: FocusHandle,
 }
@@ -79,7 +78,6 @@ impl SettingsWindow {
         Self {
             options,
             settings_note: None,
-            url_composer: Composer::default(),
             on_change: None,
             focus: cx.focus_handle(),
         }
@@ -124,27 +122,11 @@ impl Render for SettingsWindow {
         let options = &self.options;
         let saved_note = self.settings_note.as_deref();
 
-        let display_url = if self.url_composer.is_empty() {
-            if options.server.discord_base_url.is_empty() {
-                "https://discord.com"
-            } else {
-                options.server.discord_base_url.as_str()
-            }
-        } else {
-            self.url_composer.text()
-        };
-
         row()
             .id("settings-window-view")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                let pasted = (event.keystroke.key == "v"
-                    && (event.keystroke.modifiers.control
-                        || event.keystroke.modifiers.platform))
-                    .then(|| cx.read_from_clipboard().and_then(|item| item.text()))
-                    .flatten();
-                if this.url_composer.handle_key_with_clipboard(event, pasted) {
-                    this.options.server.discord_base_url = this.url_composer.text().to_string();
+                if event.keystroke.key == "escape" {
                     this.save_options(cx);
                     cx.notify();
                 }
@@ -308,39 +290,6 @@ impl Render for SettingsWindow {
                                                     .text_color(rgb(theme.text_subtle))
                                                     .child("Bright light mode theme"),
                                             ),
-                                    ),
-                            )
-                            // --- Section 2: Server & API Connection ---
-                            .child(section_title("Server & API Connection", theme))
-                            .child(
-                                column()
-                                    .w_full()
-                                    .gap(px(space::SM))
-                                    .child(
-                                        gpui::div()
-                                            .text_size(px(text::SM))
-                                            .text_color(rgb(theme.text))
-                                            .child("Discord API Base URL"),
-                                    )
-                                    .child(
-                                        gpui::div()
-                                            .text_size(px(text::XS))
-                                            .text_color(rgb(theme.text_subtle))
-                                            .child("Default: https://discord.com — set custom URL for self-hosted instances (Spacebar, protocol-server)"),
-                                    )
-                                    .child(
-                                        row()
-                                            .w_full()
-                                            .h(px(40.))
-                                            .px(px(space::MD))
-                                            .items_center()
-                                            .rounded(px(layout::RADIUS))
-                                            .bg(rgb(theme.surface_sunken))
-                                            .border_1()
-                                            .border_color(rgb(theme.border))
-                                            .text_size(px(text::BASE))
-                                            .text_color(rgb(theme.text))
-                                            .child(display_url.to_string()),
                                     ),
                             )
                             // --- Section 3: Interface & Display ---

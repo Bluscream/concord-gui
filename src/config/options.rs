@@ -221,20 +221,6 @@ impl Default for PresenceOptions {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(default)]
-pub struct ServerOptions {
-    pub discord_base_url: String,
-}
-
-impl Default for ServerOptions {
-    fn default() -> Self {
-        Self {
-            discord_base_url: "https://discord.com".to_string(),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AppOptions {
@@ -244,7 +230,6 @@ pub struct AppOptions {
     pub notifications: NotificationOptions,
     pub voice: VoiceOptions,
     pub presence: PresenceOptions,
-    pub server: ServerOptions,
 }
 
 /// Validated Highlight Group and UI definitions from `theme.toml`.
