@@ -37,6 +37,7 @@ impl MessageAction {
             MessageAction::ToggleReaction(_) => 4,
             MessageAction::RevealSpoiler => 5,
             MessageAction::OpenProfile => 6,
+            MessageAction::LoadOlder => 7,
         }
     }
 }
@@ -51,6 +52,8 @@ pub enum MessageAction {
     Delete,
     /// Open the author's profile.
     OpenProfile,
+    /// Fetch the page of messages before the oldest one loaded.
+    LoadOlder,
     /// Toggle an existing reaction, identified by its index in the row's
     /// reaction list. Carrying the index avoids threading emoji identity
     /// through the callback.
@@ -87,6 +90,27 @@ pub fn message_list(
                     .text_color(rgb(active().text_subtle))
                     .child("No messages loaded"),
             ),
+        );
+    }
+
+    // Scrollback is fetched on request rather than on scroll: a channel can
+    // have years of history, and paging only when asked keeps the request
+    // count predictable.
+    if !rows.is_empty() {
+        let handler = on_action.clone();
+        list = list.child(
+            gpui::div()
+                .id("load-older")
+                .w_full()
+                .py(px(space::SM))
+                .flex()
+                .justify_center()
+                .cursor_pointer()
+                .text_size(px(text::XS))
+                .text_color(rgb(active().accent))
+                .hover(|style| style.bg(rgb(active().surface_hover)))
+                .child("Load earlier messages")
+                .on_click(move |_event, _window, cx| handler(0, MessageAction::LoadOlder, cx)),
         );
     }
 

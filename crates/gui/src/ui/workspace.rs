@@ -1058,6 +1058,7 @@ impl Workspace {
             MessageAction::Reply => self.start_reply(message_id, author),
             MessageAction::Edit => self.start_edit(message_id),
             MessageAction::Delete => self.delete_message(message_id),
+            MessageAction::LoadOlder => self.load_older_messages(),
             MessageAction::React => self.open_emoji_picker(message_id),
             MessageAction::OpenProfile => {
                 if let Some(row) = self.messages.get(index) {
@@ -1848,6 +1849,25 @@ impl Workspace {
     /// The member pane only applies to guild channels.
     fn shows_members(&self) -> bool {
         matches!(self.nav.selection, Selection::Guild(_)) && self.nav.channel.is_some()
+    }
+
+    /// Request the page of messages before the oldest one loaded.
+    ///
+    /// The message cache is lazily populated, so scrollback exists only if it
+    /// is asked for. Without this the log stops at whatever the initial fetch
+    /// returned, which is far short of the TUI's unlimited scrollback.
+    pub fn load_older_messages(&mut self) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        let Some(oldest) = self.messages.first().map(|row| row.id) else {
+            return;
+        };
+
+        handle.send(AppCommand::LoadMessageHistory {
+            channel_id,
+            before: Some(oldest),
+        });
     }
 
     /// Switch the open guild, clearing the channel selection.

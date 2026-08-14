@@ -393,13 +393,14 @@ pub fn demo_state() -> DiscordState {
     // Occupants in a voice channel, covering speaking/muted/streaming rows.
     let voice = Arc::make_mut(&mut state.voice);
     voice.set_fixture_participants(
-        guild_id(10),
+        crate::discord::VoiceScope::Guild(guild_id(10)),
         channel_id(121),
         &[
             (user_id(1001), "blu", true, false, false),
             (user_id(1002), "ferris", false, true, false),
             (user_id(1005), "ci-bot", false, false, true),
         ],
+        false,
     );
 
     // ---- messages ----------------------------------------------------------
@@ -874,4 +875,122 @@ pub fn forum_posts(
     }
 
     (threads, first_messages)
+}
+
+/// Seat the demo user in a voice channel, or move them if already seated.
+pub fn join_voice(
+    state: &mut DiscordState,
+    scope: crate::discord::VoiceScope,
+    channel: Id<marker::ChannelMarker>,
+    muted: bool,
+    deafened: bool,
+) {
+    let voice = Arc::make_mut(&mut state.voice);
+    voice.set_fixture_participants(
+        scope,
+        channel,
+        &[(demo_user_id(), "blu", false, muted, false)],
+        deafened,
+    );
+}
+
+/// Remove the demo user from voice.
+pub fn leave_voice(state: &mut DiscordState, scope: crate::discord::VoiceScope) {
+    let voice = Arc::make_mut(&mut state.voice);
+    voice.remove_fixture_participant(scope, demo_user_id());
+}
+
+/// Attach files to the most recent message in a channel.
+///
+/// Demo attachments carry no URL: nothing is uploaded, so pointing at a CDN
+/// path that does not exist would produce broken previews.
+pub fn attach_to_last_message(
+    state: &mut DiscordState,
+    channel_id: Id<marker::ChannelMarker>,
+    files: &[(String, u64)],
+) {
+    let cache = Arc::make_mut(&mut state.message_cache);
+    let Some(timeline) = cache.timelines.get_mut(&channel_id) else {
+        return;
+    };
+    let Some(message) = timeline.messages.back_mut() else {
+        return;
+    };
+
+    for (index, (filename, size)) in files.iter().enumerate() {
+        message.attachments.push(crate::discord::AttachmentInfo {
+            id: Id::new(9_000 + index as u64 + 1),
+            filename: filename.clone(),
+            url: String::new(),
+            proxy_url: String::new(),
+            content_type: guess_content_type(filename),
+            size: *size,
+            width: None,
+            height: None,
+            description: None,
+            flags: 0,
+        });
+    }
+}
+
+fn guess_content_type(filename: &str) -> Option<String> {
+    let extension = filename.rsplit('.').next()?.to_lowercase();
+    let kind = match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "txt" | "log" => "text/plain",
+        _ => return None,
+    };
+    Some(kind.to_string())
+}
+
+/// Prepend a page of older messages, as history paging would.
+///
+/// Returns false once the synthetic backlog is exhausted, so the caller can
+/// report that there is nothing further rather than paging forever.
+pub fn prepend_history(
+    state: &mut DiscordState,
+    channel_id: Id<marker::ChannelMarker>,
+    page: usize,
+) -> bool {
+    // Three pages of backlog is enough to exercise scrolling without
+    // pretending the fixture is bottomless.
+    if page >= 3 {
+        return false;
+    }
+
+    let authors = [(1002u64, "ferris"), (1003, "turing"), (1004, "lovelace")];
+    let guild = state.channel(channel_id).and_then(|c| c.guild_id);
+
+    let mut older = Vec::new();
+    for index in 0..10 {
+        let (author, name) = authors[(page * 10 + index) % authors.len()];
+        // Ages increase with the page so ordering stays consistent.
+        let age = 7200 + (page as u64 * 10 + index as u64) * 300;
+
+        let mut message = MessageState::default();
+        message.id = message_id(snowflake_at(age));
+        message.channel_id = channel_id;
+        message.guild_id = guild;
+        message.author_id = user_id(author);
+        message.author = name.to_string();
+        message.content = Some(format!(
+            "Earlier message {} from the backlog",
+            page * 10 + index
+        ));
+        older.push(message);
+    }
+
+    // Oldest first, inserted ahead of what is already loaded.
+    older.sort_by_key(|message| message.id);
+
+    let cache = Arc::make_mut(&mut state.message_cache);
+    let timeline = cache.timelines.entry(channel_id).or_default();
+    for message in older.into_iter().rev() {
+        timeline.messages.push_front(message);
+    }
+
+    true
 }

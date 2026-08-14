@@ -576,24 +576,34 @@ impl crate::discord::state::caches::VoiceStateCache {
     /// kept only to make call sites readable.
     pub(in crate::discord) fn set_fixture_participants(
         &mut self,
-        guild_id: Id<GuildMarker>,
+        scope: VoiceScope,
         channel_id: Id<ChannelMarker>,
         participants: &[(Id<UserMarker>, &str, bool, bool, bool)],
+        deafened: bool,
     ) {
         for (user_id, _name, speaking, muted, streaming) in participants {
             self.states.insert(
-                (VoiceScope::Guild(guild_id), *user_id),
+                (scope, *user_id),
                 VoiceState {
                     channel_id,
                     user_id: *user_id,
                     deaf: false,
                     mute: false,
-                    self_deaf: false,
+                    self_deaf: deafened,
                     self_mute: *muted,
                     self_stream: *streaming,
                     speaking: *speaking,
                 },
             );
         }
+    }
+
+    /// Remove one participant from a scope.
+    pub(in crate::discord) fn remove_fixture_participant(
+        &mut self,
+        scope: VoiceScope,
+        user: Id<UserMarker>,
+    ) {
+        self.states.remove(&(scope, user));
     }
 }

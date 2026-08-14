@@ -54,8 +54,9 @@ pub fn try_spawn_demo(
         std::thread::Builder::new()
             .name("concord-demo".into())
             .spawn(move || {
+                let mut history_pages = std::collections::HashMap::new();
                 while let Some(command) = commands_rx.blocking_recv() {
-                    if !handle_command(&mut state, command, &updates_tx) {
+                    if !handle_command(&mut state, command, &updates_tx, &mut history_pages) {
                         break;
                     }
                 }
@@ -82,6 +83,10 @@ fn handle_command(
     state: &mut concord::discord::DiscordState,
     command: AppCommand,
     updates: &mpsc::UnboundedSender<Update>,
+    history_pages: &mut std::collections::HashMap<
+        concord::discord::Id<concord::discord::marker::ChannelMarker>,
+        usize,
+    >,
 ) -> bool {
     use concord::discord::{AppEvent, ReactionEmoji, fixtures};
 
@@ -112,6 +117,7 @@ fn handle_command(
         AppCommand::SendMessage {
             channel_id,
             content,
+            attachments,
             ..
         } => {
             let guild_id = guild_of(state, channel_id);
@@ -123,7 +129,58 @@ fn handle_command(
                 "blu",
                 &content,
             );
+
+            // Attachments are recorded on the message just appended, so a
+            // staged file is visible after sending rather than vanishing.
+            if !attachments.is_empty() {
+                let files: Vec<(String, u64)> = attachments
+                    .iter()
+                    .map(|upload| (upload.filename.clone(), upload.size_bytes))
+                    .collect();
+                fixtures::attach_to_last_message(state, channel_id, &files);
+            }
+
             publish_state!();
+        }
+
+        AppCommand::JoinVoiceChannel {
+            scope,
+            channel_id,
+            self_mute,
+            self_deaf,
+            ..
+        } => {
+            fixtures::join_voice(state, scope, channel_id, self_mute, self_deaf);
+            publish_state!();
+        }
+
+        AppCommand::UpdateVoiceState {
+            scope,
+            channel_id,
+            self_mute,
+            self_deaf,
+        } => {
+            fixtures::join_voice(state, scope, channel_id, self_mute, self_deaf);
+            publish_state!();
+        }
+
+        AppCommand::LeaveVoiceChannel { scope, .. } => {
+            fixtures::leave_voice(state, scope);
+            publish_state!();
+        }
+
+        AppCommand::LoadMessageHistory {
+            channel_id, before, ..
+        } => {
+            // `before` is only set when paging backwards; the initial load
+            // needs nothing, since the fixture is already populated.
+            if before.is_some() {
+                let page = *history_pages.entry(channel_id).or_insert(0);
+                if fixtures::prepend_history(state, channel_id, page) {
+                    history_pages.insert(channel_id, page + 1);
+                    publish_state!();
+                }
+            }
         }
 
         AppCommand::EditMessage {

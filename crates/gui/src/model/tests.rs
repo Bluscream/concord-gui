@@ -526,3 +526,91 @@ fn emoji_ids_survive_parsing_for_cdn_lookup() {
 
     assert_eq!(id, Some(987_654_321));
 }
+
+#[test]
+fn demo_history_paging_terminates() {
+    use concord::discord::fixtures;
+
+    let mut state = demo_state();
+    let channel = concord::discord::Id::new(111);
+    let before = state.messages_for_channel(channel).len();
+
+    // Paging must add messages, then stop, rather than growing forever.
+    assert!(fixtures::prepend_history(&mut state, channel, 0));
+    let after_first = state.messages_for_channel(channel).len();
+    assert!(after_first > before, "a page should add messages");
+
+    assert!(fixtures::prepend_history(&mut state, channel, 1));
+    assert!(fixtures::prepend_history(&mut state, channel, 2));
+    assert!(
+        !fixtures::prepend_history(&mut state, channel, 3),
+        "the backlog must report exhaustion rather than paging forever"
+    );
+}
+
+#[test]
+fn demo_history_prepends_older_messages_in_order() {
+    use concord::discord::fixtures;
+
+    let mut state = demo_state();
+    let channel = concord::discord::Id::new(111);
+    fixtures::prepend_history(&mut state, channel, 0);
+
+    let rows = project_messages(&state, channel, state.current_user_id());
+
+    // Ordering is what makes scrollback readable; a prepend that broke it
+    // would interleave the backlog with existing messages.
+    assert!(
+        rows.windows(2).all(|w| w[0].timestamp <= w[1].timestamp),
+        "history must stay oldest-first after prepending"
+    );
+}
+
+#[test]
+fn demo_attachments_land_on_the_sent_message() {
+    use concord::discord::fixtures;
+
+    let mut state = demo_state();
+    let channel = concord::discord::Id::new(111);
+
+    fixtures::append_message(
+        &mut state,
+        channel,
+        Some(concord::discord::Id::new(10)),
+        fixtures::demo_user_id(),
+        "blu",
+        "here you go",
+    );
+    fixtures::attach_to_last_message(&mut state, channel, &[("notes.txt".into(), 2048)]);
+
+    let rows = project_messages(&state, channel, state.current_user_id());
+    let last = rows.last().expect("the sent message");
+
+    assert_eq!(last.attachments.len(), 1);
+    assert_eq!(last.attachments[0].filename, "notes.txt");
+    assert!(!last.attachments[0].is_image, "a .txt is not an image");
+}
+
+#[test]
+fn demo_send_updates_the_channel_last_message() {
+    use concord::discord::fixtures;
+
+    let mut state = demo_state();
+    let channel = concord::discord::Id::new(111);
+
+    let id = fixtures::append_message(
+        &mut state,
+        channel,
+        Some(concord::discord::Id::new(10)),
+        fixtures::demo_user_id(),
+        "blu",
+        "hello",
+    );
+
+    // Without last_message_id the channel reads as empty and its unread state
+    // collapses to Seen - the invariant that bit the fixture originally.
+    assert_eq!(
+        state.channel(channel).and_then(|c| c.last_message_id),
+        Some(id)
+    );
+}
