@@ -72,20 +72,26 @@ pub fn presence_dot(presence: Presence) -> Div {
 /// `url` renders the real image; without one a deterministic tinted initial is
 /// drawn instead. The fallback is always laid out first so a slow or failed
 /// fetch leaves the layout unchanged rather than collapsing the row.
-pub fn avatar_with_url(size: f32, seed: &str, url: Option<&str>) -> gpui::AnyElement {
-    let fallback = avatar(size, seed);
+pub fn avatar_with_url(
+    size: f32,
+    seed: &str,
+    url: Option<&str>,
+    circular: bool,
+) -> gpui::AnyElement {
+    let radius = if circular { size / 2. } else { layout::RADIUS };
+    let fallback = avatar(size, seed).rounded(px(radius));
 
     match url {
         Some(url) => gpui::div()
             .w(px(size))
             .h(px(size))
-            .rounded_full()
+            .rounded(px(radius))
             .overflow_hidden()
             .child(
                 gpui::img(gpui::SharedUri::from(url.to_string()))
                     .w(px(size))
                     .h(px(size))
-                    .rounded_full(),
+                    .rounded(px(radius)),
             )
             .into_any_element(),
         None => fallback.into_any_element(),

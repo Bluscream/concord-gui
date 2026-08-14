@@ -60,6 +60,8 @@ pub enum MessageAction {
 /// so the list carries a stable id and scroll position survives re-renders.
 pub fn message_list(
     rows: &[MessageRow],
+    show_avatars: bool,
+    circular_avatars: bool,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> impl IntoElement {
     let mut list = column()
@@ -82,7 +84,13 @@ pub fn message_list(
     }
 
     for (index, message) in rows.iter().enumerate() {
-        list = list.child(message_row(index, message, on_action.clone()));
+        list = list.child(message_row(
+            index,
+            message,
+            show_avatars,
+            circular_avatars,
+            on_action.clone(),
+        ));
     }
 
     list
@@ -96,6 +104,8 @@ pub fn message_list(
 fn message_row(
     index: usize,
     message: &MessageRow,
+    show_avatars: bool,
+    circular_avatars: bool,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> impl IntoElement {
     let own = message.own;
@@ -106,7 +116,13 @@ fn message_row(
         .w_full()
         .group("message")
         .hover(|style| style.bg(rgb(DARK.surface_hover)))
-        .child(message_block(index, message, on_action.clone()))
+        .child(message_block(
+            index,
+            message,
+            show_avatars,
+            circular_avatars,
+            on_action.clone(),
+        ))
         .child(
             gpui::div()
                 .absolute()
@@ -164,6 +180,8 @@ fn action_bar(
 fn message_block(
     index: usize,
     message: &MessageRow,
+    show_avatars: bool,
+    circular_avatars: bool,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> Div {
     let mut block = column()
@@ -198,22 +216,25 @@ fn message_block(
                     .w_full()
                     .items_center()
                     .gap(px(space::MD))
-                    .child(
-                        gpui::div()
-                            .id(("author-avatar", index))
-                            .cursor_pointer()
-                            .on_click({
-                                let handler = on_action.clone();
-                                move |_event, _window, cx| {
-                                    handler(index, MessageAction::OpenProfile, cx)
-                                }
-                            })
-                            .child(avatar_with_url(
-                                layout::AVATAR,
-                                &message.author,
-                                message.author_avatar.as_deref(),
-                            )),
-                    )
+                    .when(show_avatars, |header| {
+                        header.child(
+                            gpui::div()
+                                .id(("author-avatar", index))
+                                .cursor_pointer()
+                                .on_click({
+                                    let handler = on_action.clone();
+                                    move |_event, _window, cx| {
+                                        handler(index, MessageAction::OpenProfile, cx)
+                                    }
+                                })
+                                .child(avatar_with_url(
+                                    layout::AVATAR,
+                                    &message.author,
+                                    message.author_avatar.as_deref(),
+                                    circular_avatars,
+                                )),
+                        )
+                    })
                     .child(author_line(message)),
             )
             .child(

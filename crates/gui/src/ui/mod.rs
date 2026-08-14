@@ -4,4 +4,5 @@ pub mod emoji;
 pub mod login;
 pub mod messages;
 pub mod profile;
+pub mod settings;
 pub mod workspace;

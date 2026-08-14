@@ -24,7 +24,7 @@ pub struct ProfileView {
     pub loaded: bool,
 }
 
-pub fn profile_view(profile: &ProfileView) -> Div {
+pub fn profile_view(profile: &ProfileView, circular_avatars: bool) -> Div {
     let mut panel = column()
         .w(px(layout::MEMBERS + 80.))
         .h_full()
@@ -46,6 +46,7 @@ pub fn profile_view(profile: &ProfileView) -> Div {
                 64.,
                 &profile.display_name,
                 profile.avatar.as_deref(),
+                circular_avatars,
             ))
             .child(
                 gpui::div()

@@ -5,7 +5,7 @@
 //! rebuilds from `DiscordState` on every snapshot revision. Nothing here
 //! touches core types directly except to issue commands.
 
-use concord::config::CredentialStoreMode;
+use concord::config::{self, AppOptions, CredentialStoreMode};
 use concord::discord::{
     AppCommand, AppEvent, Id, MAX_UPLOAD_ATTACHMENT_COUNT, MessageAttachmentUpload,
     MessageSearchQuery, ReactionEmoji, ReplyReference, VoiceScope, marker, next_message_nonce,
@@ -32,6 +32,7 @@ use crate::ui::emoji::{self, EmojiPicker};
 use crate::ui::login::{Login, login_view};
 use crate::ui::messages::{MessageAction, message_list};
 use crate::ui::profile::{ProfileView, profile_view};
+use crate::ui::settings::{self, Toggle};
 
 /// Everything the workspace renders, projected from the core's state store.
 pub struct WorkspaceModel {
@@ -183,6 +184,12 @@ pub struct Workspace {
     /// Whether the window has focus. Notifications for the channel being read
     /// are suppressed only while it does.
     pub window_focused: bool,
+    /// Loaded config, mutated by the settings panel and persisted on change.
+    pub options: AppOptions,
+    /// Whether the settings panel is open.
+    pub settings_open: bool,
+    /// Result of the last persistence attempt, surfaced in the panel.
+    pub settings_note: Option<String>,
     /// Files staged for the next send.
     pub attachments: Vec<MessageAttachmentUpload>,
     /// Reason the last staging attempt failed, shown above the composer.
@@ -210,6 +217,11 @@ impl Workspace {
             picker: None,
             profile: None,
             window_focused: true,
+            // A malformed config must not stop the client from starting; the
+            // defaults are usable and the panel reports the problem.
+            options: config::load_options().unwrap_or_default(),
+            settings_open: false,
+            settings_note: None,
             attachments: Vec::new(),
             attachment_error: None,
             focus: cx.focus_handle(),
@@ -302,12 +314,14 @@ impl Workspace {
                         Update::Event(event, state) => {
                             // The core owns the mute/mention rules; the GUI
                             // only adds "not the channel you are reading".
-                            if let Some(notification) = notify::notification_for(
-                                &state,
-                                &event,
-                                workspace.nav.channel,
-                                workspace.window_focused,
-                            ) {
+                            if workspace.options.notifications.desktop_notifications
+                                && let Some(notification) = notify::notification_for(
+                                    &state,
+                                    &event,
+                                    workspace.nav.channel,
+                                    workspace.window_focused,
+                                )
+                            {
                                 notify::deliver(&notification);
                             }
                             workspace.absorb(*event);
@@ -510,7 +524,7 @@ impl Workspace {
             allow_microphone_transmit: true,
             // Audio tuning lives in settings, which does not exist yet; the
             // core's defaults are the right starting point.
-            noise_suppression: true,
+            noise_suppression: self.options.voice.noise_suppression,
             microphone_sensitivity: Default::default(),
             microphone_volume: Default::default(),
             voice_output_volume: Default::default(),
@@ -603,6 +617,41 @@ impl Workspace {
                 }
             }
         }
+    }
+
+    /// Read a settings toggle.
+    fn setting(&self, toggle: Toggle) -> bool {
+        let options = &self.options;
+        match toggle {
+            Toggle::ShowAvatars => options.display.show_avatars,
+            Toggle::CircularAvatars => options.display.circular_avatars,
+            Toggle::DesktopNotifications => options.notifications.desktop_notifications,
+            Toggle::NoiseSuppression => options.voice.noise_suppression,
+            Toggle::ShareRichPresence => options.presence.share_rich_presence,
+        }
+    }
+
+    /// Flip a setting and persist immediately.
+    ///
+    /// Writing on every change rather than on close means a crash cannot lose
+    /// the preference, and matches how the TUI treats its config.
+    fn toggle_setting(&mut self, toggle: Toggle) {
+        {
+            let options = &mut self.options;
+            let field = match toggle {
+                Toggle::ShowAvatars => &mut options.display.show_avatars,
+                Toggle::CircularAvatars => &mut options.display.circular_avatars,
+                Toggle::DesktopNotifications => &mut options.notifications.desktop_notifications,
+                Toggle::NoiseSuppression => &mut options.voice.noise_suppression,
+                Toggle::ShareRichPresence => &mut options.presence.share_rich_presence,
+            };
+            *field = !*field;
+        }
+
+        self.settings_note = match config::save_options(&self.options) {
+            Ok(()) => None,
+            Err(error) => Some(format!("Could not save settings: {error}")),
+        };
     }
 
     /// Open a file picker and stage the chosen files for the next send.
@@ -792,6 +841,34 @@ impl Workspace {
         });
     }
 
+    /// Settings panel.
+    fn settings_pane(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let values: Vec<bool> = settings::SECTIONS
+            .iter()
+            .flat_map(|(_, toggles)| toggles.iter().map(|toggle| self.setting(*toggle)))
+            .collect();
+
+        // Values are snapshotted so the closure does not borrow self.
+        let lookup = move |toggle: Toggle| {
+            settings::SECTIONS
+                .iter()
+                .flat_map(|(_, toggles)| toggles.iter())
+                .position(|candidate| *candidate == toggle)
+                .and_then(|index| values.get(index).copied())
+                .unwrap_or(false)
+        };
+
+        settings::settings_view(lookup, self.settings_note.as_deref(), {
+            let entity = cx.entity();
+            move |toggle, cx: &mut gpui::App| {
+                entity.update(cx, |workspace, cx| {
+                    workspace.toggle_setting(toggle);
+                    cx.notify();
+                });
+            }
+        })
+    }
+
     /// Profile panel for the selected user.
     fn profile_pane(&self) -> impl IntoElement {
         let Some((user_id, view)) = &self.profile else {
@@ -799,19 +876,24 @@ impl Workspace {
         };
 
         match view {
-            Some(view) => gpui::div().child(profile_view(view)),
+            Some(view) => {
+                gpui::div().child(profile_view(view, self.options.display.circular_avatars))
+            }
             // The fetch is in flight. A skeleton with the id keeps the panel
             // from flashing empty.
-            None => gpui::div().child(profile_view(&ProfileView {
-                display_name: user_id.get().to_string(),
-                handle: None,
-                avatar: None,
-                pronouns: None,
-                bio: None,
-                roles: Vec::new(),
-                mutual_guilds: Vec::new(),
-                loaded: false,
-            })),
+            None => gpui::div().child(profile_view(
+                &ProfileView {
+                    display_name: user_id.get().to_string(),
+                    handle: None,
+                    avatar: None,
+                    pronouns: None,
+                    bio: None,
+                    roles: Vec::new(),
+                    mutual_guilds: Vec::new(),
+                    loaded: false,
+                },
+                self.options.display.circular_avatars,
+            )),
         }
     }
 
@@ -1247,11 +1329,14 @@ impl Workspace {
             }
 
             let mut entry = sidebar_row(false)
-                .child(avatar_with_url(
-                    layout::AVATAR_SM,
-                    &member.name,
-                    member.avatar.as_deref(),
-                ))
+                .when(self.options.display.show_avatars, |d| {
+                    d.child(avatar_with_url(
+                        layout::AVATAR_SM,
+                        &member.name,
+                        member.avatar.as_deref(),
+                        self.options.display.circular_avatars,
+                    ))
+                })
                 .child(presence_dot(member.presence))
                 .child(
                     gpui::div()
@@ -1339,17 +1424,22 @@ impl Workspace {
                         )
                     }),
             )
-            .child(message_list(&self.messages, {
-                // Click handlers run with only an `App`, so the workspace is
-                // reached through its entity handle rather than captured.
-                let entity = cx.entity();
-                move |index, action, cx: &mut gpui::App| {
-                    entity.update(cx, |workspace, cx| {
-                        workspace.handle_message_action(index, action);
-                        cx.notify();
-                    });
-                }
-            }))
+            .child(message_list(
+                &self.messages,
+                self.options.display.show_avatars,
+                self.options.display.circular_avatars,
+                {
+                    // Click handlers run with only an `App`, so the workspace is
+                    // reached through its entity handle rather than captured.
+                    let entity = cx.entity();
+                    move |index, action, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.handle_message_action(index, action);
+                            cx.notify();
+                        });
+                    }
+                },
+            ))
             .child(self.composer_row(window, cx))
     }
 
@@ -1446,6 +1536,10 @@ impl Render for Workspace {
                                 }
                                 _ => {}
                             }
+                        } else if key == "," && event.keystroke.modifiers.control {
+                            this.settings_open = !this.settings_open;
+                        } else if this.settings_open && key == "escape" {
+                            this.settings_open = false;
                         } else if key == "o" && event.keystroke.modifiers.control {
                             this.attach_files(cx);
                         } else if key == "f" && event.keystroke.modifiers.control {
@@ -1502,7 +1596,10 @@ impl Render for Workspace {
                         // Right column precedence: profile, then search, then
                         // the member list. Only one occupies it at a time so
                         // the message area keeps a readable width.
-                        .when(self.profile.is_some(), |d| d.child(self.profile_pane()))
+                        .when(self.settings_open, |d| d.child(self.settings_pane(cx)))
+                        .when(!self.settings_open && self.profile.is_some(), |d| {
+                            d.child(self.profile_pane())
+                        })
                         .when(self.profile.is_none() && self.search.is_some(), |d| {
                             d.child(self.search_pane(cx))
                         })
