@@ -331,3 +331,64 @@ fn archived_threads_are_marked_not_hidden() {
     assert!(archived.archived, "archived flag should survive projection");
     assert_eq!(archived.kind, ChannelKind::Thread);
 }
+
+#[test]
+fn message_bodies_resolve_mentions_against_guild_state() {
+    let state = demo_state();
+    let rows = project_messages(
+        &state,
+        concord::discord::Id::new(111),
+        state.current_user_id(),
+    );
+
+    let mention = rows
+        .iter()
+        .find(|row| row.content.contains("<@"))
+        .expect("fixture defines a message containing a mention");
+
+    // The raw form must never reach the rendered body.
+    assert!(
+        !mention.body.text.contains("<@"),
+        "got {}",
+        mention.body.text
+    );
+    assert!(
+        mention.body.text.contains("@ferris"),
+        "user mention should resolve to a display name, got {}",
+        mention.body.text
+    );
+    assert!(
+        mention.body.text.contains("#general"),
+        "channel mention should resolve to a channel name, got {}",
+        mention.body.text
+    );
+}
+
+#[test]
+fn author_role_colours_resolve_for_guild_messages() {
+    let state = demo_state();
+    let rows = project_messages(
+        &state,
+        concord::discord::Id::new(111),
+        state.current_user_id(),
+    );
+
+    // Role colour lookup is guild-scoped, so a message missing guild_id
+    // silently loses its colour. This guards that regression.
+    assert!(
+        rows.iter().any(|row| row.author_color.is_some()),
+        "at least one author should carry a role colour"
+    );
+}
+
+#[test]
+fn dm_messages_have_no_guild_scope() {
+    let state = demo_state();
+    let rows = project_messages(&state, concord::discord::Id::new(300), None);
+
+    assert!(!rows.is_empty(), "fixture defines a DM conversation");
+    assert!(
+        rows.iter().all(|row| row.author_color.is_none()),
+        "DMs have no roles, so no author colours"
+    );
+}

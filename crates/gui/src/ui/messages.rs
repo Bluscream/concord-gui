@@ -231,12 +231,17 @@ fn author_line(message: &MessageRow) -> Div {
 fn message_body(message: &MessageRow) -> Div {
     let mut body = column().flex_1().gap(px(space::XS));
 
-    if !message.content.is_empty() {
-        let mut source = message.content.clone();
+    if !message.body.text.is_empty() {
+        body = body.child(rich_text(&message.body));
+
         if message.edited {
-            source.push_str("  (edited)");
+            body = body.child(
+                gpui::div()
+                    .text_size(px(text::XS))
+                    .text_color(rgb(DARK.text_subtle))
+                    .child("edited"),
+            );
         }
-        body = body.child(rich_text(&source));
     }
 
     for attachment in &message.attachments {
@@ -271,9 +276,7 @@ fn message_body(message: &MessageRow) -> Div {
 ///
 /// One element rather than a row of styled spans, so wrapping happens at word
 /// boundaries across style changes instead of at segment boundaries.
-fn rich_text(source: &str) -> impl IntoElement {
-    let parsed = markdown::parse(source);
-
+fn rich_text(parsed: &markdown::Parsed) -> impl IntoElement {
     let highlights = parsed.runs.iter().map(|(range, style)| {
         let mut highlight = HighlightStyle::default();
 
@@ -299,9 +302,9 @@ fn rich_text(source: &str) -> impl IntoElement {
         // Colour is driven by semantic kind, then by the remaining modifiers.
         highlight.color = Some(
             match style.kind {
-                Kind::Mention | Kind::Role => rgb(DARK.accent),
-                Kind::Channel | Kind::Url => rgb(DARK.accent_hover),
-                Kind::Emoji | Kind::Timestamp => rgb(DARK.text_muted),
+                Kind::Mention(_) | Kind::Role(_) => rgb(DARK.accent),
+                Kind::Channel(_) | Kind::Url => rgb(DARK.accent_hover),
+                Kind::Emoji(_) | Kind::Timestamp => rgb(DARK.text_muted),
                 Kind::Text => {
                     if style.code {
                         rgb(DARK.warning)

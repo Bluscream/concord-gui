@@ -168,12 +168,26 @@ fn member(id: u64, display: &str, bot: bool, roles: &[u64]) -> GuildMemberState 
     }
 }
 
-fn message(id: u64, channel: u64, author: u64, name: &str, body: &str, age: u64) -> MessageState {
-    // MessageState does implement Default (with a placeholder id), so only the
+/// Build a message.
+///
+/// `guild` must be set for guild-channel messages: both mention resolution and
+/// author role colours are guild-scoped, and omitting it silently disables
+/// both. DMs correctly pass `None`.
+fn message(
+    id: u64,
+    channel: u64,
+    guild: Option<u64>,
+    author: u64,
+    name: &str,
+    body: &str,
+    age: u64,
+) -> MessageState {
+    // MessageState implements Default (with a placeholder id), so only the
     // fields that matter to rendering are overridden here.
     let mut message = MessageState::default();
     message.id = message_id(snowflake_at(age).max(id));
     message.channel_id = channel_id(channel);
+    message.guild_id = guild.map(guild_id);
     message.author_id = user_id(author);
     message.author = name.to_string();
     message.content = Some(body.to_string());
@@ -390,15 +404,39 @@ pub fn demo_state() -> DiscordState {
     let message_cache = Arc::make_mut(&mut state.message_cache);
 
     let mut general = vec![
-        message(1, 111, 1001, "blu", "morning all", 7200),
-        message(2, 111, 1002, "ferris", "morning", 7100),
-        message(3, 111, 1002, "ferris", "grouped with the line above", 7095),
-        message(4, 111, 1002, "ferris", "and this one too", 7090),
-        message(5, 111, 1003, "turing", "what's the plan for today?", 6000),
+        message(1, 111, Some(10), 1001, "blu", "morning all", 7200),
+        message(2, 111, Some(10), 1002, "ferris", "morning", 7100),
+        message(
+            3,
+            111,
+            Some(10),
+            1002,
+            "ferris",
+            "grouped with the line above",
+            7095,
+        ),
+        message(4, 111, Some(10), 1002, "ferris", "and this one too", 7090),
+        message(
+            5,
+            111,
+            Some(10),
+            1003,
+            "turing",
+            "what's the plan for today?",
+            6000,
+        ),
     ];
 
     // A reply, which must break grouping.
-    let mut reply = message(6, 111, 1001, "blu", "finishing the member list", 5900);
+    let mut reply = message(
+        6,
+        111,
+        Some(10),
+        1001,
+        "blu",
+        "finishing the member list",
+        5900,
+    );
     reply.reply = Some(ReplyInfo {
         author_id: Some(user_id(1003)),
         author: "turing".into(),
@@ -409,7 +447,15 @@ pub fn demo_state() -> DiscordState {
     general.push(reply);
 
     // Reactions.
-    let mut reacted = message(7, 111, 1004, "lovelace", "nice work on the composer", 3000);
+    let mut reacted = message(
+        7,
+        111,
+        Some(10),
+        1004,
+        "lovelace",
+        "nice work on the composer",
+        3000,
+    );
     reacted.reactions = vec![
         ReactionInfo {
             emoji: ReactionEmoji::Unicode("👍".into()),
@@ -428,7 +474,26 @@ pub fn demo_state() -> DiscordState {
     ];
     general.push(reacted);
 
-    let mut edited = message(8, 111, 1005, "ci-bot", "build #482 passed in 3m12s", 600);
+    // Exercises mention resolution end to end.
+    general.push(message(
+        9,
+        111,
+        Some(10),
+        1003,
+        "turing",
+        "ping <@1002> about <#111> when you get a chance",
+        1200,
+    ));
+
+    let mut edited = message(
+        8,
+        111,
+        Some(10),
+        1005,
+        "ci-bot",
+        "build #482 passed in 3m12s",
+        600,
+    );
     edited.edited_timestamp = Some("2026-08-14T12:00:00Z".into());
     general.push(edited);
 
@@ -437,16 +502,24 @@ pub fn demo_state() -> DiscordState {
     message_cache.set_fixture_messages(
         channel_id(112),
         vec![
-            message(20, 112, 1001, "blu", "pushed the projection layer", 1800),
-            message(21, 112, 1002, "ferris", "reviewing now", 900),
+            message(
+                20,
+                112,
+                Some(10),
+                1001,
+                "blu",
+                "pushed the projection layer",
+                1800,
+            ),
+            message(21, 112, Some(10), 1002, "ferris", "reviewing now", 900),
         ],
     );
 
     message_cache.set_fixture_messages(
         channel_id(300),
         vec![
-            message(30, 300, 2001, "ferris", "hey, got a minute?", 4000),
-            message(31, 300, 1001, "blu", "sure, what's up", 3900),
+            message(30, 300, None, 2001, "ferris", "hey, got a minute?", 4000),
+            message(31, 300, None, 1001, "blu", "sure, what's up", 3900),
         ],
     );
 

@@ -31,21 +31,57 @@ pub struct Style {
 }
 
 /// Semantic classification, which drives colour rather than weight.
+///
+/// Entity variants carry their snowflake so a click handler can act on the
+/// target - jumping to a channel, opening a profile - without re-parsing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Kind {
     #[default]
     Text,
     /// `<@id>` - a user mention.
-    Mention,
+    Mention(u64),
     /// `<#id>` - a channel link.
-    Channel,
+    Channel(u64),
     /// `<@&id>` - a role mention.
-    Role,
-    /// `<:name:id>` - a custom emoji, rendered as `:name:` until images land.
-    Emoji,
+    Role(u64),
+    /// `<:name:id>` - a custom emoji.
+    Emoji(u64),
     Url,
     /// `<t:unix:style>` - a rendered timestamp.
     Timestamp,
+}
+
+/// Supplies display names for mention targets.
+///
+/// Parsing is kept separate from resolution so the parser stays pure and
+/// testable; the projection layer supplies a resolver backed by guild state.
+pub trait Mentions {
+    fn user(&self, id: u64) -> Option<String>;
+    fn channel(&self, id: u64) -> Option<String>;
+    fn role(&self, id: u64) -> Option<String>;
+    /// Custom emoji name, when the guild is known.
+    fn emoji(&self, id: u64) -> Option<String>;
+}
+
+/// A resolver that knows nothing, used where guild state is unavailable.
+///
+/// Unresolved mentions render with the snowflake rather than a fake name, so
+/// an unknown target is visibly unknown instead of silently wrong.
+pub struct Unresolved;
+
+impl Mentions for Unresolved {
+    fn user(&self, _id: u64) -> Option<String> {
+        None
+    }
+    fn channel(&self, _id: u64) -> Option<String> {
+        None
+    }
+    fn role(&self, _id: u64) -> Option<String> {
+        None
+    }
+    fn emoji(&self, _id: u64) -> Option<String> {
+        None
+    }
 }
 
 /// A parsed message body: display text plus the ranges that carry styling.
@@ -74,6 +110,11 @@ impl Parsed {
 /// lines - splitting first would tear them apart and leak the fences into the
 /// rendered text.
 pub fn parse(input: &str) -> Parsed {
+    parse_with(input, &Unresolved)
+}
+
+/// Parse, resolving mention targets to display names.
+pub fn parse_with(input: &str, mentions: &dyn Mentions) -> Parsed {
     let mut out = Parsed::default();
     let mut rest = input;
 
@@ -84,7 +125,7 @@ pub fn parse(input: &str) -> Parsed {
             break;
         };
 
-        parse_lines(before, &mut out);
+        parse_lines(before, mentions, &mut out);
 
         let body = &remainder[3..3 + end];
         let body = match body.split_once('\n') {
@@ -103,12 +144,12 @@ pub fn parse(input: &str) -> Parsed {
         rest = &remainder[3 + end + 3..];
     }
 
-    parse_lines(rest, &mut out);
+    parse_lines(rest, mentions, &mut out);
     out
 }
 
 /// Line-oriented parsing for everything outside a fenced block.
-fn parse_lines(input: &str, out: &mut Parsed) {
+fn parse_lines(input: &str, mentions: &dyn Mentions, out: &mut Parsed) {
     if input.is_empty() {
         return;
     }
@@ -129,13 +170,14 @@ fn parse_lines(input: &str, out: &mut Parsed) {
                 quote,
                 ..Style::default()
             },
+            mentions,
             out,
         );
     }
 }
 
 /// Scan a single line, tracking active delimiters.
-fn parse_inline(input: &str, base: Style, out: &mut Parsed) {
+fn parse_inline(input: &str, base: Style, mentions: &dyn Mentions, out: &mut Parsed) {
     let bytes = input.as_bytes();
     let mut style = base;
     let mut plain_start = 0usize;
@@ -171,7 +213,7 @@ fn parse_inline(input: &str, base: Style, out: &mut Parsed) {
 
         // Angle-bracket entities: mentions, channels, roles, emoji, timestamps.
         if bytes[index] == b'<' {
-            if let Some((consumed, text, kind)) = entity(rest) {
+            if let Some((consumed, text, kind)) = entity(rest, mentions) {
                 flush!(index);
                 out.push(&text, Style { kind, ..style });
                 index += consumed;
@@ -278,43 +320,43 @@ fn split_code(rest: &str, total: usize) -> (usize, &str) {
 }
 
 /// Parse `<...>` entities. Returns (bytes consumed, display text, kind).
-fn entity(rest: &str) -> Option<(usize, String, Kind)> {
+fn entity(rest: &str, mentions: &dyn Mentions) -> Option<(usize, String, Kind)> {
     let close = rest.find('>')?;
     let body = &rest[1..close];
     let consumed = close + 1;
 
     // Custom emoji: <:name:id> or <a:name:id>
     if let Some(inner) = body.strip_prefix(':').or_else(|| body.strip_prefix("a:")) {
-        let name = inner.split(':').next()?;
+        let mut parts = inner.split(':');
+        let name = parts.next()?;
         if name.is_empty() {
             return None;
         }
-        return Some((consumed, format!(":{name}:"), Kind::Emoji));
+        let id: u64 = parts.next()?.parse().ok()?;
+        let name = mentions.emoji(id).unwrap_or_else(|| name.to_string());
+        return Some((consumed, format!(":{name}:"), Kind::Emoji(id)));
     }
 
     // Role: <@&id>
-    if let Some(id) = body.strip_prefix("@&") {
-        return id
-            .chars()
-            .all(|c| c.is_ascii_digit())
-            .then(|| (consumed, "@role".to_string(), Kind::Role));
+    if let Some(raw) = body.strip_prefix("@&") {
+        let id: u64 = raw.parse().ok()?;
+        let name = mentions.role(id).unwrap_or_else(|| id.to_string());
+        return Some((consumed, format!("@{name}"), Kind::Role(id)));
     }
 
     // User: <@id> or <@!id>
-    if let Some(id) = body.strip_prefix('@') {
-        let id = id.strip_prefix('!').unwrap_or(id);
-        return id
-            .chars()
-            .all(|c| c.is_ascii_digit())
-            .then(|| (consumed, "@user".to_string(), Kind::Mention));
+    if let Some(raw) = body.strip_prefix('@') {
+        let raw = raw.strip_prefix('!').unwrap_or(raw);
+        let id: u64 = raw.parse().ok()?;
+        let name = mentions.user(id).unwrap_or_else(|| id.to_string());
+        return Some((consumed, format!("@{name}"), Kind::Mention(id)));
     }
 
     // Channel: <#id>
-    if let Some(id) = body.strip_prefix('#') {
-        return id
-            .chars()
-            .all(|c| c.is_ascii_digit())
-            .then(|| (consumed, "#channel".to_string(), Kind::Channel));
+    if let Some(raw) = body.strip_prefix('#') {
+        let id: u64 = raw.parse().ok()?;
+        let name = mentions.channel(id).unwrap_or_else(|| id.to_string());
+        return Some((consumed, format!("#{name}"), Kind::Channel(id)));
     }
 
     // Timestamp: <t:unix> or <t:unix:style>
@@ -401,21 +443,52 @@ mod tests {
         assert!(parsed.runs.is_empty());
     }
 
+    /// A resolver with fixed answers, for tests.
+    struct FakeMentions;
+
+    impl Mentions for FakeMentions {
+        fn user(&self, id: u64) -> Option<String> {
+            (id == 123).then(|| "ferris".to_string())
+        }
+        fn channel(&self, id: u64) -> Option<String> {
+            (id == 456).then(|| "general".to_string())
+        }
+        fn role(&self, id: u64) -> Option<String> {
+            (id == 789).then(|| "Maintainer".to_string())
+        }
+        fn emoji(&self, _id: u64) -> Option<String> {
+            None
+        }
+    }
+
     #[test]
-    fn mentions_and_channels() {
-        let parsed = parse("hi <@123> see <#456> and <@&789>");
-        assert_eq!(parsed.text, "hi @user see #channel and @role");
+    fn mentions_resolve_to_display_names() {
+        let parsed = parse_with("hi <@123> see <#456> and <@&789>", &FakeMentions);
+        assert_eq!(parsed.text, "hi @ferris see #general and @Maintainer");
+
         let kinds: Vec<_> = parsed.runs.iter().map(|(_, s)| s.kind).collect();
-        assert!(kinds.contains(&Kind::Mention));
-        assert!(kinds.contains(&Kind::Channel));
-        assert!(kinds.contains(&Kind::Role));
+        assert!(kinds.contains(&Kind::Mention(123)));
+        assert!(kinds.contains(&Kind::Channel(456)));
+        assert!(kinds.contains(&Kind::Role(789)));
+    }
+
+    #[test]
+    fn unresolved_mentions_show_the_id_not_a_fake_name() {
+        // An unknown target must be visibly unknown rather than silently wrong.
+        let parsed = parse("hi <@999>");
+        assert_eq!(parsed.text, "hi @999");
     }
 
     #[test]
     fn custom_emoji_falls_back_to_name() {
         let parsed = parse("nice <:ferris:1234>");
         assert_eq!(parsed.text, "nice :ferris:");
-        assert!(parsed.runs.iter().any(|(_, s)| s.kind == Kind::Emoji));
+        assert!(
+            parsed
+                .runs
+                .iter()
+                .any(|(_, s)| matches!(s.kind, Kind::Emoji(_)))
+        );
     }
 
     #[test]

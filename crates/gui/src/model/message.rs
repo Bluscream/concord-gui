@@ -9,6 +9,8 @@
 //!   chat log readable rather than a wall of repeated names.
 
 use chrono::{DateTime, Local, TimeZone, Utc};
+
+use crate::model::markdown::{self, Mentions, Parsed};
 use concord::discord::{DiscordState, Id, MessageState, ReactionEmoji, marker};
 
 /// Discord epoch (2015-01-01T00:00:00Z) in milliseconds.
@@ -40,7 +42,10 @@ pub struct MessageRow {
     pub author_avatar: Option<String>,
     /// Role colour as packed RGB, when the author has a coloured role.
     pub author_color: Option<u32>,
+    /// Raw source, kept for edit prefill.
     pub content: String,
+    /// Parsed body with mentions resolved, ready to render.
+    pub body: Parsed,
     pub timestamp: DateTime<Local>,
     /// True when this row continues the previous author's block: the header
     /// is suppressed and only the body indents.
@@ -100,6 +105,13 @@ pub fn project_messages(
             author_avatar: message.author_avatar_url.clone(),
             author_color: author_color(state, message),
             content: message.content.clone().unwrap_or_default(),
+            body: markdown::parse_with(
+                message.content.as_deref().unwrap_or_default(),
+                &GuildMentions {
+                    state,
+                    guild_id: message.guild_id,
+                },
+            ),
             timestamp: created.with_timezone(&Local),
             continues,
             edited: message.edited_timestamp.is_some(),
@@ -161,6 +173,45 @@ fn author_color(state: &DiscordState, message: &MessageState) -> Option<u32> {
     state
         .message_author_role_color(guild_id, message.channel_id, message.id, message.author_id)
         .filter(|color| *color != 0)
+}
+
+/// Resolves mention targets against the state store.
+///
+/// Users are looked up in the message's own guild first; falling back to a
+/// bare snowflake is deliberate, since inventing a name for an uncached user
+/// would be worse than showing the id.
+struct GuildMentions<'a> {
+    state: &'a DiscordState,
+    guild_id: Option<Id<marker::GuildMarker>>,
+}
+
+impl Mentions for GuildMentions<'_> {
+    fn user(&self, id: u64) -> Option<String> {
+        let guild_id = self.guild_id?;
+        self.state
+            .member_for_guild(guild_id, Id::new(id))
+            .map(|member| member.display_name.clone())
+    }
+
+    fn channel(&self, id: u64) -> Option<String> {
+        self.state
+            .channel(Id::new(id))
+            .map(|channel| channel.name.clone())
+    }
+
+    fn role(&self, id: u64) -> Option<String> {
+        let guild_id = self.guild_id?;
+        self.state
+            .role_for_guild(guild_id, Id::new(id))
+            .map(|role| role.name.clone())
+    }
+
+    fn emoji(&self, id: u64) -> Option<String> {
+        self.state
+            .custom_emojis()
+            .find(|emoji| emoji.id.get() == id)
+            .map(|emoji| emoji.name.clone())
+    }
 }
 
 /// Human-readable byte size for attachment rows.
