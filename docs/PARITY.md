@@ -18,7 +18,8 @@ send · reply · edit · delete · react · emoji picker · spoilers · attachme
 (stage, send) · member list · profiles · unread and mention badges · typing
 indicators · guild voice · DM calls · mute/deafen · screenshare controls ·
 search with jump · desktop notifications · settings · history paging ·
-composer with selection, undo, clipboard, multi-line
+composer with selection, undo, clipboard, multi-line · mark read / mark all
+read · quick switcher
 
 ### Missing
 
@@ -26,8 +27,6 @@ Ordered roughly by how much a daily driver misses them.
 
 | Feature | TUI action | Notes |
 |---|---|---|
-| Quick switcher | `ChannelSwitcher` | Jump to any channel/DM by typing. The single biggest navigation gap. |
-| Mark read / mark all read | `MarkRead`, `MarkAllRead`, `MarkSelectedRead` | Unread badges accumulate with no way to clear them. `AckChannel` exists in the core. |
 | Jump to replied message | `GoToReferencedMessage` | Reply context is shown but not clickable. |
 | Copy message text / link | `CopyMessage`, `CopyContent`, `CopyUrl` | |
 | Pin / unpin, view pins | `PinMessage`, `OpenPinConfirmation` | |

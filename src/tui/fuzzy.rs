@@ -30,10 +30,7 @@ pub(super) enum FuzzyMatchQuality {
     Context,
 }
 
-pub(super) fn fuzzy_name_match_score(
-    value: &str,
-    query: &str,
-) -> Option<(FuzzyMatchQuality, FuzzyScore)> {
+pub fn fuzzy_name_match_score(value: &str, query: &str) -> Option<(FuzzyMatchQuality, FuzzyScore)> {
     let score = fuzzy_text_score(value, query)?;
     let value = value.to_lowercase();
     let query = query.trim().to_lowercase();
@@ -57,7 +54,7 @@ pub(super) fn best_fuzzy_name_match_score(
         .min_by_key(|(quality, score)| (*quality, *score))
 }
 
-pub(super) fn fuzzy_text_score(value: &str, query: &str) -> Option<FuzzyScore> {
+pub fn fuzzy_text_score(value: &str, query: &str) -> Option<FuzzyScore> {
     let query = query.trim();
 
     if query.is_empty() {

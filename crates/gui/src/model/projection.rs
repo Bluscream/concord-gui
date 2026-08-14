@@ -14,6 +14,7 @@ use concord::discord::{
 
 use crate::theme::Presence;
 use crate::ui::profile::ProfileView;
+use crate::ui::switcher::Candidate;
 use crate::ui::workspace::{
     ChannelEntry, ChannelKind, GuildEntry, MemberEntry, VoiceMember, WorkspaceModel,
 };
@@ -319,6 +320,56 @@ pub fn voice_participants(
             speaking: participant.speaking,
         })
         .collect()
+}
+
+/// Every channel the user can jump to, across every guild.
+///
+/// Built from the whole state rather than the open guild: the switcher's
+/// value is reaching somewhere you are *not* currently looking.
+pub fn switcher_candidates(state: &DiscordState) -> Vec<Candidate> {
+    let mut out = Vec::new();
+
+    // Direct messages first: they have no guild and are addressed by
+    // participant name.
+    for channel in state.channels_for_guild(None) {
+        if channel.is_category() {
+            continue;
+        }
+        out.push(Candidate {
+            channel_id: channel.id,
+            guild_id: None,
+            name: channel.name.clone(),
+            context: "Direct Messages".to_string(),
+            kind: channel_kind(channel),
+            unread: !matches!(
+                state.channel_sidebar_unread(channel.id),
+                ChannelUnreadState::Seen
+            ),
+        });
+    }
+
+    for guild in state.guilds() {
+        for channel in state.channels_for_guild(Some(guild.id)) {
+            // Categories are not destinations, and voice channels are joined
+            // rather than opened, so neither belongs here.
+            if channel.is_category() || channel.is_voice() {
+                continue;
+            }
+            out.push(Candidate {
+                channel_id: channel.id,
+                guild_id: Some(guild.id),
+                name: channel.name.clone(),
+                context: guild.name.clone(),
+                kind: channel_kind(channel),
+                unread: !matches!(
+                    state.channel_sidebar_unread(channel.id),
+                    ChannelUnreadState::Seen
+                ),
+            });
+        }
+    }
+
+    out
 }
 
 /// Presence lookup for a single user, used by DM rows and member entries.

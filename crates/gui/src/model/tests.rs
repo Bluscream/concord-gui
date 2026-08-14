@@ -614,3 +614,100 @@ fn demo_send_updates_the_channel_last_message() {
         Some(id)
     );
 }
+
+#[test]
+fn switcher_spans_every_guild_not_just_the_open_one() {
+    let state = demo_state();
+    let candidates = crate::model::projection::switcher_candidates(&state);
+
+    let contexts: std::collections::HashSet<_> =
+        candidates.iter().map(|c| c.context.as_str()).collect();
+
+    // The switcher's value is reaching somewhere you are not looking, so a
+    // list limited to the open guild would defeat it.
+    assert!(contexts.contains("RostFaden"), "got {contexts:?}");
+    assert!(contexts.contains("Rust Community"), "got {contexts:?}");
+    assert!(contexts.contains("Direct Messages"), "got {contexts:?}");
+}
+
+#[test]
+fn switcher_excludes_non_destinations() {
+    let state = demo_state();
+    let candidates = crate::model::projection::switcher_candidates(&state);
+
+    // Categories are not places, and voice channels are joined rather than
+    // opened, so neither should be offered as a jump target.
+    assert!(
+        !candidates.iter().any(|c| c.kind == ChannelKind::Category),
+        "categories are not destinations"
+    );
+    assert!(
+        !candidates.iter().any(|c| c.kind == ChannelKind::Voice),
+        "voice channels are joined, not opened"
+    );
+}
+
+#[test]
+fn switcher_ranks_matches_and_filters_non_matches() {
+    use crate::ui::switcher::Switcher;
+
+    let state = demo_state();
+    let mut switcher = Switcher::default();
+
+    switcher.query.set_text("gui");
+    switcher.rank(crate::model::projection::switcher_candidates(&state));
+
+    assert!(!switcher.results.is_empty(), "a real channel should match");
+    assert_eq!(
+        switcher.results[0].name, "gui-rewrite",
+        "the closest match should rank first"
+    );
+    assert!(
+        switcher.results.iter().all(|c| c.name != "announcements"),
+        "non-matching channels must be filtered out"
+    );
+}
+
+#[test]
+fn switcher_matches_across_name_and_guild() {
+    use crate::ui::switcher::Switcher;
+
+    let state = demo_state();
+    let mut switcher = Switcher::default();
+
+    // Querying name plus context should find the channel in that guild.
+    switcher.query.set_text("help rust");
+    switcher.rank(crate::model::projection::switcher_candidates(&state));
+
+    assert!(
+        switcher
+            .results
+            .iter()
+            .any(|c| c.name == "help" && c.context == "Rust Community"),
+        "matching should span the channel name and its guild"
+    );
+}
+
+#[test]
+fn switcher_selection_wraps_and_survives_empty_results() {
+    use crate::ui::switcher::Switcher;
+
+    let state = demo_state();
+    let mut switcher = Switcher::default();
+    switcher.rank(crate::model::projection::switcher_candidates(&state));
+
+    let count = switcher.results.len();
+    assert!(count > 1);
+
+    switcher.move_selection(-1);
+    assert_eq!(switcher.selected, count - 1, "moving up from the top wraps");
+    switcher.move_selection(1);
+    assert_eq!(switcher.selected, 0);
+
+    // A query that matches nothing must not panic or leave a stale index.
+    switcher.query.set_text("zzzzzzzznotachannel");
+    switcher.rank(crate::model::projection::switcher_candidates(&state));
+    assert!(switcher.results.is_empty());
+    switcher.move_selection(1);
+    assert!(switcher.selection().is_none());
+}

@@ -38,6 +38,7 @@ use crate::ui::messages::{MessageAction, message_list};
 use crate::ui::profile::{ProfileView, profile_view};
 use crate::ui::settings::{OnChange, SettingsWindow};
 use crate::ui::stream::{self, StreamPicker, share_button};
+use crate::ui::switcher::{self, Switcher};
 
 /// Everything the workspace renders, projected from the core's state store.
 pub struct WorkspaceModel {
@@ -84,7 +85,7 @@ pub enum ChannelKind {
 }
 
 impl ChannelKind {
-    fn glyph(self) -> &'static str {
+    pub fn glyph(self) -> &'static str {
         match self {
             ChannelKind::Text => "#",
             ChannelKind::Voice => "♪",
@@ -196,6 +197,8 @@ pub struct Workspace {
     pub editing: Option<Id<marker::MessageMarker>>,
     /// Channel the user is connected to by voice, if any.
     pub voice_channel: Option<(Id<marker::ChannelMarker>, String)>,
+    /// Quick switcher, open while jumping to a channel.
+    pub switcher: Option<Switcher>,
     /// Forum being browsed, when the open channel is a forum.
     pub forum: Option<ForumView>,
     /// Capture-source picker, open while choosing what to share.
@@ -248,6 +251,7 @@ impl Workspace {
             editing: None,
             voice_channel: None,
             voice_scope_joined: None,
+            switcher: None,
             forum: None,
             stream_picker: None,
             broadcasting: false,
@@ -1863,6 +1867,49 @@ impl Workspace {
         matches!(self.nav.selection, Selection::Guild(_)) && self.nav.channel.is_some()
     }
 
+    /// Open the quick switcher, seeded with the full candidate list.
+    pub fn open_switcher(&mut self) {
+        let mut switcher = Switcher::default();
+        if let Some(state) = &self.last_state {
+            switcher.rank(projection::switcher_candidates(state));
+        }
+        self.switcher = Some(switcher);
+    }
+
+    /// Re-rank after the query changes.
+    fn rerank_switcher(&mut self) {
+        let Some(state) = self.last_state.clone() else {
+            return;
+        };
+        if let Some(switcher) = &mut self.switcher {
+            switcher.rank(projection::switcher_candidates(&state));
+        }
+    }
+
+    /// Jump to the highlighted candidate.
+    fn activate_switcher(&mut self) {
+        let Some(target) = self
+            .switcher
+            .as_ref()
+            .and_then(|switcher| switcher.selection())
+            .map(|candidate| (candidate.channel_id, candidate.guild_id))
+        else {
+            return;
+        };
+
+        self.switcher = None;
+
+        // Switching guild first keeps the sidebar and the open channel
+        // consistent; opening the channel alone would leave the wrong guild
+        // selected and its channel list showing.
+        let (channel_id, guild_id) = target;
+        if self.nav.selection != guild_id.map_or(Selection::DirectMessages, Selection::Guild) {
+            self.open_guild(guild_id);
+        }
+        self.forum = None;
+        self.open_channel(channel_id);
+    }
+
     /// Mark the open channel read up to its newest message.
     ///
     /// Without this, unread badges accumulate with no way to clear them - the
@@ -2638,7 +2685,30 @@ impl Render for Workspace {
                     Screen::Ready => {
                         let key = event.keystroke.key.as_str();
 
-                        if this.stream_picker.is_some() && key == "escape" {
+                        if let Some(switcher) = &mut this.switcher {
+                            match key {
+                                "escape" => this.switcher = None,
+                                "up" => switcher.move_selection(-1),
+                                "down" => switcher.move_selection(1),
+                                "enter" => this.activate_switcher(),
+                                _ => {
+                                    let pasted = (key == "v"
+                                        && (event.keystroke.modifiers.control
+                                            || event.keystroke.modifiers.platform))
+                                        .then(|| {
+                                            cx.read_from_clipboard().and_then(|item| item.text())
+                                        })
+                                        .flatten();
+                                    switcher.query.handle_key_with_clipboard(event, pasted);
+                                    this.rerank_switcher();
+                                }
+                            }
+                        } else if key == "k"
+                            && (event.keystroke.modifiers.control
+                                || event.keystroke.modifiers.platform)
+                        {
+                            this.open_switcher();
+                        } else if this.stream_picker.is_some() && key == "escape" {
                             this.stream_picker = None;
                         } else if this.picker.is_some() {
                             // The picker owns the keyboard while open.

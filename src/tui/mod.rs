@@ -1,6 +1,8 @@
 mod clipboard;
 mod commands;
-mod fuzzy;
+// Public so the GUI scores the quick switcher identically to the TUI;
+// a second matcher would rank the same query differently in each client.
+pub mod fuzzy;
 #[cfg(feature = "voice-playback")]
 mod global_push_to_talk;
 mod input;
