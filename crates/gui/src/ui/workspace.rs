@@ -330,6 +330,30 @@ impl Workspace {
             ),
             None => (Vec::new(), Vec::new()),
         };
+
+        if let Some((voice_channel_id, _)) = &self.voice_channel {
+            if let Some(channel) = self.model.channels.iter_mut().find(|c| c.id == Some(*voice_channel_id)) {
+                let user_name = self
+                    .last_state
+                    .as_ref()
+                    .and_then(|s| s.current_user())
+                    .unwrap_or("You")
+                    .to_string();
+
+                if let Some(member) = channel.voice.iter_mut().find(|m| m.name == user_name || m.name == "You") {
+                    member.muted = self.self_mute;
+                    member.deafened = self.self_deaf;
+                } else {
+                    channel.voice.push(VoiceMember {
+                        name: user_name,
+                        muted: self.self_mute,
+                        deafened: self.self_deaf,
+                        streaming: false,
+                        speaking: !self.self_mute,
+                    });
+                }
+            }
+        }
     }
 
     /// Drain the bridge's update stream on the foreground executor, reprojecting
@@ -881,51 +905,46 @@ impl Workspace {
             self.leave_voice();
         }
 
-        let Some(handle) = &self.handle else {
-            return;
-        };
-
-        handle.send(AppCommand::JoinVoiceChannel {
-            scope,
-            channel_id,
-            self_mute: self.self_mute,
-            self_deaf: self.self_deaf,
-            input_source: None,
-            output_source: None,
-            allow_microphone_transmit: true,
-            // Audio tuning lives in settings, which does not exist yet; the
-            // core's defaults are the right starting point.
-            noise_suppression: self.options.voice.noise_suppression,
-            microphone_sensitivity: Default::default(),
-            microphone_volume: Default::default(),
-            voice_output_volume: Default::default(),
-            participant_playback_settings: Vec::new(),
-        });
+        if let Some(handle) = &self.handle {
+            handle.send(AppCommand::JoinVoiceChannel {
+                scope,
+                channel_id,
+                self_mute: self.self_mute,
+                self_deaf: self.self_deaf,
+                input_source: None,
+                output_source: None,
+                allow_microphone_transmit: true,
+                // Audio tuning lives in settings, which does not exist yet; the
+                // core's defaults are the right starting point.
+                noise_suppression: self.options.voice.noise_suppression,
+                microphone_sensitivity: Default::default(),
+                microphone_volume: Default::default(),
+                voice_output_volume: Default::default(),
+                participant_playback_settings: Vec::new(),
+            });
+        }
         self.voice_channel = Some((channel_id, name));
         self.voice_scope_joined = Some(scope);
+        self.reproject();
     }
 
     pub fn leave_voice(&mut self) {
         // The scope must match the channel actually joined, not the current
         // selection - the user may have navigated elsewhere while connected.
-        let Some((channel_id, _)) = self.voice_channel else {
-            return;
-        };
-        let Some(scope) = self.voice_scope_joined else {
-            return;
-        };
-        let Some(handle) = &self.handle else {
+        let Some((_, _)) = self.voice_channel else {
             return;
         };
 
-        let _ = channel_id;
-        handle.send(AppCommand::LeaveVoiceChannel {
-            scope,
-            self_mute: self.self_mute,
-            self_deaf: self.self_deaf,
-        });
+        if let (Some(handle), Some(scope)) = (&self.handle, self.voice_scope_joined) {
+            handle.send(AppCommand::LeaveVoiceChannel {
+                scope,
+                self_mute: self.self_mute,
+                self_deaf: self.self_deaf,
+            });
+        }
         self.voice_channel = None;
         self.voice_scope_joined = None;
+        self.reproject();
     }
 
     /// Toggle mute or deafen on the live connection.
@@ -945,20 +964,19 @@ impl Workspace {
             }
         }
 
-        let (Some(handle), Some(scope), Some((channel_id, _))) = (
+        if let (Some(handle), Some(scope), Some((channel_id, _))) = (
             &self.handle,
             self.voice_scope_joined,
             self.voice_channel.as_ref(),
-        ) else {
-            return;
-        };
-
-        handle.send(AppCommand::UpdateVoiceState {
-            scope,
-            channel_id: *channel_id,
-            self_mute: self.self_mute,
-            self_deaf: self.self_deaf,
-        });
+        ) {
+            handle.send(AppCommand::UpdateVoiceState {
+                scope,
+                channel_id: *channel_id,
+                self_mute: self.self_mute,
+                self_deaf: self.self_deaf,
+            });
+        }
+        self.reproject();
     }
 
     /// Route a toolbar action for the row at `index`.
