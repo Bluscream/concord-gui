@@ -15,8 +15,8 @@ use concord::discord::{
 };
 use concord::token_store;
 use gpui::{
-    Context, FocusHandle, KeyDownEvent, PathPromptOptions, Window, WindowHandle, prelude::*, px,
-    rgb,
+    ClipboardItem, Context, FocusHandle, KeyDownEvent, PathPromptOptions, Window, WindowHandle,
+    prelude::*, px, rgb,
 };
 use tokio::sync::mpsc;
 
@@ -30,7 +30,7 @@ use crate::ui::chrome::{
     avatar, avatar_with_url, column, header, hint, panel_sunken, presence_dot, row, section_label,
     sidebar_row, voice_participant_row,
 };
-use crate::ui::composer::{Composer, composer_view};
+use crate::ui::composer::{ClipboardIntent, Composer, composer_view};
 use crate::ui::emoji::{self, EmojiPicker};
 use crate::ui::forum::{self, ForumPost, ForumView};
 use crate::ui::login::{Login, LoginEvent, LoginHandle, LoginScreen, PasswordField, login_view};
@@ -2612,7 +2612,25 @@ impl Render for Workspace {
                                 .then(|| cx.read_from_clipboard().and_then(|item| item.text()))
                                 .flatten();
 
-                            if this.composer.handle_key_with_clipboard(event, pasted) {
+                            let send = this.composer.handle_key_with_clipboard(event, pasted);
+
+                            // The composer reports copy/cut rather than
+                            // reaching the clipboard itself, so perform it here.
+                            // Taken once: a second take would clear the intent
+                            // and silently turn every cut into a copy.
+                            let intent = this.composer.take_clipboard_intent();
+                            if intent != ClipboardIntent::None
+                                && let Some(selected) = this.composer.selected_text()
+                            {
+                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                    selected.to_string(),
+                                ));
+                                if intent == ClipboardIntent::Cut {
+                                    this.composer.cut_selection();
+                                }
+                            }
+
+                            if send {
                                 this.send_message();
                             }
                         }
