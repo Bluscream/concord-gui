@@ -5,8 +5,12 @@
 //! session already publishes on every state revision - no new plumbing needed,
 //! only mapping.
 
-use concord::discord::{Id, marker};
-use gpui::{Context, Window, prelude::*, px, rgb};
+use concord::discord::{AppEvent, Id, marker};
+use gpui::{Context, Window, WindowHandle, prelude::*, px, rgb};
+use tokio::sync::mpsc;
+
+use crate::model::projection::{self, Navigation};
+use crate::session::{SessionHandle, Update};
 
 use crate::theme::{DARK, Presence, layout, space, text};
 use crate::ui::chrome::{
@@ -129,11 +133,74 @@ impl WorkspaceModel {
 
 pub struct Workspace {
     pub model: WorkspaceModel,
+    /// Command sink into the core. `None` until a session starts.
+    pub handle: Option<SessionHandle>,
+    /// Navigation is GUI-owned: the core has no concept of "what is on screen".
+    pub nav: Navigation,
 }
 
 impl Workspace {
     pub fn new(model: WorkspaceModel) -> Self {
-        Self { model }
+        Self {
+            model,
+            handle: None,
+            nav: Navigation::default(),
+        }
+    }
+
+    /// Attach the command sink once the session thread is running.
+    pub fn attach(&mut self, handle: SessionHandle) {
+        self.handle = Some(handle);
+    }
+
+    /// Drain the bridge's update stream on the foreground executor, reprojecting
+    /// the view model whenever the core's state store advances.
+    pub fn pump(
+        window: WindowHandle<Workspace>,
+        mut updates: mpsc::UnboundedReceiver<Update>,
+        cx: &mut gpui::App,
+    ) {
+        cx.spawn(async move |cx| {
+            while let Some(update) = updates.recv().await {
+                let applied = window.update(cx, |workspace, _window, cx| {
+                    match update {
+                        Update::State(state) => {
+                            workspace.model = projection::project(&state, &workspace.nav, true);
+                        }
+                        Update::Event(event) => workspace.absorb(*event),
+                        Update::Closed(reason) => {
+                            workspace.model.connected = false;
+                            workspace.model.status_line =
+                                reason.unwrap_or_else(|| "session closed".to_string());
+                        }
+                    }
+                    cx.notify();
+                });
+
+                if applied.is_err() {
+                    // Window is gone; stop pumping.
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Fold a discrete event into the model.
+    ///
+    /// Most state arrives through reprojection; this handles only what is not
+    /// represented in the state store, such as transient errors.
+    fn absorb(&mut self, event: AppEvent) {
+        match event {
+            AppEvent::GatewayError { message } => {
+                self.model.status_line = message;
+            }
+            AppEvent::Ready { user, .. } => {
+                self.model.connected = true;
+                self.model.status_line = format!("connected as {user}");
+            }
+            _ => {}
+        }
     }
 
     fn guild_rail(&self) -> impl IntoElement {

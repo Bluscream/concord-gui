@@ -67,30 +67,72 @@ impl CoreStatus {
     }
 }
 
+/// Resolve a token without any interactive flow.
+///
+/// The GUI login screen is not built yet, so for now a session can only start
+/// from an existing credential (env var or the configured store). When that is
+/// absent the workspace opens in a disconnected state that says so, rather
+/// than failing to launch.
+fn existing_token() -> Option<String> {
+    if let Some(token) = token_store::env_token() {
+        return Some(token);
+    }
+    token_store::load_token(CredentialStoreMode::default())
+        .ok()
+        .flatten()
+}
+
 fn main() {
     let status = CoreStatus::probe();
 
     Application::new().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
 
-        let mut model = WorkspaceModel::placeholder();
-        model.status_line = if status.has_token {
-            format!(
-                "credential present - session not started | config: {}",
-                status.config_path
+        let window = cx
+            .open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    ..Default::default()
+                },
+                |_window, cx| {
+                    let mut model = WorkspaceModel::placeholder();
+                    model.status_line = if status.has_token {
+                        "starting session…".to_string()
+                    } else {
+                        format!(
+                            "no credential - set CONCORD_TOKEN or log in with the TUI | config: {}",
+                            status.config_path
+                        )
+                    };
+                    cx.new(|_cx| Workspace::new(model))
+                },
             )
-        } else {
-            "no credential - login required (not yet implemented)".to_string()
-        };
+            .expect("failed to open window");
 
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
-            |_window, cx| cx.new(|_cx| Workspace::new(model)),
-        )
-        .expect("failed to open window");
+        // Start the core only when a credential already exists.
+        if let Some(token) = existing_token() {
+            match session::spawn(token) {
+                Ok((updates, handle)) => {
+                    window
+                        .update(cx, |workspace, _window, cx| {
+                            workspace.attach(handle);
+                            cx.notify();
+                        })
+                        .ok();
+
+                    Workspace::pump(window, updates, cx);
+                }
+                Err(error) => {
+                    window
+                        .update(cx, |workspace, _window, cx| {
+                            workspace.model.status_line =
+                                format!("failed to start session: {error}");
+                            cx.notify();
+                        })
+                        .ok();
+                }
+            }
+        }
 
         cx.activate(true);
     });
