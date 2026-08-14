@@ -51,17 +51,44 @@ pub fn try_spawn_demo(
             Arc::new(state.clone()),
         ));
 
-        std::thread::Builder::new()
-            .name("concord-demo".into())
-            .spawn(move || {
-                let mut history_pages = std::collections::HashMap::new();
-                while let Some(command) = commands_rx.blocking_recv() {
-                    if !handle_command(&mut state, command, &updates_tx, &mut history_pages) {
-                        break;
+        // Runs on the shared runtime rather than a bare thread so it can wait
+        // on a timer as well as on commands: the canned reply needs to arrive
+        // after a pause, not instantly.
+        crate::runtime::spawn(async move {
+            let mut history_pages = std::collections::HashMap::new();
+            let mut pending: Vec<Scheduled> = Vec::new();
+
+            loop {
+                let next_delay = pending
+                    .iter()
+                    .map(|item| item.at)
+                    .min()
+                    .map(|at| at.saturating_duration_since(std::time::Instant::now()));
+
+                tokio::select! {
+                    command = commands_rx.recv() => {
+                        let Some(command) = command else { break };
+                        if !handle_command(
+                            &mut state,
+                            command,
+                            &updates_tx,
+                            &mut history_pages,
+                            &mut pending,
+                        ) {
+                            break;
+                        }
+                    }
+                    // Only armed when something is scheduled.
+                    _ = tokio::time::sleep(next_delay.unwrap_or(std::time::Duration::MAX)),
+                        if next_delay.is_some() =>
+                    {
+                        if !fire_due(&mut state, &updates_tx, &mut pending) {
+                            break;
+                        }
                     }
                 }
-            })
-            .ok()?;
+            }
+        })?;
 
         return Some(Ok((
             updates_rx,
@@ -73,6 +100,66 @@ pub fn try_spawn_demo(
 
     let _ = token;
     None
+}
+
+/// A deferred action, so the demo can show activity over time rather than
+/// resolving everything the instant a command arrives.
+#[cfg(feature = "fixtures")]
+struct Scheduled {
+    at: std::time::Instant,
+    action: Action,
+}
+
+#[cfg(feature = "fixtures")]
+enum Action {
+    /// Show a fixture user as typing.
+    StartTyping {
+        channel: concord::discord::Id<concord::discord::marker::ChannelMarker>,
+        user: concord::discord::Id<concord::discord::marker::UserMarker>,
+    },
+    /// Stop typing and post the reply.
+    Reply {
+        channel: concord::discord::Id<concord::discord::marker::ChannelMarker>,
+        user: concord::discord::Id<concord::discord::marker::UserMarker>,
+        author: &'static str,
+        body: &'static str,
+    },
+}
+
+/// Run every action whose deadline has passed.
+#[cfg(feature = "fixtures")]
+fn fire_due(
+    state: &mut concord::discord::DiscordState,
+    updates: &mpsc::UnboundedSender<Update>,
+    pending: &mut Vec<Scheduled>,
+) -> bool {
+    use concord::discord::fixtures;
+
+    let now = std::time::Instant::now();
+    let (due, rest): (Vec<_>, Vec<_>) = std::mem::take(pending)
+        .into_iter()
+        .partition(|item| item.at <= now);
+    *pending = rest;
+
+    for item in due {
+        match item.action {
+            Action::StartTyping { channel, user } => {
+                fixtures::set_typing(state, channel, user);
+            }
+            Action::Reply {
+                channel,
+                user,
+                author,
+                body,
+            } => {
+                fixtures::clear_typing(state, channel, user);
+                let guild = guild_of(state, channel);
+                fixtures::append_message(state, channel, guild, user, author, body);
+            }
+        }
+    }
+
+    updates.send(Update::State(Arc::new(state.clone()))).is_ok()
 }
 
 /// Apply one command to the synthetic state and publish the result.
@@ -87,6 +174,7 @@ fn handle_command(
         concord::discord::Id<concord::discord::marker::ChannelMarker>,
         usize,
     >,
+    pending: &mut Vec<Scheduled>,
 ) -> bool {
     use concord::discord::{AppEvent, ReactionEmoji, fixtures};
 
@@ -141,6 +229,28 @@ fn handle_command(
             }
 
             publish_state!();
+
+            // A canned reply, so the typing indicator and an incoming message
+            // are both demonstrable offline. Delays are long enough to be
+            // visible and short enough not to feel broken.
+            let (user, author, body) = fixtures::demo_responder(channel_id);
+            let now = std::time::Instant::now();
+            pending.push(Scheduled {
+                at: now + std::time::Duration::from_millis(600),
+                action: Action::StartTyping {
+                    channel: channel_id,
+                    user,
+                },
+            });
+            pending.push(Scheduled {
+                at: now + std::time::Duration::from_millis(2200),
+                action: Action::Reply {
+                    channel: channel_id,
+                    user,
+                    author,
+                    body,
+                },
+            });
         }
 
         AppCommand::JoinVoiceChannel {

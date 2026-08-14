@@ -221,6 +221,16 @@ impl PresenceCache {
             );
         }
     }
+
+    pub(in crate::discord) fn clear_fixture_typing(
+        &mut self,
+        channel_id: Id<ChannelMarker>,
+        user: Id<UserMarker>,
+    ) {
+        if let Some(entry) = self.typing.get_mut(&channel_id) {
+            entry.remove(&user);
+        }
+    }
 }
 
 #[cfg(feature = "fixtures")]

@@ -994,3 +994,41 @@ pub fn prepend_history(
 
     true
 }
+
+/// Show a fixture user as typing in a channel.
+pub fn set_typing(
+    state: &mut DiscordState,
+    channel_id: Id<marker::ChannelMarker>,
+    user: Id<marker::UserMarker>,
+) {
+    let presence = Arc::make_mut(&mut state.presence);
+    presence.set_fixture_typing(channel_id, &[user]);
+}
+
+/// Stop showing a user as typing.
+pub fn clear_typing(
+    state: &mut DiscordState,
+    channel_id: Id<marker::ChannelMarker>,
+    user: Id<marker::UserMarker>,
+) {
+    let presence = Arc::make_mut(&mut state.presence);
+    presence.clear_fixture_typing(channel_id, user);
+}
+
+/// Who replies to the demo user, and what they say.
+///
+/// Canned rather than generated: a demo should be predictable enough to
+/// screenshot, and inventing text risks it reading as real conversation.
+pub fn demo_responder(
+    channel_id: Id<marker::ChannelMarker>,
+) -> (Id<marker::UserMarker>, &'static str, &'static str) {
+    if channel_id == channel_id_of(300) {
+        (user_id(2001), "ferris", "got it, thanks")
+    } else {
+        (user_id(1002), "ferris", "sounds good to me")
+    }
+}
+
+fn channel_id_of(raw: u64) -> Id<marker::ChannelMarker> {
+    channel_id(raw)
+}
