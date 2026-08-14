@@ -7,7 +7,8 @@
 
 use concord::config::CredentialStoreMode;
 use concord::discord::{
-    AppCommand, AppEvent, Id, ReactionEmoji, ReplyReference, VoiceScope, marker, next_message_nonce,
+    AppCommand, AppEvent, Id, MessageSearchQuery, ReactionEmoji, ReplyReference, VoiceScope,
+    marker, next_message_nonce,
 };
 use concord::token_store;
 use gpui::{Context, FocusHandle, KeyDownEvent, Window, WindowHandle, prelude::*, px, rgb};
@@ -114,6 +115,22 @@ impl WorkspaceModel {
     }
 }
 
+/// Message-search state.
+#[derive(Default)]
+pub struct Search {
+    pub input: Composer,
+    pub results: Vec<SearchResult>,
+    pub total: Option<usize>,
+    pub running: bool,
+    pub error: Option<String>,
+}
+
+pub struct SearchResult {
+    pub author: String,
+    pub content: String,
+    pub channel_id: Id<marker::ChannelMarker>,
+}
+
 /// Which top-level surface is showing.
 pub enum Screen {
     Login(Login),
@@ -140,6 +157,8 @@ pub struct Workspace {
     pub voice_channel: Option<(Id<marker::ChannelMarker>, String)>,
     pub self_mute: bool,
     pub self_deaf: bool,
+    /// Search state. `None` when the search panel is closed.
+    pub search: Option<Search>,
     focus: FocusHandle,
 }
 
@@ -158,6 +177,7 @@ impl Workspace {
             voice_channel: None,
             self_mute: false,
             self_deaf: false,
+            search: None,
             focus: cx.focus_handle(),
         }
     }
@@ -336,6 +356,50 @@ impl Workspace {
         }
     }
 
+    /// Open or close the search panel.
+    pub fn toggle_search(&mut self) {
+        self.search = match self.search {
+            Some(_) => None,
+            None => Some(Search::default()),
+        };
+    }
+
+    /// Run the current search query, scoped to the open guild.
+    pub fn run_search(&mut self) {
+        let Some(search) = &mut self.search else {
+            return;
+        };
+        let content = search.input.text().trim().to_string();
+        if content.is_empty() {
+            return;
+        }
+
+        search.running = true;
+        search.error = None;
+        search.results.clear();
+
+        let Some(handle) = &self.handle else {
+            return;
+        };
+
+        handle.send(AppCommand::SearchMessages {
+            query: MessageSearchQuery {
+                guild_id: match self.nav.selection {
+                    Selection::Guild(id) => Some(id),
+                    Selection::DirectMessages => None,
+                },
+                // A DM search has no guild, so it is scoped to the open
+                // channel instead; otherwise Discord rejects the query.
+                channel_id: match self.nav.selection {
+                    Selection::DirectMessages => self.nav.channel,
+                    Selection::Guild(_) => None,
+                },
+                content: Some(content),
+                ..Default::default()
+            },
+        });
+    }
+
     /// Join a voice channel, leaving any current one first.
     ///
     /// Only guild voice is wired: DM calls use VoiceScope::Private and a
@@ -485,6 +549,114 @@ impl Workspace {
         });
     }
 
+    /// Search panel. Replaces the member list rather than adding a fourth
+    /// column, which would squeeze the message area past readability.
+    fn search_pane(&self) -> impl IntoElement {
+        let Some(search) = &self.search else {
+            return gpui::div();
+        };
+
+        let mut pane = column()
+            .w(px(layout::MEMBERS + 80.))
+            .h_full()
+            .bg(rgb(DARK.surface_sunken))
+            .border_l_1()
+            .border_color(rgb(DARK.border));
+
+        pane = pane.child(
+            row()
+                .w_full()
+                .h(px(layout::HEADER))
+                .px(px(space::MD))
+                .border_b_1()
+                .border_color(rgb(DARK.border))
+                .text_size(px(text::SM))
+                .text_color(rgb(DARK.text))
+                .child("Search"),
+        );
+
+        // Query field.
+        pane = pane.child(
+            gpui::div().w_full().p(px(space::SM)).child(
+                row()
+                    .w_full()
+                    .min_h(px(32.))
+                    .px(px(space::SM))
+                    .rounded(px(layout::RADIUS))
+                    .bg(rgb(DARK.surface))
+                    .border_1()
+                    .border_color(rgb(DARK.accent))
+                    .text_size(px(text::SM))
+                    .child(if search.input.text().is_empty() {
+                        gpui::div()
+                            .text_color(rgb(DARK.text_subtle))
+                            .child("Type and press Enter")
+                    } else {
+                        gpui::div()
+                            .text_color(rgb(DARK.text))
+                            .child(search.input.text().to_string())
+                    }),
+            ),
+        );
+
+        let status = if search.running {
+            Some("Searching…".to_string())
+        } else if let Some(error) = &search.error {
+            Some(error.clone())
+        } else {
+            search
+                .total
+                .map(|total| format!("{total} result{}", if total == 1 { "" } else { "s" }))
+        };
+
+        if let Some(status) = status {
+            pane = pane.child(
+                gpui::div()
+                    .px(px(space::MD))
+                    .pb(px(space::XS))
+                    .text_size(px(text::XS))
+                    .text_color(rgb(DARK.text_subtle))
+                    .child(status),
+            );
+        }
+
+        let mut results = column()
+            .id("search-results")
+            .flex_1()
+            .w_full()
+            .overflow_y_scroll();
+
+        for (index, result) in search.results.iter().enumerate() {
+            // Long bodies are trimmed: the panel is a jump list, not a reader.
+            let preview: String = result.content.chars().take(160).collect();
+
+            results = results.child(
+                column()
+                    .id(("search-result", index))
+                    .w_full()
+                    .px(px(space::MD))
+                    .py(px(space::SM))
+                    .gap(px(2.))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgb(DARK.surface_hover)))
+                    .child(
+                        gpui::div()
+                            .text_size(px(text::XS))
+                            .text_color(rgb(DARK.accent))
+                            .child(result.author.clone()),
+                    )
+                    .child(
+                        gpui::div()
+                            .text_size(px(text::SM))
+                            .text_color(rgb(DARK.text_muted))
+                            .child(preview),
+                    ),
+            );
+        }
+
+        pane.child(results)
+    }
+
     /// Connection bar, shown only while connected to voice.
     fn voice_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let Some((_, name)) = &self.voice_channel else {
@@ -597,6 +769,27 @@ impl Workspace {
         match event {
             AppEvent::GatewayError { message } => {
                 self.model.status_line = message;
+            }
+            AppEvent::MessageSearchLoaded { page } => {
+                if let Some(search) = &mut self.search {
+                    search.running = false;
+                    search.total = page.total_results;
+                    search.results = page
+                        .messages
+                        .into_iter()
+                        .map(|message| SearchResult {
+                            author: message.author,
+                            content: message.content.unwrap_or_default(),
+                            channel_id: message.channel_id,
+                        })
+                        .collect();
+                }
+            }
+            AppEvent::MessageSearchLoadFailed { .. } => {
+                if let Some(search) = &mut self.search {
+                    search.running = false;
+                    search.error = Some("search failed".to_string());
+                }
             }
             AppEvent::Ready { user, .. } => {
                 self.model.connected = true;
@@ -898,7 +1091,20 @@ impl Render for Workspace {
                         }
                     }
                     Screen::Ready => {
-                        if event.keystroke.key == "escape" {
+                        let key = event.keystroke.key.as_str();
+
+                        if key == "f" && event.keystroke.modifiers.control {
+                            this.toggle_search();
+                        } else if this.search.is_some() && key == "escape" {
+                            this.search = None;
+                        } else if let Some(search) = &mut this.search {
+                            // While the search panel is open it owns the
+                            // keyboard, so typing does not leak into the
+                            // composer behind it.
+                            if search.input.handle_key(event) {
+                                this.run_search();
+                            }
+                        } else if key == "escape" {
                             this.cancel_compose_context();
                         } else if this.composer.handle_key(event) {
                             this.send_message();
@@ -925,7 +1131,10 @@ impl Render for Workspace {
                         .child(self.guild_rail(cx))
                         .child(self.channel_sidebar(cx))
                         .child(self.content(window, cx))
-                        .when(self.shows_members(), |d| d.child(self.member_pane())),
+                        .when(self.search.is_some(), |d| d.child(self.search_pane()))
+                        .when(self.shows_members() && self.search.is_none(), |d| {
+                            d.child(self.member_pane())
+                        }),
                 )
                 .child(self.voice_bar(cx))
                 .child(self.status_bar())
