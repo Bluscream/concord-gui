@@ -20,6 +20,7 @@ concord = { path = "../..", default-features = false }
 gpui = "0.2.2"
 
 anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
 tracing = "0.1"
 
