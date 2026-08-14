@@ -51,8 +51,7 @@ pub fn sidebar_row(selected: bool) -> Div {
         .text_size(px(text::SM));
 
     if selected {
-        base.bg(rgb(DARK.surface_active))
-            .text_color(rgb(DARK.text))
+        base.bg(rgb(DARK.surface_active)).text_color(rgb(DARK.text))
     } else {
         base.text_color(rgb(DARK.text_muted))
             .hover(|s| s.bg(rgb(DARK.surface_hover)).text_color(rgb(DARK.text)))

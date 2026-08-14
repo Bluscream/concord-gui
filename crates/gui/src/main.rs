@@ -14,6 +14,7 @@
 // Wiring the command/event loop is the next step; see docs/REWRITE.md.
 
 mod model;
+mod session;
 mod theme;
 mod ui;
 
