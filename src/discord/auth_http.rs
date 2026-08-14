@@ -8,7 +8,7 @@ use super::fingerprint::{
 pub(super) const DISCORD_LOGIN_REFERER: &str = "https://discord.com/login";
 
 #[derive(Clone)]
-pub(crate) struct DiscordAuthSession {
+pub struct DiscordAuthSession {
     fingerprint: Arc<ClientFingerprint>,
     http: reqwest::Client,
 }

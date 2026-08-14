@@ -1,6 +1,6 @@
 mod action_policy;
 mod application_commands;
-mod auth_http;
+pub mod auth_http;
 mod avatar;
 mod builtin_commands;
 mod capabilities;
@@ -46,7 +46,9 @@ pub use application_commands::{
     ApplicationCommandOptionInfo, application_command_content_is_complete,
     application_command_option_scope, parsed_application_command_option_names,
 };
-pub(crate) use auth_http::DiscordAuthSession;
+// Public so that out-of-crate front-ends can drive the login flows and pass
+// the resulting session to `app::Session::start`.
+pub use auth_http::DiscordAuthSession;
 pub use builtin_commands::{
     BuiltinSlashCommandInfo, BuiltinSlashCommandParse, BuiltinSlashCommandSubmit,
     builtin_slash_commands, parse_builtin_slash_command,
