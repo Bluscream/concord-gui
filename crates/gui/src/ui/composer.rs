@@ -10,7 +10,7 @@
 
 use gpui::{Div, KeyDownEvent, prelude::*, px, rgb};
 
-use crate::theme::{DARK, layout, space, text};
+use crate::theme::{active, layout, space, text};
 use crate::ui::chrome::{column, row};
 
 /// A single-line text buffer with a cursor.
@@ -264,11 +264,11 @@ mod tests {
 pub fn composer_view(composer: &Composer, focused: bool, enabled: bool, placeholder: &str) -> Div {
     let content: Div = if !enabled {
         gpui::div()
-            .text_color(rgb(DARK.text_subtle))
+            .text_color(rgb(active().text_subtle))
             .child(placeholder.to_string())
     } else if composer.text().is_empty() {
         gpui::div()
-            .text_color(rgb(DARK.text_subtle))
+            .text_color(rgb(active().text_subtle))
             .child(placeholder.to_string())
     } else {
         // The caret is drawn by splitting the buffer at the cursor. A measured
@@ -288,7 +288,7 @@ pub fn composer_view(composer: &Composer, focused: bool, enabled: bool, placehol
         if let Some((head, _)) = before_head {
             column_view = column_view.child(
                 gpui::div()
-                    .text_color(rgb(DARK.text))
+                    .text_color(rgb(active().text))
                     .child(head.to_string()),
             );
         }
@@ -300,7 +300,7 @@ pub fn composer_view(composer: &Composer, focused: bool, enabled: bool, placehol
             row()
                 .child(
                     gpui::div()
-                        .text_color(rgb(DARK.text))
+                        .text_color(rgb(active().text))
                         .child(caret_before.to_string()),
                 )
                 .when(focused, |d| {
@@ -308,12 +308,12 @@ pub fn composer_view(composer: &Composer, focused: bool, enabled: bool, placehol
                         gpui::div()
                             .w(px(1.))
                             .h(px(text::BASE + 4.))
-                            .bg(rgb(DARK.accent)),
+                            .bg(rgb(active().accent)),
                     )
                 })
                 .child(
                     gpui::div()
-                        .text_color(rgb(DARK.text))
+                        .text_color(rgb(active().text))
                         .child(caret_after.to_string()),
                 ),
         );
@@ -321,7 +321,7 @@ pub fn composer_view(composer: &Composer, focused: bool, enabled: bool, placehol
         if let Some((_, tail)) = after_tail {
             column_view = column_view.child(
                 gpui::div()
-                    .text_color(rgb(DARK.text))
+                    .text_color(rgb(active().text))
                     .child(tail.to_string()),
             );
         }
@@ -340,12 +340,12 @@ pub fn composer_view(composer: &Composer, focused: bool, enabled: bool, placehol
                 .px(px(space::MD))
                 .py(px(space::SM))
                 .rounded(px(layout::RADIUS_LG))
-                .bg(rgb(DARK.surface_hover))
+                .bg(rgb(active().surface_hover))
                 .border_1()
                 .border_color(rgb(if focused && enabled {
-                    DARK.accent
+                    active().accent
                 } else {
-                    DARK.border
+                    active().border
                 }))
                 .text_size(px(text::BASE))
                 .child(content),

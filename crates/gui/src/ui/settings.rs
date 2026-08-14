@@ -7,13 +7,14 @@
 
 use gpui::{Context, Div, FocusHandle, KeyDownEvent, Render, Window, prelude::*, px, rgb};
 
-use crate::theme::{DARK, LIGHT, Palette, layout, space, text};
+use crate::theme::{DARK, LIGHT, Palette, active, layout, space, text};
 use crate::ui::chrome::{column, row};
 use crate::ui::composer::Composer;
 
 /// Toggleable boolean settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Toggle {
+    Hour24,
     ShowAvatars,
     CircularAvatars,
     DesktopNotifications,
@@ -25,6 +26,8 @@ pub enum Toggle {
 impl Toggle {
     pub fn label(self) -> &'static str {
         match self {
+            Toggle::LightMode => "Light theme",
+            Toggle::Hour24 => "24-hour timestamps",
             Toggle::ShowAvatars => "Show avatars",
             Toggle::CircularAvatars => "Circular avatars",
             Toggle::DesktopNotifications => "Desktop notifications",
@@ -45,11 +48,13 @@ impl Toggle {
 
     fn slot(self) -> usize {
         match self {
-            Toggle::ShowAvatars => 0,
-            Toggle::CircularAvatars => 1,
-            Toggle::DesktopNotifications => 2,
-            Toggle::NoiseSuppression => 3,
-            Toggle::ShareRichPresence => 4,
+            Toggle::LightMode => 0,
+            Toggle::Hour24 => 1,
+            Toggle::ShowAvatars => 2,
+            Toggle::CircularAvatars => 3,
+            Toggle::DesktopNotifications => 4,
+            Toggle::NoiseSuppression => 5,
+            Toggle::ShareRichPresence => 6,
             Toggle::LightMode => 5,
         }
     }
@@ -469,7 +474,11 @@ fn switch(on: bool, theme: &Palette) -> Div {
         .w(px(32.))
         .h(px(18.))
         .rounded(px(9.))
-        .bg(rgb(if on { theme.accent } else { theme.surface_active }))
+        .bg(rgb(if on {
+            theme.accent
+        } else {
+            theme.surface_active
+        }))
         .flex()
         .items_center();
 
@@ -477,7 +486,11 @@ fn switch(on: bool, theme: &Palette) -> Div {
         .w(px(14.))
         .h(px(14.))
         .rounded_full()
-        .bg(rgb(if on { theme.on_accent } else { theme.text_subtle }));
+        .bg(rgb(if on {
+            theme.on_accent
+        } else {
+            theme.text_subtle
+        }));
 
     if on {
         track.justify_end().child(knob.mr(px(2.)))

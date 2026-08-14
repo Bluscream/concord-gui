@@ -435,3 +435,37 @@ fn spoilers_are_hidden_until_revealed() {
 
     assert!(!spoilered.spoiler_revealed, "spoilers must start hidden");
 }
+
+#[test]
+fn timestamp_format_follows_the_hour_setting() {
+    let state = demo_state();
+    let rows = project_messages(
+        &state,
+        concord::discord::Id::new(111),
+        state.current_user_id(),
+    );
+    let row = rows.first().expect("fixture defines messages");
+
+    let h24 = row.short_time(true);
+    let h12 = row.short_time(false);
+
+    assert!(!h24.contains("AM") && !h24.contains("PM"), "got {h24}");
+    assert!(h12.contains("AM") || h12.contains("PM"), "got {h12}");
+
+    // `%l` pads with a leading space; that must not reach the UI.
+    assert_eq!(h12, h12.trim());
+    assert!(!row.long_time(false).starts_with(' '));
+}
+
+#[test]
+fn palette_switch_changes_the_active_theme() {
+    use crate::theme;
+
+    let dark_bg = theme::active().bg;
+    theme::set_light_mode(true);
+    let light_bg = theme::active().bg;
+    theme::set_light_mode(false);
+
+    assert_ne!(dark_bg, light_bg, "light and dark must differ");
+    assert_eq!(theme::active().bg, dark_bg, "must restore");
+}

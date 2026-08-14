@@ -14,7 +14,7 @@ use gpui::{
 use crate::model::markdown::{self, Kind};
 
 use crate::model::message::{MessageRow, format_bytes};
-use crate::theme::{DARK, layout, space, text};
+use crate::theme::{active, layout, space, text};
 use crate::ui::chrome::{avatar_with_url, column, row};
 
 /// Width reserved to the left of message bodies, so continuation rows align
@@ -62,6 +62,7 @@ pub fn message_list(
     rows: &[MessageRow],
     show_avatars: bool,
     circular_avatars: bool,
+    hour24: bool,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> impl IntoElement {
     let mut list = column()
@@ -77,7 +78,7 @@ pub fn message_list(
             column().flex_1().items_center().justify_center().child(
                 gpui::div()
                     .text_size(px(text::SM))
-                    .text_color(rgb(DARK.text_subtle))
+                    .text_color(rgb(active().text_subtle))
                     .child("No messages loaded"),
             ),
         );
@@ -89,6 +90,7 @@ pub fn message_list(
             message,
             show_avatars,
             circular_avatars,
+            hour24,
             on_action.clone(),
         ));
     }
@@ -106,6 +108,7 @@ fn message_row(
     message: &MessageRow,
     show_avatars: bool,
     circular_avatars: bool,
+    hour24: bool,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> impl IntoElement {
     let own = message.own;
@@ -115,12 +118,13 @@ fn message_row(
         .relative()
         .w_full()
         .group("message")
-        .hover(|style| style.bg(rgb(DARK.surface_hover)))
+        .hover(|style| style.bg(rgb(active().surface_hover)))
         .child(message_block(
             index,
             message,
             show_avatars,
             circular_avatars,
+            hour24,
             on_action.clone(),
         ))
         .child(
@@ -143,9 +147,9 @@ fn action_bar(
         .gap(px(2.))
         .p(px(2.))
         .rounded(px(layout::RADIUS))
-        .bg(rgb(DARK.surface))
+        .bg(rgb(active().surface))
         .border_1()
-        .border_color(rgb(DARK.border));
+        .border_color(rgb(active().border));
 
     let button = |label: &'static str, action: MessageAction, danger: bool| {
         let handler = on_action.clone();
@@ -156,8 +160,12 @@ fn action_bar(
             .rounded(px(3.))
             .cursor_pointer()
             .text_size(px(text::XS))
-            .text_color(rgb(if danger { DARK.danger } else { DARK.text_muted }))
-            .hover(|style| style.bg(rgb(DARK.surface_hover)))
+            .text_color(rgb(if danger {
+                active().danger
+            } else {
+                active().text_muted
+            }))
+            .hover(|style| style.bg(rgb(active().surface_hover)))
             .child(label)
             .on_click(move |_event, _window, cx| handler(index, action, cx))
     };
@@ -182,6 +190,7 @@ fn message_block(
     message: &MessageRow,
     show_avatars: bool,
     circular_avatars: bool,
+    hour24: bool,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> Div {
     let mut block = column()
@@ -204,8 +213,8 @@ fn message_block(
                         .w(px(GUTTER))
                         .flex_none()
                         .text_size(px(text::XS))
-                        .text_color(rgb(DARK.text_subtle))
-                        .child(message.short_time()),
+                        .text_color(rgb(active().text_subtle))
+                        .child(message.short_time(hour24)),
                 )
                 .child(message_body(index, message, on_action)),
         )
@@ -235,7 +244,7 @@ fn message_block(
                                 )),
                         )
                     })
-                    .child(author_line(message)),
+                    .child(author_line(message, hour24)),
             )
             .child(
                 row()
@@ -247,8 +256,8 @@ fn message_block(
     }
 }
 
-fn author_line(message: &MessageRow) -> Div {
-    let name_color = message.author_color.unwrap_or(DARK.text);
+fn author_line(message: &MessageRow, hour24: bool) -> Div {
+    let name_color = message.author_color.unwrap_or(active().text);
 
     let mut line = row().gap(px(space::SM)).child(
         gpui::div()
@@ -262,9 +271,9 @@ fn author_line(message: &MessageRow) -> Div {
             gpui::div()
                 .px(px(4.))
                 .rounded(px(3.))
-                .bg(rgb(DARK.accent))
+                .bg(rgb(active().accent))
                 .text_size(px(text::XS))
-                .text_color(rgb(DARK.on_accent))
+                .text_color(rgb(active().on_accent))
                 .child("BOT"),
         );
     }
@@ -272,15 +281,15 @@ fn author_line(message: &MessageRow) -> Div {
     line = line.child(
         gpui::div()
             .text_size(px(text::XS))
-            .text_color(rgb(DARK.text_subtle))
-            .child(message.long_time()),
+            .text_color(rgb(active().text_subtle))
+            .child(message.long_time(hour24)),
     );
 
     if message.pinned {
         line = line.child(
             gpui::div()
                 .text_size(px(text::XS))
-                .text_color(rgb(DARK.text_subtle))
+                .text_color(rgb(active().text_subtle))
                 .child("pinned"),
         );
     }
@@ -314,7 +323,7 @@ fn message_body(
             body = body.child(
                 gpui::div()
                     .text_size(px(text::XS))
-                    .text_color(rgb(DARK.text_subtle))
+                    .text_color(rgb(active().text_subtle))
                     .child("edited"),
             );
         }
@@ -332,7 +341,7 @@ fn message_body(
         body = body.child(
             gpui::div()
                 .text_size(px(text::XS))
-                .text_color(rgb(DARK.text_subtle))
+                .text_color(rgb(active().text_subtle))
                 .child(format!(
                     "{} embed{}",
                     message.embed_count,
@@ -378,16 +387,16 @@ fn rich_text(parsed: &markdown::Parsed, reveal_spoilers: bool) -> impl IntoEleme
         // Colour is driven by semantic kind, then by the remaining modifiers.
         highlight.color = Some(
             match style.kind {
-                Kind::Mention(_) | Kind::Role(_) => rgb(DARK.accent),
-                Kind::Channel(_) | Kind::Url => rgb(DARK.accent_hover),
-                Kind::Emoji(_) | Kind::Timestamp => rgb(DARK.text_muted),
+                Kind::Mention(_) | Kind::Role(_) => rgb(active().accent),
+                Kind::Channel(_) | Kind::Url => rgb(active().accent_hover),
+                Kind::Emoji(_) | Kind::Timestamp => rgb(active().text_muted),
                 Kind::Text => {
                     if style.code {
-                        rgb(DARK.warning)
+                        rgb(active().warning)
                     } else if style.quote {
-                        rgb(DARK.text_muted)
+                        rgb(active().text_muted)
                     } else {
-                        rgb(DARK.text)
+                        rgb(active().text)
                     }
                 }
             }
@@ -398,9 +407,9 @@ fn rich_text(parsed: &markdown::Parsed, reveal_spoilers: bool) -> impl IntoEleme
         // revealed they keep the block tint, so it stays clear which part of
         // the message was spoilered.
         if style.spoiler {
-            highlight.background_color = Some(rgb(DARK.surface_active).into());
+            highlight.background_color = Some(rgb(active().surface_active).into());
             if !reveal_spoilers {
-                highlight.color = Some(rgb(DARK.surface_active).into());
+                highlight.color = Some(rgb(active().surface_active).into());
             }
         }
 
@@ -409,7 +418,7 @@ fn rich_text(parsed: &markdown::Parsed, reveal_spoilers: bool) -> impl IntoEleme
 
     gpui::div()
         .text_size(px(text::BASE))
-        .text_color(rgb(DARK.text))
+        .text_color(rgb(active().text))
         .child(StyledText::new(parsed.text.clone()).with_highlights(highlights.collect::<Vec<_>>()))
 }
 
@@ -423,11 +432,11 @@ fn reply_context(author: &str, content: &str) -> Div {
         .gap(px(space::SM))
         .pl(px(GUTTER))
         .text_size(px(text::XS))
-        .text_color(rgb(DARK.text_subtle))
+        .text_color(rgb(active().text_subtle))
         .child(gpui::div().child("\u{21b3}"))
         .child(
             gpui::div()
-                .text_color(rgb(DARK.text_muted))
+                .text_color(rgb(active().text_muted))
                 .child(author.to_string()),
         )
         .child(gpui::div().child(preview))
@@ -439,24 +448,24 @@ fn attachment_chip(filename: &str, size: u64, is_image: bool) -> Div {
         .px(px(space::SM))
         .py(px(space::XS))
         .rounded(px(layout::RADIUS))
-        .bg(rgb(DARK.surface_hover))
+        .bg(rgb(active().surface_hover))
         .border_1()
-        .border_color(rgb(DARK.border))
+        .border_color(rgb(active().border))
         .text_size(px(text::SM))
         .child(
             gpui::div()
-                .text_color(rgb(DARK.text_subtle))
+                .text_color(rgb(active().text_subtle))
                 .child(if is_image { "IMG" } else { "FILE" }),
         )
         .child(
             gpui::div()
-                .text_color(rgb(DARK.text))
+                .text_color(rgb(active().text))
                 .child(filename.to_string()),
         )
         .child(
             gpui::div()
                 .text_size(px(text::XS))
-                .text_color(rgb(DARK.text_subtle))
+                .text_color(rgb(active().text_subtle))
                 .child(format_bytes(size)),
         )
 }
@@ -486,16 +495,16 @@ fn reaction_bar(
                 .py(px(2.))
                 .rounded(px(layout::RADIUS))
                 .bg(rgb(if *mine {
-                    DARK.surface_active
+                    active().surface_active
                 } else {
-                    DARK.surface_hover
+                    active().surface_hover
                 }))
-                .when(*mine, |d| d.border_1().border_color(rgb(DARK.accent)))
+                .when(*mine, |d| d.border_1().border_color(rgb(active().accent)))
                 .text_size(px(text::XS))
                 .child(gpui::div().child(glyph.clone()))
                 .child(
                     gpui::div()
-                        .text_color(rgb(DARK.text_muted))
+                        .text_color(rgb(active().text_muted))
                         .child(count.to_string()),
                 ),
         );

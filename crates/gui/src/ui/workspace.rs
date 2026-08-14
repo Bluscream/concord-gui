@@ -24,16 +24,14 @@ use crate::model::projection::{self, Navigation, Selection};
 use crate::notify;
 use crate::session::{SessionHandle, Update};
 
-use crate::theme::{DARK, Presence, layout, space, text};
+use crate::theme::{self, Presence, active, layout, space, text};
 use crate::ui::chrome::{
     avatar, avatar_with_url, column, header, hint, panel_sunken, presence_dot, row, section_label,
     sidebar_row, voice_participant_row,
 };
 use crate::ui::composer::{Composer, composer_view};
 use crate::ui::emoji::{self, EmojiPicker};
-use crate::ui::login::{
-    Login, LoginEvent, LoginHandle, LoginScreen, PasswordField, login_view,
-};
+use crate::ui::login::{Login, LoginEvent, LoginHandle, LoginScreen, PasswordField, login_view};
 use crate::ui::messages::{MessageAction, message_list};
 use crate::ui::profile::{ProfileView, profile_view};
 use crate::ui::settings::SettingsWindow;
@@ -269,9 +267,7 @@ impl Workspace {
                 window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_window, cx| {
-                cx.new(|cx| SettingsWindow::new(options, cx))
-            },
+            |_window, cx| cx.new(|cx| SettingsWindow::new(options, cx)),
         );
     }
 
@@ -352,18 +348,19 @@ impl Workspace {
 
         (self.messages, self.typing) = match self.nav.channel {
             Some(channel_id) => (
-                message::project_messages(
-                    state,
-                    channel_id,
-                    state.current_user_id(),
-                ),
+                message::project_messages(state, channel_id, state.current_user_id()),
                 projection::typing_names(state, channel_id, guild_id),
             ),
             None => (Vec::new(), Vec::new()),
         };
 
         if let Some((voice_channel_id, _)) = &self.voice_channel {
-            if let Some(channel) = self.model.channels.iter_mut().find(|c| c.id == Some(*voice_channel_id)) {
+            if let Some(channel) = self
+                .model
+                .channels
+                .iter_mut()
+                .find(|c| c.id == Some(*voice_channel_id))
+            {
                 let user_name = self
                     .last_state
                     .as_ref()
@@ -371,7 +368,11 @@ impl Workspace {
                     .unwrap_or("You")
                     .to_string();
 
-                if let Some(member) = channel.voice.iter_mut().find(|m| m.name == user_name || m.name == "You") {
+                if let Some(member) = channel
+                    .voice
+                    .iter_mut()
+                    .find(|m| m.name == user_name || m.name == "You")
+                {
                     member.muted = self.self_mute;
                     member.deafened = self.self_deaf;
                 } else {
@@ -481,19 +482,24 @@ impl Workspace {
     ///
     /// Called from the key handler with a `LoginAction` that describes what
     /// the user just did (submit, back, pick a method, etc.).
-    pub(crate) fn handle_login_action(&mut self, action: LoginAction, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn handle_login_action(
+        &mut self,
+        action: LoginAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match action {
             // -- Picker: user chose a method --------------------------------
             LoginAction::PickPassword => {
                 if let Screen::Login(l) = &mut self.screen {
-                    l.screen  = LoginScreen::Password;
-                    l.error   = None;
+                    l.screen = LoginScreen::Password;
+                    l.error = None;
                 }
             }
             LoginAction::PickToken => {
                 if let Screen::Login(l) = &mut self.screen {
                     l.screen = LoginScreen::Token;
-                    l.error  = None;
+                    l.error = None;
                 }
             }
             LoginAction::PickQr => {
@@ -502,10 +508,13 @@ impl Workspace {
                     l.handle = None;
                     l.qr.reset();
                     l.screen = LoginScreen::QrScan;
-                    l.error  = None;
+                    l.error = None;
 
                     let (rx, join) = crate::session::spawn_qr_login();
-                    l.handle = Some(LoginHandle { rx: Self::wrap_qr(rx), join });
+                    l.handle = Some(LoginHandle {
+                        rx: Self::wrap_qr(rx),
+                        join,
+                    });
 
                     if let Some(wh) = window.window_handle().downcast::<Workspace>() {
                         Workspace::pump_login(wh, cx);
@@ -522,25 +531,33 @@ impl Workspace {
                     // Abort any running auth task.
                     l.handle = None;
                     l.screen = LoginScreen::Picker;
-                    l.error  = None;
+                    l.error = None;
                 }
             }
 
             // -- Token screen: submit ---------------------------------------
             LoginAction::SubmitToken => {
-                let Screen::Login(login) = &mut self.screen else { return; };
-                if !login.token_submittable() { return; }
-                let token    = login.token.take();
+                let Screen::Login(login) = &mut self.screen else {
+                    return;
+                };
+                if !login.token_submittable() {
+                    return;
+                }
+                let token = login.token.take();
                 let remember = login.remember;
                 self.start_token_session(token, remember, window, cx);
             }
 
             // -- Password screen: submit ------------------------------------
             LoginAction::SubmitPassword => {
-                let Screen::Login(login) = &mut self.screen else { return; };
-                if !login.password.is_submittable() { return; }
+                let Screen::Login(login) = &mut self.screen else {
+                    return;
+                };
+                if !login.password.is_submittable() {
+                    return;
+                }
                 let login_id = login.password.login.text().to_string();
-                let pw       = login.password.password.text().to_string();
+                let pw = login.password.password.text().to_string();
                 login.password.in_progress = true;
                 login.password.status = "Authenticating with Discord…".to_string();
                 login.error = None;
@@ -558,8 +575,12 @@ impl Workspace {
 
             // -- MFA select: user picked a method ---------------------------
             LoginAction::PickMfaMethod(method) => {
-                let Screen::Login(login) = &mut self.screen else { return; };
-                let Some(challenge) = login.password.mfa.clone() else { return; };
+                let Screen::Login(login) = &mut self.screen else {
+                    return;
+                };
+                let Some(challenge) = login.password.mfa.clone() else {
+                    return;
+                };
                 match method {
                     MfaMethod::Totp => {
                         login.password.mfa_method = Some(MfaMethod::Totp);
@@ -588,11 +609,19 @@ impl Workspace {
 
             // -- MFA code: user submitted the code --------------------------
             LoginAction::SubmitMfaCode => {
-                let Screen::Login(login) = &mut self.screen else { return; };
-                if !login.password.is_mfa_submittable() { return; }
-                let Some(challenge) = login.password.mfa.clone() else { return; };
-                let Some(method)    = login.password.mfa_method else { return; };
-                let code            = login.password.mfa_code.text().to_string();
+                let Screen::Login(login) = &mut self.screen else {
+                    return;
+                };
+                if !login.password.is_mfa_submittable() {
+                    return;
+                }
+                let Some(challenge) = login.password.mfa.clone() else {
+                    return;
+                };
+                let Some(method) = login.password.mfa_method else {
+                    return;
+                };
+                let code = login.password.mfa_code.text().to_string();
                 login.password.in_progress = true;
                 login.password.status = "Verifying…".to_string();
                 login.error = None;
@@ -682,8 +711,8 @@ impl Workspace {
                         });
                         match done {
                             Err(_) => break,
-                            Ok(true) => break,  // session started or fatal error
-                            Ok(false) => {}     // keep pumping
+                            Ok(true) => break, // session started or fatal error
+                            Ok(false) => {}    // keep pumping
                         }
                     }
                 }
@@ -748,7 +777,7 @@ impl Workspace {
                     login.password.mfa_code.clear();
                     login.password.status = match phone {
                         Some(p) => format!("SMS sent to {p}. Enter the code below."),
-                        None    => "SMS sent. Enter the code below.".to_string(),
+                        None => "SMS sent. Enter the code below.".to_string(),
                     };
                     login.screen = LoginScreen::MfaCode;
                     login.handle = None;
@@ -786,7 +815,10 @@ impl Workspace {
                     cx.notify();
                     false
                 }
-                QrEvent::UserPending { username, discriminator } => {
+                QrEvent::UserPending {
+                    username,
+                    discriminator,
+                } => {
                     let display = if discriminator == "0" {
                         username
                     } else {
@@ -807,7 +839,8 @@ impl Workspace {
                     login.handle = None;
                     login.qr.reset();
                     login.screen = LoginScreen::Picker;
-                    login.error = Some("QR login was cancelled in the Discord mobile app.".to_string());
+                    login.error =
+                        Some("QR login was cancelled in the Discord mobile app.".to_string());
                     cx.notify();
                     false
                 }
@@ -1039,7 +1072,6 @@ impl Workspace {
         }
     }
 
-
     /// Open a file picker and stage the chosen files for the next send.
     fn attach_files(&mut self, cx: &mut Context<Self>) {
         if self.nav.channel.is_none() {
@@ -1227,7 +1259,6 @@ impl Workspace {
         });
     }
 
-
     /// Profile panel for the selected user.
     fn profile_pane(&self) -> impl IntoElement {
         let Some((user_id, view)) = &self.profile else {
@@ -1266,9 +1297,9 @@ impl Workspace {
         let mut pane = column()
             .w(px(layout::MEMBERS + 80.))
             .h_full()
-            .bg(rgb(DARK.surface_sunken))
+            .bg(rgb(active().surface_sunken))
             .border_l_1()
-            .border_color(rgb(DARK.border));
+            .border_color(rgb(active().border));
 
         pane = pane.child(
             row()
@@ -1276,9 +1307,9 @@ impl Workspace {
                 .h(px(layout::HEADER))
                 .px(px(space::MD))
                 .border_b_1()
-                .border_color(rgb(DARK.border))
+                .border_color(rgb(active().border))
                 .text_size(px(text::SM))
-                .text_color(rgb(DARK.text))
+                .text_color(rgb(active().text))
                 .child("Search"),
         );
 
@@ -1290,17 +1321,17 @@ impl Workspace {
                     .min_h(px(32.))
                     .px(px(space::SM))
                     .rounded(px(layout::RADIUS))
-                    .bg(rgb(DARK.surface))
+                    .bg(rgb(active().surface))
                     .border_1()
-                    .border_color(rgb(DARK.accent))
+                    .border_color(rgb(active().accent))
                     .text_size(px(text::SM))
                     .child(if search.input.text().is_empty() {
                         gpui::div()
-                            .text_color(rgb(DARK.text_subtle))
+                            .text_color(rgb(active().text_subtle))
                             .child("Type and press Enter")
                     } else {
                         gpui::div()
-                            .text_color(rgb(DARK.text))
+                            .text_color(rgb(active().text))
                             .child(search.input.text().to_string())
                     }),
             ),
@@ -1322,7 +1353,7 @@ impl Workspace {
                     .px(px(space::MD))
                     .pb(px(space::XS))
                     .text_size(px(text::XS))
-                    .text_color(rgb(DARK.text_subtle))
+                    .text_color(rgb(active().text_subtle))
                     .child(status),
             );
         }
@@ -1347,7 +1378,7 @@ impl Workspace {
                     .py(px(space::SM))
                     .gap(px(2.))
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgb(DARK.surface_hover)))
+                    .hover(|style| style.bg(rgb(active().surface_hover)))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.jump_to(channel_id, message_id);
                         cx.notify();
@@ -1355,13 +1386,13 @@ impl Workspace {
                     .child(
                         gpui::div()
                             .text_size(px(text::XS))
-                            .text_color(rgb(DARK.accent))
+                            .text_color(rgb(active().accent))
                             .child(result.author.clone()),
                     )
                     .child(
                         gpui::div()
                             .text_size(px(text::SM))
-                            .text_color(rgb(DARK.text_muted))
+                            .text_color(rgb(active().text_muted))
                             .child(preview),
                     ),
             );
@@ -1379,9 +1410,9 @@ impl Workspace {
             .w_full()
             .p(px(space::SM))
             .gap(px(space::XS))
-            .bg(rgb(DARK.surface))
+            .bg(rgb(active().surface))
             .border_t_1()
-            .border_color(rgb(DARK.border))
+            .border_color(rgb(active().border))
             // Top row: signal wave icon + Voice Connected status + channel name + disconnect button
             .child(
                 row()
@@ -1391,7 +1422,7 @@ impl Workspace {
                     .child(
                         gpui::div()
                             .text_size(px(14.))
-                            .text_color(rgb(DARK.success))
+                            .text_color(rgb(active().success))
                             .child("📶"),
                     )
                     .child(
@@ -1400,13 +1431,13 @@ impl Workspace {
                             .child(
                                 gpui::div()
                                     .text_size(px(text::XS))
-                                    .text_color(rgb(DARK.success))
+                                    .text_color(rgb(active().success))
                                     .child("Voice Connected"),
                             )
                             .child(
                                 gpui::div()
                                     .text_size(px(text::XS))
-                                    .text_color(rgb(DARK.text_subtle))
+                                    .text_color(rgb(active().text_subtle))
                                     .child(name.to_string()),
                             ),
                     )
@@ -1417,9 +1448,9 @@ impl Workspace {
                             .py(px(2.))
                             .rounded(px(layout::RADIUS))
                             .cursor_pointer()
-                            .hover(|s| s.bg(rgb(DARK.surface_hover)))
+                            .hover(|s| s.bg(rgb(active().surface_hover)))
                             .text_size(px(14.))
-                            .text_color(rgb(DARK.danger))
+                            .text_color(rgb(active().danger))
                             .child("📞")
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.leave_voice();
@@ -1441,11 +1472,19 @@ impl Workspace {
                             .items_center()
                             .justify_center()
                             .rounded(px(layout::RADIUS))
-                            .bg(rgb(if mute { DARK.danger } else { DARK.surface_sunken }))
+                            .bg(rgb(if mute {
+                                active().danger
+                            } else {
+                                active().surface_sunken
+                            }))
                             .text_size(px(12.))
-                            .text_color(rgb(if mute { DARK.on_accent } else { DARK.text }))
+                            .text_color(rgb(if mute {
+                                active().on_accent
+                            } else {
+                                active().text
+                            }))
                             .cursor_pointer()
-                            .hover(|s| s.bg(rgb(DARK.surface_hover)))
+                            .hover(|s| s.bg(rgb(active().surface_hover)))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.toggle_voice_flag(false);
                                 cx.notify();
@@ -1460,11 +1499,19 @@ impl Workspace {
                             .items_center()
                             .justify_center()
                             .rounded(px(layout::RADIUS))
-                            .bg(rgb(if deaf { DARK.danger } else { DARK.surface_sunken }))
+                            .bg(rgb(if deaf {
+                                active().danger
+                            } else {
+                                active().surface_sunken
+                            }))
                             .text_size(px(12.))
-                            .text_color(rgb(if deaf { DARK.on_accent } else { DARK.text }))
+                            .text_color(rgb(if deaf {
+                                active().on_accent
+                            } else {
+                                active().text
+                            }))
                             .cursor_pointer()
-                            .hover(|s| s.bg(rgb(DARK.surface_hover)))
+                            .hover(|s| s.bg(rgb(active().surface_hover)))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.toggle_voice_flag(true);
                                 cx.notify();
@@ -1479,11 +1526,11 @@ impl Workspace {
                             .items_center()
                             .justify_center()
                             .rounded(px(layout::RADIUS))
-                            .bg(rgb(DARK.surface_sunken))
+                            .bg(rgb(active().surface_sunken))
                             .text_size(px(12.))
-                            .text_color(rgb(DARK.text))
+                            .text_color(rgb(active().text))
                             .cursor_pointer()
-                            .hover(|s| s.bg(rgb(DARK.surface_hover)))
+                            .hover(|s| s.bg(rgb(active().surface_hover)))
                             .child("🖥"),
                     )
                     .child(
@@ -1494,11 +1541,11 @@ impl Workspace {
                             .items_center()
                             .justify_center()
                             .rounded(px(layout::RADIUS))
-                            .bg(rgb(DARK.surface_sunken))
+                            .bg(rgb(active().surface_sunken))
                             .text_size(px(12.))
-                            .text_color(rgb(DARK.text))
+                            .text_color(rgb(active().text))
                             .cursor_pointer()
-                            .hover(|s| s.bg(rgb(DARK.surface_hover)))
+                            .hover(|s| s.bg(rgb(active().surface_hover)))
                             .child("🎮"),
                     ),
             )
@@ -1522,9 +1569,9 @@ impl Workspace {
             .h(px(52.))
             .px(px(space::SM))
             .items_center()
-            .bg(rgb(DARK.surface))
+            .bg(rgb(active().surface))
             .border_t_1()
-            .border_color(rgb(DARK.border))
+            .border_color(rgb(active().border))
             // User Avatar & Name block (clicking opens profile)
             .child(
                 row()
@@ -1536,7 +1583,7 @@ impl Workspace {
                     .py(px(4.))
                     .rounded(px(layout::RADIUS))
                     .cursor_pointer()
-                    .hover(|s| s.bg(rgb(DARK.surface_hover)))
+                    .hover(|s| s.bg(rgb(active().surface_hover)))
                     .on_click(cx.listener(|this, _event, _window, cx| {
                         if let Some(state) = &this.last_state {
                             let user_id = state.current_user_id();
@@ -1556,13 +1603,13 @@ impl Workspace {
                             .child(
                                 gpui::div()
                                     .text_size(px(text::SM))
-                                    .text_color(rgb(DARK.text))
+                                    .text_color(rgb(active().text))
                                     .child(user_name),
                             )
                             .child(
                                 gpui::div()
                                     .text_size(px(text::XS))
-                                    .text_color(rgb(DARK.text_subtle))
+                                    .text_color(rgb(active().text_subtle))
                                     .child("Online"),
                             ),
                     ),
@@ -1579,11 +1626,22 @@ impl Workspace {
                             .items_center()
                             .justify_center()
                             .rounded(px(layout::RADIUS))
-                            .bg(rgb(if mute { DARK.danger } else { DARK.surface }))
+                            .bg(rgb(if mute {
+                                active().danger
+                            } else {
+                                active().surface
+                            }))
                             .text_size(px(14.))
-                            .text_color(rgb(if mute { DARK.on_accent } else { DARK.text_muted }))
+                            .text_color(rgb(if mute {
+                                active().on_accent
+                            } else {
+                                active().text_muted
+                            }))
                             .cursor_pointer()
-                            .hover(|s| s.bg(rgb(DARK.surface_hover)).text_color(rgb(DARK.text)))
+                            .hover(|s| {
+                                s.bg(rgb(active().surface_hover))
+                                    .text_color(rgb(active().text))
+                            })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.toggle_voice_flag(false);
                                 cx.notify();
@@ -1598,11 +1656,22 @@ impl Workspace {
                             .items_center()
                             .justify_center()
                             .rounded(px(layout::RADIUS))
-                            .bg(rgb(if deaf { DARK.danger } else { DARK.surface }))
+                            .bg(rgb(if deaf {
+                                active().danger
+                            } else {
+                                active().surface
+                            }))
                             .text_size(px(14.))
-                            .text_color(rgb(if deaf { DARK.on_accent } else { DARK.text_muted }))
+                            .text_color(rgb(if deaf {
+                                active().on_accent
+                            } else {
+                                active().text_muted
+                            }))
                             .cursor_pointer()
-                            .hover(|s| s.bg(rgb(DARK.surface_hover)).text_color(rgb(DARK.text)))
+                            .hover(|s| {
+                                s.bg(rgb(active().surface_hover))
+                                    .text_color(rgb(active().text))
+                            })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.toggle_voice_flag(true);
                                 cx.notify();
@@ -1617,11 +1686,22 @@ impl Workspace {
                             .items_center()
                             .justify_center()
                             .rounded(px(layout::RADIUS))
-                            .bg(rgb(if settings_open { DARK.accent } else { DARK.surface }))
+                            .bg(rgb(if settings_open {
+                                active().accent
+                            } else {
+                                active().surface
+                            }))
                             .text_size(px(14.))
-                            .text_color(rgb(if settings_open { DARK.on_accent } else { DARK.text_muted }))
+                            .text_color(rgb(if settings_open {
+                                active().on_accent
+                            } else {
+                                active().text_muted
+                            }))
                             .cursor_pointer()
-                            .hover(|s| s.bg(rgb(DARK.surface_hover)).text_color(rgb(DARK.text)))
+                            .hover(|s| {
+                                s.bg(rgb(active().surface_hover))
+                                    .text_color(rgb(active().text))
+                            })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.open_settings_window(cx);
                             }))
@@ -1702,7 +1782,7 @@ impl Workspace {
         let mut rail = column()
             .w(px(layout::GUILD_RAIL))
             .h_full()
-            .bg(rgb(DARK.bg))
+            .bg(rgb(active().bg))
             .items_center()
             .pt(px(space::MD))
             .gap(px(space::SM));
@@ -1721,11 +1801,13 @@ impl Workspace {
                     .relative()
                     .child(avatar(44., &guild.name))
                     .when(selected, |d| {
-                        d.border_2().border_color(rgb(DARK.accent)).rounded_full()
+                        d.border_2()
+                            .border_color(rgb(active().accent))
+                            .rounded_full()
                     })
                     .when(guild.unread && !selected, |d| {
                         d.border_1()
-                            .border_color(rgb(DARK.text_muted))
+                            .border_color(rgb(active().text_muted))
                             .rounded_full()
                     }),
             );
@@ -1747,9 +1829,9 @@ impl Workspace {
             .h(px(layout::HEADER))
             .px(px(space::MD))
             .border_b_1()
-            .border_color(rgb(DARK.border))
+            .border_color(rgb(active().border))
             .text_size(px(text::BASE))
-            .text_color(rgb(DARK.text))
+            .text_color(rgb(active().text))
             .child(guild_name);
 
         let mut list = column()
@@ -1777,14 +1859,14 @@ impl Workspace {
                 .child(
                     gpui::div()
                         .w(px(14.))
-                        .text_color(rgb(DARK.text_subtle))
+                        .text_color(rgb(active().text_subtle))
                         .child(channel.kind.glyph()),
                 )
                 .child(
                     gpui::div()
                         .flex_1()
                         .when(channel.unread && !selected, |d| {
-                            d.text_color(rgb(DARK.text))
+                            d.text_color(rgb(active().text))
                         })
                         .child(channel.name.clone()),
                 );
@@ -1794,9 +1876,9 @@ impl Workspace {
                     gpui::div()
                         .px(px(6.))
                         .rounded_full()
-                        .bg(rgb(DARK.danger))
+                        .bg(rgb(active().danger))
                         .text_size(px(text::XS))
-                        .text_color(rgb(DARK.on_accent))
+                        .text_color(rgb(active().on_accent))
                         .child(channel.mentions.to_string()),
                 );
             }
@@ -1839,9 +1921,7 @@ impl Workspace {
             }
         }
 
-        let mut sidebar = panel_sunken(layout::SIDEBAR)
-            .child(header_row)
-            .child(list);
+        let mut sidebar = panel_sunken(layout::SIDEBAR).child(header_row).child(list);
 
         if let Some((_, name)) = &self.voice_channel {
             sidebar = sidebar.child(self.voice_connected_card(name, cx));
@@ -1856,9 +1936,9 @@ impl Workspace {
         let mut pane = column()
             .w(px(layout::MEMBERS))
             .h_full()
-            .bg(rgb(DARK.surface_sunken))
+            .bg(rgb(active().surface_sunken))
             .border_l_1()
-            .border_color(rgb(DARK.border))
+            .border_color(rgb(active().border))
             .pt(px(space::SM))
             .overflow_hidden();
 
@@ -1868,7 +1948,7 @@ impl Workspace {
                     .px(px(space::MD))
                     .pt(px(space::MD))
                     .text_size(px(text::XS))
-                    .text_color(rgb(DARK.text_subtle))
+                    .text_color(rgb(active().text_subtle))
                     .child("No member data"),
             );
         }
@@ -1892,7 +1972,7 @@ impl Workspace {
                 .child(
                     gpui::div()
                         .flex_1()
-                        .text_color(rgb(member.color.unwrap_or(DARK.text_muted)))
+                        .text_color(rgb(member.color.unwrap_or(active().text_muted)))
                         .child(member.name.clone()),
                 );
 
@@ -1901,9 +1981,9 @@ impl Workspace {
                     gpui::div()
                         .px(px(4.))
                         .rounded(px(3.))
-                        .bg(rgb(DARK.accent))
+                        .bg(rgb(active().accent))
                         .text_size(px(text::XS))
-                        .text_color(rgb(DARK.on_accent))
+                        .text_color(rgb(active().on_accent))
                         .child("BOT"),
                 );
             }
@@ -1937,19 +2017,19 @@ impl Workspace {
         column()
             .flex_1()
             .h_full()
-            .bg(rgb(DARK.surface))
+            .bg(rgb(active().surface))
             .child(
                 header()
                     .child(
                         gpui::div()
-                            .text_color(rgb(DARK.text_subtle))
+                            .text_color(rgb(active().text_subtle))
                             .child(ChannelKind::Text.glyph()),
                     )
                     .child(
                         gpui::div()
                             .flex_1()
                             .text_size(px(text::BASE))
-                            .text_color(rgb(DARK.text))
+                            .text_color(rgb(active().text))
                             .child(channel_name.clone()),
                     )
                     .when(self.can_call(), |header| {
@@ -1962,9 +2042,9 @@ impl Workspace {
                                 .py(px(space::XS))
                                 .rounded(px(layout::RADIUS))
                                 .cursor_pointer()
-                                .bg(rgb(DARK.surface_hover))
+                                .bg(rgb(active().surface_hover))
                                 .text_size(px(text::XS))
-                                .text_color(rgb(DARK.success))
+                                .text_color(rgb(active().success))
                                 .child("call")
                                 .on_click(cx.listener(move |this, _event, _window, cx| {
                                     if let Some(channel_id) = call_channel {
@@ -1979,6 +2059,7 @@ impl Workspace {
                 &self.messages,
                 self.options.display.show_avatars,
                 self.options.display.circular_avatars,
+                self.options.display.hour_format_24,
                 {
                     // Click handlers run with only an `App`, so the workspace is
                     // reached through its entity handle rather than captured.
@@ -2022,11 +2103,11 @@ impl Workspace {
             .h(px(24.))
             .px(px(space::MD))
             .gap(px(space::SM))
-            .bg(rgb(DARK.surface_sunken))
+            .bg(rgb(active().surface_sunken))
             .border_t_1()
-            .border_color(rgb(DARK.border))
+            .border_color(rgb(active().border))
             .text_size(px(text::XS))
-            .text_color(rgb(DARK.text_subtle))
+            .text_color(rgb(active().text_subtle))
             .child(presence_dot(if self.model.connected {
                 Presence::Online
             } else {
@@ -2048,9 +2129,9 @@ impl Render for Workspace {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 match &mut this.screen {
                     Screen::Login(login) => {
-                        let key     = event.keystroke.key.as_str();
-                        let ctrl    = event.keystroke.modifiers.control
-                            || event.keystroke.modifiers.platform;
+                        let key = event.keystroke.key.as_str();
+                        let ctrl =
+                            event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
 
                         // ctrl-r toggles credential persistence on any sub-screen.
                         if key == "r" && ctrl {
@@ -2091,19 +2172,30 @@ impl Render for Workspace {
                                     }
                                     "enter" => {
                                         drop(login);
-                                        this.handle_login_action(LoginAction::SubmitPassword, window, cx);
+                                        this.handle_login_action(
+                                            LoginAction::SubmitPassword,
+                                            window,
+                                            cx,
+                                        );
                                     }
                                     _ => {
                                         let pasted = (key == "v" && ctrl)
-                                            .then(|| cx.read_from_clipboard().and_then(|item| item.text()))
+                                            .then(|| {
+                                                cx.read_from_clipboard()
+                                                    .and_then(|item| item.text())
+                                            })
                                             .flatten();
                                         if let Screen::Login(l) = &mut this.screen {
                                             let field = l.password.focused_field;
                                             match field {
-                                                PasswordField::Login =>
-                                                    l.password.login.handle_key_with_clipboard(event, pasted),
-                                                PasswordField::Password =>
-                                                    l.password.password.handle_key_with_clipboard(event, pasted),
+                                                PasswordField::Login => l
+                                                    .password
+                                                    .login
+                                                    .handle_key_with_clipboard(event, pasted),
+                                                PasswordField::Password => l
+                                                    .password
+                                                    .password
+                                                    .handle_key_with_clipboard(event, pasted),
                                             };
                                         }
                                     }
@@ -2113,7 +2205,9 @@ impl Render for Workspace {
                             // ---- MFA method select: number keys -----------
                             LoginScreen::MfaSelect => {
                                 // Pick a method by number key or Escape to go back.
-                                let methods: Vec<MfaMethod> = login.password.mfa
+                                let methods: Vec<MfaMethod> = login
+                                    .password
+                                    .mfa
                                     .as_ref()
                                     .map(|c| c.methods.clone())
                                     .unwrap_or_default();
@@ -2126,14 +2220,16 @@ impl Render for Workspace {
                                         drop(login);
                                         this.handle_login_action(
                                             LoginAction::PickMfaMethod(methods[0]),
-                                            window, cx,
+                                            window,
+                                            cx,
                                         );
                                     }
                                     "2" if methods.len() >= 2 => {
                                         drop(login);
                                         this.handle_login_action(
                                             LoginAction::PickMfaMethod(methods[1]),
-                                            window, cx,
+                                            window,
+                                            cx,
                                         );
                                     }
                                     _ => {}
@@ -2141,50 +2237,60 @@ impl Render for Workspace {
                             }
 
                             // ---- MFA code entry ---------------------------
-                            LoginScreen::MfaCode => {
-                                match key {
-                                    "escape" => {
-                                        if let Screen::Login(l) = &mut this.screen {
-                                            l.screen = LoginScreen::MfaSelect;
-                                        }
-                                    }
-                                    "enter" => {
-                                        drop(login);
-                                        this.handle_login_action(LoginAction::SubmitMfaCode, window, cx);
-                                    }
-                                    _ => {
-                                        let pasted = (key == "v" && ctrl)
-                                            .then(|| cx.read_from_clipboard().and_then(|item| item.text()))
-                                            .flatten();
-                                        if let Screen::Login(l) = &mut this.screen {
-                                            l.password.mfa_code.handle_key_with_clipboard(event, pasted);
-                                        }
+                            LoginScreen::MfaCode => match key {
+                                "escape" => {
+                                    if let Screen::Login(l) = &mut this.screen {
+                                        l.screen = LoginScreen::MfaSelect;
                                     }
                                 }
-                            }
+                                "enter" => {
+                                    drop(login);
+                                    this.handle_login_action(
+                                        LoginAction::SubmitMfaCode,
+                                        window,
+                                        cx,
+                                    );
+                                }
+                                _ => {
+                                    let pasted = (key == "v" && ctrl)
+                                        .then(|| {
+                                            cx.read_from_clipboard().and_then(|item| item.text())
+                                        })
+                                        .flatten();
+                                    if let Screen::Login(l) = &mut this.screen {
+                                        l.password
+                                            .mfa_code
+                                            .handle_key_with_clipboard(event, pasted);
+                                    }
+                                }
+                            },
 
                             // ---- Token entry ------------------------------
-                            LoginScreen::Token => {
-                                match key {
-                                    "escape" => {
-                                        drop(login);
-                                        this.handle_login_action(LoginAction::Back, window, cx);
-                                    }
-                                    _ => {
-                                        let pasted = (key == "v" && ctrl)
-                                            .then(|| cx.read_from_clipboard().and_then(|item| item.text()))
-                                            .flatten();
-                                        let submit = if let Screen::Login(l) = &mut this.screen {
-                                            l.token.handle_key_with_clipboard(event, pasted)
-                                        } else {
-                                            false
-                                        };
-                                        if submit {
-                                            this.handle_login_action(LoginAction::SubmitToken, window, cx);
-                                        }
+                            LoginScreen::Token => match key {
+                                "escape" => {
+                                    drop(login);
+                                    this.handle_login_action(LoginAction::Back, window, cx);
+                                }
+                                _ => {
+                                    let pasted = (key == "v" && ctrl)
+                                        .then(|| {
+                                            cx.read_from_clipboard().and_then(|item| item.text())
+                                        })
+                                        .flatten();
+                                    let submit = if let Screen::Login(l) = &mut this.screen {
+                                        l.token.handle_key_with_clipboard(event, pasted)
+                                    } else {
+                                        false
+                                    };
+                                    if submit {
+                                        this.handle_login_action(
+                                            LoginAction::SubmitToken,
+                                            window,
+                                            cx,
+                                        );
                                     }
                                 }
-                            }
+                            },
 
                             // ---- QR scan: only Escape to cancel ----------
                             LoginScreen::QrScan => {
@@ -2234,7 +2340,8 @@ impl Render for Workspace {
                                     .then(|| cx.read_from_clipboard().and_then(|item| item.text()))
                                     .flatten();
                                 if this.url_composer.handle_key_with_clipboard(event, pasted) {
-                                    this.options.server.discord_base_url = this.url_composer.text().to_string();
+                                    this.options.server.discord_base_url =
+                                        this.url_composer.text().to_string();
                                     this.save_options();
                                 }
                             }
@@ -2279,7 +2386,7 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .size_full()
-            .bg(rgb(DARK.bg))
+            .bg(rgb(active().bg))
             .text_size(px(text::BASE))
             .when(matches!(self.screen, Screen::Login(_)), |d| {
                 let Screen::Login(login) = &self.screen else {
@@ -2299,9 +2406,7 @@ impl Render for Workspace {
                         // Right column precedence: profile, then search, then
                         // the member list. Only one occupies it at a time so
                         // the message area keeps a readable width.
-                        .when(self.profile.is_some(), |d| {
-                            d.child(self.profile_pane())
-                        })
+                        .when(self.profile.is_some(), |d| d.child(self.profile_pane()))
                         .when(self.profile.is_none() && self.search.is_some(), |d| {
                             d.child(self.search_pane(cx))
                         })

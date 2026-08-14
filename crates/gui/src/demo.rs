@@ -4,12 +4,12 @@
 //! setup. All demo-specific code is isolated here so it does not clutter core session
 //! or workspace UI logic, and can be cleanly disabled or removed at any time.
 
-#[cfg(feature = "fixtures")]
-use std::sync::Arc;
+use crate::session::{SessionHandle, Update};
 #[cfg(feature = "fixtures")]
 use concord::discord::AppCommand;
+#[cfg(feature = "fixtures")]
+use std::sync::Arc;
 use tokio::sync::mpsc;
-use crate::session::{SessionHandle, Update};
 
 /// Check if the given token string is a demo/fixture token.
 pub fn is_demo_token(token: &str) -> bool {

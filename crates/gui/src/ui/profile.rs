@@ -7,7 +7,7 @@
 
 use gpui::{Div, prelude::*, px, rgb};
 
-use crate::theme::{DARK, layout, space, text};
+use crate::theme::{active, layout, space, text};
 use crate::ui::chrome::{avatar_with_url, column, row};
 
 /// A profile projected for rendering.
@@ -28,9 +28,9 @@ pub fn profile_view(profile: &ProfileView, circular_avatars: bool) -> Div {
     let mut panel = column()
         .w(px(layout::MEMBERS + 80.))
         .h_full()
-        .bg(rgb(DARK.surface_sunken))
+        .bg(rgb(active().surface_sunken))
         .border_l_1()
-        .border_color(rgb(DARK.border))
+        .border_color(rgb(active().border))
         .overflow_hidden();
 
     // Header: avatar, name, handle.
@@ -41,7 +41,7 @@ pub fn profile_view(profile: &ProfileView, circular_avatars: bool) -> Div {
             .gap(px(space::SM))
             .items_center()
             .border_b_1()
-            .border_color(rgb(DARK.border))
+            .border_color(rgb(active().border))
             .child(avatar_with_url(
                 64.,
                 &profile.display_name,
@@ -51,7 +51,7 @@ pub fn profile_view(profile: &ProfileView, circular_avatars: bool) -> Div {
             .child(
                 gpui::div()
                     .text_size(px(text::LG))
-                    .text_color(rgb(DARK.text))
+                    .text_color(rgb(active().text))
                     .child(profile.display_name.clone()),
             ),
     );
@@ -78,11 +78,11 @@ pub fn profile_view(profile: &ProfileView, circular_avatars: bool) -> Div {
                     .px(px(6.))
                     .py(px(2.))
                     .rounded(px(layout::RADIUS))
-                    .bg(rgb(DARK.surface_hover))
+                    .bg(rgb(active().surface_hover))
                     .border_1()
-                    .border_color(rgb(color.unwrap_or(DARK.border)))
+                    .border_color(rgb(color.unwrap_or(active().border)))
                     .text_size(px(text::XS))
-                    .text_color(rgb(color.unwrap_or(DARK.text_muted)))
+                    .text_color(rgb(color.unwrap_or(active().text_muted)))
                     .child(name.clone()),
             );
         }
@@ -104,7 +104,7 @@ pub fn profile_view(profile: &ProfileView, circular_avatars: bool) -> Div {
             list = list.child(
                 gpui::div()
                     .text_size(px(text::SM))
-                    .text_color(rgb(DARK.text_muted))
+                    .text_color(rgb(active().text_muted))
                     .child(guild.clone()),
             );
         }
@@ -126,7 +126,7 @@ pub fn profile_view(profile: &ProfileView, circular_avatars: bool) -> Div {
                 .px(px(space::MD))
                 .py(px(space::SM))
                 .text_size(px(text::XS))
-                .text_color(rgb(DARK.text_subtle))
+                .text_color(rgb(active().text_subtle))
                 .child("Loading profile…"),
         );
     }
@@ -137,7 +137,7 @@ pub fn profile_view(profile: &ProfileView, circular_avatars: bool) -> Div {
 fn label(text_value: &'static str) -> Div {
     gpui::div()
         .text_size(px(text::XS))
-        .text_color(rgb(DARK.text_subtle))
+        .text_color(rgb(active().text_subtle))
         .child(text_value)
 }
 
@@ -151,7 +151,7 @@ fn section(title: &'static str, body: String) -> Div {
         .child(
             gpui::div()
                 .text_size(px(text::SM))
-                .text_color(rgb(DARK.text))
+                .text_color(rgb(active().text))
                 .child(body),
         )
 }

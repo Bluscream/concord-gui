@@ -10,7 +10,7 @@
 
 use gpui::{Div, prelude::*, px, rgb};
 
-use crate::theme::{DARK, layout, space, text};
+use crate::theme::{active, layout, space, text};
 use crate::ui::chrome::{column, row};
 
 /// Picker state, anchored to the message being reacted to.
@@ -53,14 +53,14 @@ pub fn picker_view(
         .p(px(space::SM))
         .gap(px(space::XS))
         .rounded(px(layout::RADIUS_LG))
-        .bg(rgb(DARK.surface))
+        .bg(rgb(active().surface))
         .border_1()
-        .border_color(rgb(DARK.border));
+        .border_color(rgb(active().border));
 
     panel = panel.child(
         gpui::div()
             .text_size(px(text::XS))
-            .text_color(rgb(DARK.text_subtle))
+            .text_color(rgb(active().text_subtle))
             .child("Enter to pick  ·  arrows to move  ·  Esc to close"),
     );
 
@@ -71,7 +71,7 @@ pub fn picker_view(
             gpui::div()
                 .pt(px(space::XS))
                 .text_size(px(text::XS))
-                .text_color(rgb(DARK.text_subtle))
+                .text_color(rgb(active().text_subtle))
                 .child(*title),
         );
 
@@ -93,8 +93,8 @@ pub fn picker_view(
                     .rounded(px(layout::RADIUS))
                     .cursor_pointer()
                     .text_size(px(text::LG))
-                    .when(selected, |d| d.bg(rgb(DARK.surface_active)))
-                    .hover(|style| style.bg(rgb(DARK.surface_hover)))
+                    .when(selected, |d| d.bg(rgb(active().surface_active)))
+                    .hover(|style| style.bg(rgb(active().surface_hover)))
                     .child(*glyph)
                     .on_click(move |_event, _window, cx| handler(glyph, cx)),
             );

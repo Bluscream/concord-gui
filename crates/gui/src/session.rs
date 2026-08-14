@@ -35,7 +35,10 @@ pub use concord::discord::password_auth::{MfaChallenge, MfaMethod};
 pub fn spawn_password_login(
     login: String,
     password: String,
-) -> (mpsc::Receiver<PasswordAuthEvent>, tokio::task::JoinHandle<()>) {
+) -> (
+    mpsc::Receiver<PasswordAuthEvent>,
+    tokio::task::JoinHandle<()>,
+) {
     let (tx, rx) = mpsc::channel(8);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -47,12 +50,8 @@ pub fn spawn_password_login(
         .spawn(move || {
             rt.block_on(async move {
                 let auth_session = DiscordAuthSession::fallback();
-                let join = password_auth::spawn_login_with_auth_session(
-                    login,
-                    password,
-                    auth_session,
-                    tx,
-                );
+                let join =
+                    password_auth::spawn_login_with_auth_session(login, password, auth_session, tx);
                 let _ = join.await;
             });
         })
@@ -77,7 +76,10 @@ pub fn spawn_mfa_verify(
     code: String,
     ticket: String,
     login_instance_id: String,
-) -> (mpsc::Receiver<PasswordAuthEvent>, tokio::task::JoinHandle<()>) {
+) -> (
+    mpsc::Receiver<PasswordAuthEvent>,
+    tokio::task::JoinHandle<()>,
+) {
     let (tx, rx) = mpsc::channel(8);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -109,7 +111,10 @@ pub fn spawn_mfa_verify(
 /// Spawn an SMS send task.
 pub fn spawn_sms_send(
     ticket: String,
-) -> (mpsc::Receiver<PasswordAuthEvent>, tokio::task::JoinHandle<()>) {
+) -> (
+    mpsc::Receiver<PasswordAuthEvent>,
+    tokio::task::JoinHandle<()>,
+) {
     let (tx, rx) = mpsc::channel(8);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -121,11 +126,8 @@ pub fn spawn_sms_send(
         .spawn(move || {
             rt.block_on(async move {
                 let auth_session = DiscordAuthSession::fallback();
-                let join = password_auth::spawn_sms_send_with_auth_session(
-                    ticket,
-                    auth_session,
-                    tx,
-                );
+                let join =
+                    password_auth::spawn_sms_send_with_auth_session(ticket, auth_session, tx);
                 let _ = join.await;
             });
         })

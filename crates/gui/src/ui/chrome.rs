@@ -6,7 +6,7 @@
 
 use gpui::{Div, prelude::*, px, rgb};
 
-use crate::theme::{DARK, Presence, layout, space, text};
+use crate::theme::{Presence, active, layout, space, text};
 
 /// A vertical divider-free column that fills its parent.
 pub fn column() -> Div {
@@ -23,9 +23,9 @@ pub fn panel_sunken(width: f32) -> Div {
     column()
         .w(px(width))
         .h_full()
-        .bg(rgb(DARK.surface_sunken))
+        .bg(rgb(active().surface_sunken))
         .border_r_1()
-        .border_color(rgb(DARK.border))
+        .border_color(rgb(active().border))
 }
 
 /// A section label above a group of sidebar rows.
@@ -35,7 +35,7 @@ pub fn section_label(title: impl Into<gpui::SharedString>) -> Div {
         .pt(px(space::MD))
         .pb(px(space::XS))
         .text_size(px(text::XS))
-        .text_color(rgb(DARK.text_subtle))
+        .text_color(rgb(active().text_subtle))
         .child(title.into())
 }
 
@@ -51,10 +51,13 @@ pub fn sidebar_row(selected: bool) -> Div {
         .text_size(px(text::SM));
 
     if selected {
-        base.bg(rgb(DARK.surface_active)).text_color(rgb(DARK.text))
+        base.bg(rgb(active().surface_active))
+            .text_color(rgb(active().text))
     } else {
-        base.text_color(rgb(DARK.text_muted))
-            .hover(|s| s.bg(rgb(DARK.surface_hover)).text_color(rgb(DARK.text)))
+        base.text_color(rgb(active().text_muted)).hover(|s| {
+            s.bg(rgb(active().surface_hover))
+                .text_color(rgb(active().text))
+        })
     }
 }
 
@@ -64,7 +67,7 @@ pub fn presence_dot(presence: Presence) -> Div {
         .w(px(8.))
         .h(px(8.))
         .rounded_full()
-        .bg(rgb(presence.color(&DARK)))
+        .bg(rgb(presence.color(active())))
 }
 
 /// Circular avatar.
@@ -138,16 +141,16 @@ pub fn header() -> Div {
         .h(px(layout::HEADER))
         .px(px(space::LG))
         .gap(px(space::SM))
-        .bg(rgb(DARK.surface))
+        .bg(rgb(active().surface))
         .border_b_1()
-        .border_color(rgb(DARK.border))
+        .border_color(rgb(active().border))
 }
 
 /// Muted helper text, e.g. empty states.
 pub fn hint(message: impl Into<gpui::SharedString>) -> Div {
     gpui::div()
         .text_size(px(text::SM))
-        .text_color(rgb(DARK.text_subtle))
+        .text_color(rgb(active().text_subtle))
         .child(message.into())
 }
 
@@ -173,20 +176,20 @@ pub fn voice_participant_row(
                 // Speaking is shown by brightening the name rather than by a
                 // ring, which would reflow the row on every voice activity.
                 .text_color(rgb(if speaking {
-                    DARK.success
+                    active().success
                 } else {
-                    DARK.text_muted
+                    active().text_muted
                 }))
                 .child(name.to_string()),
         )
         .when(streaming, |d| {
-            d.child(gpui::div().text_color(rgb(DARK.accent)).child("live"))
+            d.child(gpui::div().text_color(rgb(active().accent)).child("live"))
         })
         .when(muted || deafened, |d| {
-            d.child(gpui::div().text_color(rgb(DARK.danger)).child(if deafened {
-                "deaf"
-            } else {
-                "mute"
-            }))
+            d.child(
+                gpui::div()
+                    .text_color(rgb(active().danger))
+                    .child(if deafened { "deaf" } else { "mute" }),
+            )
         })
 }

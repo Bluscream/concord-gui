@@ -9,6 +9,8 @@
 //! Mapping that onto these tokens is a later step; the token names are chosen
 //! to make that mapping mechanical.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use gpui::{Hsla, Rgba, rgb};
 
 /// Semantic colour tokens.
@@ -104,6 +106,27 @@ pub const LIGHT: Palette = Palette {
     dnd: 0xed4245,
     offline: 0x747f8d,
 };
+
+/// Selected palette.
+///
+/// An atomic rather than threading a `&Palette` through every view: the theme
+/// changes only when the user flips a setting, and passing it down would touch
+/// every signature in the UI for a value that is effectively constant.
+static LIGHT_MODE: AtomicBool = AtomicBool::new(false);
+
+/// Switch palettes. Takes effect on the next render.
+pub fn set_light_mode(enabled: bool) {
+    LIGHT_MODE.store(enabled, Ordering::Relaxed);
+}
+
+pub fn is_light_mode() -> bool {
+    LIGHT_MODE.load(Ordering::Relaxed)
+}
+
+/// The palette every view should read.
+pub fn active() -> &'static Palette {
+    if is_light_mode() { &LIGHT } else { &DARK }
+}
 
 impl Palette {
     pub fn c(&self, value: u32) -> Rgba {

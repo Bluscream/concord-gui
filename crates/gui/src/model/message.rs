@@ -67,14 +67,20 @@ pub struct MessageRow {
 }
 
 impl MessageRow {
-    /// `HH:MM` for the group header / hover column.
-    pub fn short_time(&self) -> String {
-        self.timestamp.format("%H:%M").to_string()
+    /// Time of day for the gutter column.
+    pub fn short_time(&self, hour24: bool) -> String {
+        let format = if hour24 { "%H:%M" } else { "%l:%M %p" };
+        self.timestamp.format(format).to_string().trim().to_string()
     }
 
     /// Full timestamp for the group header.
-    pub fn long_time(&self) -> String {
-        self.timestamp.format("%Y-%m-%d %H:%M").to_string()
+    pub fn long_time(&self, hour24: bool) -> String {
+        let format = if hour24 {
+            "%Y-%m-%d %H:%M"
+        } else {
+            "%Y-%m-%d %l:%M %p"
+        };
+        self.timestamp.format(format).to_string().trim().to_string()
     }
 }
 
