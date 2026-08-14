@@ -5,7 +5,7 @@
 # Everything is user-scoped: no root, no system paths. Undo with --uninstall.
 #
 #   ./scripts/deploy.sh              build release, install, launch
-#   ./scripts/deploy.sh --test       launch with offline fixture data (token "test")
+#   ./scripts/deploy.sh --test       build WITH demo data and launch offline
 #   ./scripts/deploy.sh --debug      build the debug profile (much faster to compile)
 #   ./scripts/deploy.sh --no-run     install without launching
 #   ./scripts/deploy.sh --run-only   skip the build, just launch what is installed
@@ -28,7 +28,9 @@ MENU_DIR="$HOME/.local/share/applications"
 DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")"
 
 PROFILE="release"
-FEATURES="fixtures"
+# Demo mode is a build-time feature, enabled only by --test. A daily-driver
+# install should not carry synthetic state or accept the "test" token.
+FEATURES=""
 RUN=1
 BUILD=1
 TEST_MODE=0
@@ -51,7 +53,7 @@ uninstall() {
 
 for arg in "$@"; do
     case "$arg" in
-        --test)      TEST_MODE=1 ;;
+        --test)      TEST_MODE=1; FEATURES="fixtures" ;;
         --debug)     PROFILE="debug" ;;
         --no-run)    RUN=0 ;;
         --run-only)  BUILD=0 ;;
@@ -83,10 +85,11 @@ if [[ $BUILD -eq 1 ]]; then
         die "$CARGO_CONFIG has duplicate [build] tables (invalid TOML). Fix it, then re-run."
     fi
 
-    BUILD_ARGS=(build -p concord-gui --features "$FEATURES")
+    BUILD_ARGS=(build -p concord-gui)
+    [[ -n "$FEATURES" ]] && BUILD_ARGS+=(--features "$FEATURES")
     [[ "$PROFILE" == "release" ]] && BUILD_ARGS+=(--release)
 
-    info "Building ($PROFILE, features: $FEATURES) in distrobox '$BOX'"
+    info "Building ($PROFILE${FEATURES:+, features: $FEATURES}) in distrobox '$BOX'"
     distrobox enter "$BOX" -- bash -lc "cd '$REPO' && cargo ${BUILD_ARGS[*]}" ||
         die "build failed"
 fi
@@ -131,11 +134,6 @@ Keywords=discord;chat;voice;concord;
 StartupNotify=true
 StartupWMClass=$APP_ID
 
-Actions=TestMode;
-
-[Desktop Action TestMode]
-Name=Launch with test data (offline)
-Exec=env CONCORD_TOKEN=test $BIN_DIR/$APP_ID
 DESKTOP
     chmod +x "$target"
 }
@@ -172,6 +170,9 @@ if [[ $RUN -eq 1 ]]; then
     if [[ $TEST_MODE -eq 1 ]]; then
         info "Launching with offline fixture data (no account, no network)"
         exec env CONCORD_TOKEN=test "$BIN_DIR/$APP_ID"
+    elif [[ $BUILD -eq 0 ]]; then
+        info "Launching the installed build."
+        exec "$BIN_DIR/$APP_ID"
     else
         info "Launching. No credential? Paste a token on the login screen,"
         info "or re-run with --test for offline sample data."
