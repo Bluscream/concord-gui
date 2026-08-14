@@ -1,3 +1,4 @@
+pub mod markdown;
 pub mod message;
 pub mod projection;
 

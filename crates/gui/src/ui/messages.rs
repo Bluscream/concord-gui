@@ -6,7 +6,12 @@
 //! timestamp only in the gutter. That gutter alignment is most of what makes
 //! a dense log scannable.
 
-use gpui::{Div, prelude::*, px, rgb};
+use gpui::{
+    Div, FontStyle, FontWeight, HighlightStyle, StrikethroughStyle, StyledText, UnderlineStyle,
+    prelude::*, px, rgb,
+};
+
+use crate::model::markdown::{self, Kind};
 
 use crate::model::message::{MessageRow, format_bytes};
 use crate::theme::{DARK, layout, space, text};
@@ -138,18 +143,11 @@ fn message_body(message: &MessageRow) -> Div {
     let mut body = column().flex_1().gap(px(space::XS));
 
     if !message.content.is_empty() {
-        // Markdown and mention rendering are not implemented yet; the raw
-        // content is shown verbatim rather than partially parsed.
-        let mut line = message.content.clone();
+        let mut source = message.content.clone();
         if message.edited {
-            line.push_str("  (edited)");
+            source.push_str("  (edited)");
         }
-        body = body.child(
-            gpui::div()
-                .text_size(px(text::BASE))
-                .text_color(rgb(DARK.text))
-                .child(line),
-        );
+        body = body.child(rich_text(&source));
     }
 
     for attachment in &message.attachments {
@@ -178,6 +176,70 @@ fn message_body(message: &MessageRow) -> Div {
     }
 
     body
+}
+
+/// Render markdown as a single styled text element.
+///
+/// One element rather than a row of styled spans, so wrapping happens at word
+/// boundaries across style changes instead of at segment boundaries.
+fn rich_text(source: &str) -> impl IntoElement {
+    let parsed = markdown::parse(source);
+
+    let highlights = parsed.runs.iter().map(|(range, style)| {
+        let mut highlight = HighlightStyle::default();
+
+        if style.bold {
+            highlight.font_weight = Some(FontWeight::BOLD);
+        }
+        if style.italic {
+            highlight.font_style = Some(FontStyle::Italic);
+        }
+        if style.underline {
+            highlight.underline = Some(UnderlineStyle {
+                thickness: px(1.),
+                ..Default::default()
+            });
+        }
+        if style.strike {
+            highlight.strikethrough = Some(StrikethroughStyle {
+                thickness: px(1.),
+                ..Default::default()
+            });
+        }
+
+        // Colour is driven by semantic kind, then by the remaining modifiers.
+        highlight.color = Some(
+            match style.kind {
+                Kind::Mention | Kind::Role => rgb(DARK.accent),
+                Kind::Channel | Kind::Url => rgb(DARK.accent_hover),
+                Kind::Emoji | Kind::Timestamp => rgb(DARK.text_muted),
+                Kind::Text => {
+                    if style.code {
+                        rgb(DARK.warning)
+                    } else if style.quote {
+                        rgb(DARK.text_muted)
+                    } else {
+                        rgb(DARK.text)
+                    }
+                }
+            }
+            .into(),
+        );
+
+        // Spoilers are hidden by painting text on its own background. Click to
+        // reveal needs per-run hit testing, which StyledText does not expose.
+        if style.spoiler {
+            highlight.background_color = Some(rgb(DARK.surface_active).into());
+            highlight.color = Some(rgb(DARK.surface_active).into());
+        }
+
+        (range.clone(), highlight)
+    });
+
+    gpui::div()
+        .text_size(px(text::BASE))
+        .text_color(rgb(DARK.text))
+        .child(StyledText::new(parsed.text.clone()).with_highlights(highlights.collect::<Vec<_>>()))
 }
 
 fn reply_context(author: &str, content: &str) -> Div {

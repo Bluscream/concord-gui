@@ -37,19 +37,20 @@ pub struct SessionHandle {
 }
 
 impl SessionHandle {
-    /// Issue a command. Dropped silently if the session has ended - the UI
-    /// learns about that through `Update::Closed` rather than per-command
+    /// Issue a command.
+    ///
+    /// Uses `try_send` rather than spawning an async send: this is called from
+    /// GPUI's main thread, which has no tokio runtime, so `tokio::spawn` here
+    /// panics with "there is no reactor running". The channel has a 64-slot
+    /// buffer, which is ample for UI-driven commands.
+    ///
+    /// A full or closed channel drops the command silently; the UI learns
+    /// about a dead session through `Update::Closed` rather than per-command
     /// error handling.
     pub fn send(&self, command: AppCommand) {
-        let commands = self.commands.clone();
-        tokio::spawn(async move {
-            let _ = commands.send(command).await;
-        });
-    }
-
-    /// Blocking variant for use outside a tokio context.
-    pub fn send_blocking(&self, command: AppCommand) {
-        let _ = self.commands.blocking_send(command);
+        if let Err(error) = self.commands.try_send(command) {
+            tracing::warn!("dropped command: {error}");
+        }
     }
 }
 
