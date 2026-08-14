@@ -72,6 +72,8 @@ fn presence_of(status: Option<PresenceStatus>) -> Presence {
 fn channel_kind(channel: &concord::discord::ChannelState) -> ChannelKind {
     if channel.is_category() {
         ChannelKind::Category
+    } else if channel.is_thread() {
+        ChannelKind::Thread
     } else if channel.is_voice() {
         ChannelKind::Voice
     } else if channel.is_forum() {
@@ -152,12 +154,26 @@ fn project_channels(state: &DiscordState, nav: &Navigation) -> Vec<ChannelEntry>
 
     let mut channels = state.channels_for_guild(guild_id);
 
-    // Categories first at each position, then by Discord's own ordering.
+    // Discord's own ordering, with threads pulled out and reinserted directly
+    // beneath their parent so the tree reads correctly.
     channels.sort_by_key(|c| (c.position.unwrap_or(i32::MAX), c.name.clone()));
 
-    channels
+    let (threads, roots): (Vec<_>, Vec<_>) = channels.into_iter().partition(|c| c.is_thread());
+
+    let mut ordered = Vec::with_capacity(roots.len() + threads.len());
+    for channel in roots {
+        let id = channel.id;
+        ordered.push(channel);
+        ordered.extend(
+            threads
+                .iter()
+                .filter(|thread| thread.parent_id == Some(id))
+                .copied(),
+        );
+    }
+
+    ordered
         .into_iter()
-        .filter(|c| !c.is_thread())
         .map(|channel| {
             let unread = state.channel_sidebar_unread(channel.id);
             let voice = match (channel.is_voice(), guild_id) {
@@ -176,6 +192,7 @@ fn project_channels(state: &DiscordState, nav: &Navigation) -> Vec<ChannelEntry>
                 unread: !matches!(unread, ChannelUnreadState::Seen),
                 mentions: mention_count(unread),
                 voice,
+                archived: channel.thread_archived().unwrap_or(false),
             }
         })
         .collect()

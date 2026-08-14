@@ -51,6 +51,9 @@ pub struct ChannelEntry {
     pub id: Option<Id<marker::ChannelMarker>>,
     pub name: String,
     pub kind: ChannelKind,
+    /// Archived threads are shown dimmed rather than hidden, so a thread the
+    /// user is reading does not vanish when it auto-archives.
+    pub archived: bool,
     pub unread: bool,
     pub mentions: u32,
     /// Occupants, for voice channels only.
@@ -63,6 +66,8 @@ pub enum ChannelKind {
     Voice,
     Forum,
     Category,
+    /// A thread, rendered nested under its parent channel.
+    Thread,
 }
 
 impl ChannelKind {
@@ -72,6 +77,7 @@ impl ChannelKind {
             ChannelKind::Voice => "♪",
             ChannelKind::Forum => "▤",
             ChannelKind::Category => "",
+            ChannelKind::Thread => "\u{2937}",
         }
     }
 }
@@ -864,7 +870,13 @@ impl Workspace {
             }
 
             let selected = index == self.model.selected_channel;
+            let is_thread = channel.kind == ChannelKind::Thread;
+
             let mut entry = sidebar_row(selected)
+                // Threads indent under their parent, and archived ones dim so
+                // an auto-archived thread stays visible without competing.
+                .when(is_thread, |d| d.pl(px(space::LG)))
+                .when(channel.archived, |d| d.opacity(0.55))
                 .child(
                     gpui::div()
                         .w(px(14.))

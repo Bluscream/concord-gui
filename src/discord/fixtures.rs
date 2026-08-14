@@ -215,6 +215,30 @@ pub fn demo_state() -> DiscordState {
         navigation.channels.insert(channel.id, channel);
     }
 
+    // A thread under #gui-rewrite, plus an archived one, so the sidebar's
+    // nesting and dimming both have something to render.
+    let mut thread = channel(130, Some(10), Some(112), "avatar-loading", "thread", 0);
+    thread.thread_metadata = Some(crate::discord::ThreadMetadataInfo {
+        archived: false,
+        auto_archive_duration: Some(1440),
+        archive_timestamp: None,
+        locked: false,
+        invitable: None,
+        create_timestamp: None,
+    });
+    navigation.channels.insert(thread.id, thread);
+
+    let mut archived = channel(131, Some(10), Some(112), "old-discussion", "thread", 1);
+    archived.thread_metadata = Some(crate::discord::ThreadMetadataInfo {
+        archived: true,
+        auto_archive_duration: Some(1440),
+        archive_timestamp: None,
+        locked: false,
+        invitable: None,
+        create_timestamp: None,
+    });
+    navigation.channels.insert(archived.id, archived);
+
     // ---- direct messages ---------------------------------------------------
     for channel in [
         dm(300, &[(2001, "ferris")]),

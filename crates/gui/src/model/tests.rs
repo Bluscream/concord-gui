@@ -293,3 +293,41 @@ fn text_channels_have_no_voice_occupants() {
         .expect("fixture defines #general");
     assert!(general.voice.is_empty());
 }
+
+#[test]
+fn threads_nest_under_their_parent_channel() {
+    let state = demo_state();
+    let model = project(&state, &guild_nav(10, None), true);
+
+    let names: Vec<_> = model.channels.iter().map(|c| c.name.as_str()).collect();
+
+    let parent = names
+        .iter()
+        .position(|n| *n == "gui-rewrite")
+        .expect("fixture defines #gui-rewrite");
+    let thread = names
+        .iter()
+        .position(|n| *n == "avatar-loading")
+        .expect("fixture defines a thread");
+
+    assert!(
+        thread > parent,
+        "threads must follow their parent, got {names:?}"
+    );
+    assert_eq!(model.channels[thread].kind, ChannelKind::Thread);
+}
+
+#[test]
+fn archived_threads_are_marked_not_hidden() {
+    let state = demo_state();
+    let model = project(&state, &guild_nav(10, None), true);
+
+    let archived = model
+        .channels
+        .iter()
+        .find(|c| c.name == "old-discussion")
+        .expect("archived threads must still project");
+
+    assert!(archived.archived, "archived flag should survive projection");
+    assert_eq!(archived.kind, ChannelKind::Thread);
+}
