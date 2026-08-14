@@ -74,21 +74,41 @@ Five of the eight are a single concern: a cached image-protocol handle that
 becomes a backend-agnostic texture handle. This is type substitution, not
 restructuring.
 
-### Phase 2 — event loop
+### Phase 2 — event loop ✅
+
+Bridged in `crates/gui/src/session.rs`: a dedicated tokio thread forwards
+snapshot revisions and events down one channel; the workspace drains it on
+GPUI's foreground executor. Reprojection is driven by the snapshot watch
+rather than a parallel reducer, so GUI state cannot drift from the core's.
+
+### Phase 2 (original note) — event loop
 
 Bridge `AppEvent` → GPUI. The core is async (tokio); GPUI has its own executor.
 Bridge over a channel, dispatching to entity updates on the foreground executor.
 
-### Phase 3 — views
+### Phase 3 — views (in progress)
 
-Rebuild the surfaces, in dependency order:
+| Surface | Status |
+|---|---|
+| Login (token) | ✅ done |
+| Login (QR, password) | ✗ `qr_auth` exists upstream; password needs captcha/MFA UI |
+| Guild rail + channel sidebar | ✅ done, click-to-navigate |
+| Message list | ✅ grouped blocks, replies, attachments, reactions |
+| Composer + send | ✅ minimal editor; no selection/clipboard/multi-line |
+| Member list | ✅ groups, presence, role colours |
+| Unread / mentions | ✅ from core notification state |
+| Typing indicators | ✅ |
+| Markdown / mentions rendering | ✗ content shown verbatim |
+| Custom emoji + avatar images | ✗ no image loading yet |
+| Message actions (edit, delete, react, reply) | ✗ commands exist, no UI |
+| Search | ✗ `SearchMessages` exists |
+| Threads / forums | ✗ filtered out of the sidebar |
+| User profiles | ✗ |
+| Voice controls | ✗ |
+| Settings / keybindings | ✗ |
+| Notifications (desktop) | ✗ |
 
-1. Login (token, QR) — required before anything else is testable
-2. Guild / channel tree
-3. Message list + composer (the bulk of the work)
-4. Member list, user profiles
-5. Voice controls
-6. Settings
+### Phase 3 (original note) — views
 
 `src/tui/ui/` (21,212 lines) and `src/tui/input/` (8,817) are the surfaces being
 replaced; `media/`, `keybindings/`, `message/` (~15k) are ported selectively.
