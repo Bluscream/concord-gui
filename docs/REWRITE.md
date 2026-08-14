@@ -179,3 +179,22 @@ Arch distrobox:
 ```bash
 distrobox enter arch -- cargo check -p concord-gui
 ```
+
+## Deploying for testing
+
+`scripts/deploy.sh` builds, installs and launches, and adds a launcher to the
+application menu and the desktop. Everything is user-scoped; `--uninstall`
+reverses it.
+
+```bash
+./scripts/deploy.sh            # release build, install, launch
+./scripts/deploy.sh --test     # launch with offline fixture data
+./scripts/deploy.sh --debug    # debug profile - far faster to compile
+./scripts/deploy.sh --run-only # skip the build, launch what is installed
+./scripts/deploy.sh --uninstall
+```
+
+The build runs in the Arch distrobox (the host lacks `cmake`, which
+`opusic-sys` needs); the resulting binary runs on the host, so the shortcuts
+launch it directly. The menu entry also carries a right-click action to start
+in offline test mode.
