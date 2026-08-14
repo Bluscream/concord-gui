@@ -16,6 +16,7 @@ mod demo;
 mod http;
 mod model;
 mod notify;
+mod runtime;
 mod session;
 mod theme;
 mod ui;

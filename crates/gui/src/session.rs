@@ -24,6 +24,8 @@ use concord::discord::{
 };
 use tokio::sync::mpsc;
 
+use crate::runtime;
+
 // Re-export the auth event types so workspace.rs only needs to import from here.
 pub use concord::discord::password_auth::{MfaChallenge, MfaMethod};
 
@@ -34,31 +36,19 @@ pub use concord::discord::password_auth::{MfaChallenge, MfaMethod};
 /// (`spawn_mfa_verify`, `spawn_sms_send`) as needed.
 pub fn spawn_password_login(login: String, password: String) -> mpsc::Receiver<PasswordAuthEvent> {
     let (tx, rx) = mpsc::channel(8);
-    let rt = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
+    // Runs on the shared runtime rather than a private one: this is
+    // called from GPUI's thread, where `tokio::spawn` has no reactor.
+    if runtime::spawn(async move {
+        let auth_session = DiscordAuthSession::fallback();
+        let join = password_auth::spawn_login_with_auth_session(login, password, auth_session, tx);
+        let _ = join.await;
+    })
+    .is_none()
     {
-        Ok(rt) => rt,
-        // Runtime creation fails only under real resource pressure. Reporting
-        // it leaves the user on the login screen with an error; panicking here
-        // would take the whole client down mid-login.
-        Err(_) => return rx,
-    };
-
-    let handle = std::thread::Builder::new()
-        .name("concord-password-auth".into())
-        .spawn(move || {
-            rt.block_on(async move {
-                let auth_session = DiscordAuthSession::fallback();
-                let join =
-                    password_auth::spawn_login_with_auth_session(login, password, auth_session, tx);
-                let _ = join.await;
-            });
-        });
-
-    // The worker thread owns its own runtime and runs to completion; nothing
-    // awaits it, so no handle is returned.
-    let _ = handle;
+        // No runtime: the receiver closes immediately and the caller
+        // reports a failed login rather than hanging.
+        return rx;
+    }
 
     rx
 }
@@ -71,86 +61,67 @@ pub fn spawn_mfa_verify(
     login_instance_id: String,
 ) -> mpsc::Receiver<PasswordAuthEvent> {
     let (tx, rx) = mpsc::channel(8);
-    let rt = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
+    // Runs on the shared runtime rather than a private one: this is
+    // called from GPUI's thread, where `tokio::spawn` has no reactor.
+    if runtime::spawn(async move {
+        let auth_session = DiscordAuthSession::fallback();
+        let join = password_auth::spawn_mfa_verify_with_auth_session(
+            method,
+            code,
+            ticket,
+            login_instance_id,
+            auth_session,
+            tx,
+        );
+        let _ = join.await;
+    })
+    .is_none()
     {
-        Ok(rt) => rt,
-        // Runtime creation fails only under real resource pressure. Reporting
-        // it leaves the user on the login screen with an error; panicking here
-        // would take the whole client down mid-login.
-        Err(_) => return rx,
-    };
+        // No runtime: the receiver closes immediately and the caller
+        // reports a failed login rather than hanging.
+        return rx;
+    }
 
-    std::thread::Builder::new()
-        .name("concord-mfa-verify".into())
-        .spawn(move || {
-            rt.block_on(async move {
-                let auth_session = DiscordAuthSession::fallback();
-                let join = password_auth::spawn_mfa_verify_with_auth_session(
-                    method,
-                    code,
-                    ticket,
-                    login_instance_id,
-                    auth_session,
-                    tx,
-                );
-                let _ = join.await;
-            });
-        });
     rx
 }
 
 /// Spawn an SMS send task.
 pub fn spawn_sms_send(ticket: String) -> mpsc::Receiver<PasswordAuthEvent> {
     let (tx, rx) = mpsc::channel(8);
-    let rt = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
+    // Runs on the shared runtime rather than a private one: this is
+    // called from GPUI's thread, where `tokio::spawn` has no reactor.
+    if runtime::spawn(async move {
+        let auth_session = DiscordAuthSession::fallback();
+        let join = password_auth::spawn_sms_send_with_auth_session(ticket, auth_session, tx);
+        let _ = join.await;
+    })
+    .is_none()
     {
-        Ok(rt) => rt,
-        // Runtime creation fails only under real resource pressure. Reporting
-        // it leaves the user on the login screen with an error; panicking here
-        // would take the whole client down mid-login.
-        Err(_) => return rx,
-    };
+        // No runtime: the receiver closes immediately and the caller
+        // reports a failed login rather than hanging.
+        return rx;
+    }
 
-    std::thread::Builder::new()
-        .name("concord-sms-send".into())
-        .spawn(move || {
-            rt.block_on(async move {
-                let auth_session = DiscordAuthSession::fallback();
-                let join =
-                    password_auth::spawn_sms_send_with_auth_session(ticket, auth_session, tx);
-                let _ = join.await;
-            });
-        });
     rx
 }
 
 /// Spawn a QR-auth task and return a receiver for its events.
 pub fn spawn_qr_login() -> mpsc::Receiver<QrEvent> {
     let (tx, rx) = mpsc::channel(8);
-    let rt = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
+    // Runs on the shared runtime rather than a private one: this is
+    // called from GPUI's thread, where `tokio::spawn` has no reactor.
+    if runtime::spawn(async move {
+        let auth_session = DiscordAuthSession::fallback();
+        let join = qr_auth::spawn_with_auth_session(auth_session, tx);
+        let _ = join.await;
+    })
+    .is_none()
     {
-        Ok(rt) => rt,
-        // Runtime creation fails only under real resource pressure. Reporting
-        // it leaves the user on the login screen with an error; panicking here
-        // would take the whole client down mid-login.
-        Err(_) => return rx,
-    };
+        // No runtime: the receiver closes immediately and the caller
+        // reports a failed login rather than hanging.
+        return rx;
+    }
 
-    std::thread::Builder::new()
-        .name("concord-qr-auth".into())
-        .spawn(move || {
-            rt.block_on(async move {
-                let auth_session = DiscordAuthSession::fallback();
-                let join = qr_auth::spawn_with_auth_session(auth_session, tx);
-                let _ = join.await;
-            });
-        });
     rx
 }
 

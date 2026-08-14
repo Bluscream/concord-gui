@@ -644,7 +644,8 @@ impl Workspace {
     /// Convert a `PasswordAuthEvent` receiver into the unified `LoginEvent` channel.
     fn wrap_password(rx: mpsc::Receiver<PasswordAuthEvent>) -> mpsc::Receiver<LoginEvent> {
         let (tx, out) = mpsc::channel(8);
-        tokio::task::spawn(async move {
+        // Shared runtime: this runs on GPUI's thread, which has no reactor.
+        let _ = crate::runtime::spawn(async move {
             let mut rx = rx;
             while let Some(ev) = rx.recv().await {
                 if tx.send(LoginEvent::Password(ev)).await.is_err() {
@@ -658,7 +659,8 @@ impl Workspace {
     /// Convert a `QrEvent` receiver into the unified `LoginEvent` channel.
     fn wrap_qr(rx: mpsc::Receiver<QrEvent>) -> mpsc::Receiver<LoginEvent> {
         let (tx, out) = mpsc::channel(8);
-        tokio::task::spawn(async move {
+        // Shared runtime: this runs on GPUI's thread, which has no reactor.
+        let _ = crate::runtime::spawn(async move {
             let mut rx = rx;
             while let Some(ev) = rx.recv().await {
                 if tx.send(LoginEvent::Qr(ev)).await.is_err() {
