@@ -146,9 +146,7 @@ impl Login {
         if t.is_empty() {
             return false;
         }
-        // Allow the fixture token through regardless of length.
-        #[cfg(feature = "fixtures")]
-        if concord::discord::fixtures::is_fixture_token(t) {
+        if crate::demo::is_demo_token(t) {
             return true;
         }
         t.len() >= 20
