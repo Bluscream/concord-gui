@@ -44,7 +44,7 @@ pub fn spawn(events_tx: mpsc::Sender<QrEvent>) -> JoinHandle<()> {
     spawn_with_auth_session(DiscordAuthSession::fallback(), events_tx)
 }
 
-pub(crate) fn spawn_with_auth_session(
+pub fn spawn_with_auth_session(
     auth_session: DiscordAuthSession,
     events_tx: mpsc::Sender<QrEvent>,
 ) -> JoinHandle<()> {

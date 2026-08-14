@@ -14,7 +14,7 @@ pub struct DiscordAuthSession {
 }
 
 impl DiscordAuthSession {
-    pub(crate) fn fallback() -> Self {
+    pub fn fallback() -> Self {
         Self::new(Arc::new(ClientFingerprint::new(CLIENT_BUILD_NUMBER)))
     }
 

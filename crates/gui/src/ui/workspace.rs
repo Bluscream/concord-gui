@@ -9,6 +9,8 @@ use concord::config::{self, AppOptions, CredentialStoreMode};
 use concord::discord::{
     AppCommand, AppEvent, Id, MAX_UPLOAD_ATTACHMENT_COUNT, MessageAttachmentUpload,
     MessageSearchQuery, ReactionEmoji, ReplyReference, VoiceScope, marker, next_message_nonce,
+    password_auth::{MfaMethod, PasswordAuthEvent},
+    qr_auth::QrEvent,
 };
 use concord::token_store;
 use gpui::{
@@ -29,7 +31,9 @@ use crate::ui::chrome::{
 };
 use crate::ui::composer::{Composer, composer_view};
 use crate::ui::emoji::{self, EmojiPicker};
-use crate::ui::login::{Login, login_view};
+use crate::ui::login::{
+    Login, LoginEvent, LoginHandle, LoginScreen, PasswordField, login_view,
+};
 use crate::ui::messages::{MessageAction, message_list};
 use crate::ui::profile::{ProfileView, profile_view};
 use crate::ui::settings::{self, Toggle};
@@ -150,6 +154,25 @@ pub struct SearchResult {
 pub enum Screen {
     Login(Login),
     Ready,
+}
+
+/// Actions the login key handler can request from the workspace.
+#[derive(Debug)]
+enum LoginAction {
+    // Picker selections
+    PickPassword,
+    PickToken,
+    PickQr,
+    PickDemo,
+    // Navigation
+    Back,
+    ToggleRemember,
+    // Submissions
+    SubmitPassword,
+    SubmitToken,
+    SubmitMfaCode,
+    // MFA method choice
+    PickMfaMethod(MfaMethod),
 }
 
 pub struct Workspace {
@@ -386,39 +409,374 @@ impl Workspace {
         }
     }
 
-    /// Start a session from a token entered on the login screen.
-    fn submit_login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Screen::Login(login) = &mut self.screen else {
-            return;
-        };
-        if !login.is_submittable() {
-            return;
+    /// Advance the login state machine based on a user action in the current sub-screen.
+    ///
+    /// Called from the key handler with a `LoginAction` that describes what
+    /// the user just did (submit, back, pick a method, etc.).
+    fn handle_login_action(&mut self, action: LoginAction, window: &mut Window, cx: &mut Context<Self>) {
+        match action {
+            // -- Picker: user chose a method --------------------------------
+            LoginAction::PickPassword => {
+                if let Screen::Login(l) = &mut self.screen {
+                    l.screen  = LoginScreen::Password;
+                    l.error   = None;
+                }
+            }
+            LoginAction::PickToken => {
+                if let Screen::Login(l) = &mut self.screen {
+                    l.screen = LoginScreen::Token;
+                    l.error  = None;
+                }
+            }
+            LoginAction::PickQr => {
+                if let Screen::Login(l) = &mut self.screen {
+                    // Abort any stale handle.
+                    l.handle = None;
+                    l.qr.reset();
+                    l.screen = LoginScreen::QrScan;
+                    l.error  = None;
+
+                    let (rx, join) = crate::session::spawn_qr_login();
+                    l.handle = Some(LoginHandle { rx: Self::wrap_qr(rx), join });
+
+                    if let Some(wh) = window.window_handle().downcast::<Workspace>() {
+                        Workspace::pump_login(wh, cx);
+                    }
+                }
+            }
+            LoginAction::PickDemo => {
+                self.start_token_session("test".to_string(), false, window, cx);
+            }
+
+            // -- Back: return to picker -------------------------------------
+            LoginAction::Back => {
+                if let Screen::Login(l) = &mut self.screen {
+                    // Abort any running auth task.
+                    l.handle = None;
+                    l.screen = LoginScreen::Picker;
+                    l.error  = None;
+                }
+            }
+
+            // -- Token screen: submit ---------------------------------------
+            LoginAction::SubmitToken => {
+                let Screen::Login(login) = &mut self.screen else { return; };
+                if !login.token_submittable() { return; }
+                let token    = login.token.take();
+                let remember = login.remember;
+                self.start_token_session(token, remember, window, cx);
+            }
+
+            // -- Password screen: submit ------------------------------------
+            LoginAction::SubmitPassword => {
+                let Screen::Login(login) = &mut self.screen else { return; };
+                if !login.password.is_submittable() { return; }
+                let login_id = login.password.login.text().to_string();
+                let pw       = login.password.password.text().to_string();
+                login.password.in_progress = true;
+                login.password.status = "Authenticating with Discord…".to_string();
+                login.error = None;
+
+                let (rx, join) = crate::session::spawn_password_login(login_id, pw);
+                login.handle = Some(LoginHandle {
+                    rx: Self::wrap_password(rx),
+                    join,
+                });
+
+                if let Some(wh) = window.window_handle().downcast::<Workspace>() {
+                    Workspace::pump_login(wh, cx);
+                }
+            }
+
+            // -- MFA select: user picked a method ---------------------------
+            LoginAction::PickMfaMethod(method) => {
+                let Screen::Login(login) = &mut self.screen else { return; };
+                let Some(challenge) = login.password.mfa.clone() else { return; };
+                match method {
+                    MfaMethod::Totp => {
+                        login.password.mfa_method = Some(MfaMethod::Totp);
+                        login.password.status =
+                            "Enter the 6-digit code from your authenticator app.".to_string();
+                        login.screen = LoginScreen::MfaCode;
+                    }
+                    MfaMethod::Sms => {
+                        // Ask Discord to send the SMS first.
+                        login.password.in_progress = true;
+                        login.password.status = "Requesting SMS code…".to_string();
+                        login.error = None;
+
+                        let (rx, join) = crate::session::spawn_sms_send(challenge.ticket.clone());
+                        login.handle = Some(LoginHandle {
+                            rx: Self::wrap_password(rx),
+                            join,
+                        });
+
+                        if let Some(wh) = window.window_handle().downcast::<Workspace>() {
+                            Workspace::pump_login(wh, cx);
+                        }
+                    }
+                }
+            }
+
+            // -- MFA code: user submitted the code --------------------------
+            LoginAction::SubmitMfaCode => {
+                let Screen::Login(login) = &mut self.screen else { return; };
+                if !login.password.is_mfa_submittable() { return; }
+                let Some(challenge) = login.password.mfa.clone() else { return; };
+                let Some(method)    = login.password.mfa_method else { return; };
+                let code            = login.password.mfa_code.text().to_string();
+                login.password.in_progress = true;
+                login.password.status = "Verifying…".to_string();
+                login.error = None;
+
+                let (rx, join) = crate::session::spawn_mfa_verify(
+                    method,
+                    code,
+                    challenge.ticket.clone(),
+                    challenge.login_instance_id.clone(),
+                );
+                login.handle = Some(LoginHandle {
+                    rx: Self::wrap_password(rx),
+                    join,
+                });
+
+                if let Some(wh) = window.window_handle().downcast::<Workspace>() {
+                    Workspace::pump_login(wh, cx);
+                }
+            }
+
+            // -- Toggle remember --------------------------------------------
+            LoginAction::ToggleRemember => {
+                if let Screen::Login(l) = &mut self.screen {
+                    l.remember = !l.remember;
+                }
+            }
         }
+    }
 
-        let token = login.input.take();
-        let remember = login.remember;
-        login.connecting = true;
-        login.error = None;
+    /// Convert a `PasswordAuthEvent` receiver into the unified `LoginEvent` channel.
+    fn wrap_password(rx: mpsc::Receiver<PasswordAuthEvent>) -> mpsc::Receiver<LoginEvent> {
+        let (tx, out) = mpsc::channel(8);
+        tokio::task::spawn(async move {
+            let mut rx = rx;
+            while let Some(ev) = rx.recv().await {
+                if tx.send(LoginEvent::Password(ev)).await.is_err() {
+                    break;
+                }
+            }
+        });
+        out
+    }
 
-        // Persisting is best-effort: a failure to write the credential store
-        // must not block a session that would otherwise work.
+    /// Convert a `QrEvent` receiver into the unified `LoginEvent` channel.
+    fn wrap_qr(rx: mpsc::Receiver<QrEvent>) -> mpsc::Receiver<LoginEvent> {
+        let (tx, out) = mpsc::channel(8);
+        tokio::task::spawn(async move {
+            let mut rx = rx;
+            while let Some(ev) = rx.recv().await {
+                if tx.send(LoginEvent::Qr(ev)).await.is_err() {
+                    break;
+                }
+            }
+        });
+        out
+    }
+
+    /// Drain the active login auth handle's event stream on GPUI's executor.
+    ///
+    /// Starts the token session as soon as a `Token` event arrives, or
+    /// advances the MFA / QR state machine for intermediate events.
+    fn pump_login(window: WindowHandle<Workspace>, cx: &mut gpui::App) {
+        cx.spawn(async move |cx| {
+            loop {
+                // Peek: is there still a handle and does it have an event?
+                let event = window.update(cx, |workspace, _window, _cx| {
+                    let Screen::Login(login) = &mut workspace.screen else {
+                        return None;
+                    };
+                    // Try to receive without blocking. We'll re-schedule if empty.
+                    login.handle.as_mut().and_then(|h| h.rx.try_recv().ok())
+                });
+
+                match event {
+                    Err(_) => break, // window gone
+                    Ok(None) => {
+                        // Nothing yet – yield to other GPUI work and try again
+                        // via a small async sleep so we don't busy-spin.
+                        // Use recv() properly by driving from a spawn.
+                        // We reschedule ourselves in 16ms.
+                        tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+                        continue;
+                    }
+                    Ok(Some(event)) => {
+                        let done = window.update(cx, |workspace, win, cx| {
+                            workspace.apply_login_event(event, win, cx)
+                        });
+                        match done {
+                            Err(_) => break,
+                            Ok(true) => break,  // session started or fatal error
+                            Ok(false) => {}     // keep pumping
+                        }
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Apply a single `LoginEvent` to the login state.
+    ///
+    /// Returns `true` when pumping should stop (session started or unrecoverable).
+    fn apply_login_event(
+        &mut self,
+        event: LoginEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Screen::Login(login) = &mut self.screen else {
+            return true;
+        };
+
+        match event {
+            // ---- Password / MFA events ------------------------------------
+            LoginEvent::Password(pev) => match pev {
+                PasswordAuthEvent::Status(s) => {
+                    login.password.status = s;
+                    cx.notify();
+                    false
+                }
+                PasswordAuthEvent::Token(token) => {
+                    login.password.reset_sensitive();
+                    login.handle = None;
+                    let remember = login.remember;
+                    cx.notify();
+                    self.start_token_session(token, remember, window, cx);
+                    true
+                }
+                PasswordAuthEvent::Failed(reason) => {
+                    login.password.in_progress = false;
+                    login.password.status.clear();
+                    login.error = Some(format!("Login failed: {reason}"));
+                    login.handle = None;
+                    cx.notify();
+                    false
+                }
+                PasswordAuthEvent::MfaRequired(challenge) => {
+                    login.password.in_progress = false;
+                    login.password.password.clear();
+                    login.password.mfa = Some(challenge);
+                    login.password.mfa_method = None;
+                    login.password.mfa_code.clear();
+                    login.password.status =
+                        "Choose a two-factor authentication method.".to_string();
+                    login.screen = LoginScreen::MfaSelect;
+                    login.handle = None;
+                    cx.notify();
+                    false
+                }
+                PasswordAuthEvent::SmsSent { phone } => {
+                    login.password.in_progress = false;
+                    login.password.mfa_method = Some(MfaMethod::Sms);
+                    login.password.mfa_code.clear();
+                    login.password.status = match phone {
+                        Some(p) => format!("SMS sent to {p}. Enter the code below."),
+                        None    => "SMS sent. Enter the code below.".to_string(),
+                    };
+                    login.screen = LoginScreen::MfaCode;
+                    login.handle = None;
+                    cx.notify();
+                    false
+                }
+                PasswordAuthEvent::RequiredActions(actions) => {
+                    login.password.reset_sensitive();
+                    login.handle = None;
+                    let list = actions
+                        .into_iter()
+                        .map(|a| match a.as_str() {
+                            "update_password" => "update your account password".to_owned(),
+                            other => other.to_owned(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    login.error = Some(format!(
+                        "Discord requires you to {list} in the official client before Concord can log in."
+                    ));
+                    cx.notify();
+                    false
+                }
+            },
+
+            // ---- QR events -----------------------------------------------
+            LoginEvent::Qr(qev) => match qev {
+                QrEvent::Status(s) => {
+                    login.qr.status = s;
+                    cx.notify();
+                    false
+                }
+                QrEvent::QrBitmap(bm) => {
+                    login.qr.bitmap = Some(bm);
+                    cx.notify();
+                    false
+                }
+                QrEvent::UserPending { username, discriminator } => {
+                    let display = if discriminator == "0" {
+                        username
+                    } else {
+                        format!("{username}#{discriminator}")
+                    };
+                    login.qr.pending_user = Some(display);
+                    cx.notify();
+                    false
+                }
+                QrEvent::Token(token) => {
+                    login.handle = None;
+                    let remember = login.remember;
+                    cx.notify();
+                    self.start_token_session(token, remember, window, cx);
+                    true
+                }
+                QrEvent::Cancelled => {
+                    login.handle = None;
+                    login.qr.reset();
+                    login.screen = LoginScreen::Picker;
+                    login.error = Some("QR login was cancelled in the Discord mobile app.".to_string());
+                    cx.notify();
+                    false
+                }
+                QrEvent::Failed(reason) => {
+                    login.handle = None;
+                    login.qr.reset();
+                    login.screen = LoginScreen::Picker;
+                    login.error = Some(format!("QR login failed: {reason}"));
+                    cx.notify();
+                    false
+                }
+            },
+        }
+    }
+
+    /// Spawn the core session from a resolved token and transition to `Screen::Ready`.
+    fn start_token_session(
+        &mut self,
+        token: String,
+        remember: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if remember {
             let _ = token_store::save_token(&token, CredentialStoreMode::default());
         }
-
         match crate::session::spawn(token) {
             Ok((updates, handle)) => {
                 self.attach(handle);
                 self.screen = Screen::Ready;
                 self.model.status_line = "connecting…".to_string();
-
-                if let Some(window_handle) = window.window_handle().downcast::<Workspace>() {
-                    Workspace::pump(window_handle, updates, cx);
+                if let Some(wh) = window.window_handle().downcast::<Workspace>() {
+                    Workspace::pump(wh, updates, cx);
                 }
             }
             Err(error) => {
                 if let Screen::Login(login) = &mut self.screen {
-                    login.connecting = false;
                     login.error = Some(format!("could not start session: {error}"));
                 }
             }
@@ -1497,21 +1855,153 @@ impl Render for Workspace {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 match &mut this.screen {
                     Screen::Login(login) => {
-                        // ctrl-r toggles persistence; everything else edits the
-                        // token buffer.
-                        if event.keystroke.key == "r" && event.keystroke.modifiers.control {
-                            login.remember = !login.remember;
-                        } else {
-                            let pasted = (event.keystroke.key == "v"
-                                && (event.keystroke.modifiers.control
-                                    || event.keystroke.modifiers.platform))
-                                .then(|| cx.read_from_clipboard().and_then(|item| item.text()))
-                                .flatten();
+                        let key     = event.keystroke.key.as_str();
+                        let ctrl    = event.keystroke.modifiers.control
+                            || event.keystroke.modifiers.platform;
 
-                            if login.input.handle_key_with_clipboard(event, pasted) {
-                                this.submit_login(window, cx);
+                        // ctrl-r toggles credential persistence on any sub-screen.
+                        if key == "r" && ctrl {
+                            let action = LoginAction::ToggleRemember;
+                            this.handle_login_action(action, window, cx);
+                            return;
+                        }
+
+                        match login.screen {
+                            // ---- Picker: number-key or letter shortcuts ----
+                            LoginScreen::Picker => {
+                                let action = match key {
+                                    "1" => Some(LoginAction::PickPassword),
+                                    "2" => Some(LoginAction::PickToken),
+                                    "3" => Some(LoginAction::PickQr),
+                                    "4" | "d" => Some(LoginAction::PickDemo),
+                                    _ => None,
+                                };
+                                if let Some(a) = action {
+                                    drop(login); // release borrow before calling
+                                    this.handle_login_action(a, window, cx);
+                                }
+                            }
+
+                            // ---- Password: two-field entry ----------------
+                            LoginScreen::Password => {
+                                match key {
+                                    "escape" => {
+                                        drop(login);
+                                        this.handle_login_action(LoginAction::Back, window, cx);
+                                    }
+                                    "tab" => {
+                                        // Cycle focus between login and password fields.
+                                        if let Screen::Login(l) = &mut this.screen {
+                                            l.password.focused_field =
+                                                l.password.focused_field.next();
+                                        }
+                                    }
+                                    "enter" => {
+                                        drop(login);
+                                        this.handle_login_action(LoginAction::SubmitPassword, window, cx);
+                                    }
+                                    _ => {
+                                        let pasted = (key == "v" && ctrl)
+                                            .then(|| cx.read_from_clipboard().and_then(|item| item.text()))
+                                            .flatten();
+                                        if let Screen::Login(l) = &mut this.screen {
+                                            let field = l.password.focused_field;
+                                            match field {
+                                                PasswordField::Login =>
+                                                    l.password.login.handle_key_with_clipboard(event, pasted),
+                                                PasswordField::Password =>
+                                                    l.password.password.handle_key_with_clipboard(event, pasted),
+                                            };
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ---- MFA method select: number keys -----------
+                            LoginScreen::MfaSelect => {
+                                // Pick a method by number key or Escape to go back.
+                                let methods: Vec<MfaMethod> = login.password.mfa
+                                    .as_ref()
+                                    .map(|c| c.methods.clone())
+                                    .unwrap_or_default();
+                                match key {
+                                    "escape" => {
+                                        drop(login);
+                                        this.handle_login_action(LoginAction::Back, window, cx);
+                                    }
+                                    "1" if !methods.is_empty() => {
+                                        drop(login);
+                                        this.handle_login_action(
+                                            LoginAction::PickMfaMethod(methods[0]),
+                                            window, cx,
+                                        );
+                                    }
+                                    "2" if methods.len() >= 2 => {
+                                        drop(login);
+                                        this.handle_login_action(
+                                            LoginAction::PickMfaMethod(methods[1]),
+                                            window, cx,
+                                        );
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            // ---- MFA code entry ---------------------------
+                            LoginScreen::MfaCode => {
+                                match key {
+                                    "escape" => {
+                                        if let Screen::Login(l) = &mut this.screen {
+                                            l.screen = LoginScreen::MfaSelect;
+                                        }
+                                    }
+                                    "enter" => {
+                                        drop(login);
+                                        this.handle_login_action(LoginAction::SubmitMfaCode, window, cx);
+                                    }
+                                    _ => {
+                                        let pasted = (key == "v" && ctrl)
+                                            .then(|| cx.read_from_clipboard().and_then(|item| item.text()))
+                                            .flatten();
+                                        if let Screen::Login(l) = &mut this.screen {
+                                            l.password.mfa_code.handle_key_with_clipboard(event, pasted);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ---- Token entry ------------------------------
+                            LoginScreen::Token => {
+                                match key {
+                                    "escape" => {
+                                        drop(login);
+                                        this.handle_login_action(LoginAction::Back, window, cx);
+                                    }
+                                    _ => {
+                                        let pasted = (key == "v" && ctrl)
+                                            .then(|| cx.read_from_clipboard().and_then(|item| item.text()))
+                                            .flatten();
+                                        let submit = if let Screen::Login(l) = &mut this.screen {
+                                            l.token.handle_key_with_clipboard(event, pasted)
+                                        } else {
+                                            false
+                                        };
+                                        if submit {
+                                            this.handle_login_action(LoginAction::SubmitToken, window, cx);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ---- QR scan: only Escape to cancel ----------
+                            LoginScreen::QrScan => {
+                                if key == "escape" {
+                                    drop(login);
+                                    this.handle_login_action(LoginAction::Back, window, cx);
+                                }
                             }
                         }
+                        return; // consumed
                     }
                     Screen::Ready => {
                         let key = event.keystroke.key.as_str();
