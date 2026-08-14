@@ -569,3 +569,309 @@ pub fn is_fixture_token(token: &str) -> bool {
 pub(in crate::discord) fn into_deque<T>(items: Vec<T>) -> VecDeque<T> {
     items.into()
 }
+
+// ---------------------------------------------------------------------------
+// Demo-mode mutation
+//
+// A front-end running offline has no server to answer its commands, so it
+// answers them itself. These helpers let it mutate the synthetic state, which
+// the caches' visibility otherwise keeps inside this module.
+// ---------------------------------------------------------------------------
+
+/// Append a message to a channel, as though it had just arrived.
+///
+/// Returns the id it was given, so a caller can reference it afterwards.
+pub fn append_message(
+    state: &mut DiscordState,
+    channel_id: Id<marker::ChannelMarker>,
+    guild_id: Option<Id<marker::GuildMarker>>,
+    author_id: Id<marker::UserMarker>,
+    author: &str,
+    content: &str,
+) -> Id<marker::MessageMarker> {
+    let mut message = MessageState::default();
+    message.id = message_id(snowflake_at(0));
+    message.channel_id = channel_id;
+    message.guild_id = guild_id;
+    message.author_id = author_id;
+    message.author = author.to_string();
+    message.content = Some(content.to_string());
+
+    let id = message.id;
+
+    let cache = Arc::make_mut(&mut state.message_cache);
+    let timeline = cache.timelines.entry(channel_id).or_default();
+    timeline.messages.push_back(message);
+
+    // Keep last_message_id consistent, or the channel reads as having no
+    // messages and its unread state collapses to Seen.
+    let navigation = Arc::make_mut(&mut state.navigation);
+    if let Some(channel) = navigation.channels.get_mut(&channel_id) {
+        channel.last_message_id = Some(id);
+    }
+
+    id
+}
+
+/// The authenticated user in demo mode.
+pub fn demo_user_id() -> Id<marker::UserMarker> {
+    user_id(1001)
+}
+
+/// Add a reaction to a message, or remove it if the user already reacted.
+pub fn toggle_reaction(
+    state: &mut DiscordState,
+    channel_id: Id<marker::ChannelMarker>,
+    target: Id<marker::MessageMarker>,
+    emoji: &str,
+) {
+    let cache = Arc::make_mut(&mut state.message_cache);
+    let Some(timeline) = cache.timelines.get_mut(&channel_id) else {
+        return;
+    };
+    let Some(message) = timeline.messages.iter_mut().find(|m| m.id == target) else {
+        return;
+    };
+
+    let existing = message.reactions.iter().position(
+        |reaction| matches!(&reaction.emoji, ReactionEmoji::Unicode(text) if text == emoji),
+    );
+
+    match existing {
+        Some(index) if message.reactions[index].me => {
+            if message.reactions[index].count <= 1 {
+                message.reactions.remove(index);
+            } else {
+                message.reactions[index].count -= 1;
+                message.reactions[index].me = false;
+            }
+        }
+        Some(index) => {
+            message.reactions[index].count += 1;
+            message.reactions[index].me = true;
+        }
+        None => message.reactions.push(ReactionInfo {
+            emoji: ReactionEmoji::Unicode(emoji.to_string()),
+            count: 1,
+            me: true,
+        }),
+    }
+}
+
+/// Edit a message's body in place.
+pub fn edit_message(
+    state: &mut DiscordState,
+    channel_id: Id<marker::ChannelMarker>,
+    target: Id<marker::MessageMarker>,
+    content: &str,
+) {
+    let cache = Arc::make_mut(&mut state.message_cache);
+    if let Some(timeline) = cache.timelines.get_mut(&channel_id)
+        && let Some(message) = timeline.messages.iter_mut().find(|m| m.id == target)
+    {
+        message.content = Some(content.to_string());
+        message.edited_timestamp = Some("now".to_string());
+    }
+}
+
+/// Delete a message.
+pub fn delete_message(
+    state: &mut DiscordState,
+    channel_id: Id<marker::ChannelMarker>,
+    target: Id<marker::MessageMarker>,
+) {
+    let cache = Arc::make_mut(&mut state.message_cache);
+    if let Some(timeline) = cache.timelines.get_mut(&channel_id) {
+        timeline.messages.retain(|message| message.id != target);
+    }
+}
+
+/// Populate a user's profile, so the profile panel resolves offline.
+pub fn add_profile(
+    state: &mut DiscordState,
+    user: Id<marker::UserMarker>,
+    guild: Option<Id<marker::GuildMarker>>,
+) {
+    let profiles = Arc::make_mut(&mut state.profiles);
+
+    let (username, bio, pronouns) = match user.get() {
+        1001 => ("blu", "Maintaining this client.", Some("they/them")),
+        1002 => ("ferris", "Rust mascot. Mostly here for the crabs.", None),
+        1003 => ("turing", "Thinking about machines.", None),
+        1005 => ("ci-bot", "Automated build reporter.", None),
+        _ => ("unknown", "", None),
+    };
+
+    profiles.user_profiles.insert(
+        super::profile::state::UserProfileCacheKey::new(user, guild),
+        crate::discord::UserProfileInfo {
+            user_id: user,
+            username: username.to_string(),
+            global_name: Some(username.to_string()),
+            guild_nick: None,
+            role_ids: guild.map(|_| vec![role_id(2)]).unwrap_or_default(),
+            role_ids_present: guild.is_some(),
+            avatar_url: None,
+            bio: Some(bio.to_string()),
+            pronouns: pronouns.map(str::to_string),
+            guild_pronouns: None,
+            mutual_guilds: vec![crate::discord::MutualGuildInfo {
+                guild_id: guild_id(10),
+                nick: None,
+            }],
+            mutual_friends_count: 3,
+            friend_status: crate::discord::FriendStatus::Friend,
+            note: None,
+        },
+    );
+}
+
+/// Synthetic capture sources for the screenshare picker.
+pub fn capture_targets() -> Vec<crate::discord::StreamCaptureTarget> {
+    vec![
+        crate::discord::StreamCaptureTarget {
+            kind: crate::discord::StreamCaptureTargetKind::Display,
+            id: 1,
+            title: "Screen 1 (2560x1440)".to_string(),
+        },
+        crate::discord::StreamCaptureTarget {
+            kind: crate::discord::StreamCaptureTargetKind::Window,
+            id: 2,
+            title: "concord-gui".to_string(),
+        },
+        crate::discord::StreamCaptureTarget {
+            kind: crate::discord::StreamCaptureTargetKind::Window,
+            id: 3,
+            title: "Terminal".to_string(),
+        },
+    ]
+}
+
+/// Channels the demo search should look through.
+pub fn demo_channel_ids() -> Vec<Id<marker::ChannelMarker>> {
+    [111u64, 112, 113, 300, 301, 302]
+        .into_iter()
+        .map(channel_id)
+        .collect()
+}
+
+/// Convert a stored message into the wire-shaped `MessageInfo` that search
+/// results and forum pages carry.
+pub fn message_info(message: &MessageState) -> crate::discord::MessageInfo {
+    let mut info = crate::discord::MessageInfo::default();
+    info.guild_id = message.guild_id;
+    info.channel_id = message.channel_id;
+    info.message_id = message.id;
+    info.author_id = message.author_id;
+    info.author = message.author.clone();
+    info.author_is_bot = message.author_is_bot;
+    info.content = message.content.clone();
+    info.pinned = message.pinned;
+    info
+}
+
+/// Synthetic forum posts for the demo forum channel.
+///
+/// Active and archived are distinct sets, matching Discord: archived posts are
+/// not a filtered view of the active page.
+pub fn forum_posts(
+    forum: Id<marker::ChannelMarker>,
+    archive_state: crate::discord::ForumPostArchiveState,
+) -> (
+    Vec<crate::discord::ChannelInfo>,
+    Vec<crate::discord::MessageInfo>,
+) {
+    let archived = matches!(
+        archive_state,
+        crate::discord::ForumPostArchiveState::Archived
+    );
+
+    let posts: &[(u64, &str, &str, &str, u64)] = if archived {
+        &[(
+            940,
+            "How do I build on musl?",
+            "ferris",
+            "Resolved: the DMA-BUF ioctl needed a cfg guard.",
+            12,
+        )]
+    } else {
+        &[
+            (
+                900,
+                "Voice keeps dropping on reconnect",
+                "turing",
+                "Happens after a suspend/resume cycle. Logs attached.",
+                8,
+            ),
+            (
+                901,
+                "Feature request: message pinning UI",
+                "lovelace",
+                "The command exists in the core but there is no control for it.",
+                3,
+            ),
+            (
+                902,
+                "Wayland fractional scaling looks blurry",
+                "ferris",
+                "Only on 125%. 150% and 200% are fine.",
+                21,
+            ),
+        ]
+    };
+
+    let mut threads = Vec::new();
+    let mut first_messages = Vec::new();
+
+    for (id, title, author, body, replies) in posts {
+        let thread_id = channel_id(*id);
+
+        let mut thread = blank_channel(*id, "thread", title);
+        thread.guild_id = Some(guild_id(10));
+        thread.parent_id = Some(forum);
+        thread.message_count = Some(*replies);
+        threads.push(crate::discord::ChannelInfo {
+            guild_id: thread.guild_id,
+            channel_id: thread_id,
+            parent_id: thread.parent_id,
+            owner_id: None,
+            position: None,
+            last_message_id: None,
+            name: title.to_string(),
+            kind: "thread".to_string(),
+            message_count: Some(*replies),
+            member_count: None,
+            total_message_sent: None,
+            thread_metadata: Some(crate::discord::ThreadMetadataInfo {
+                archived,
+                auto_archive_duration: Some(1440),
+                archive_timestamp: None,
+                locked: false,
+                invitable: None,
+                create_timestamp: None,
+            }),
+            flags: None,
+            rate_limit_per_user: None,
+            available_tags: Vec::new(),
+            applied_tags: Vec::new(),
+            current_user_joined_thread: Some(false),
+            current_user_thread_notification_flags: None,
+            current_user_thread_muted: Some(false),
+            current_user_thread_mute_end_time: None,
+            recipients: None,
+            permission_overwrites: Vec::new(),
+            is_message_request: None,
+            is_spam: None,
+        });
+
+        let mut opening = crate::discord::MessageInfo::default();
+        opening.guild_id = Some(guild_id(10));
+        opening.channel_id = thread_id;
+        opening.message_id = message_id(snowflake_at(3600));
+        opening.author = author.to_string();
+        opening.content = Some(body.to_string());
+        first_messages.push(opening);
+    }
+
+    (threads, first_messages)
+}

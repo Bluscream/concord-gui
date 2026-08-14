@@ -1,4 +1,4 @@
-mod state;
+pub(in crate::discord) mod state;
 
 pub(in crate::discord) use state::{ProfileRoleIds, UserProfileCacheKey};
 
