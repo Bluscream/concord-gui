@@ -10,8 +10,7 @@
 //
 // so a front-end only has to render state and issue commands.
 //
-// Status: bootstrap shell. Proves linkage against the core and opens a window.
-// Wiring the command/event loop is the next step; see docs/REWRITE.md.
+// See docs/REWRITE.md for the phased plan and what remains.
 
 mod http;
 mod model;

@@ -31,6 +31,7 @@ impl MessageAction {
             MessageAction::Delete => 3,
             MessageAction::ToggleReaction(_) => 4,
             MessageAction::RevealSpoiler => 5,
+            MessageAction::OpenProfile => 6,
         }
     }
 }
@@ -43,6 +44,8 @@ pub enum MessageAction {
     React,
     Edit,
     Delete,
+    /// Open the author's profile.
+    OpenProfile,
     /// Toggle an existing reaction, identified by its index in the row's
     /// reaction list. Carrying the index avoids threading emoji identity
     /// through the callback.
@@ -195,11 +198,22 @@ fn message_block(
                     .w_full()
                     .items_center()
                     .gap(px(space::MD))
-                    .child(avatar_with_url(
-                        layout::AVATAR,
-                        &message.author,
-                        message.author_avatar.as_deref(),
-                    ))
+                    .child(
+                        gpui::div()
+                            .id(("author-avatar", index))
+                            .cursor_pointer()
+                            .on_click({
+                                let handler = on_action.clone();
+                                move |_event, _window, cx| {
+                                    handler(index, MessageAction::OpenProfile, cx)
+                                }
+                            })
+                            .child(avatar_with_url(
+                                layout::AVATAR,
+                                &message.author,
+                                message.author_avatar.as_deref(),
+                            )),
+                    )
                     .child(author_line(message)),
             )
             .child(

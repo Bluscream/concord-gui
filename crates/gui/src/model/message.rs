@@ -38,6 +38,7 @@ pub struct AttachmentRow {
 pub struct MessageRow {
     pub id: Id<marker::MessageMarker>,
     pub author: String,
+    pub author_id: Id<marker::UserMarker>,
     pub author_is_bot: bool,
     pub author_avatar: Option<String>,
     /// Role colour as packed RGB, when the author has a coloured role.
@@ -103,6 +104,7 @@ pub fn project_messages(
         rows.push(MessageRow {
             id: message.id,
             author: display_author(message),
+            author_id: message.author_id,
             author_is_bot: message.author_is_bot,
             author_avatar: message.author_avatar_url.clone(),
             author_color: author_color(state, message),
@@ -153,7 +155,7 @@ pub fn project_messages(
 }
 
 /// Renderable glyph for a reaction. Custom emoji have no text form, so the
-/// name is shown in colons until image rendering lands.
+/// name is shown in colons; inline custom-emoji images are not rendered.
 fn reaction_glyph(emoji: &ReactionEmoji) -> String {
     match emoji {
         ReactionEmoji::Unicode(text) => text.clone(),

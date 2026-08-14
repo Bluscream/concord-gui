@@ -433,8 +433,5 @@ fn spoilers_are_hidden_until_revealed() {
         .find(|row| row.body.runs.iter().any(|(_, style)| style.spoiler))
         .expect("fixture defines a spoilered message");
 
-    assert!(
-        !spoilered.spoiler_revealed,
-        "spoilers must start hidden"
-    );
+    assert!(!spoilered.spoiler_revealed, "spoilers must start hidden");
 }

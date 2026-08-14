@@ -1,9 +1,9 @@
-//! The main three-pane workspace: guild rail, channel sidebar, content area.
+//! The main three-pane workspace: guild rail, channel sidebar, content area,
+//! plus the member list, search and emoji panels that share the right column.
 //!
-//! Currently renders from a placeholder model. The next step replaces that
-//! model with projections of `concord::discord::DiscordSnapshot`, which the
-//! session already publishes on every state revision - no new plumbing needed,
-//! only mapping.
+//! Rendering reads only from `WorkspaceModel`, which `model::projection`
+//! rebuilds from `DiscordState` on every snapshot revision. Nothing here
+//! touches core types directly except to issue commands.
 
 use concord::config::CredentialStoreMode;
 use concord::discord::{
@@ -27,9 +27,9 @@ use crate::ui::composer::{Composer, composer_view};
 use crate::ui::emoji::{self, EmojiPicker};
 use crate::ui::login::{Login, login_view};
 use crate::ui::messages::{MessageAction, message_list};
+use crate::ui::profile::{ProfileView, profile_view};
 
-/// Placeholder view-model. Mirrors the shape of the snapshot projections so
-/// swapping in real data does not change the render code.
+/// Everything the workspace renders, projected from the core's state store.
 pub struct WorkspaceModel {
     pub guilds: Vec<GuildEntry>,
     pub channels: Vec<ChannelEntry>,
@@ -94,6 +94,8 @@ pub struct VoiceMember {
 
 pub struct MemberEntry {
     pub name: String,
+    /// `None` for group headers, which are not clickable.
+    pub user_id: Option<Id<marker::UserMarker>>,
     pub avatar: Option<String>,
     pub presence: Presence,
     /// Group headers ("ONLINE - 42") render as section labels, not rows.
@@ -169,6 +171,8 @@ pub struct Workspace {
     pub search: Option<Search>,
     /// Emoji picker, anchored to the message being reacted to.
     pub picker: Option<EmojiPicker<Id<marker::MessageMarker>>>,
+    /// Profile panel target, and the projected profile once it arrives.
+    pub profile: Option<(Id<marker::UserMarker>, Option<ProfileView>)>,
     focus: FocusHandle,
 }
 
@@ -189,6 +193,7 @@ impl Workspace {
             self_deaf: false,
             search: None,
             picker: None,
+            profile: None,
             focus: cx.focus_handle(),
         }
     }
@@ -255,6 +260,12 @@ impl Workspace {
                                 Selection::Guild(id) => Some(id),
                                 Selection::DirectMessages => None,
                             };
+
+                            if let Some((user_id, _)) = workspace.profile {
+                                let view = projection::project_profile(&state, user_id, guild_id);
+                                workspace.profile = Some((user_id, view));
+                            }
+
                             (workspace.messages, workspace.typing) = match workspace.nav.channel {
                                 Some(channel_id) => (
                                     message::project_messages(
@@ -528,6 +539,12 @@ impl Workspace {
             MessageAction::Edit => self.start_edit(message_id),
             MessageAction::Delete => self.delete_message(message_id),
             MessageAction::React => self.open_emoji_picker(message_id),
+            MessageAction::OpenProfile => {
+                if let Some(row) = self.messages.get(index) {
+                    let author_id = row.author_id;
+                    self.open_profile(author_id);
+                }
+            }
             MessageAction::ToggleReaction(reaction) => {
                 self.toggle_reaction(index, reaction);
             }
@@ -536,6 +553,20 @@ impl Workspace {
                     row.spoiler_revealed = true;
                 }
             }
+        }
+    }
+
+    /// Open the profile panel for a user, requesting it if not cached.
+    pub fn open_profile(&mut self, user_id: Id<marker::UserMarker>) {
+        let guild_id = match self.nav.selection {
+            Selection::Guild(id) => Some(id),
+            Selection::DirectMessages => None,
+        };
+
+        self.profile = Some((user_id, None));
+
+        if let Some(handle) = &self.handle {
+            handle.send(AppCommand::LoadUserProfile { user_id, guild_id });
         }
     }
 
@@ -648,6 +679,29 @@ impl Workspace {
             message_id,
             emoji: ReactionEmoji::Unicode(emoji.to_string()),
         });
+    }
+
+    /// Profile panel for the selected user.
+    fn profile_pane(&self) -> impl IntoElement {
+        let Some((user_id, view)) = &self.profile else {
+            return gpui::div();
+        };
+
+        match view {
+            Some(view) => gpui::div().child(profile_view(view)),
+            // The fetch is in flight. A skeleton with the id keeps the panel
+            // from flashing empty.
+            None => gpui::div().child(profile_view(&ProfileView {
+                display_name: user_id.get().to_string(),
+                handle: None,
+                avatar: None,
+                pronouns: None,
+                bio: None,
+                roles: Vec::new(),
+                mutual_guilds: Vec::new(),
+                loaded: false,
+            })),
+        }
     }
 
     /// Search panel. Replaces the member list rather than adding a fourth
@@ -1047,7 +1101,7 @@ impl Workspace {
         sidebar.child(list)
     }
 
-    fn member_pane(&self) -> impl IntoElement {
+    fn member_pane(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut pane = column()
             .w(px(layout::MEMBERS))
             .h_full()
@@ -1068,7 +1122,7 @@ impl Workspace {
             );
         }
 
-        for member in &self.model.members {
+        for (pane_index, member) in self.model.members.iter().enumerate() {
             if member.is_group {
                 pane = pane.child(section_label(member.name.clone()));
                 continue;
@@ -1099,6 +1153,18 @@ impl Workspace {
                         .child("BOT"),
                 );
             }
+
+            let entry = match member.user_id {
+                Some(user_id) => entry
+                    .id(("member", pane_index))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.open_profile(user_id);
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+                None => entry.into_any_element(),
+            };
 
             pane = pane.child(entry);
         }
@@ -1229,6 +1295,8 @@ impl Render for Workspace {
                             }
                         } else if key == "f" && event.keystroke.modifiers.control {
                             this.toggle_search();
+                        } else if this.profile.is_some() && key == "escape" {
+                            this.profile = None;
                         } else if this.search.is_some() && key == "escape" {
                             this.search = None;
                         } else if let Some(search) = &mut this.search {
@@ -1265,10 +1333,17 @@ impl Render for Workspace {
                         .child(self.guild_rail(cx))
                         .child(self.channel_sidebar(cx))
                         .child(self.content(window, cx))
-                        .when(self.search.is_some(), |d| d.child(self.search_pane(cx)))
-                        .when(self.shows_members() && self.search.is_none(), |d| {
-                            d.child(self.member_pane())
-                        }),
+                        // Right column precedence: profile, then search, then
+                        // the member list. Only one occupies it at a time so
+                        // the message area keeps a readable width.
+                        .when(self.profile.is_some(), |d| d.child(self.profile_pane()))
+                        .when(self.profile.is_none() && self.search.is_some(), |d| {
+                            d.child(self.search_pane(cx))
+                        })
+                        .when(
+                            self.profile.is_none() && self.search.is_none() && self.shows_members(),
+                            |d| d.child(self.member_pane(cx)),
+                        ),
                 )
                 .child(self.voice_bar(cx))
                 .child(self.status_bar())

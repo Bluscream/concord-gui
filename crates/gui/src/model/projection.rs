@@ -13,6 +13,7 @@ use concord::discord::{
 };
 
 use crate::theme::Presence;
+use crate::ui::profile::ProfileView;
 use crate::ui::workspace::{
     ChannelEntry, ChannelKind, GuildEntry, MemberEntry, VoiceMember, WorkspaceModel,
 };
@@ -217,6 +218,7 @@ fn project_members(state: &DiscordState, nav: &Navigation) -> Vec<MemberEntry> {
         .filter_map(|(_, entry)| match entry {
             GuildMemberListEntry::Group { id, count } => Some(MemberEntry {
                 name: format!("{} - {}", id.to_uppercase(), count),
+                user_id: None,
                 avatar: None,
                 presence: Presence::Offline,
                 is_group: true,
@@ -229,6 +231,7 @@ fn project_members(state: &DiscordState, nav: &Navigation) -> Vec<MemberEntry> {
                     name: member
                         .map(|m| m.display_name.clone())
                         .unwrap_or_else(|| "unknown".to_string()),
+                    user_id: Some(*user_id),
                     avatar: member.and_then(|m| m.avatar_url.clone()),
                     presence: presence_of(state.user_presence_for_guild(Some(guild_id), *user_id)),
                     is_group: false,
@@ -240,6 +243,59 @@ fn project_members(state: &DiscordState, nav: &Navigation) -> Vec<MemberEntry> {
             }
         })
         .collect()
+}
+
+/// Project a cached profile for the panel.
+///
+/// Returns `None` when the fetch has not completed; the caller renders a
+/// loading state rather than an empty profile.
+pub fn project_profile(
+    state: &DiscordState,
+    user_id: Id<marker::UserMarker>,
+    guild_id: Option<Id<marker::GuildMarker>>,
+) -> Option<ProfileView> {
+    let profile = state.user_profile(user_id, guild_id)?;
+
+    // Roles are resolved to names and colours here so the view stays free of
+    // core types.
+    let roles = guild_id
+        .map(|guild_id| {
+            profile
+                .role_ids
+                .iter()
+                .filter_map(|role_id| state.role_for_guild(guild_id, *role_id))
+                .map(|role| (role.name.clone(), role.color.filter(|c| *c != 0)))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mutual_guilds = profile
+        .mutual_guilds
+        .iter()
+        .filter_map(|mutual| state.guild(mutual.guild_id))
+        .map(|guild| guild.name.clone())
+        .collect();
+
+    Some(ProfileView {
+        display_name: profile
+            .guild_nick
+            .clone()
+            .or_else(|| profile.global_name.clone())
+            .unwrap_or_else(|| profile.username.clone()),
+        handle: Some(profile.username.clone()),
+        avatar: profile.avatar_url.clone(),
+        // Guild-specific pronouns win over the global value, matching how
+        // Discord itself scopes them.
+        pronouns: profile
+            .guild_pronouns
+            .clone()
+            .or_else(|| profile.pronouns.clone())
+            .filter(|value| !value.is_empty()),
+        bio: profile.bio.clone().filter(|value| !value.is_empty()),
+        roles,
+        mutual_guilds,
+        loaded: true,
+    })
 }
 
 /// Who is sitting in a voice channel, for the sidebar's nested participant
