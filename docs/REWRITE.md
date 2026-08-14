@@ -50,6 +50,9 @@ executable specification for what each of the 70 commands is supposed to do.
 - Prove the core links and compiles independently of the terminal front-end
   (`cargo check --no-default-features` — passes in 20.9s).
 - Shell window rendering core status probed through the public API.
+- Runtime verified on Wayland from the Arch distrobox: surface acquired
+  (1 wayland fd), Vulkan device acquired via radv (2 DRI fds), 27 threads,
+  80.9 MB RSS debug build, clean log.
 
 ### Phase 1 — decouple the portable state
 
