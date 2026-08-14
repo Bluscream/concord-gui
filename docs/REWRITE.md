@@ -90,23 +90,29 @@ Bridge over a channel, dispatching to entity updates on the foreground executor.
 
 | Surface | Status |
 |---|---|
-| Login (token) | ✅ done |
-| Login (QR, password) | ✗ `qr_auth` exists upstream; password needs captcha/MFA UI |
-| Guild rail + channel sidebar | ✅ done, click-to-navigate |
-| Message list | ✅ grouped blocks, replies, attachments, reactions |
-| Composer + send | ✅ minimal editor; no selection/clipboard/multi-line |
-| Member list | ✅ groups, presence, role colours |
-| Unread / mentions | ✅ from core notification state |
-| Typing indicators | ✅ |
-| Markdown / mentions rendering | ✗ content shown verbatim |
-| Custom emoji + avatar images | ✗ no image loading yet |
-| Message actions (edit, delete, react, reply) | ✗ commands exist, no UI |
-| Search | ✗ `SearchMessages` exists |
-| Threads / forums | ✗ filtered out of the sidebar |
-| User profiles | ✗ |
-| Voice controls | ✗ |
-| Settings / keybindings | ✗ |
-| Notifications (desktop) | ✗ |
+| Login (token) | done - masked entry, optional persistence |
+| Login (QR, password) | not started - `qr_auth` exists upstream; password needs captcha/MFA UI |
+| Guild rail + channel sidebar | done - click to navigate |
+| Threads | done - nested under parent, archived dimmed |
+| Forums | partial - listed, not browsable as a post view |
+| Message list | done - grouping, replies, attachments, reactions, avatars |
+| Markdown | done - 13 parser tests; no lists/headings/tables |
+| Mentions | done - resolved to names against guild state |
+| Custom emoji | partial - `:name:` text; inline images not rendered |
+| Composer + send | done - minimal editor; no selection/clipboard/multi-line |
+| Message actions | done - reply, edit, delete, react, toggle reaction |
+| Emoji picker | done - unicode only |
+| Spoilers | done - click to reveal |
+| Member list | done - groups, presence, role colours |
+| User profiles | done - bio, pronouns, roles, mutual servers |
+| Unread / mentions | done - from core notification state |
+| Typing indicators | done |
+| Voice (guild) | done - join, leave, mute, deafen, participants |
+| Voice (DM calls) | not started - needs `VoiceScope::Private` entry point |
+| Search | done - scoped, click to jump |
+| Desktop notifications | done - eligibility delegated to core |
+| Attachments | partial - displayed; upload not implemented |
+| Settings / keybindings | not started |
 
 ### Phase 3 (original note) — views
 
@@ -115,12 +121,33 @@ replaced; `media/`, `keybindings/`, `message/` (~15k) are ported selectively.
 
 ### Phase 4 — media
 
-Voice inherits for free via `AppCommand::JoinVoiceChannel` etc. Two known gaps:
+Voice is wired. Remaining:
 
 - **Screenshare viewing** shells out to `mpv` upstream. A GUI should decode
   in-process and render to a texture.
+- **Screenshare broadcast** is implemented in the core but has no UI control.
 - **Camera does not exist** anywhere in the core. Net-new work in
   `src/discord/voice/capture/`, not UI work.
+
+## Offline development
+
+The core ships a `fixtures` feature with a fully-populated `DiscordState`.
+Run with the token `test` to exercise every rendering path with no account,
+no token and no network:
+
+```bash
+distrobox enter arch -- cargo run -p concord-gui --features fixtures
+```
+
+36 headless tests run against it, covering the core -> projection -> view-model
+path without a display.
+
+The fixture has repeatedly caught bugs the type checker could not, including a
+`tokio::spawn` on GPUI's runtime-less main thread that crashed on the first
+command, and three separate channel-kind modelling errors. Channel kinds are
+string *names* (`"category"`, `"voice"`, `"dm"`, `"group-dm"`, `"thread"`),
+not Discord's numeric wire values - a wrong spelling silently yields an empty
+or misclassified list rather than an error.
 
 ## Constraints
 
