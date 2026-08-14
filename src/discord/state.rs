@@ -2005,7 +2005,7 @@ fn merge_relationship_info(
     }
 }
 
-mod caches;
+pub(in crate::discord) mod caches;
 mod snapshot;
 #[cfg(test)]
 mod tests;

@@ -61,6 +61,30 @@ pub fn spawn(token: String) -> Result<(mpsc::UnboundedReceiver<Update>, SessionH
     let (updates_tx, updates_rx) = mpsc::unbounded_channel();
     let (commands_tx, mut commands_rx) = mpsc::channel::<AppCommand>(64);
 
+    // Fixture mode: the token "test" loads synthetic state instead of
+    // connecting. This exercises every rendering path offline, with no
+    // account and no network.
+    #[cfg(feature = "fixtures")]
+    if concord::discord::fixtures::is_fixture_token(&token) {
+        let _ = updates_tx.send(Update::State(Arc::new(
+            concord::discord::fixtures::demo_state(),
+        )));
+        let _ = updates_tx.send(Update::Event(Box::new(AppEvent::Ready {
+            user: "test-account".to_string(),
+            user_id: None,
+        })));
+
+        // Commands are drained and dropped: there is no server to accept them.
+        std::thread::spawn(move || while commands_rx.blocking_recv().is_some() {});
+
+        return Ok((
+            updates_rx,
+            SessionHandle {
+                commands: commands_tx,
+            },
+        ));
+    }
+
     std::thread::Builder::new()
         .name("concord-core".into())
         .spawn(move || {

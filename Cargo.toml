@@ -106,6 +106,8 @@ yuv = { version = "0.8.16", features = ["fast_mode"], optional = true }
 
 [features]
 default = ["voice-playback", "stream-broadcast"]
+# Synthetic state for offline UI development. Never enabled in release builds.
+fixtures = []
 voice-playback = [
   "dep:cpal",
   "dep:alsa",

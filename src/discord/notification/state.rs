@@ -813,3 +813,19 @@ fn notification_level_from_channel_flags(flags: u64) -> NotificationLevel {
         NotificationLevel::OnlyMentions
     }
 }
+
+#[cfg(feature = "fixtures")]
+impl super::super::state::caches::NotificationCache {
+    /// Mark a channel unread with `mentions` mentions and `notifications`
+    /// unread messages, as the sidebar projections read them.
+    pub(in crate::discord) fn set_fixture_unread(
+        &mut self,
+        channel_id: Id<ChannelMarker>,
+        mentions: u32,
+        notifications: u32,
+    ) {
+        let state = self.read_states.entry(channel_id).or_default();
+        state.mention_count = mentions;
+        state.notification_count = notifications;
+    }
+}

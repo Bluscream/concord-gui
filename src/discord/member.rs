@@ -1,4 +1,4 @@
-mod list;
+pub(in crate::discord) mod list;
 mod state;
 
 use chrono::{DateTime, Utc};

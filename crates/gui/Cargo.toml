@@ -29,3 +29,5 @@ default = []
 # Mirrors the upstream feature of the same purpose; enables voice playback and
 # screenshare broadcast by turning the core's default features back on.
 media = ["concord/voice-playback", "concord/stream-broadcast"]
+# Offline demo state, selected at runtime with the token "test".
+fixtures = ["concord/fixtures"]

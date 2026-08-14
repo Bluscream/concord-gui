@@ -500,3 +500,20 @@ fn item_entry(item: &GuildMemberListItem) -> Option<GuildMemberListEntry> {
         GuildMemberListItem::Unknown { .. } => None,
     }
 }
+
+#[cfg(feature = "fixtures")]
+impl GuildMemberListState {
+    /// Build a list directly from positional entries, bypassing the sync
+    /// protocol. Fixture use only.
+    pub(in crate::discord) fn from_fixture_entries(
+        entries: Vec<(u32, GuildMemberListEntry)>,
+    ) -> Self {
+        let mut state = Self::default();
+        state.stable = Some(GuildMemberListSnapshot {
+            list_id: Some("everyone".to_string()),
+            entries: entries.into_iter().collect(),
+            ..Default::default()
+        });
+        state
+    }
+}

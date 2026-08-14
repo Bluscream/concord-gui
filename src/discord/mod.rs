@@ -12,6 +12,8 @@ mod display_name;
 mod emoji;
 mod events;
 mod fingerprint;
+#[cfg(feature = "fixtures")]
+pub mod fixtures;
 mod gateway;
 mod guild;
 pub mod ids;
@@ -29,7 +31,7 @@ mod read;
 mod request_lifecycle;
 mod rest;
 mod rpc;
-mod state;
+pub(in crate::discord) mod state;
 mod upload;
 mod user_settings;
 mod verification;

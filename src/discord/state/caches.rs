@@ -178,3 +178,61 @@ pub(in crate::discord) struct NotificationCache {
     pub(in crate::discord) private_notification_settings: Option<GuildNotificationSettingsState>,
     pub(in crate::discord) user_guild_settings_version: Option<i64>,
 }
+
+// ---------------------------------------------------------------------------
+// Fixture support
+//
+// Setters used by `crate::discord::fixtures` to build synthetic state for
+// offline UI development. Compiled only under the `fixtures` feature so they
+// cannot be reached from a release build.
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "fixtures")]
+impl MessageCache {
+    /// Replace a channel's timeline with `messages`, oldest first.
+    ///
+    /// Segments are left empty: `messages_for_channel` reads only the message
+    /// deque, and segment bookkeeping exists for history-gap tracking that a
+    /// fixture has no need to model.
+    pub(in crate::discord) fn set_fixture_messages(
+        &mut self,
+        channel_id: Id<ChannelMarker>,
+        messages: Vec<MessageState>,
+    ) {
+        let timeline = self.timelines.entry(channel_id).or_default();
+        timeline.messages = messages.into();
+    }
+}
+
+#[cfg(feature = "fixtures")]
+impl PresenceCache {
+    pub(in crate::discord) fn set_fixture_typing(
+        &mut self,
+        channel_id: Id<ChannelMarker>,
+        users: &[Id<UserMarker>],
+    ) {
+        let entry = self.typing.entry(channel_id).or_default();
+        for user_id in users {
+            entry.insert(
+                *user_id,
+                TypingIndicator {
+                    started: std::time::Instant::now(),
+                },
+            );
+        }
+    }
+}
+
+#[cfg(feature = "fixtures")]
+impl GuildDetailCache {
+    pub(in crate::discord) fn set_fixture_member_list(
+        &mut self,
+        guild_id: Id<GuildMarker>,
+        entries: Vec<(u32, crate::discord::GuildMemberListEntry)>,
+    ) {
+        self.member_lists.insert(
+            guild_id,
+            super::super::member::list::GuildMemberListState::from_fixture_entries(entries),
+        );
+    }
+}
