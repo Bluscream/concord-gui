@@ -32,18 +32,18 @@ pub use concord::discord::password_auth::{MfaChallenge, MfaMethod};
 /// Runs on its own tokio runtime (same pattern as `spawn`). The caller drives
 /// the auth state machine via the events and issues follow-up calls
 /// (`spawn_mfa_verify`, `spawn_sms_send`) as needed.
-pub fn spawn_password_login(
-    login: String,
-    password: String,
-) -> (
-    mpsc::Receiver<PasswordAuthEvent>,
-    tokio::task::JoinHandle<()>,
-) {
+pub fn spawn_password_login(login: String, password: String) -> mpsc::Receiver<PasswordAuthEvent> {
     let (tx, rx) = mpsc::channel(8);
-    let rt = tokio::runtime::Builder::new_multi_thread()
+    let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .expect("tokio runtime for password auth");
+    {
+        Ok(rt) => rt,
+        // Runtime creation fails only under real resource pressure. Reporting
+        // it leaves the user on the login screen with an error; panicking here
+        // would take the whole client down mid-login.
+        Err(_) => return rx,
+    };
 
     let handle = std::thread::Builder::new()
         .name("concord-password-auth".into())
@@ -54,20 +54,13 @@ pub fn spawn_password_login(
                     password_auth::spawn_login_with_auth_session(login, password, auth_session, tx);
                 let _ = join.await;
             });
-        })
-        .expect("spawn password-auth thread");
+        });
 
-    // Wrap the OS thread handle in a task handle-like structure.
-    // We use a oneshot to signal completion.
-    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
-    let join_handle = tokio::task::spawn(async move {
-        let _ = done_rx.await;
-    });
-    // Signal immediately after the thread exits (best-effort).
-    std::mem::drop(done_tx);
-    let _ = handle; // thread runs to completion on its own
+    // The worker thread owns its own runtime and runs to completion; nothing
+    // awaits it, so no handle is returned.
+    let _ = handle;
 
-    (rx, join_handle)
+    rx
 }
 
 /// Spawn an MFA verification task (TOTP or SMS code submit).
@@ -76,15 +69,18 @@ pub fn spawn_mfa_verify(
     code: String,
     ticket: String,
     login_instance_id: String,
-) -> (
-    mpsc::Receiver<PasswordAuthEvent>,
-    tokio::task::JoinHandle<()>,
-) {
+) -> mpsc::Receiver<PasswordAuthEvent> {
     let (tx, rx) = mpsc::channel(8);
-    let rt = tokio::runtime::Builder::new_multi_thread()
+    let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .expect("tokio runtime for mfa verify");
+    {
+        Ok(rt) => rt,
+        // Runtime creation fails only under real resource pressure. Reporting
+        // it leaves the user on the login screen with an error; panicking here
+        // would take the whole client down mid-login.
+        Err(_) => return rx,
+    };
 
     std::thread::Builder::new()
         .name("concord-mfa-verify".into())
@@ -101,25 +97,23 @@ pub fn spawn_mfa_verify(
                 );
                 let _ = join.await;
             });
-        })
-        .expect("spawn mfa-verify thread");
-
-    let join_handle = tokio::task::spawn(async {});
-    (rx, join_handle)
+        });
+    rx
 }
 
 /// Spawn an SMS send task.
-pub fn spawn_sms_send(
-    ticket: String,
-) -> (
-    mpsc::Receiver<PasswordAuthEvent>,
-    tokio::task::JoinHandle<()>,
-) {
+pub fn spawn_sms_send(ticket: String) -> mpsc::Receiver<PasswordAuthEvent> {
     let (tx, rx) = mpsc::channel(8);
-    let rt = tokio::runtime::Builder::new_multi_thread()
+    let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .expect("tokio runtime for sms send");
+    {
+        Ok(rt) => rt,
+        // Runtime creation fails only under real resource pressure. Reporting
+        // it leaves the user on the login screen with an error; panicking here
+        // would take the whole client down mid-login.
+        Err(_) => return rx,
+    };
 
     std::thread::Builder::new()
         .name("concord-sms-send".into())
@@ -130,20 +124,23 @@ pub fn spawn_sms_send(
                     password_auth::spawn_sms_send_with_auth_session(ticket, auth_session, tx);
                 let _ = join.await;
             });
-        })
-        .expect("spawn sms-send thread");
-
-    let join_handle = tokio::task::spawn(async {});
-    (rx, join_handle)
+        });
+    rx
 }
 
 /// Spawn a QR-auth task and return a receiver for its events.
-pub fn spawn_qr_login() -> (mpsc::Receiver<QrEvent>, tokio::task::JoinHandle<()>) {
+pub fn spawn_qr_login() -> mpsc::Receiver<QrEvent> {
     let (tx, rx) = mpsc::channel(8);
-    let rt = tokio::runtime::Builder::new_multi_thread()
+    let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .expect("tokio runtime for qr auth");
+    {
+        Ok(rt) => rt,
+        // Runtime creation fails only under real resource pressure. Reporting
+        // it leaves the user on the login screen with an error; panicking here
+        // would take the whole client down mid-login.
+        Err(_) => return rx,
+    };
 
     std::thread::Builder::new()
         .name("concord-qr-auth".into())
@@ -153,11 +150,8 @@ pub fn spawn_qr_login() -> (mpsc::Receiver<QrEvent>, tokio::task::JoinHandle<()>
                 let join = qr_auth::spawn_with_auth_session(auth_session, tx);
                 let _ = join.await;
             });
-        })
-        .expect("spawn qr-auth thread");
-
-    let join_handle = tokio::task::spawn(async {});
-    (rx, join_handle)
+        });
+    rx
 }
 
 /// What the bridge forwards to the UI thread.

@@ -106,7 +106,6 @@ impl QrState {
 /// Active async handles for in-flight auth tasks.
 pub struct LoginHandle {
     pub rx: mpsc::Receiver<LoginEvent>,
-    pub join: JoinHandle<()>,
 }
 
 /// Unified event type that the UI drains from `LoginHandle`.

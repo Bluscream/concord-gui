@@ -504,10 +504,9 @@ impl Workspace {
                     l.screen = LoginScreen::QrScan;
                     l.error = None;
 
-                    let (rx, join) = crate::session::spawn_qr_login();
+                    let rx = crate::session::spawn_qr_login();
                     l.handle = Some(LoginHandle {
                         rx: Self::wrap_qr(rx),
-                        join,
                     });
 
                     if let Some(wh) = window.window_handle().downcast::<Workspace>() {
@@ -556,10 +555,9 @@ impl Workspace {
                 login.password.status = "Authenticating with Discord…".to_string();
                 login.error = None;
 
-                let (rx, join) = crate::session::spawn_password_login(login_id, pw);
+                let rx = crate::session::spawn_password_login(login_id, pw);
                 login.handle = Some(LoginHandle {
                     rx: Self::wrap_password(rx),
-                    join,
                 });
 
                 if let Some(wh) = window.window_handle().downcast::<Workspace>() {
@@ -588,10 +586,9 @@ impl Workspace {
                         login.password.status = "Requesting SMS code…".to_string();
                         login.error = None;
 
-                        let (rx, join) = crate::session::spawn_sms_send(challenge.ticket.clone());
+                        let rx = crate::session::spawn_sms_send(challenge.ticket.clone());
                         login.handle = Some(LoginHandle {
                             rx: Self::wrap_password(rx),
-                            join,
                         });
 
                         if let Some(wh) = window.window_handle().downcast::<Workspace>() {
@@ -620,7 +617,7 @@ impl Workspace {
                 login.password.status = "Verifying…".to_string();
                 login.error = None;
 
-                let (rx, join) = crate::session::spawn_mfa_verify(
+                let rx = crate::session::spawn_mfa_verify(
                     method,
                     code,
                     challenge.ticket.clone(),
@@ -628,7 +625,6 @@ impl Workspace {
                 );
                 login.handle = Some(LoginHandle {
                     rx: Self::wrap_password(rx),
-                    join,
                 });
 
                 if let Some(wh) = window.window_handle().downcast::<Workspace>() {
