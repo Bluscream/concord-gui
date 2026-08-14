@@ -1400,87 +1400,265 @@ impl Workspace {
         pane.child(results)
     }
 
-    /// Connection bar, shown only while connected to voice.
-    fn voice_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some((_, name)) = &self.voice_channel else {
-            return gpui::div();
-        };
+    /// Discord-style Voice Connected Card rendered right above the user profile bar at the bottom of the sidebar.
+    fn voice_connected_card(&self, name: &str, cx: &mut Context<Self>) -> gpui::Div {
+        let mute = self.self_mute;
+        let deaf = self.self_deaf;
 
-        gpui::div().w_full().child(
-            row()
-                .w_full()
-                .h(px(40.))
-                .px(px(space::MD))
-                .gap(px(space::SM))
-                .bg(rgb(DARK.surface))
-                .border_t_1()
-                .border_color(rgb(DARK.border))
-                .child(presence_dot(Presence::Online))
-                .child(
-                    column()
-                        .flex_1()
-                        .child(
-                            gpui::div()
-                                .text_size(px(text::SM))
-                                .text_color(rgb(DARK.success))
-                                .child("Voice connected"),
-                        )
-                        .child(
-                            gpui::div()
-                                .text_size(px(text::XS))
-                                .text_color(rgb(DARK.text_subtle))
-                                .child(name.clone()),
-                        ),
-                )
-                .child(
-                    self.voice_button("mute", self.self_mute)
-                        .id("voice-mute")
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _event, _window, cx| {
-                            this.toggle_voice_flag(false);
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    self.voice_button("deafen", self.self_deaf)
-                        .id("voice-deafen")
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _event, _window, cx| {
-                            this.toggle_voice_flag(true);
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    self.voice_button("leave", false)
-                        .id("voice-leave")
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _event, _window, cx| {
-                            this.leave_voice();
-                            cx.notify();
-                        })),
-                ),
-        )
+        column()
+            .w_full()
+            .p(px(space::SM))
+            .gap(px(space::XS))
+            .bg(rgb(DARK.surface))
+            .border_t_1()
+            .border_color(rgb(DARK.border))
+            // Top row: signal wave icon + Voice Connected status + channel name + disconnect button
+            .child(
+                row()
+                    .w_full()
+                    .items_center()
+                    .gap(px(space::SM))
+                    .child(
+                        gpui::div()
+                            .text_size(px(14.))
+                            .text_color(rgb(DARK.success))
+                            .child("📶"),
+                    )
+                    .child(
+                        column()
+                            .flex_1()
+                            .child(
+                                gpui::div()
+                                    .text_size(px(text::XS))
+                                    .text_color(rgb(DARK.success))
+                                    .child("Voice Connected"),
+                            )
+                            .child(
+                                gpui::div()
+                                    .text_size(px(text::XS))
+                                    .text_color(rgb(DARK.text_subtle))
+                                    .child(name.to_string()),
+                            ),
+                    )
+                    .child(
+                        gpui::div()
+                            .id("voice-card-leave")
+                            .px(px(6.))
+                            .py(px(2.))
+                            .rounded(px(layout::RADIUS))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgb(DARK.surface_hover)))
+                            .text_size(px(14.))
+                            .text_color(rgb(DARK.danger))
+                            .child("📞")
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.leave_voice();
+                                cx.notify();
+                            })),
+                    ),
+            )
+            // Second row: 4 rounded quick control action buttons
+            .child(
+                row()
+                    .w_full()
+                    .gap(px(space::XS))
+                    .justify_around()
+                    .child(
+                        gpui::div()
+                            .id("card-mute")
+                            .flex_1()
+                            .h(px(28.))
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(layout::RADIUS))
+                            .bg(rgb(if mute { DARK.danger } else { DARK.surface_sunken }))
+                            .text_size(px(12.))
+                            .text_color(rgb(if mute { DARK.on_accent } else { DARK.text }))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgb(DARK.surface_hover)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.toggle_voice_flag(false);
+                                cx.notify();
+                            }))
+                            .child(if mute { "🎤̸" } else { "🎤" }),
+                    )
+                    .child(
+                        gpui::div()
+                            .id("card-deafen")
+                            .flex_1()
+                            .h(px(28.))
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(layout::RADIUS))
+                            .bg(rgb(if deaf { DARK.danger } else { DARK.surface_sunken }))
+                            .text_size(px(12.))
+                            .text_color(rgb(if deaf { DARK.on_accent } else { DARK.text }))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgb(DARK.surface_hover)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.toggle_voice_flag(true);
+                                cx.notify();
+                            }))
+                            .child(if deaf { "🎧̸" } else { "🎧" }),
+                    )
+                    .child(
+                        gpui::div()
+                            .id("card-screen")
+                            .flex_1()
+                            .h(px(28.))
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(layout::RADIUS))
+                            .bg(rgb(DARK.surface_sunken))
+                            .text_size(px(12.))
+                            .text_color(rgb(DARK.text))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgb(DARK.surface_hover)))
+                            .child("🖥"),
+                    )
+                    .child(
+                        gpui::div()
+                            .id("card-activity")
+                            .flex_1()
+                            .h(px(28.))
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(layout::RADIUS))
+                            .bg(rgb(DARK.surface_sunken))
+                            .text_size(px(12.))
+                            .text_color(rgb(DARK.text))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgb(DARK.surface_hover)))
+                            .child("🎮"),
+                    ),
+            )
     }
 
-    /// One control in the voice bar. Active toggles are filled, so state is
-    /// readable at a glance rather than needing a colour comparison.
-    fn voice_button(&self, label: &'static str, active: bool) -> gpui::Div {
-        gpui::div()
+    /// Discord-style User Profile Bar rendered at the very bottom of the channel sidebar.
+    fn user_profile_bar(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let user_name = self
+            .last_state
+            .as_ref()
+            .and_then(|s| s.current_user())
+            .unwrap_or("blu")
+            .to_string();
+
+        let mute = self.self_mute;
+        let deaf = self.self_deaf;
+        let settings_open = self.settings_open;
+
+        row()
+            .w_full()
+            .h(px(52.))
             .px(px(space::SM))
-            .py(px(space::XS))
-            .rounded(px(layout::RADIUS))
-            .text_size(px(text::XS))
-            .bg(rgb(if active {
-                DARK.danger
-            } else {
-                DARK.surface_hover
-            }))
-            .text_color(rgb(if active {
-                DARK.on_accent
-            } else {
-                DARK.text_muted
-            }))
-            .child(label)
+            .items_center()
+            .bg(rgb(DARK.surface))
+            .border_t_1()
+            .border_color(rgb(DARK.border))
+            // User Avatar & Name block (clicking opens profile)
+            .child(
+                row()
+                    .id("user-bar-profile")
+                    .flex_1()
+                    .items_center()
+                    .gap(px(space::SM))
+                    .px(px(4.))
+                    .py(px(4.))
+                    .rounded(px(layout::RADIUS))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(rgb(DARK.surface_hover)))
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        if let Some(state) = &this.last_state {
+                            let user_id = state.current_user_id();
+                            this.profile = user_id.map(|id| (id, None));
+                            cx.notify();
+                        }
+                    }))
+                    .child(
+                        gpui::div()
+                            .relative()
+                            .child(avatar(32., &user_name))
+                            .child(presence_dot(Presence::Online)),
+                    )
+                    .child(
+                        column()
+                            .overflow_hidden()
+                            .child(
+                                gpui::div()
+                                    .text_size(px(text::SM))
+                                    .text_color(rgb(DARK.text))
+                                    .child(user_name),
+                            )
+                            .child(
+                                gpui::div()
+                                    .text_size(px(text::XS))
+                                    .text_color(rgb(DARK.text_subtle))
+                                    .child("Online"),
+                            ),
+                    ),
+            )
+            // Controls (Mic, Headphones/Deafen, Settings Gear)
+            .child(
+                row()
+                    .gap(px(2.))
+                    .child(
+                        gpui::div()
+                            .id("bar-mute")
+                            .w(px(28.))
+                            .h(px(28.))
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(layout::RADIUS))
+                            .bg(rgb(if mute { DARK.danger } else { DARK.surface }))
+                            .text_size(px(14.))
+                            .text_color(rgb(if mute { DARK.on_accent } else { DARK.text_muted }))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgb(DARK.surface_hover)).text_color(rgb(DARK.text)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.toggle_voice_flag(false);
+                                cx.notify();
+                            }))
+                            .child(if mute { "🎤̸" } else { "🎤" }),
+                    )
+                    .child(
+                        gpui::div()
+                            .id("bar-deafen")
+                            .w(px(28.))
+                            .h(px(28.))
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(layout::RADIUS))
+                            .bg(rgb(if deaf { DARK.danger } else { DARK.surface }))
+                            .text_size(px(14.))
+                            .text_color(rgb(if deaf { DARK.on_accent } else { DARK.text_muted }))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgb(DARK.surface_hover)).text_color(rgb(DARK.text)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.toggle_voice_flag(true);
+                                cx.notify();
+                            }))
+                            .child(if deaf { "🎧̸" } else { "🎧" }),
+                    )
+                    .child(
+                        gpui::div()
+                            .id("bar-settings")
+                            .w(px(28.))
+                            .h(px(28.))
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(layout::RADIUS))
+                            .bg(rgb(if settings_open { DARK.accent } else { DARK.surface }))
+                            .text_size(px(14.))
+                            .text_color(rgb(if settings_open { DARK.on_accent } else { DARK.text_muted }))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgb(DARK.surface_hover)).text_color(rgb(DARK.text)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.settings_open = !this.settings_open;
+                                cx.notify();
+                            }))
+                            .child("⚙"),
+                    ),
+            )
     }
 
     /// A DM or group DM with no call already running can be called.
@@ -1595,19 +1773,23 @@ impl Workspace {
             .map(|g| g.name.clone())
             .unwrap_or_default();
 
-        let sidebar = panel_sunken(layout::SIDEBAR).child(
-            row()
-                .w_full()
-                .h(px(layout::HEADER))
-                .px(px(space::MD))
-                .border_b_1()
-                .border_color(rgb(DARK.border))
-                .text_size(px(text::BASE))
-                .text_color(rgb(DARK.text))
-                .child(guild_name),
-        );
+        let header_row = row()
+            .w_full()
+            .h(px(layout::HEADER))
+            .px(px(space::MD))
+            .border_b_1()
+            .border_color(rgb(DARK.border))
+            .text_size(px(text::BASE))
+            .text_color(rgb(DARK.text))
+            .child(guild_name);
 
-        let mut list = column().w_full().pt(px(space::XS)).gap(px(1.));
+        let mut list = column()
+            .id("channel-list")
+            .flex_1()
+            .w_full()
+            .pt(px(space::XS))
+            .gap(px(1.))
+            .overflow_y_scroll();
 
         for (index, channel) in self.model.channels.iter().enumerate() {
             if channel.kind == ChannelKind::Category {
@@ -1688,7 +1870,17 @@ impl Workspace {
             }
         }
 
-        sidebar.child(list)
+        let mut sidebar = panel_sunken(layout::SIDEBAR)
+            .child(header_row)
+            .child(list);
+
+        if let Some((_, name)) = &self.voice_channel {
+            sidebar = sidebar.child(self.voice_connected_card(name, cx));
+        }
+
+        sidebar = sidebar.child(self.user_profile_bar(cx));
+
+        sidebar
     }
 
     fn member_pane(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2130,7 +2322,6 @@ impl Render for Workspace {
                             |d| d.child(self.member_pane(cx)),
                         ),
                 )
-                .child(self.voice_bar(cx))
                 .child(self.status_bar())
             })
     }
