@@ -16,6 +16,7 @@ use tokio::sync::mpsc;
 
 use crate::model::message::{self, MessageRow};
 use crate::model::projection::{self, Navigation, Selection};
+use crate::notify;
 use crate::session::{SessionHandle, Update};
 
 use crate::theme::{DARK, Presence, layout, space, text};
@@ -173,6 +174,9 @@ pub struct Workspace {
     pub picker: Option<EmojiPicker<Id<marker::MessageMarker>>>,
     /// Profile panel target, and the projected profile once it arrives.
     pub profile: Option<(Id<marker::UserMarker>, Option<ProfileView>)>,
+    /// Whether the window has focus. Notifications for the channel being read
+    /// are suppressed only while it does.
+    pub window_focused: bool,
     focus: FocusHandle,
 }
 
@@ -194,6 +198,7 @@ impl Workspace {
             search: None,
             picker: None,
             profile: None,
+            window_focused: true,
             focus: cx.focus_handle(),
         }
     }
@@ -278,7 +283,19 @@ impl Workspace {
                                 None => (Vec::new(), Vec::new()),
                             };
                         }
-                        Update::Event(event) => workspace.absorb(*event),
+                        Update::Event(event, state) => {
+                            // The core owns the mute/mention rules; the GUI
+                            // only adds "not the channel you are reading".
+                            if let Some(notification) = notify::notification_for(
+                                &state,
+                                &event,
+                                workspace.nav.channel,
+                                workspace.window_focused,
+                            ) {
+                                notify::deliver(&notification);
+                            }
+                            workspace.absorb(*event);
+                        }
                         Update::Closed(reason) => {
                             workspace.model.connected = false;
                             workspace.model.status_line =
@@ -1256,6 +1273,10 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Sampled per render rather than observed: GPUI re-renders on
+        // activation changes, so this stays current without a second channel.
+        self.window_focused = window.is_window_active();
+
         column()
             .track_focus(&self.focus)
             .key_context("Workspace")

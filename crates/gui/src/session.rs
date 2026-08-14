@@ -25,7 +25,11 @@ pub enum Update {
     /// The state store changed; carries a freshly-read state to project.
     State(Arc<DiscordState>),
     /// A discrete event worth surfacing (errors, toasts, connection status).
-    Event(Box<AppEvent>),
+    ///
+    /// Carries the state as observed when the event fired, so notification
+    /// eligibility - which the core computes from mutes and mention rules -
+    /// can be evaluated against a consistent snapshot.
+    Event(Box<AppEvent>, Arc<DiscordState>),
     /// The session ended, with an optional reason.
     Closed(Option<String>),
 }
@@ -70,10 +74,13 @@ pub fn spawn(token: String) -> Result<(mpsc::UnboundedReceiver<Update>, SessionH
         let _ = updates_tx.send(Update::State(Arc::new(
             concord::discord::fixtures::demo_state(),
         )));
-        let _ = updates_tx.send(Update::Event(Box::new(AppEvent::Ready {
-            user: "test-account".to_string(),
-            user_id: None,
-        })));
+        let _ = updates_tx.send(Update::Event(
+            Box::new(AppEvent::Ready {
+                user: "test-account".to_string(),
+                user_id: None,
+            }),
+            Arc::new(concord::discord::fixtures::demo_state()),
+        ));
 
         // Commands are drained and dropped: there is no server to accept them.
         std::thread::spawn(move || while commands_rx.blocking_recv().is_some() {});
@@ -145,8 +152,10 @@ pub fn spawn(token: String) -> Result<(mpsc::UnboundedReceiver<Update>, SessionH
                         event = effects.recv() => {
                             match event {
                                 Some(sequenced) => {
+                                    let state =
+                                        Arc::new(client.current_discord_snapshot().to_state());
                                     if updates_tx
-                                        .send(Update::Event(Box::new(sequenced.event)))
+                                        .send(Update::Event(Box::new(sequenced.event), state))
                                         .is_err()
                                     {
                                         break;

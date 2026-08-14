@@ -1420,6 +1420,7 @@ dependencies = [
  "futures",
  "gpui",
  "gpui_http_client",
+ "notify-rust",
  "reqwest",
  "tokio",
  "tracing",
@@ -5207,6 +5208,7 @@ version = "4.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "50ff2e74231b72c832d82982193b417f230945be6bdb5575b251d941d31adb00"
 dependencies = [
+ "dbus",
  "futures-lite 2.6.1",
  "log",
  "mac-notification-sys",

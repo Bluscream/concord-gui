@@ -14,6 +14,7 @@
 
 mod http;
 mod model;
+mod notify;
 mod session;
 mod theme;
 mod ui;
