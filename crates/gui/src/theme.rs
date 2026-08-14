@@ -78,6 +78,33 @@ pub const DARK: Palette = Palette {
     offline: 0x6b7280,
 };
 
+pub const LIGHT: Palette = Palette {
+    bg: 0xf2f3f5,
+    surface: 0xffffff,
+    surface_sunken: 0xebedef,
+    surface_hover: 0xe3e5e8,
+    surface_active: 0xd8daed,
+
+    border: 0xd1d5db,
+
+    text: 0x2e3338,
+    text_muted: 0x4f5660,
+    text_subtle: 0x747f8d,
+
+    accent: 0x5865f2,
+    accent_hover: 0x4752c4,
+    on_accent: 0xffffff,
+
+    success: 0x3ba55d,
+    warning: 0xfaa81a,
+    danger: 0xed4245,
+
+    online: 0x3ba55d,
+    idle: 0xfaa81a,
+    dnd: 0xed4245,
+    offline: 0x747f8d,
+};
+
 impl Palette {
     pub fn c(&self, value: u32) -> Rgba {
         let _ = self;

@@ -36,7 +36,7 @@ use crate::ui::login::{
 };
 use crate::ui::messages::{MessageAction, message_list};
 use crate::ui::profile::{ProfileView, profile_view};
-use crate::ui::settings::{self, Toggle};
+use crate::ui::settings::settings_modal_view;
 
 /// Everything the workspace renders, projected from the core's state store.
 pub struct WorkspaceModel {
@@ -213,6 +213,8 @@ pub struct Workspace {
     pub settings_open: bool,
     /// Result of the last persistence attempt, surfaced in the panel.
     pub settings_note: Option<String>,
+    /// Composer for editing custom Discord base URL.
+    pub url_composer: Composer,
     /// Files staged for the next send.
     pub attachments: Vec<MessageAttachmentUpload>,
     /// Reason the last staging attempt failed, shown above the composer.
@@ -225,6 +227,10 @@ pub struct Workspace {
 
 impl Workspace {
     pub fn new(model: WorkspaceModel, screen: Screen, cx: &mut Context<Self>) -> Self {
+        let options = config::load_options().unwrap_or_default();
+        let mut url_composer = Composer::default();
+        url_composer.set_text(&options.server.discord_base_url);
+
         Self {
             screen,
             model,
@@ -243,15 +249,25 @@ impl Workspace {
             picker: None,
             profile: None,
             window_focused: true,
-            // A malformed config must not stop the client from starting; the
-            // defaults are usable and the panel reports the problem.
-            options: config::load_options().unwrap_or_default(),
+            options,
             settings_open: false,
             settings_note: None,
+            url_composer,
             attachments: Vec::new(),
             attachment_error: None,
             last_state: None,
             focus: cx.focus_handle(),
+        }
+    }
+
+    pub fn save_options(&mut self) {
+        match config::save_options(&self.options) {
+            Ok(()) => {
+                self.settings_note = Some("Saved to config.toml".to_string());
+            }
+            Err(err) => {
+                self.settings_note = Some(format!("Failed to save: {err}"));
+            }
         }
     }
 
@@ -1008,40 +1024,6 @@ impl Workspace {
         }
     }
 
-    /// Read a settings toggle.
-    fn setting(&self, toggle: Toggle) -> bool {
-        let options = &self.options;
-        match toggle {
-            Toggle::ShowAvatars => options.display.show_avatars,
-            Toggle::CircularAvatars => options.display.circular_avatars,
-            Toggle::DesktopNotifications => options.notifications.desktop_notifications,
-            Toggle::NoiseSuppression => options.voice.noise_suppression,
-            Toggle::ShareRichPresence => options.presence.share_rich_presence,
-        }
-    }
-
-    /// Flip a setting and persist immediately.
-    ///
-    /// Writing on every change rather than on close means a crash cannot lose
-    /// the preference, and matches how the TUI treats its config.
-    fn toggle_setting(&mut self, toggle: Toggle) {
-        {
-            let options = &mut self.options;
-            let field = match toggle {
-                Toggle::ShowAvatars => &mut options.display.show_avatars,
-                Toggle::CircularAvatars => &mut options.display.circular_avatars,
-                Toggle::DesktopNotifications => &mut options.notifications.desktop_notifications,
-                Toggle::NoiseSuppression => &mut options.voice.noise_suppression,
-                Toggle::ShareRichPresence => &mut options.presence.share_rich_presence,
-            };
-            *field = !*field;
-        }
-
-        self.settings_note = match config::save_options(&self.options) {
-            Ok(()) => None,
-            Err(error) => Some(format!("Could not save settings: {error}")),
-        };
-    }
 
     /// Open a file picker and stage the chosen files for the next send.
     fn attach_files(&mut self, cx: &mut Context<Self>) {
@@ -1230,33 +1212,6 @@ impl Workspace {
         });
     }
 
-    /// Settings panel.
-    fn settings_pane(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let values: Vec<bool> = settings::SECTIONS
-            .iter()
-            .flat_map(|(_, toggles)| toggles.iter().map(|toggle| self.setting(*toggle)))
-            .collect();
-
-        // Values are snapshotted so the closure does not borrow self.
-        let lookup = move |toggle: Toggle| {
-            settings::SECTIONS
-                .iter()
-                .flat_map(|(_, toggles)| toggles.iter())
-                .position(|candidate| *candidate == toggle)
-                .and_then(|index| values.get(index).copied())
-                .unwrap_or(false)
-        };
-
-        settings::settings_view(lookup, self.settings_note.as_deref(), {
-            let entity = cx.entity();
-            move |toggle, cx: &mut gpui::App| {
-                entity.update(cx, |workspace, cx| {
-                    workspace.toggle_setting(toggle);
-                    cx.notify();
-                });
-            }
-        })
-    }
 
     /// Profile panel for the selected user.
     fn profile_pane(&self) -> impl IntoElement {
@@ -2250,10 +2205,25 @@ impl Render for Workspace {
                                 }
                                 _ => {}
                             }
-                        } else if key == "," && event.keystroke.modifiers.control {
+                        } else if key == "comma"
+                            && (event.keystroke.modifiers.control
+                                || event.keystroke.modifiers.platform)
+                        {
                             this.settings_open = !this.settings_open;
-                        } else if this.settings_open && key == "escape" {
-                            this.settings_open = false;
+                        } else if this.settings_open {
+                            if key == "escape" {
+                                this.settings_open = false;
+                            } else {
+                                let pasted = (event.keystroke.key == "v"
+                                    && (event.keystroke.modifiers.control
+                                        || event.keystroke.modifiers.platform))
+                                    .then(|| cx.read_from_clipboard().and_then(|item| item.text()))
+                                    .flatten();
+                                if this.url_composer.handle_key_with_clipboard(event, pasted) {
+                                    this.options.server.discord_base_url = this.url_composer.text().to_string();
+                                    this.save_options();
+                                }
+                            }
                         } else if key == "o" && event.keystroke.modifiers.control {
                             this.attach_files(cx);
                         } else if key == "f" && event.keystroke.modifiers.control {
@@ -2310,8 +2280,7 @@ impl Render for Workspace {
                         // Right column precedence: profile, then search, then
                         // the member list. Only one occupies it at a time so
                         // the message area keeps a readable width.
-                        .when(self.settings_open, |d| d.child(self.settings_pane(cx)))
-                        .when(!self.settings_open && self.profile.is_some(), |d| {
+                        .when(self.profile.is_some(), |d| {
                             d.child(self.profile_pane())
                         })
                         .when(self.profile.is_none() && self.search.is_some(), |d| {
@@ -2323,6 +2292,9 @@ impl Render for Workspace {
                         ),
                 )
                 .child(self.status_bar())
+                .when(self.settings_open, |d| {
+                    d.child(settings_modal_view(self, cx))
+                })
             })
     }
 }

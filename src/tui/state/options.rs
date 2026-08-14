@@ -358,6 +358,7 @@ impl DashboardState {
             notifications: self.options.notification_options.clone(),
             voice: self.options.voice_options.clone(),
             presence: self.options.presence_options,
+            server: Default::default(),
         })
     }
 
