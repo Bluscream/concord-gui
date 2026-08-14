@@ -28,7 +28,9 @@ pub const MAX_UPLOAD_PREVIEW_BYTES: u64 = 10 * 1024 * 1024;
 /// Generates a unique snowflake-shaped nonce before a message enters the
 /// asynchronous send pipeline. The TUI and Discord request share this value,
 /// which lets the local pending row match the later `MESSAGE_CREATE` event.
-pub(crate) fn next_message_nonce() -> Id<MessageMarker> {
+/// Public so out-of-crate front-ends can construct `AppCommand::SendMessage`,
+/// which requires a client-generated nonce for echo suppression.
+pub fn next_message_nonce() -> Id<MessageMarker> {
     const DISCORD_EPOCH_MS: u64 = 1_420_070_400_000;
     static LAST_NONCE: AtomicU64 = AtomicU64::new(0);
 

@@ -104,7 +104,7 @@ fn main() {
                             status.config_path
                         )
                     };
-                    cx.new(|_cx| Workspace::new(model))
+                    cx.new(|cx| Workspace::new(model, cx))
                 },
             )
             .expect("failed to open window");

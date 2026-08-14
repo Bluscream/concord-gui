@@ -5,8 +5,8 @@
 //! session already publishes on every state revision - no new plumbing needed,
 //! only mapping.
 
-use concord::discord::{AppCommand, AppEvent, Id, marker};
-use gpui::{Context, Window, WindowHandle, prelude::*, px, rgb};
+use concord::discord::{AppCommand, AppEvent, Id, marker, next_message_nonce};
+use gpui::{Context, FocusHandle, KeyDownEvent, Window, WindowHandle, prelude::*, px, rgb};
 use tokio::sync::mpsc;
 
 use crate::model::message::{self, MessageRow};
@@ -17,6 +17,7 @@ use crate::theme::{DARK, Presence, layout, space, text};
 use crate::ui::chrome::{
     avatar, column, header, hint, panel_sunken, presence_dot, row, section_label, sidebar_row,
 };
+use crate::ui::composer::{Composer, composer_view};
 use crate::ui::messages::message_list;
 
 /// Placeholder view-model. Mirrors the shape of the snapshot projections so
@@ -141,16 +142,43 @@ pub struct Workspace {
     pub nav: Navigation,
     /// Projected rows for the open channel.
     pub messages: Vec<MessageRow>,
+    pub composer: Composer,
+    focus: FocusHandle,
 }
 
 impl Workspace {
-    pub fn new(model: WorkspaceModel) -> Self {
+    pub fn new(model: WorkspaceModel, cx: &mut Context<Self>) -> Self {
         Self {
             model,
             handle: None,
             nav: Navigation::default(),
             messages: Vec::new(),
+            composer: Composer::default(),
+            focus: cx.focus_handle(),
         }
+    }
+
+    /// Send the composer's contents to the open channel.
+    ///
+    /// The nonce lets the core match the gateway echo back to this send, so
+    /// the message does not briefly appear twice.
+    fn send_message(&mut self) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+
+        let content = self.composer.take();
+        if content.trim().is_empty() {
+            return;
+        }
+
+        handle.send(AppCommand::SendMessage {
+            channel_id,
+            nonce: next_message_nonce(),
+            content,
+            reply_to: None,
+            attachments: Vec::new(),
+        });
     }
 
     /// Attach the command sink once the session thread is running.
@@ -369,7 +397,7 @@ impl Workspace {
         sidebar.child(list)
     }
 
-    fn content(&self) -> impl IntoElement {
+    fn content(&self, window: &Window) -> impl IntoElement {
         let channel_name = self
             .model
             .channels
@@ -396,26 +424,29 @@ impl Workspace {
                     ),
             )
             .child(message_list(&self.messages))
-            .child(self.composer())
+            .child(self.composer_row(window))
     }
 
-    fn composer(&self) -> impl IntoElement {
-        gpui::div()
-            .w_full()
-            .px(px(space::LG))
-            .pb(px(space::LG))
-            .child(
-                row()
-                    .w_full()
-                    .h(px(42.))
-                    .px(px(space::MD))
-                    .gap(px(space::SM))
-                    .rounded(px(layout::RADIUS_LG))
-                    .bg(rgb(DARK.surface_hover))
-                    .text_size(px(text::BASE))
-                    .text_color(rgb(DARK.text_subtle))
-                    .child("Message input - not yet wired"),
-            )
+    fn composer_row(&self, window: &Window) -> impl IntoElement {
+        let enabled = self.nav.channel.is_some() && self.handle.is_some();
+        let placeholder = if !enabled {
+            "Select a channel to start typing".to_string()
+        } else {
+            let name = self
+                .model
+                .channels
+                .get(self.model.selected_channel)
+                .map(|c| c.name.clone())
+                .unwrap_or_default();
+            format!("Message #{name}")
+        };
+
+        composer_view(
+            &self.composer,
+            self.focus.is_focused(window),
+            enabled,
+            &placeholder,
+        )
     }
 
     fn status_bar(&self) -> impl IntoElement {
@@ -439,8 +470,16 @@ impl Workspace {
 }
 
 impl Render for Workspace {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         column()
+            .track_focus(&self.focus)
+            .key_context("Workspace")
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+                if this.composer.handle_key(event) {
+                    this.send_message();
+                }
+                cx.notify();
+            }))
             .size_full()
             .bg(rgb(DARK.bg))
             .text_size(px(text::BASE))
@@ -451,7 +490,7 @@ impl Render for Workspace {
                     .overflow_hidden()
                     .child(self.guild_rail(cx))
                     .child(self.channel_sidebar(cx))
-                    .child(self.content()),
+                    .child(self.content(window)),
             )
             .child(self.status_bar())
     }
