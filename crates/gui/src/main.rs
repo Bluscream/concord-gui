@@ -13,10 +13,12 @@
 // Status: bootstrap shell. Proves linkage against the core and opens a window.
 // Wiring the command/event loop is the next step; see docs/REWRITE.md.
 
-use gpui::{
-    App, Application, Bounds, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px,
-    rgb, size,
-};
+mod theme;
+mod ui;
+
+use gpui::{App, Application, Bounds, WindowBounds, WindowOptions, prelude::*, px, size};
+
+use crate::ui::workspace::{Workspace, WorkspaceModel};
 
 use concord::config::CredentialStoreMode;
 use concord::{paths, token_store};
@@ -63,70 +65,28 @@ impl CoreStatus {
     }
 }
 
-struct Shell {
-    status: CoreStatus,
-}
-
-impl Render for Shell {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let row = |label: &'static str, value: String| {
-            div()
-                .flex()
-                .flex_row()
-                .gap_3()
-                .child(div().w(px(140.)).text_color(rgb(0x8b93a7)).child(label))
-                .child(div().text_color(rgb(0xe4e6ea)).child(value))
-        };
-
-        div()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .size_full()
-            .bg(rgb(0x1a1c20))
-            .p_8()
-            .text_sm()
-            .child(
-                div()
-                    .text_xl()
-                    .text_color(rgb(0xffffff))
-                    .child("concord-gui"),
-            )
-            .child(
-                div()
-                    .text_color(rgb(0x8b93a7))
-                    .child("GPUI front-end - bootstrap shell"),
-            )
-            .child(div().h(px(12.)))
-            .child(row("core linked", "concord (library)".to_string()))
-            .child(row("gui version", self.status.core_version.to_string()))
-            .child(row("config", self.status.config_path.clone()))
-            .child(row("state", self.status.state_path.clone()))
-            .child(row(
-                "credential",
-                if self.status.has_token {
-                    "present".to_string()
-                } else {
-                    "absent - login required".to_string()
-                },
-            ))
-    }
-}
-
 fn main() {
-    Application::new().run(|cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(900.), px(600.)), cx);
+    let status = CoreStatus::probe();
+
+    Application::new().run(move |cx: &mut App| {
+        let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
+
+        let mut model = WorkspaceModel::placeholder();
+        model.status_line = if status.has_token {
+            format!(
+                "credential present - session not started | config: {}",
+                status.config_path
+            )
+        } else {
+            "no credential - login required (not yet implemented)".to_string()
+        };
 
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_window, cx| {
-                cx.new(|_cx| Shell {
-                    status: CoreStatus::probe(),
-                })
-            },
+            |_window, cx| cx.new(|_cx| Workspace::new(model)),
         )
         .expect("failed to open window");
 
