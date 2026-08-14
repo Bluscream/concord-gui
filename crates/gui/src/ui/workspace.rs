@@ -7,9 +7,9 @@
 
 use concord::config::{self, AppOptions, CredentialStoreMode};
 use concord::discord::{
-    AppCommand, AppEvent, Id, MAX_UPLOAD_ATTACHMENT_COUNT, MessageAttachmentUpload,
-    MessageSearchQuery, ReactionEmoji, ReplyReference, StreamCaptureTargetsRequestId, VoiceScope,
-    marker, next_message_nonce,
+    AppCommand, AppEvent, ForumPostArchiveState, Id, MAX_UPLOAD_ATTACHMENT_COUNT,
+    MessageAttachmentUpload, MessageSearchQuery, ReactionEmoji, ReplyReference,
+    StreamCaptureTargetsRequestId, VoiceScope, marker, next_message_nonce,
     password_auth::{MfaMethod, PasswordAuthEvent},
     qr_auth::QrEvent,
 };
@@ -32,6 +32,7 @@ use crate::ui::chrome::{
 };
 use crate::ui::composer::{Composer, composer_view};
 use crate::ui::emoji::{self, EmojiPicker};
+use crate::ui::forum::{self, ForumPost, ForumView};
 use crate::ui::login::{Login, LoginEvent, LoginHandle, LoginScreen, PasswordField, login_view};
 use crate::ui::messages::{MessageAction, message_list};
 use crate::ui::profile::{ProfileView, profile_view};
@@ -193,6 +194,8 @@ pub struct Workspace {
     pub editing: Option<Id<marker::MessageMarker>>,
     /// Channel the user is connected to by voice, if any.
     pub voice_channel: Option<(Id<marker::ChannelMarker>, String)>,
+    /// Forum being browsed, when the open channel is a forum.
+    pub forum: Option<ForumView>,
     /// Capture-source picker, open while choosing what to share.
     pub stream_picker: Option<StreamPicker>,
     /// True while this client is broadcasting.
@@ -243,6 +246,7 @@ impl Workspace {
             editing: None,
             voice_channel: None,
             voice_scope_joined: None,
+            forum: None,
             stream_picker: None,
             broadcasting: false,
             self_mute: false,
@@ -1701,6 +1705,60 @@ impl Workspace {
             )
     }
 
+    /// Open a forum channel, which lists posts rather than messages.
+    fn open_forum(&mut self, channel_id: Id<marker::ChannelMarker>, name: String) {
+        self.forum = Some(ForumView::loading(channel_id, name));
+        self.messages.clear();
+        self.request_forum_posts(0);
+    }
+
+    /// Request a page of posts for the open forum.
+    fn request_forum_posts(&mut self, offset: usize) {
+        let (Some(handle), Some(forum), Selection::Guild(guild_id)) =
+            (&self.handle, &self.forum, self.nav.selection)
+        else {
+            return;
+        };
+
+        handle.send(AppCommand::LoadForumPosts {
+            guild_id,
+            channel_id: forum.channel_id,
+            archive_state: if forum.showing_archived {
+                ForumPostArchiveState::Archived
+            } else {
+                ForumPostArchiveState::Active
+            },
+            offset,
+        });
+    }
+
+    /// Switch between active and archived posts, refetching from the start.
+    fn toggle_forum_archived(&mut self) {
+        let Some(forum) = &mut self.forum else {
+            return;
+        };
+        forum.showing_archived = !forum.showing_archived;
+        forum.posts.clear();
+        forum.complete = false;
+        forum.loading = true;
+        forum.error = None;
+        self.request_forum_posts(0);
+    }
+
+    /// Open a post. A forum post is a thread, so this is a channel switch.
+    fn open_forum_post(&mut self, index: usize) {
+        let Some(channel_id) = self
+            .forum
+            .as_ref()
+            .and_then(|forum| forum.posts.get(index))
+            .map(|post| post.channel_id)
+        else {
+            return;
+        };
+        self.forum = None;
+        self.open_channel(channel_id);
+    }
+
     /// Whether this build can capture a screen at all.
     ///
     /// Capture lives behind the core's `stream-broadcast` feature; without it
@@ -1817,6 +1875,50 @@ impl Workspace {
         match event {
             AppEvent::GatewayError { message } => {
                 self.model.status_line = message;
+            }
+            AppEvent::ForumPostsLoaded {
+                channel_id,
+                threads,
+                first_messages,
+                has_more,
+                next_offset,
+                ..
+            } => {
+                if let Some(forum) = &mut self.forum
+                    && forum.channel_id == channel_id
+                {
+                    forum.loading = false;
+                    forum.complete = !has_more;
+                    forum.next_offset = next_offset;
+
+                    for (index, thread) in threads.iter().enumerate() {
+                        // Discord returns opening messages positionally
+                        // alongside the threads, so they are paired by index.
+                        let opening = first_messages.get(index);
+
+                        forum.posts.push(ForumPost {
+                            channel_id: thread.channel_id,
+                            title: thread.name.clone(),
+                            preview: opening
+                                .and_then(|message| message.content.clone())
+                                .map(|content| content.chars().take(160).collect())
+                                .unwrap_or_default(),
+                            author: opening
+                                .map(|message| message.author.clone())
+                                .unwrap_or_default(),
+                            message_count: thread.message_count.unwrap_or(0),
+                            archived: forum.showing_archived,
+                        });
+                    }
+                }
+            }
+            AppEvent::ForumPostsLoadFailed { channel_id, .. } => {
+                if let Some(forum) = &mut self.forum
+                    && forum.channel_id == channel_id
+                {
+                    forum.loading = false;
+                    forum.error = Some("Could not load posts".to_string());
+                }
             }
             AppEvent::StreamCaptureTargetsLoaded { targets, error, .. } => {
                 if let Some(picker) = &mut self.stream_picker {
@@ -1990,10 +2092,22 @@ impl Workspace {
                         }))
                         .into_any_element()
                 }
+                Some(channel_id) if channel.kind == ChannelKind::Forum => {
+                    let name = channel.name.clone();
+                    entry
+                        .id(("channel", index))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.open_forum(channel_id, name.clone());
+                            cx.notify();
+                        }))
+                        .into_any_element()
+                }
                 Some(channel_id) => entry
                     .id(("channel", index))
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.forum = None;
                         this.open_channel(channel_id);
                         cx.notify();
                     }))
@@ -2100,7 +2214,51 @@ impl Workspace {
         pane
     }
 
-    fn content(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn content(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if let Some(view) = &self.forum {
+            return forum::forum_view(
+                view,
+                {
+                    let entity = cx.entity();
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.open_forum_post(index);
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = cx.entity();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.toggle_forum_archived();
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = cx.entity();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            let offset =
+                                workspace.forum.as_ref().map(|f| f.next_offset).unwrap_or(0);
+                            if let Some(forum) = &mut workspace.forum {
+                                forum.loading = true;
+                            }
+                            workspace.request_forum_posts(offset);
+                            cx.notify();
+                        });
+                    }
+                },
+            )
+            .into_any_element();
+        }
+
+        self.chat_content(window, cx).into_any_element()
+    }
+
+    /// The ordinary message view.
+    fn chat_content(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let channel_name = self
             .model
             .channels

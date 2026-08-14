@@ -217,6 +217,8 @@ pub fn demo_state() -> DiscordState {
         channel(111, Some(10), Some(110), "general", "text", 4),
         channel(112, Some(10), Some(110), "gui-rewrite", "text", 5),
         channel(113, Some(10), Some(110), "ci-logs", "text", 6),
+        // A forum, so the post-list view has something to render offline.
+        channel(114, Some(10), Some(110), "help-forum", "forum", 7),
         channel(120, Some(10), None, "voice", "category", 7),
         channel(121, Some(10), Some(120), "Standup", "voice", 8),
         channel(122, Some(10), Some(120), "Pairing", "voice", 9),

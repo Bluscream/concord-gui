@@ -469,3 +469,19 @@ fn palette_switch_changes_the_active_theme() {
     assert_ne!(dark_bg, light_bg, "light and dark must differ");
     assert_eq!(theme::active().bg, dark_bg, "must restore");
 }
+
+#[test]
+fn forum_channels_are_classified_not_treated_as_text() {
+    let state = demo_state();
+    let model = project(&state, &guild_nav(10, None), true);
+
+    let forum = model
+        .channels
+        .iter()
+        .find(|c| c.name == "help-forum")
+        .expect("fixture defines a forum channel");
+
+    // A forum opens a post list, not a message log, so misclassifying it as
+    // Text would silently route it to the wrong view.
+    assert_eq!(forum.kind, ChannelKind::Forum);
+}

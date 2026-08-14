@@ -1,6 +1,7 @@
 pub mod chrome;
 pub mod composer;
 pub mod emoji;
+pub mod forum;
 pub mod login;
 pub mod messages;
 pub mod profile;
