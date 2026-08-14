@@ -134,7 +134,7 @@ fn member_list_preserves_groups_and_order() {
 #[test]
 fn messages_project_in_order_with_grouping() {
     let state = demo_state();
-    let rows = project_messages(&state, concord::discord::Id::new(111));
+    let rows = project_messages(&state, concord::discord::Id::new(111), state.current_user_id());
 
     assert!(rows.len() >= 8, "fixture defines a full conversation");
 
@@ -157,7 +157,7 @@ fn messages_project_in_order_with_grouping() {
 #[test]
 fn replies_break_grouping_and_carry_context() {
     let state = demo_state();
-    let rows = project_messages(&state, concord::discord::Id::new(111));
+    let rows = project_messages(&state, concord::discord::Id::new(111), state.current_user_id());
 
     let reply = rows
         .iter()
@@ -176,7 +176,7 @@ fn replies_break_grouping_and_carry_context() {
 #[test]
 fn reactions_and_edits_project() {
     let state = demo_state();
-    let rows = project_messages(&state, concord::discord::Id::new(111));
+    let rows = project_messages(&state, concord::discord::Id::new(111), state.current_user_id());
 
     let reacted = rows
         .iter()
@@ -203,7 +203,7 @@ fn reactions_and_edits_project() {
 #[test]
 fn message_timestamps_are_recent_not_epoch() {
     let state = demo_state();
-    let rows = project_messages(&state, concord::discord::Id::new(111));
+    let rows = project_messages(&state, concord::discord::Id::new(111), state.current_user_id());
 
     // Snowflakes encode time; a naive small id would render as 2015.
     let newest = rows.last().expect("fixture defines messages");

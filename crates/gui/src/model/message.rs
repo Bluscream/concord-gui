@@ -52,6 +52,9 @@ pub struct MessageRow {
     /// `(emoji, count, me_reacted)`.
     pub reactions: Vec<(String, u64, bool)>,
     pub embed_count: usize,
+    /// Whether the authenticated user wrote this message, which gates the
+    /// edit and delete actions.
+    pub own: bool,
 }
 
 impl MessageRow {
@@ -70,6 +73,7 @@ impl MessageRow {
 pub fn project_messages(
     state: &DiscordState,
     channel_id: Id<marker::ChannelMarker>,
+    current_user: Option<Id<marker::UserMarker>>,
 ) -> Vec<MessageRow> {
     let messages = state.messages_for_channel(channel_id);
 
@@ -122,6 +126,7 @@ pub fn project_messages(
                 .map(|reaction| (reaction_glyph(&reaction.emoji), reaction.count, reaction.me))
                 .collect(),
             embed_count: message.embeds.len(),
+            own: current_user == Some(message.author_id),
         });
 
         previous = Some((message.author_id, created));

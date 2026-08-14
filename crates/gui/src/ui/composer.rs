@@ -34,6 +34,17 @@ impl Composer {
         std::mem::take(&mut self.text)
     }
 
+    /// Replace the buffer, putting the cursor at the end.
+    pub fn set_text(&mut self, text: &str) {
+        self.text = text.to_string();
+        self.cursor = self.text.len();
+    }
+
+    pub fn clear(&mut self) {
+        self.text.clear();
+        self.cursor = 0;
+    }
+
     pub fn insert(&mut self, input: &str) {
         self.text.insert_str(self.cursor, input);
         self.cursor += input.len();

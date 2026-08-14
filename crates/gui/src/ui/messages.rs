@@ -21,11 +21,23 @@ use crate::ui::chrome::{avatar, column, row};
 /// with the avatar column above them.
 const GUTTER: f32 = layout::AVATAR + space::MD;
 
+/// An action requested from a message's hover toolbar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageAction {
+    Reply,
+    React,
+    Edit,
+    Delete,
+}
+
 /// Render the full message list, oldest first.
 ///
 /// GPUI requires a stateful element (one with an id) for a scroll container,
 /// so the list carries a stable id and scroll position survives re-renders.
-pub fn message_list(rows: &[MessageRow]) -> impl IntoElement {
+pub fn message_list(
+    rows: &[MessageRow],
+    on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
+) -> impl IntoElement {
     let mut list = column()
         .id("message-list")
         .flex_1()
@@ -45,11 +57,84 @@ pub fn message_list(rows: &[MessageRow]) -> impl IntoElement {
         );
     }
 
-    for message in rows {
-        list = list.child(message_block(message));
+    for (index, message) in rows.iter().enumerate() {
+        list = list.child(message_row(index, message, on_action.clone()));
     }
 
     list
+}
+
+/// A message plus its hover toolbar.
+///
+/// The toolbar is absolutely positioned and only visible on hover, so it never
+/// reflows the log - a toolbar that pushed text around on mouse-over would
+/// make the list feel unstable while scanning it.
+fn message_row(
+    index: usize,
+    message: &MessageRow,
+    on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
+) -> impl IntoElement {
+    let own = message.own;
+
+    gpui::div()
+        .id(("message", index))
+        .relative()
+        .w_full()
+        .group("message")
+        .hover(|style| style.bg(rgb(DARK.surface_hover)))
+        .child(message_block(message))
+        .child(
+            gpui::div()
+                .absolute()
+                .top(px(-8.))
+                .right(px(space::MD))
+                .invisible()
+                .group_hover("message", |style| style.visible())
+                .child(action_bar(index, own, on_action)),
+        )
+}
+
+fn action_bar(
+    index: usize,
+    own: bool,
+    on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
+) -> Div {
+    let mut bar = row()
+        .gap(px(2.))
+        .p(px(2.))
+        .rounded(px(layout::RADIUS))
+        .bg(rgb(DARK.surface))
+        .border_1()
+        .border_color(rgb(DARK.border));
+
+    let mut button = |label: &'static str, action: MessageAction, danger: bool| {
+        let handler = on_action.clone();
+        gpui::div()
+            .id(("action", index * 8 + action as usize))
+            .px(px(6.))
+            .py(px(2.))
+            .rounded(px(3.))
+            .cursor_pointer()
+            .text_size(px(text::XS))
+            .text_color(rgb(if danger { DARK.danger } else { DARK.text_muted }))
+            .hover(|style| style.bg(rgb(DARK.surface_hover)))
+            .child(label)
+            .on_click(move |_event, _window, cx| handler(index, action, cx))
+    };
+
+    bar = bar
+        .child(button("reply", MessageAction::Reply, false))
+        .child(button("react", MessageAction::React, false));
+
+    // Edit and delete are only offered on the user's own messages; showing
+    // them otherwise would invite a request the server will reject.
+    if own {
+        bar = bar
+            .child(button("edit", MessageAction::Edit, false))
+            .child(button("delete", MessageAction::Delete, true));
+    }
+
+    bar
 }
 
 fn message_block(message: &MessageRow) -> Div {

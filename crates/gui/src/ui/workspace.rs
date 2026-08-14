@@ -6,7 +6,9 @@
 //! only mapping.
 
 use concord::config::CredentialStoreMode;
-use concord::discord::{AppCommand, AppEvent, Id, marker, next_message_nonce};
+use concord::discord::{
+    AppCommand, AppEvent, Id, ReactionEmoji, ReplyReference, marker, next_message_nonce,
+};
 use concord::token_store;
 use gpui::{Context, FocusHandle, KeyDownEvent, Window, WindowHandle, prelude::*, px, rgb};
 use tokio::sync::mpsc;
@@ -21,7 +23,7 @@ use crate::ui::chrome::{
 };
 use crate::ui::composer::{Composer, composer_view};
 use crate::ui::login::{Login, login_view};
-use crate::ui::messages::message_list;
+use crate::ui::messages::{MessageAction, message_list};
 
 /// Placeholder view-model. Mirrors the shape of the snapshot projections so
 /// swapping in real data does not change the render code.
@@ -162,6 +164,10 @@ pub struct Workspace {
     pub composer: Composer,
     /// Display names of users currently typing in the open channel.
     pub typing: Vec<String>,
+    /// Message being replied to, shown above the composer until cleared.
+    pub replying_to: Option<(Id<marker::MessageMarker>, String)>,
+    /// Message being edited. While set, the composer edits instead of sends.
+    pub editing: Option<Id<marker::MessageMarker>>,
     focus: FocusHandle,
 }
 
@@ -175,6 +181,8 @@ impl Workspace {
             messages: Vec::new(),
             composer: Composer::default(),
             typing: Vec::new(),
+            replying_to: None,
+            editing: None,
             focus: cx.focus_handle(),
         }
     }
@@ -193,11 +201,28 @@ impl Workspace {
             return;
         }
 
+        if let Some(message_id) = self.editing.take() {
+            handle.send(AppCommand::EditMessage {
+                channel_id,
+                message_id,
+                content,
+            });
+            return;
+        }
+
+        let reply_to = self
+            .replying_to
+            .take()
+            .map(|(message_id, _)| ReplyReference {
+                message_id,
+                mention_author: true,
+            });
+
         handle.send(AppCommand::SendMessage {
             channel_id,
             nonce: next_message_nonce(),
             content,
-            reply_to: None,
+            reply_to,
             attachments: Vec::new(),
         });
     }
@@ -226,7 +251,11 @@ impl Workspace {
                             };
                             (workspace.messages, workspace.typing) = match workspace.nav.channel {
                                 Some(channel_id) => (
-                                    message::project_messages(&state, channel_id),
+                                    message::project_messages(
+                                        &state,
+                                        channel_id,
+                                        state.current_user_id(),
+                                    ),
                                     projection::typing_names(&state, channel_id, guild_id),
                                 ),
                                 None => (Vec::new(), Vec::new()),
@@ -330,6 +359,73 @@ impl Workspace {
                 }
             }
         }
+    }
+
+    /// Route a toolbar action for the row at `index`.
+    fn handle_message_action(&mut self, index: usize, action: MessageAction) {
+        let Some(row) = self.messages.get(index) else {
+            return;
+        };
+        let (message_id, author) = (row.id, row.author.clone());
+
+        match action {
+            MessageAction::Reply => self.start_reply(message_id, author),
+            MessageAction::Edit => self.start_edit(message_id),
+            MessageAction::Delete => self.delete_message(message_id),
+            // A picker is the proper affordance here; until then the toolbar
+            // offers the single most common acknowledgement rather than
+            // pretending to support arbitrary emoji.
+            MessageAction::React => self.react(message_id, "\u{1f44d}"),
+        }
+    }
+
+    /// Begin replying to a message.
+    pub fn start_reply(&mut self, message_id: Id<marker::MessageMarker>, author: String) {
+        self.editing = None;
+        self.replying_to = Some((message_id, author));
+    }
+
+    /// Begin editing one of the user's own messages, preloading its body.
+    pub fn start_edit(&mut self, message_id: Id<marker::MessageMarker>) {
+        let Some(row) = self.messages.iter().find(|row| row.id == message_id) else {
+            return;
+        };
+        if !row.own {
+            return;
+        }
+        self.replying_to = None;
+        self.editing = Some(message_id);
+        self.composer.set_text(&row.content);
+    }
+
+    pub fn cancel_compose_context(&mut self) {
+        self.replying_to = None;
+        self.editing = None;
+        self.composer.clear();
+    }
+
+    pub fn delete_message(&mut self, message_id: Id<marker::MessageMarker>) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        handle.send(AppCommand::DeleteMessage {
+            channel_id,
+            message_id,
+        });
+    }
+
+    /// Toggle a reaction. Only adding is wired: removing needs the emoji
+    /// identity the user reacted with, which the row already carries, so this
+    /// is a small follow-up rather than a gap in the command surface.
+    pub fn react(&mut self, message_id: Id<marker::MessageMarker>, emoji: &str) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        handle.send(AppCommand::AddReaction {
+            channel_id,
+            message_id,
+            emoji: ReactionEmoji::Unicode(emoji.to_string()),
+        });
     }
 
     /// The member pane only applies to guild channels.
@@ -537,7 +633,7 @@ impl Workspace {
         pane
     }
 
-    fn content(&self, window: &Window) -> impl IntoElement {
+    fn content(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let channel_name = self
             .model
             .channels
@@ -563,7 +659,17 @@ impl Workspace {
                             .child(channel_name),
                     ),
             )
-            .child(message_list(&self.messages))
+            .child(message_list(&self.messages, {
+                // Click handlers run with only an `App`, so the workspace is
+                // reached through its entity handle rather than captured.
+                let entity = cx.entity();
+                move |index, action, cx: &mut gpui::App| {
+                    entity.update(cx, |workspace, cx| {
+                        workspace.handle_message_action(index, action);
+                        cx.notify();
+                    });
+                }
+            }))
             .child(self.composer_row(window))
     }
 
@@ -626,7 +732,9 @@ impl Render for Workspace {
                         }
                     }
                     Screen::Ready => {
-                        if this.composer.handle_key(event) {
+                        if event.keystroke.key == "escape" {
+                            this.cancel_compose_context();
+                        } else if this.composer.handle_key(event) {
                             this.send_message();
                         }
                     }
@@ -650,7 +758,7 @@ impl Render for Workspace {
                         .overflow_hidden()
                         .child(self.guild_rail(cx))
                         .child(self.channel_sidebar(cx))
-                        .child(self.content(window))
+                        .child(self.content(window, cx))
                         .when(self.shows_members(), |d| d.child(self.member_pane())),
                 )
                 .child(self.status_bar())
