@@ -169,6 +169,9 @@ pub struct Workspace {
     pub editing: Option<Id<marker::MessageMarker>>,
     /// Channel the user is connected to by voice, if any.
     pub voice_channel: Option<(Id<marker::ChannelMarker>, String)>,
+    /// Scope of the joined connection, retained so leaving works after the
+    /// user navigates away from the channel they joined.
+    voice_scope_joined: Option<VoiceScope>,
     pub self_mute: bool,
     pub self_deaf: bool,
     /// Search state. `None` when the search panel is closed.
@@ -200,6 +203,7 @@ impl Workspace {
             replying_to: None,
             editing: None,
             voice_channel: None,
+            voice_scope_joined: None,
             self_mute: false,
             self_deaf: false,
             search: None,
@@ -474,14 +478,18 @@ impl Workspace {
         });
     }
 
-    /// Join a voice channel, leaving any current one first.
-    ///
-    /// Only guild voice is wired: DM calls use VoiceScope::Private and a
-    /// different entry point in the sidebar, which does not exist yet.
+    /// The voice scope for a channel: guild channels are guild-scoped, DM and
+    /// group-DM calls are private-scoped to the channel itself.
+    fn voice_scope(&self, channel_id: Id<marker::ChannelMarker>) -> VoiceScope {
+        match self.nav.selection {
+            Selection::Guild(guild_id) => VoiceScope::Guild(guild_id),
+            Selection::DirectMessages => VoiceScope::Private(channel_id),
+        }
+    }
+
+    /// Join a voice channel or start a DM call, leaving any current one first.
     pub fn join_voice(&mut self, channel_id: Id<marker::ChannelMarker>, name: String) {
-        let Selection::Guild(guild_id) = self.nav.selection else {
-            return;
-        };
+        let scope = self.voice_scope(channel_id);
 
         // Leave first, while nothing else borrows the handle.
         if self.voice_channel.is_some() {
@@ -493,7 +501,7 @@ impl Workspace {
         };
 
         handle.send(AppCommand::JoinVoiceChannel {
-            scope: VoiceScope::Guild(guild_id),
+            scope,
             channel_id,
             self_mute: self.self_mute,
             self_deaf: self.self_deaf,
@@ -509,18 +517,30 @@ impl Workspace {
             participant_playback_settings: Vec::new(),
         });
         self.voice_channel = Some((channel_id, name));
+        self.voice_scope_joined = Some(scope);
     }
 
     pub fn leave_voice(&mut self) {
-        let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
+        // The scope must match the channel actually joined, not the current
+        // selection - the user may have navigated elsewhere while connected.
+        let Some((channel_id, _)) = self.voice_channel else {
             return;
         };
+        let Some(scope) = self.voice_scope_joined else {
+            return;
+        };
+        let Some(handle) = &self.handle else {
+            return;
+        };
+
+        let _ = channel_id;
         handle.send(AppCommand::LeaveVoiceChannel {
-            scope: VoiceScope::Guild(guild_id),
+            scope,
             self_mute: self.self_mute,
             self_deaf: self.self_deaf,
         });
         self.voice_channel = None;
+        self.voice_scope_joined = None;
     }
 
     /// Toggle mute or deafen on the live connection.
@@ -540,16 +560,16 @@ impl Workspace {
             }
         }
 
-        let (Some(handle), Selection::Guild(guild_id), Some((channel_id, _))) = (
+        let (Some(handle), Some(scope), Some((channel_id, _))) = (
             &self.handle,
-            self.nav.selection,
+            self.voice_scope_joined,
             self.voice_channel.as_ref(),
         ) else {
             return;
         };
 
         handle.send(AppCommand::UpdateVoiceState {
-            scope: VoiceScope::Guild(guild_id),
+            scope,
             channel_id: *channel_id,
             self_mute: self.self_mute,
             self_deaf: self.self_deaf,
@@ -992,6 +1012,13 @@ impl Workspace {
             .child(label)
     }
 
+    /// A DM or group DM with no call already running can be called.
+    fn can_call(&self) -> bool {
+        matches!(self.nav.selection, Selection::DirectMessages)
+            && self.nav.channel.is_some()
+            && self.voice_channel.is_none()
+    }
+
     /// The member pane only applies to guild channels.
     fn shows_members(&self) -> bool {
         matches!(self.nav.selection, Selection::Guild(_)) && self.nav.channel.is_some()
@@ -1284,10 +1311,33 @@ impl Workspace {
                     )
                     .child(
                         gpui::div()
+                            .flex_1()
                             .text_size(px(text::BASE))
                             .text_color(rgb(DARK.text))
-                            .child(channel_name),
-                    ),
+                            .child(channel_name.clone()),
+                    )
+                    .when(self.can_call(), |header| {
+                        let call_channel = self.nav.channel;
+                        let call_name = channel_name.clone();
+                        header.child(
+                            gpui::div()
+                                .id("dm-call")
+                                .px(px(space::SM))
+                                .py(px(space::XS))
+                                .rounded(px(layout::RADIUS))
+                                .cursor_pointer()
+                                .bg(rgb(DARK.surface_hover))
+                                .text_size(px(text::XS))
+                                .text_color(rgb(DARK.success))
+                                .child("call")
+                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                    if let Some(channel_id) = call_channel {
+                                        this.join_voice(channel_id, call_name.clone());
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                    }),
             )
             .child(message_list(&self.messages, {
                 // Click handlers run with only an `App`, so the workspace is
