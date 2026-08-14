@@ -60,6 +60,8 @@ pub struct GuildEntry {
 
 pub struct ChannelEntry {
     pub id: Option<Id<marker::ChannelMarker>>,
+    /// Newest message, needed to mark the channel read.
+    pub last_message: Option<Id<marker::MessageMarker>>,
     pub name: String,
     pub kind: ChannelKind,
     /// Archived threads are shown dimmed rather than hidden, so a thread the
@@ -1861,6 +1863,54 @@ impl Workspace {
         matches!(self.nav.selection, Selection::Guild(_)) && self.nav.channel.is_some()
     }
 
+    /// Mark the open channel read up to its newest message.
+    ///
+    /// Without this, unread badges accumulate with no way to clear them - the
+    /// counts are correct but permanently rising, which is worse than not
+    /// showing them.
+    pub fn mark_read(&mut self) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        let Some(newest) = self.messages.last().map(|row| row.id) else {
+            return;
+        };
+
+        handle.send(AppCommand::AckChannel {
+            channel_id,
+            message_id: newest,
+        });
+    }
+
+    /// Mark every unread channel in view read.
+    ///
+    /// Batched into one command rather than one per channel: the core accepts
+    /// a list, and a burst of individual acks is exactly the traffic pattern
+    /// that gets a third-party client flagged.
+    pub fn mark_all_read(&mut self) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+
+        let targets: Vec<_> = self
+            .model
+            .channels
+            .iter()
+            .filter(|channel| channel.unread)
+            .filter_map(|channel| {
+                // Acking needs a message to ack up to; a channel whose last
+                // message is unknown is skipped rather than guessed at.
+                channel.id.zip(channel.last_message)
+            })
+            .collect();
+
+        if targets.is_empty() {
+            return;
+        }
+
+        handle.send(AppCommand::AckChannels { targets });
+    }
+
     /// Request the page of messages before the oldest one loaded.
     ///
     /// The message cache is lazily populated, so scrollback exists only if it
@@ -2615,6 +2665,11 @@ impl Render for Workspace {
                                 || event.keystroke.modifiers.platform)
                         {
                             this.open_settings_window(cx);
+                        } else if key == "a"
+                            && event.keystroke.modifiers.control
+                            && event.keystroke.modifiers.shift
+                        {
+                            this.mark_all_read();
                         } else if key == "o" && event.keystroke.modifiers.control {
                             this.attach_files(cx);
                         } else if key == "f" && event.keystroke.modifiers.control {
@@ -2631,7 +2686,14 @@ impl Render for Workspace {
                                 this.run_search();
                             }
                         } else if key == "escape" {
-                            this.cancel_compose_context();
+                            // Escape dismisses an active reply or edit first;
+                            // only once nothing is open does it mark the
+                            // channel read, matching the TUI's ordering.
+                            if this.replying_to.is_some() || this.editing.is_some() {
+                                this.cancel_compose_context();
+                            } else {
+                                this.mark_read();
+                            }
                         } else {
                             // Read the clipboard only for the paste chord, so
                             // ordinary typing does not hit the platform on
