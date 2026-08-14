@@ -1417,7 +1417,10 @@ dependencies = [
  "anyhow",
  "chrono",
  "concord",
+ "futures",
  "gpui",
+ "gpui_http_client",
+ "reqwest",
  "tokio",
  "tracing",
 ]
@@ -7141,6 +7144,7 @@ dependencies = [
  "mime_guess",
  "percent-encoding",
  "pin-project-lite",
+ "quinn",
  "rustls",
  "rustls-pki-types",
  "serde",

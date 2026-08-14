@@ -155,6 +155,8 @@ fn member(id: u64, display: &str, bot: bool, roles: &[u64]) -> GuildMemberState 
         username: Some(display.to_lowercase()),
         nickname: None,
         is_bot: bot,
+        // Left unset: the fixture must not reach the network, so avatars fall
+        // back to the deterministic initial. Real sessions supply CDN URLs.
         avatar_url: None,
         role_ids: roles.iter().map(|r| role_id(*r)).collect(),
         role_ids_known: true,

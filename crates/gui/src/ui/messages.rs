@@ -15,7 +15,7 @@ use crate::model::markdown::{self, Kind};
 
 use crate::model::message::{MessageRow, format_bytes};
 use crate::theme::{DARK, layout, space, text};
-use crate::ui::chrome::{avatar, column, row};
+use crate::ui::chrome::{avatar_with_url, column, row};
 
 /// Width reserved to the left of message bodies, so continuation rows align
 /// with the avatar column above them.
@@ -170,7 +170,11 @@ fn message_block(message: &MessageRow) -> Div {
                     .w_full()
                     .items_center()
                     .gap(px(space::MD))
-                    .child(avatar(layout::AVATAR, &message.author))
+                    .child(avatar_with_url(
+                        layout::AVATAR,
+                        &message.author,
+                        message.author_avatar.as_deref(),
+                    ))
                     .child(author_line(message)),
             )
             .child(

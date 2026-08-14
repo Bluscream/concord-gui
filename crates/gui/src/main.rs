@@ -13,6 +13,7 @@
 // Status: bootstrap shell. Proves linkage against the core and opens a window.
 // Wiring the command/event loop is the next step; see docs/REWRITE.md.
 
+mod http;
 mod model;
 mod session;
 mod theme;
@@ -86,55 +87,58 @@ fn existing_token() -> Option<String> {
 fn main() {
     let status = CoreStatus::probe();
 
-    Application::new().run(move |cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
+    // GPUI needs an HTTP client before it will load images from a URI.
+    Application::new()
+        .with_http_client(http::ReqwestClient::new())
+        .run(move |cx: &mut App| {
+            let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
 
-        let window = cx
-            .open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    ..Default::default()
-                },
-                |_window, cx| {
-                    let mut model = WorkspaceModel::empty();
-                    model.status_line = "connecting…".to_string();
-                    // With a stored credential the workspace opens directly;
-                    // otherwise the login screen is the entry point.
-                    let screen = if status.has_token {
-                        Screen::Ready
-                    } else {
-                        Screen::Login(Login::default())
-                    };
-                    cx.new(|cx| Workspace::new(model, screen, cx))
-                },
-            )
-            .expect("failed to open window");
+            let window = cx
+                .open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(bounds)),
+                        ..Default::default()
+                    },
+                    |_window, cx| {
+                        let mut model = WorkspaceModel::empty();
+                        model.status_line = "connecting…".to_string();
+                        // With a stored credential the workspace opens directly;
+                        // otherwise the login screen is the entry point.
+                        let screen = if status.has_token {
+                            Screen::Ready
+                        } else {
+                            Screen::Login(Login::default())
+                        };
+                        cx.new(|cx| Workspace::new(model, screen, cx))
+                    },
+                )
+                .expect("failed to open window");
 
-        // Start the core only when a credential already exists.
-        if let Some(token) = existing_token() {
-            match session::spawn(token) {
-                Ok((updates, handle)) => {
-                    window
-                        .update(cx, |workspace, _window, cx| {
-                            workspace.attach(handle);
-                            cx.notify();
-                        })
-                        .ok();
+            // Start the core only when a credential already exists.
+            if let Some(token) = existing_token() {
+                match session::spawn(token) {
+                    Ok((updates, handle)) => {
+                        window
+                            .update(cx, |workspace, _window, cx| {
+                                workspace.attach(handle);
+                                cx.notify();
+                            })
+                            .ok();
 
-                    Workspace::pump(window, updates, cx);
-                }
-                Err(error) => {
-                    window
-                        .update(cx, |workspace, _window, cx| {
-                            workspace.model.status_line =
-                                format!("failed to start session: {error}");
-                            cx.notify();
-                        })
-                        .ok();
+                        Workspace::pump(window, updates, cx);
+                    }
+                    Err(error) => {
+                        window
+                            .update(cx, |workspace, _window, cx| {
+                                workspace.model.status_line =
+                                    format!("failed to start session: {error}");
+                                cx.notify();
+                            })
+                            .ok();
+                    }
                 }
             }
-        }
 
-        cx.activate(true);
-    });
+            cx.activate(true);
+        });
 }

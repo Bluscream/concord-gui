@@ -67,8 +67,32 @@ pub fn presence_dot(presence: Presence) -> Div {
         .bg(rgb(presence.color(&DARK)))
 }
 
-/// Circular avatar placeholder. Real avatar loading is a later step; this keeps
-/// layout honest in the meantime by reserving the correct footprint.
+/// Circular avatar.
+///
+/// `url` renders the real image; without one a deterministic tinted initial is
+/// drawn instead. The fallback is always laid out first so a slow or failed
+/// fetch leaves the layout unchanged rather than collapsing the row.
+pub fn avatar_with_url(size: f32, seed: &str, url: Option<&str>) -> gpui::AnyElement {
+    let fallback = avatar(size, seed);
+
+    match url {
+        Some(url) => gpui::div()
+            .w(px(size))
+            .h(px(size))
+            .rounded_full()
+            .overflow_hidden()
+            .child(
+                gpui::img(gpui::SharedUri::from(url.to_string()))
+                    .w(px(size))
+                    .h(px(size))
+                    .rounded_full(),
+            )
+            .into_any_element(),
+        None => fallback.into_any_element(),
+    }
+}
+
+/// Deterministic tinted initial, used when no avatar URL is available.
 pub fn avatar(size: f32, seed: &str) -> Div {
     // Deterministic hue per user so adjacent avatars stay distinguishable
     // without any network fetch.

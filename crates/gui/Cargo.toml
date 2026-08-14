@@ -18,6 +18,9 @@ publish = false
 concord = { path = "../..", default-features = false }
 
 gpui = "0.2.2"
+gpui_http_client = "0.2.2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"] }
+futures = "0.3"
 
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }

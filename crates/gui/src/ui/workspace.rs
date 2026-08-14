@@ -19,8 +19,8 @@ use crate::session::{SessionHandle, Update};
 
 use crate::theme::{DARK, Presence, layout, space, text};
 use crate::ui::chrome::{
-    avatar, column, header, hint, panel_sunken, presence_dot, row, section_label, sidebar_row,
-    voice_participant_row,
+    avatar, avatar_with_url, column, header, hint, panel_sunken, presence_dot, row, section_label,
+    sidebar_row, voice_participant_row,
 };
 use crate::ui::composer::{Composer, composer_view};
 use crate::ui::login::{Login, login_view};
@@ -86,6 +86,7 @@ pub struct VoiceMember {
 
 pub struct MemberEntry {
     pub name: String,
+    pub avatar: Option<String>,
     pub presence: Presence,
     /// Group headers ("ONLINE - 42") render as section labels, not rows.
     pub is_group: bool,
@@ -767,6 +768,11 @@ impl Workspace {
             }
 
             let mut entry = sidebar_row(false)
+                .child(avatar_with_url(
+                    layout::AVATAR_SM,
+                    &member.name,
+                    member.avatar.as_deref(),
+                ))
                 .child(presence_dot(member.presence))
                 .child(
                     gpui::div()

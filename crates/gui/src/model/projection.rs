@@ -200,6 +200,7 @@ fn project_members(state: &DiscordState, nav: &Navigation) -> Vec<MemberEntry> {
         .filter_map(|(_, entry)| match entry {
             GuildMemberListEntry::Group { id, count } => Some(MemberEntry {
                 name: format!("{} - {}", id.to_uppercase(), count),
+                avatar: None,
                 presence: Presence::Offline,
                 is_group: true,
                 is_bot: false,
@@ -211,6 +212,7 @@ fn project_members(state: &DiscordState, nav: &Navigation) -> Vec<MemberEntry> {
                     name: member
                         .map(|m| m.display_name.clone())
                         .unwrap_or_else(|| "unknown".to_string()),
+                    avatar: member.and_then(|m| m.avatar_url.clone()),
                     presence: presence_of(state.user_presence_for_guild(Some(guild_id), *user_id)),
                     is_group: false,
                     is_bot: member.is_some_and(|m| m.is_bot),

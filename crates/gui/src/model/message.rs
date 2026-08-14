@@ -37,6 +37,7 @@ pub struct MessageRow {
     pub id: Id<marker::MessageMarker>,
     pub author: String,
     pub author_is_bot: bool,
+    pub author_avatar: Option<String>,
     /// Role colour as packed RGB, when the author has a coloured role.
     pub author_color: Option<u32>,
     pub content: String,
@@ -96,6 +97,7 @@ pub fn project_messages(
             id: message.id,
             author: display_author(message),
             author_is_bot: message.author_is_bot,
+            author_avatar: message.author_avatar_url.clone(),
             author_color: author_color(state, message),
             content: message.content.clone().unwrap_or_default(),
             timestamp: created.with_timezone(&Local),
