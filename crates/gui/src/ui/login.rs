@@ -207,17 +207,48 @@ fn method_btn(
 }
 
 /// A labelled text input row (used in both password and token screens).
-fn input_row(label: &str, value: &str, focused: bool, masked: bool, error: bool) -> Div {
-    let display = if masked && !value.is_empty() {
-        let visible: String = value.chars().take(4).collect();
-        format!(
-            "{}{}",
-            visible,
-            "•".repeat(value.chars().count().saturating_sub(4))
-        )
-    } else {
-        value.to_string()
-    };
+/// How much of a field's value to show.
+///
+/// The right answer differs per secret, so it is stated explicitly rather than
+/// left to a single `masked` flag:
+///
+/// * `Full` - passwords. Human-chosen and short, so revealing even a prefix
+///   materially helps anyone reading over a shoulder or a screenshot.
+/// * `Prefix` - tokens. Long and opaque; showing four characters confirms the
+///   right value was pasted while leaking almost nothing.
+/// * `None` - MFA codes. Short, single-use and typed from another screen, so
+///   masking only makes typos harder to spot without protecting anything.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Mask {
+    None,
+    Prefix,
+    Full,
+}
+
+/// Apply a mask policy to a value.
+fn apply_mask(value: &str, mask: Mask) -> String {
+    match mask {
+        Mask::None => value.to_string(),
+        Mask::Full => "•".repeat(value.chars().count()),
+        Mask::Prefix if value.is_empty() => String::new(),
+        Mask::Prefix => {
+            let visible: String = value.chars().take(4).collect();
+            format!(
+                "{}{}",
+                visible,
+                "•".repeat(value.chars().count().saturating_sub(4))
+            )
+        }
+    }
+}
+
+#[cfg(test)]
+fn mask_for_test(value: &str, mask: Mask) -> String {
+    apply_mask(value, mask)
+}
+
+fn input_row(label: &str, value: &str, focused: bool, mask: Mask, error: bool) -> Div {
+    let display = apply_mask(value, mask);
 
     column()
         .w_full()
@@ -488,14 +519,14 @@ fn password_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
                     "Email / Phone / Username",
                     pw.login.text(),
                     pw.focused_field == PasswordField::Login,
-                    false,
+                    Mask::None,
                     false,
                 ))
                 .child(input_row(
                     "Password",
                     pw.password.text(),
                     pw.focused_field == PasswordField::Password,
-                    true,
+                    Mask::Full,
                     false,
                 )),
         )
@@ -633,7 +664,7 @@ fn mfa_code_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
             "Verification code",
             pw.mfa_code.text(),
             true,
-            false,
+            Mask::None,
             false,
         ))
         .child(action_btn(
@@ -680,7 +711,7 @@ fn token_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
             "Token",
             login.token.text(),
             true,
-            true,
+            Mask::Prefix,
             login.error.is_some(),
         ))
         .child(action_btn(
@@ -788,5 +819,53 @@ fn maybe_error(card: Div, error: &Option<String>) -> Div {
         )
     } else {
         card
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The mask policy is security-relevant, so it is asserted rather than
+    /// left to inspection: a password must never reveal a prefix.
+    #[test]
+    fn password_masking_reveals_nothing() {
+        let masked = super::mask_for_test("hunter2", Mask::Full);
+        assert_eq!(masked, "•".repeat(7));
+        assert!(!masked.contains('h'));
+    }
+
+    #[test]
+    fn token_masking_reveals_only_a_short_prefix() {
+        let token = "MTIzNDU2Nzg5MDEyMzQ1Njc4";
+        let masked = super::mask_for_test(token, Mask::Prefix);
+
+        assert!(masked.starts_with("MTIz"));
+        assert_eq!(masked.chars().count(), token.chars().count());
+        // Everything past the prefix must be hidden.
+        assert_eq!(
+            masked.chars().filter(|c| *c == '•').count(),
+            token.len() - 4
+        );
+    }
+
+    #[test]
+    fn mfa_codes_are_shown_so_typos_are_visible() {
+        assert_eq!(super::mask_for_test("123456", Mask::None), "123456");
+    }
+
+    #[test]
+    fn masking_handles_short_and_empty_values() {
+        assert_eq!(super::mask_for_test("", Mask::Prefix), "");
+        assert_eq!(super::mask_for_test("", Mask::Full), "");
+        // Shorter than the prefix window must not panic or over-repeat.
+        assert_eq!(super::mask_for_test("ab", Mask::Prefix), "ab");
+    }
+
+    #[test]
+    fn masking_is_char_based_not_byte_based() {
+        // A byte-based implementation would emit the wrong number of bullets
+        // for multi-byte input.
+        assert_eq!(super::mask_for_test("héllo", Mask::Full).chars().count(), 5);
     }
 }
