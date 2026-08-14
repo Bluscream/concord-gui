@@ -1361,8 +1361,16 @@ impl Render for Workspace {
                         // token buffer.
                         if event.keystroke.key == "r" && event.keystroke.modifiers.control {
                             login.remember = !login.remember;
-                        } else if login.input.handle_key(event) {
-                            this.submit_login(window, cx);
+                        } else {
+                            let pasted = (event.keystroke.key == "v"
+                                && (event.keystroke.modifiers.control
+                                    || event.keystroke.modifiers.platform))
+                                .then(|| cx.read_from_clipboard().and_then(|item| item.text()))
+                                .flatten();
+
+                            if login.input.handle_key_with_clipboard(event, pasted) {
+                                this.submit_login(window, cx);
+                            }
                         }
                     }
                     Screen::Ready => {
@@ -1405,8 +1413,19 @@ impl Render for Workspace {
                             }
                         } else if key == "escape" {
                             this.cancel_compose_context();
-                        } else if this.composer.handle_key(event) {
-                            this.send_message();
+                        } else {
+                            // Read the clipboard only for the paste chord, so
+                            // ordinary typing does not hit the platform on
+                            // every keystroke.
+                            let pasted = (event.keystroke.key == "v"
+                                && (event.keystroke.modifiers.control
+                                    || event.keystroke.modifiers.platform))
+                                .then(|| cx.read_from_clipboard().and_then(|item| item.text()))
+                                .flatten();
+
+                            if this.composer.handle_key_with_clipboard(event, pasted) {
+                                this.send_message();
+                            }
                         }
                     }
                 }
