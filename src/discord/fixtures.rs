@@ -1039,3 +1039,18 @@ pub fn demo_responder(
 fn channel_id_of(raw: u64) -> Id<marker::ChannelMarker> {
     channel_id(raw)
 }
+
+/// Pin or unpin a message.
+pub fn set_pinned(
+    state: &mut DiscordState,
+    channel_id: Id<marker::ChannelMarker>,
+    target: Id<marker::MessageMarker>,
+    pinned: bool,
+) {
+    let cache = Arc::make_mut(&mut state.message_cache);
+    if let Some(timeline) = cache.timelines.get_mut(&channel_id)
+        && let Some(message) = timeline.messages.iter_mut().find(|m| m.id == target)
+    {
+        message.pinned = pinned;
+    }
+}

@@ -8,7 +8,7 @@
 use concord::config::{self, AppOptions, CredentialStoreMode};
 use concord::discord::{
     AppCommand, AppEvent, ForumPostArchiveState, Id, MAX_UPLOAD_ATTACHMENT_COUNT,
-    MessageAttachmentUpload, MessageSearchQuery, ReactionEmoji, ReplyReference,
+    MessageAttachmentUpload, MessageSearchQuery, MuteDuration, ReactionEmoji, ReplyReference,
     StreamCaptureTargetsRequestId, VoiceScope, marker, next_message_nonce,
     password_auth::{MfaMethod, PasswordAuthEvent},
     qr_auth::QrEvent,
@@ -197,6 +197,12 @@ pub struct Workspace {
     pub editing: Option<Id<marker::MessageMarker>>,
     /// Channel the user is connected to by voice, if any.
     pub voice_channel: Option<(Id<marker::ChannelMarker>, String)>,
+    /// Whether the open channel is muted, as last reported by the core.
+    pub channel_muted: bool,
+    /// Whether the open guild is muted.
+    pub guild_muted: bool,
+    /// Pinned messages for the open channel, shown in a panel when requested.
+    pub pins: Option<Vec<(Id<marker::MessageMarker>, String, String)>>,
     /// Text queued for the clipboard, written on the next render pass where
     /// an `App` context is available.
     pub pending_copy: Option<String>,
@@ -256,6 +262,9 @@ impl Workspace {
             editing: None,
             voice_channel: None,
             voice_scope_joined: None,
+            channel_muted: false,
+            guild_muted: false,
+            pins: None,
             pending_copy: None,
             reaction_users: None,
             switcher: None,
@@ -1105,6 +1114,14 @@ impl Workspace {
             MessageAction::ShowReactionUsers(reaction) => {
                 self.show_reaction_users(index, reaction);
             }
+            MessageAction::TogglePin => {
+                let pinned = self
+                    .messages
+                    .get(index)
+                    .map(|row| row.pinned)
+                    .unwrap_or(false);
+                self.set_pinned(index, !pinned);
+            }
             MessageAction::React => self.open_emoji_picker(message_id),
             MessageAction::OpenProfile => {
                 if let Some(row) = self.messages.get(index) {
@@ -1897,6 +1914,73 @@ impl Workspace {
         matches!(self.nav.selection, Selection::Guild(_)) && self.nav.channel.is_some()
     }
 
+    /// Pin or unpin a message.
+    fn set_pinned(&mut self, index: usize, pinned: bool) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        let Some(row) = self.messages.get(index) else {
+            return;
+        };
+
+        handle.send(AppCommand::SetMessagePinned {
+            channel_id,
+            message_id: row.id,
+            pinned,
+        });
+    }
+
+    /// Open the pinned-messages panel for the current channel.
+    pub fn open_pins(&mut self) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        self.pins = Some(Vec::new());
+        handle.send(AppCommand::LoadPinnedMessages { channel_id });
+    }
+
+    /// Mute or unmute the open channel.
+    ///
+    /// Permanent rather than timed: a timed mute needs a duration picker, and
+    /// silently choosing one for the user would be worse than not offering it.
+    pub fn toggle_channel_muted(&mut self) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        let guild_id = match self.nav.selection {
+            Selection::Guild(id) => Some(id),
+            Selection::DirectMessages => None,
+        };
+
+        let muted = !self.channel_muted;
+        self.channel_muted = muted;
+
+        handle.send(AppCommand::SetChannelMuted {
+            guild_id,
+            channel_id,
+            muted,
+            duration: Some(MuteDuration::Permanent),
+            label: String::new(),
+        });
+    }
+
+    /// Mute or unmute the open guild.
+    pub fn toggle_guild_muted(&mut self) {
+        let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
+            return;
+        };
+
+        let muted = !self.guild_muted;
+        self.guild_muted = muted;
+
+        handle.send(AppCommand::SetGuildMuted {
+            guild_id,
+            muted,
+            duration: Some(MuteDuration::Permanent),
+            label: String::new(),
+        });
+    }
+
     /// A discord.com link to a message in the open channel.
     ///
     /// DMs use the `@me` sentinel in place of a guild id, matching Discord's
@@ -2125,6 +2209,21 @@ impl Workspace {
                     forum.error = Some("Could not load posts".to_string());
                 }
             }
+            AppEvent::PinnedMessagesLoaded { messages, .. } => {
+                self.pins = Some(
+                    messages
+                        .into_iter()
+                        .map(|message| {
+                            (
+                                message.message_id,
+                                message.author,
+                                message.content.unwrap_or_default(),
+                            )
+                        })
+                        .collect(),
+                );
+            }
+            AppEvent::PinnedMessagesLoadFailed { .. } => self.pins = None,
             AppEvent::ReactionUsersLoaded {
                 message_id,
                 users,
@@ -2508,6 +2607,42 @@ impl Workspace {
                             .text_size(px(text::BASE))
                             .text_color(rgb(active().text))
                             .child(channel_name.clone()),
+                    )
+                    .child(
+                        gpui::div()
+                            .id("channel-pins")
+                            .px(px(space::SM))
+                            .py(px(space::XS))
+                            .rounded(px(layout::RADIUS))
+                            .cursor_pointer()
+                            .text_size(px(text::XS))
+                            .text_color(rgb(active().text_muted))
+                            .hover(|style| style.bg(rgb(active().surface_hover)))
+                            .child("pins")
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.open_pins();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        gpui::div()
+                            .id("channel-mute")
+                            .px(px(space::SM))
+                            .py(px(space::XS))
+                            .rounded(px(layout::RADIUS))
+                            .cursor_pointer()
+                            .text_size(px(text::XS))
+                            .text_color(rgb(if self.channel_muted {
+                                active().danger
+                            } else {
+                                active().text_muted
+                            }))
+                            .hover(|style| style.bg(rgb(active().surface_hover)))
+                            .child(if self.channel_muted { "unmute" } else { "mute" })
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.toggle_channel_muted();
+                                cx.notify();
+                            })),
                     )
                     .when(self.can_call(), |header| {
                         let call_channel = self.nav.channel;

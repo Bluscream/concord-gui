@@ -328,6 +328,28 @@ fn handle_command(
             }
         }
 
+        AppCommand::SetMessagePinned {
+            channel_id,
+            message_id,
+            pinned,
+        } => {
+            fixtures::set_pinned(state, channel_id, message_id, pinned);
+            publish_state!();
+        }
+
+        AppCommand::LoadPinnedMessages { channel_id } => {
+            let messages = state
+                .messages_for_channel(channel_id)
+                .into_iter()
+                .filter(|message| message.pinned)
+                .map(fixtures::message_info)
+                .collect();
+            publish_event!(AppEvent::PinnedMessagesLoaded {
+                channel_id,
+                messages,
+            });
+        }
+
         AppCommand::LoadUserProfile { user_id, guild_id } => {
             fixtures::add_profile(state, user_id, guild_id);
             publish_state!();

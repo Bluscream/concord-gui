@@ -42,6 +42,7 @@ impl MessageAction {
             MessageAction::CopyText => 9,
             MessageAction::CopyLink => 10,
             MessageAction::ShowReactionUsers(_) => 11,
+            MessageAction::TogglePin => 12,
         }
     }
 }
@@ -66,6 +67,8 @@ pub enum MessageAction {
     CopyLink,
     /// Show who reacted, by index into the row's reactions.
     ShowReactionUsers(usize),
+    /// Pin or unpin, depending on the row's current state.
+    TogglePin,
     /// Toggle an existing reaction, identified by its index in the row's
     /// reaction list. Carrying the index avoids threading emoji identity
     /// through the callback.
@@ -179,13 +182,14 @@ fn message_row(
                 .right(px(space::MD))
                 .invisible()
                 .group_hover("message", |style| style.visible())
-                .child(action_bar(index, own, on_action)),
+                .child(action_bar(index, own, message.pinned, on_action)),
         )
 }
 
 fn action_bar(
     index: usize,
     own: bool,
+    pinned: bool,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> Div {
     let mut bar = row()
@@ -219,7 +223,12 @@ fn action_bar(
         .child(button("reply", MessageAction::Reply, false))
         .child(button("react", MessageAction::React, false))
         .child(button("copy", MessageAction::CopyText, false))
-        .child(button("link", MessageAction::CopyLink, false));
+        .child(button("link", MessageAction::CopyLink, false))
+        .child(button(
+            if pinned { "unpin" } else { "pin" },
+            MessageAction::TogglePin,
+            false,
+        ));
 
     // Edit and delete are only offered on the user's own messages; showing
     // them otherwise would invite a request the server will reject.
