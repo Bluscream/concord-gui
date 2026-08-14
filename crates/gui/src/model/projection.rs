@@ -8,7 +8,7 @@
 //! bridge reprojects on each revision rather than diffing, because
 //! `DiscordState` is already an immutable snapshot behind `Arc`s.
 
-use concord::discord::{DiscordState, Id, PresenceStatus, marker};
+use concord::discord::{DiscordState, GuildMemberListEntry, Id, PresenceStatus, marker};
 
 use crate::theme::Presence;
 use crate::ui::workspace::{ChannelEntry, ChannelKind, GuildEntry, MemberEntry, WorkspaceModel};
@@ -140,16 +140,41 @@ fn project_members(state: &DiscordState, nav: &Navigation) -> Vec<MemberEntry> {
         return Vec::new();
     };
 
-    let Some(guild) = state.guild(guild_id) else {
+    // Discord's member list is a positional structure interleaving group
+    // headers ("Online", role names) with members, so it is walked in order
+    // rather than sorted here - the server's ordering is the correct one.
+    let entries = state.member_list_entries_for_guild(guild_id);
+
+    if entries.is_empty() {
         return Vec::new();
-    };
+    }
 
-    let _ = guild;
-
-    // Member list population is gated on GUILD_MEMBER_LIST_UPDATE, which the
-    // core requests lazily per channel. Until the GUI issues that request the
-    // honest projection is empty rather than a partial list.
-    Vec::new()
+    entries
+        .into_iter()
+        .filter_map(|(_, entry)| match entry {
+            GuildMemberListEntry::Group { id, count } => Some(MemberEntry {
+                name: format!("{} - {}", id.to_uppercase(), count),
+                presence: Presence::Offline,
+                is_group: true,
+                is_bot: false,
+                color: None,
+            }),
+            GuildMemberListEntry::Member { user_id } => {
+                let member = state.member_for_guild(guild_id, *user_id);
+                Some(MemberEntry {
+                    name: member
+                        .map(|m| m.display_name.clone())
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    presence: presence_of(state.user_presence_for_guild(Some(guild_id), *user_id)),
+                    is_group: false,
+                    is_bot: member.is_some_and(|m| m.is_bot),
+                    color: state
+                        .member_role_color(guild_id, *user_id)
+                        .filter(|color| *color != 0),
+                })
+            }
+        })
+        .collect()
 }
 
 /// Presence lookup for a single user, used by DM rows and member entries.

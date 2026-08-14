@@ -69,6 +69,10 @@ impl ChannelKind {
 pub struct MemberEntry {
     pub name: String,
     pub presence: Presence,
+    /// Group headers ("ONLINE - 42") render as section labels, not rows.
+    pub is_group: bool,
+    pub is_bot: bool,
+    pub color: Option<u32>,
 }
 
 impl WorkspaceModel {
@@ -251,11 +255,23 @@ impl Workspace {
                     guild_id,
                     channel_id,
                 });
+                // Discord streams the member list in windowed ranges; the
+                // first two cover what fits on screen without over-fetching.
+                handle.send(AppCommand::UpdateMemberListSubscription {
+                    guild_id,
+                    channel_id,
+                    ranges: vec![(0, 99), (100, 199)],
+                });
             }
             Selection::DirectMessages => {
                 handle.send(AppCommand::SubscribeDirectMessage { channel_id });
             }
         }
+    }
+
+    /// The member pane only applies to guild channels.
+    fn shows_members(&self) -> bool {
+        matches!(self.nav.selection, Selection::Guild(_)) && self.nav.channel.is_some()
     }
 
     /// Switch the open guild, clearing the channel selection.
@@ -397,6 +413,60 @@ impl Workspace {
         sidebar.child(list)
     }
 
+    fn member_pane(&self) -> impl IntoElement {
+        let mut pane = column()
+            .w(px(layout::MEMBERS))
+            .h_full()
+            .bg(rgb(DARK.surface_sunken))
+            .border_l_1()
+            .border_color(rgb(DARK.border))
+            .pt(px(space::SM))
+            .overflow_hidden();
+
+        if self.model.members.is_empty() {
+            return pane.child(
+                gpui::div()
+                    .px(px(space::MD))
+                    .pt(px(space::MD))
+                    .text_size(px(text::XS))
+                    .text_color(rgb(DARK.text_subtle))
+                    .child("No member data"),
+            );
+        }
+
+        for member in &self.model.members {
+            if member.is_group {
+                pane = pane.child(section_label(member.name.clone()));
+                continue;
+            }
+
+            let mut entry = sidebar_row(false)
+                .child(presence_dot(member.presence))
+                .child(
+                    gpui::div()
+                        .flex_1()
+                        .text_color(rgb(member.color.unwrap_or(DARK.text_muted)))
+                        .child(member.name.clone()),
+                );
+
+            if member.is_bot {
+                entry = entry.child(
+                    gpui::div()
+                        .px(px(4.))
+                        .rounded(px(3.))
+                        .bg(rgb(DARK.accent))
+                        .text_size(px(text::XS))
+                        .text_color(rgb(DARK.on_accent))
+                        .child("BOT"),
+                );
+            }
+
+            pane = pane.child(entry);
+        }
+
+        pane
+    }
+
     fn content(&self, window: &Window) -> impl IntoElement {
         let channel_name = self
             .model
@@ -490,7 +560,8 @@ impl Render for Workspace {
                     .overflow_hidden()
                     .child(self.guild_rail(cx))
                     .child(self.channel_sidebar(cx))
-                    .child(self.content(window)),
+                    .child(self.content(window))
+                    .when(self.shows_members(), |d| d.child(self.member_pane())),
             )
             .child(self.status_bar())
     }
