@@ -7,11 +7,14 @@
 
 use concord::config::CredentialStoreMode;
 use concord::discord::{
-    AppCommand, AppEvent, Id, MessageSearchQuery, ReactionEmoji, ReplyReference, VoiceScope,
-    marker, next_message_nonce,
+    AppCommand, AppEvent, Id, MAX_UPLOAD_ATTACHMENT_COUNT, MessageAttachmentUpload,
+    MessageSearchQuery, ReactionEmoji, ReplyReference, VoiceScope, marker, next_message_nonce,
 };
 use concord::token_store;
-use gpui::{Context, FocusHandle, KeyDownEvent, Window, WindowHandle, prelude::*, px, rgb};
+use gpui::{
+    Context, FocusHandle, KeyDownEvent, PathPromptOptions, Window, WindowHandle, prelude::*, px,
+    rgb,
+};
 use tokio::sync::mpsc;
 
 use crate::model::message::{self, MessageRow};
@@ -177,6 +180,10 @@ pub struct Workspace {
     /// Whether the window has focus. Notifications for the channel being read
     /// are suppressed only while it does.
     pub window_focused: bool,
+    /// Files staged for the next send.
+    pub attachments: Vec<MessageAttachmentUpload>,
+    /// Reason the last staging attempt failed, shown above the composer.
+    pub attachment_error: Option<String>,
     focus: FocusHandle,
 }
 
@@ -199,6 +206,8 @@ impl Workspace {
             picker: None,
             profile: None,
             window_focused: true,
+            attachments: Vec::new(),
+            attachment_error: None,
             focus: cx.focus_handle(),
         }
     }
@@ -213,7 +222,9 @@ impl Workspace {
         };
 
         let content = self.composer.take();
-        if content.trim().is_empty() {
+
+        // A message may be attachments only, but never entirely empty.
+        if content.trim().is_empty() && self.attachments.is_empty() {
             return;
         }
 
@@ -239,8 +250,9 @@ impl Workspace {
             nonce: next_message_nonce(),
             content,
             reply_to,
-            attachments: Vec::new(),
+            attachments: std::mem::take(&mut self.attachments),
         });
+        self.attachment_error = None;
     }
 
     /// Attach the command sink once the session thread is running.
@@ -571,6 +583,68 @@ impl Workspace {
                 }
             }
         }
+    }
+
+    /// Open a file picker and stage the chosen files for the next send.
+    fn attach_files(&mut self, cx: &mut Context<Self>) {
+        if self.nav.channel.is_none() {
+            return;
+        }
+
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Attach".into()),
+        });
+
+        cx.spawn(async move |workspace, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else {
+                // Cancelled, or the platform refused - neither is an error.
+                return;
+            };
+
+            let _ = workspace.update(cx, |workspace, cx| {
+                workspace.stage_attachments(paths);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Validate and stage picked files.
+    fn stage_attachments(&mut self, paths: Vec<std::path::PathBuf>) {
+        self.attachment_error = None;
+
+        for path in paths {
+            if self.attachments.len() >= MAX_UPLOAD_ATTACHMENT_COUNT {
+                self.attachment_error = Some(format!(
+                    "Discord allows at most {MAX_UPLOAD_ATTACHMENT_COUNT} attachments per message"
+                ));
+                break;
+            }
+
+            match MessageAttachmentUpload::from_existing_path(path.clone()) {
+                Ok(upload) => self.attachments.push(upload),
+                // A file that vanished or cannot be read is reported by name:
+                // silently dropping it would look like the picker failed.
+                Err(error) => {
+                    self.attachment_error = Some(format!(
+                        "{}: {error}",
+                        path.file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| path.display().to_string())
+                    ));
+                }
+            }
+        }
+    }
+
+    fn remove_attachment(&mut self, index: usize) {
+        if index < self.attachments.len() {
+            self.attachments.remove(index);
+        }
+        self.attachment_error = None;
     }
 
     /// Open the profile panel for a user, requesting it if not cached.
@@ -1240,7 +1314,7 @@ impl Workspace {
                 .get(self.model.selected_channel)
                 .map(|c| c.name.clone())
                 .unwrap_or_default();
-            format!("Message #{name}")
+            format!("Message #{name}  ·  ctrl-o to attach")
         };
 
         composer_view(
@@ -1314,6 +1388,8 @@ impl Render for Workspace {
                                 }
                                 _ => {}
                             }
+                        } else if key == "o" && event.keystroke.modifiers.control {
+                            this.attach_files(cx);
                         } else if key == "f" && event.keystroke.modifiers.control {
                             this.toggle_search();
                         } else if this.profile.is_some() && key == "escape" {
