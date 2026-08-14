@@ -5,17 +5,19 @@
 //! session already publishes on every state revision - no new plumbing needed,
 //! only mapping.
 
-use concord::discord::{AppEvent, Id, marker};
+use concord::discord::{AppCommand, AppEvent, Id, marker};
 use gpui::{Context, Window, WindowHandle, prelude::*, px, rgb};
 use tokio::sync::mpsc;
 
-use crate::model::projection::{self, Navigation};
+use crate::model::message::{self, MessageRow};
+use crate::model::projection::{self, Navigation, Selection};
 use crate::session::{SessionHandle, Update};
 
 use crate::theme::{DARK, Presence, layout, space, text};
 use crate::ui::chrome::{
     avatar, column, header, hint, panel_sunken, presence_dot, row, section_label, sidebar_row,
 };
+use crate::ui::messages::message_list;
 
 /// Placeholder view-model. Mirrors the shape of the snapshot projections so
 /// swapping in real data does not change the render code.
@@ -137,6 +139,8 @@ pub struct Workspace {
     pub handle: Option<SessionHandle>,
     /// Navigation is GUI-owned: the core has no concept of "what is on screen".
     pub nav: Navigation,
+    /// Projected rows for the open channel.
+    pub messages: Vec<MessageRow>,
 }
 
 impl Workspace {
@@ -145,6 +149,7 @@ impl Workspace {
             model,
             handle: None,
             nav: Navigation::default(),
+            messages: Vec::new(),
         }
     }
 
@@ -166,6 +171,10 @@ impl Workspace {
                     match update {
                         Update::State(state) => {
                             workspace.model = projection::project(&state, &workspace.nav, true);
+                            workspace.messages = match workspace.nav.channel {
+                                Some(channel_id) => message::project_messages(&state, channel_id),
+                                None => Vec::new(),
+                            };
                         }
                         Update::Event(event) => workspace.absorb(*event),
                         Update::Closed(reason) => {
@@ -186,6 +195,57 @@ impl Workspace {
         .detach();
     }
 
+    /// Switch the open channel.
+    ///
+    /// Three commands are needed: the core tracks its own notion of the
+    /// selected channel (for read-state and typing), history must be requested
+    /// because the cache is lazily populated, and a gateway subscription is
+    /// required before Discord will push updates for it.
+    pub fn open_channel(&mut self, channel_id: Id<marker::ChannelMarker>) {
+        self.nav.channel = Some(channel_id);
+        self.messages.clear();
+
+        let Some(handle) = &self.handle else {
+            return;
+        };
+
+        handle.send(AppCommand::SetSelectedMessageChannel {
+            channel_id: Some(channel_id),
+        });
+        handle.send(AppCommand::LoadMessageHistory {
+            channel_id,
+            before: None,
+        });
+
+        match self.nav.selection {
+            Selection::Guild(guild_id) => {
+                handle.send(AppCommand::SubscribeGuildChannel {
+                    guild_id,
+                    channel_id,
+                });
+            }
+            Selection::DirectMessages => {
+                handle.send(AppCommand::SubscribeDirectMessage { channel_id });
+            }
+        }
+    }
+
+    /// Switch the open guild, clearing the channel selection.
+    pub fn open_guild(&mut self, guild_id: Option<Id<marker::GuildMarker>>) {
+        self.nav.selection = match guild_id {
+            Some(id) => Selection::Guild(id),
+            None => Selection::DirectMessages,
+        };
+        self.nav.channel = None;
+        self.messages.clear();
+
+        if let (Some(handle), Some(guild_id)) = (&self.handle, guild_id) {
+            handle.send(AppCommand::SetSelectedGuild {
+                guild_id: Some(guild_id),
+            });
+        }
+    }
+
     /// Fold a discrete event into the model.
     ///
     /// Most state arrives through reprojection; this handles only what is not
@@ -203,7 +263,7 @@ impl Workspace {
         }
     }
 
-    fn guild_rail(&self) -> impl IntoElement {
+    fn guild_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut rail = column()
             .w(px(layout::GUILD_RAIL))
             .h_full()
@@ -214,8 +274,15 @@ impl Workspace {
 
         for (index, guild) in self.model.guilds.iter().enumerate() {
             let selected = index == self.model.selected_guild;
+            let guild_id = guild.id;
             rail = rail.child(
                 gpui::div()
+                    .id(("guild", index))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.open_guild(guild_id);
+                        cx.notify();
+                    }))
                     .relative()
                     .child(avatar(44., &guild.name))
                     .when(selected, |d| {
@@ -232,7 +299,7 @@ impl Workspace {
         rail
     }
 
-    fn channel_sidebar(&self) -> impl IntoElement {
+    fn channel_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let guild_name = self
             .model
             .guilds
@@ -282,6 +349,20 @@ impl Workspace {
                 );
             }
 
+            // Voice channels need a join, not a channel switch; only text-like
+            // channels are click-to-open until voice controls land.
+            let entry = match channel.id {
+                Some(channel_id) if channel.kind != ChannelKind::Voice => entry
+                    .id(("channel", index))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.open_channel(channel_id);
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+                _ => entry.into_any_element(),
+            };
+
             list = list.child(entry);
         }
 
@@ -314,17 +395,7 @@ impl Workspace {
                             .child(channel_name),
                     ),
             )
-            .child(
-                // Message area. Empty until the snapshot projection lands -
-                // showing fabricated messages here would misrepresent progress.
-                column()
-                    .flex_1()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(space::SM))
-                    .child(hint("No session"))
-                    .child(hint(self.model.status_line.clone())),
-            )
+            .child(message_list(&self.messages))
             .child(self.composer())
     }
 
@@ -368,7 +439,7 @@ impl Workspace {
 }
 
 impl Render for Workspace {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         column()
             .size_full()
             .bg(rgb(DARK.bg))
@@ -378,8 +449,8 @@ impl Render for Workspace {
                     .flex_1()
                     .w_full()
                     .overflow_hidden()
-                    .child(self.guild_rail())
-                    .child(self.channel_sidebar())
+                    .child(self.guild_rail(cx))
+                    .child(self.channel_sidebar(cx))
                     .child(self.content()),
             )
             .child(self.status_bar())
