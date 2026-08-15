@@ -91,7 +91,7 @@ impl DashboardState {
     }
 
     pub fn restore_discord_snapshot(&mut self, discord: DiscordState) {
-        self.restore_discord_snapshot_with(SnapshotAreas::all(), |state| {
+        self.restore_discord_snapshot_with(SnapshotAreas::all(), true, |state| {
             *state = discord;
         });
     }
@@ -102,7 +102,8 @@ impl DashboardState {
         previous_revision: SnapshotRevision,
     ) {
         let areas = snapshot.revision.changed_areas_since(previous_revision);
-        self.restore_discord_snapshot_with(areas, |state| {
+        let thread_card_catalog_changed = snapshot.thread_card_catalog_changed_from(&self.discord);
+        self.restore_discord_snapshot_with(areas, thread_card_catalog_changed, |state| {
             state.restore_snapshot_areas(snapshot, previous_revision);
         });
     }
@@ -110,6 +111,7 @@ impl DashboardState {
     fn restore_discord_snapshot_with(
         &mut self,
         areas: SnapshotAreas,
+        thread_card_catalog_changed: bool,
         restore: impl FnOnce(&mut DiscordState),
     ) {
         let was_auto_follow = self.messages.message_auto_follow;
@@ -137,6 +139,12 @@ impl DashboardState {
         restore(&mut self.discord.cache);
         self.reconcile_pending_messages_with_cache();
         self.clear_message_row_content_metrics_cache();
+        if thread_card_catalog_changed {
+            // Presence, voice, and other navigation updates do not change the
+            // thread catalog. Reusing it avoids sorting every forum post for
+            // unrelated Gateway traffic.
+            self.clear_thread_card_list_cache();
+        }
         if areas.navigation {
             self.repair_navigation_after_discord_restore(channel_cursor);
         }

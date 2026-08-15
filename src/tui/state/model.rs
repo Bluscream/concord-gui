@@ -570,6 +570,10 @@ impl ChannelThreadItem {
     pub fn card_height(&self) -> usize {
         FORUM_POST_CARD_HEIGHT - usize::from(self.applied_tags.is_empty())
     }
+
+    pub(super) fn rendered_height_for(has_tags: bool, has_section_label: bool) -> usize {
+        FORUM_POST_CARD_HEIGHT - usize::from(!has_tags) + usize::from(has_section_label)
+    }
 }
 
 #[cfg(test)]

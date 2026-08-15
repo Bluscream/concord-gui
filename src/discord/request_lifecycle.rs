@@ -17,7 +17,7 @@ use crate::discord::{
 
 const APPLICATION_COMMAND_REQUEST_TTL: Duration = Duration::from_secs(15 * 60);
 const MAX_APPLICATION_COMMAND_REQUESTS: usize = 1_024;
-const FORUM_POST_DATA_BATCH_LIMIT: usize = 10;
+const FORUM_POST_DATA_BATCH_LIMIT: usize = 5;
 
 #[derive(Debug, Default)]
 pub(super) struct HistoryRequests {

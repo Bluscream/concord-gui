@@ -37,6 +37,7 @@ mod toast;
 mod user;
 mod voice_actions;
 
+use channels::ThreadCardListCacheState;
 use composer::ComposerUiState;
 use discord_ui::DiscordUiState;
 use layout_cache::{LayoutCacheState, MessageRowContentMetrics, MessageRowContentMetricsCacheKey};

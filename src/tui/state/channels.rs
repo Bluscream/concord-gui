@@ -1,4 +1,5 @@
 use std::{
+    cell::{Ref, RefCell},
     collections::{BTreeMap, BTreeSet},
     time::Instant,
 };
@@ -29,36 +30,66 @@ use crate::tui::fuzzy::{FuzzyMatchQuality, FuzzyScore, fuzzy_name_match_score};
 
 const RECENT_CHANNEL_LIMIT: usize = 10;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ThreadCardListEntry {
+    channel_id: Id<ChannelMarker>,
+    section_label: Option<&'static str>,
+    archived: bool,
+    rendered_height: usize,
+    rendered_row_start: usize,
+}
+
+impl ThreadCardListEntry {
+    fn new(
+        channel: &ChannelState,
+        section_label: Option<&'static str>,
+        archived: bool,
+        has_tags: bool,
+    ) -> Self {
+        Self {
+            channel_id: channel.id,
+            section_label,
+            archived,
+            rendered_height: ChannelThreadItem::rendered_height_for(
+                has_tags,
+                section_label.is_some(),
+            ),
+            rendered_row_start: 0,
+        }
+    }
+
+    fn card_height(self) -> usize {
+        self.rendered_height
+            .saturating_sub(usize::from(self.section_label.is_some()))
+    }
+}
+
+#[derive(Debug)]
+struct CachedThreadCardList {
+    source: Option<MessagePaneSource>,
+    entries: Vec<ThreadCardListEntry>,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct ThreadCardListCacheState {
+    // Keep only ordering and row geometry here. Full cards contain cloned
+    // message, reaction, tag, and attachment data, so materializing the whole
+    // forum list would make every draw scale with off-screen post count.
+    cached: RefCell<Option<CachedThreadCardList>>,
+}
+
 impl DashboardState {
     pub fn selected_forum_post_items(&self) -> Vec<ChannelThreadItem> {
-        let Some(MessagePaneSource::ForumPosts { channel_id }) = self.message_pane_source() else {
+        if !matches!(
+            self.message_pane_source(),
+            Some(MessagePaneSource::ForumPosts { .. })
+        ) {
             return Vec::new();
-        };
-        let Some(channel) = self
-            .discord
-            .cache
-            .channel(channel_id)
-            .filter(|channel| channel.is_forum())
-        else {
-            return Vec::new();
-        };
-        let active_post_ids = self.discord.cache.active_thread_ids_for_parent(channel.id);
-        let active_post_ids_set = active_post_ids.iter().copied().collect::<BTreeSet<_>>();
-        let archived_post_ids = self
-            .discord
-            .cache
-            .archived_thread_ids_for_parent(channel.id)
-            .into_iter()
-            .filter(|post_id| !active_post_ids_set.contains(post_id))
-            .collect::<Vec<_>>();
-        let mut items =
-            self.thread_card_section_items(&active_post_ids, channel.id, "Active posts");
-        items.extend(self.archived_forum_post_section_items(
-            &archived_post_ids,
-            channel.id,
-            "Archived posts",
-        ));
-        items
+        }
+        self.selected_thread_card_entries()
+            .iter()
+            .filter_map(|entry| self.materialize_thread_card(*entry))
+            .collect()
     }
 
     pub fn selected_forum_posts_loading(&self) -> bool {
@@ -71,36 +102,24 @@ impl DashboardState {
             })
     }
 
-    /// Card items for the message pane (forum posts or a channel's thread list);
-    /// empty for any other source.
-    pub fn selected_thread_card_items(&self) -> Vec<ChannelThreadItem> {
-        match self.message_pane_source() {
-            Some(MessagePaneSource::ForumPosts { .. }) => self.selected_forum_post_items(),
-            Some(MessagePaneSource::ChannelThreads { channel_id }) => {
-                self.channel_thread_card_items(channel_id)
-            }
-            _ => Vec::new(),
-        }
-    }
-
     pub fn visible_thread_card_items(&self) -> Vec<ChannelThreadItem> {
-        self.visible_thread_card_items_from(&self.selected_thread_card_items())
+        self.visible_thread_card_entries()
+            .into_iter()
+            .filter_map(|entry| self.materialize_thread_card(entry))
+            .collect()
     }
 
-    fn visible_thread_card_items_from(
-        &self,
-        items: &[ChannelThreadItem],
-    ) -> Vec<ChannelThreadItem> {
+    fn visible_thread_card_entries(&self) -> Vec<ThreadCardListEntry> {
+        let entries = self.selected_thread_card_entries();
         let height = self.message_content_height();
         let mut rows = 0usize;
         let mut visible = Vec::new();
-        for post in items.iter().skip(self.messages.message_scroll) {
-            let rendered_height = post.rendered_height();
-            if !visible.is_empty() && rows.saturating_add(rendered_height) > height {
+        for entry in entries.iter().skip(self.messages.message_scroll) {
+            if !visible.is_empty() && rows.saturating_add(entry.rendered_height) > height {
                 break;
             }
-            rows = rows.saturating_add(rendered_height);
-            visible.push(post.clone());
+            rows = rows.saturating_add(entry.rendered_height);
+            visible.push(*entry);
             if rows >= height {
                 break;
             }
@@ -111,14 +130,14 @@ impl DashboardState {
     pub fn selected_forum_post(&self) -> usize {
         clamp_selected_index(
             self.messages.selected_message,
-            self.selected_forum_post_items().len(),
+            self.selected_thread_card_count(),
         )
     }
 
     pub fn selected_thread_card(&self) -> usize {
         clamp_selected_index(
             self.messages.selected_message,
-            self.selected_thread_card_items().len(),
+            self.selected_thread_card_count(),
         )
     }
 
@@ -127,7 +146,7 @@ impl DashboardState {
             return None;
         }
         let selected = self.selected_thread_card();
-        let visible_count = self.visible_thread_card_items().len();
+        let visible_count = self.visible_thread_card_entries().len();
         if visible_count > 0
             && selected >= self.messages.message_scroll
             && selected < self.messages.message_scroll + visible_count
@@ -139,22 +158,19 @@ impl DashboardState {
     }
 
     pub(super) fn select_visible_thread_card_row(&mut self, row: usize) -> bool {
-        let items = self.selected_thread_card_items();
         let mut rendered_row = 0usize;
-        for (visible_index, post) in self
-            .visible_thread_card_items_from(&items)
-            .into_iter()
-            .enumerate()
-        {
-            if post.section_label.is_some() {
+        let visible_entries = self.visible_thread_card_entries();
+        for (visible_index, entry) in visible_entries.iter().enumerate() {
+            if entry.section_label.is_some() {
                 if row == rendered_row {
                     return false;
                 }
                 rendered_row = rendered_row.saturating_add(1);
             }
-            if row < rendered_row.saturating_add(post.card_height()) {
+            let card_height = entry.card_height();
+            if row < rendered_row.saturating_add(card_height) {
                 let index = self.messages.message_scroll.saturating_add(visible_index);
-                if index >= items.len() {
+                if index >= self.selected_thread_card_count() {
                     return false;
                 }
                 self.messages.selected_message = index;
@@ -162,31 +178,43 @@ impl DashboardState {
                 self.messages.message_keep_selection_visible = false;
                 return true;
             }
-            rendered_row = rendered_row.saturating_add(post.card_height());
+            rendered_row = rendered_row.saturating_add(card_height);
         }
         false
     }
 
     pub(super) fn clamp_thread_card_viewport(&mut self) {
-        let posts = self.selected_thread_card_items();
-        if posts.is_empty() {
+        let viewport = {
+            let entries = self.selected_thread_card_entries();
+            if entries.is_empty() {
+                None
+            } else {
+                let selected = self.messages.selected_message.min(entries.len() - 1);
+                let height = self.message_content_height().max(1);
+                let mut earliest_visible = selected;
+                let mut rendered_rows = entries[selected].rendered_height;
+                while earliest_visible > 0 {
+                    let candidate = earliest_visible - 1;
+                    let candidate_rows =
+                        rendered_rows.saturating_add(entries[candidate].rendered_height);
+                    if candidate_rows > height {
+                        break;
+                    }
+                    earliest_visible = candidate;
+                    rendered_rows = candidate_rows;
+                }
+                Some((selected, earliest_visible))
+            }
+        };
+        let Some((selected, earliest_visible)) = viewport else {
             self.messages.message_scroll = 0;
             return;
-        }
-
-        let selected = self.messages.selected_message.min(posts.len() - 1);
-        self.messages.message_scroll = self.messages.message_scroll.min(selected);
-        let height = self.message_content_height().max(1);
-        while self.messages.message_scroll < selected {
-            let rendered_rows: usize = posts[self.messages.message_scroll..=selected]
-                .iter()
-                .map(|post| post.rendered_height())
-                .sum();
-            if rendered_rows <= height {
-                break;
-            }
-            self.messages.message_scroll = self.messages.message_scroll.saturating_add(1);
-        }
+        };
+        self.messages.message_scroll = self
+            .messages
+            .message_scroll
+            .min(selected)
+            .max(earliest_visible);
     }
 
     pub fn selected_message_history_channel_id(&self) -> Option<Id<ChannelMarker>> {
@@ -242,16 +270,10 @@ impl DashboardState {
 
     pub(crate) fn selected_forum_post_data_target(&self) -> Option<ForumPostDataRequestTarget> {
         let (guild_id, channel_id) = self.selected_forum_channel()?;
-        let active_thread_ids = self.discord.cache.active_thread_ids_for_parent(channel_id);
-        let missing_thread_ids = active_thread_ids
+        let missing_thread_ids = self
+            .visible_thread_card_entries()
             .into_iter()
-            .chain(
-                self.discord
-                    .cache
-                    .archived_thread_ids_for_parent(channel_id),
-            )
-            .collect::<BTreeSet<_>>()
-            .into_iter()
+            .map(|entry| entry.channel_id)
             .filter(|thread_id| !self.discord.cache.thread_post_data_loaded(*thread_id))
             .collect();
         Some(ForumPostDataRequestTarget {
@@ -278,58 +300,124 @@ impl DashboardState {
     }
 
     fn selected_forum_is_near_loaded_end(&self) -> bool {
-        let items = self.selected_forum_post_items();
-        if items.is_empty() {
+        let item_count = self.selected_thread_card_count();
+        if item_count == 0 {
             return true;
         }
         const PREFETCH_CARDS: usize = 3;
         let visible_end = self
             .messages
             .message_scroll
-            .saturating_add(self.visible_thread_card_items_from(&items).len());
+            .saturating_add(self.visible_thread_card_entries().len());
         let selected_end = self.selected_forum_post().saturating_add(1);
-        visible_end.max(selected_end).saturating_add(PREFETCH_CARDS) >= items.len()
+        visible_end.max(selected_end).saturating_add(PREFETCH_CARDS) >= item_count
     }
 
     /// Open the selected card (a thread or forum post) as the active channel.
     pub fn activate_selected_thread_card(&mut self) -> Option<AppCommand> {
-        let item = self
-            .selected_thread_card_items()
+        let channel_id = self
+            .selected_thread_card_entries()
             .get(self.selected_thread_card())?
-            .clone();
-        self.activate_thread_card_item(item)
+            .channel_id;
+        self.activate_thread_card_item(channel_id)
     }
 
-    fn activate_thread_card_item(&mut self, item: ChannelThreadItem) -> Option<AppCommand> {
+    fn activate_thread_card_item(&mut self, channel_id: Id<ChannelMarker>) -> Option<AppCommand> {
         let guild_id = self
             .discord
-            .channel(item.channel_id)
+            .channel(channel_id)
             .and_then(|channel| channel.guild_id)?;
-        self.record_thread_return_target(item.channel_id);
-        self.activate_channel(item.channel_id);
+        self.record_thread_return_target(channel_id);
+        self.activate_channel(channel_id);
         Some(AppCommand::SubscribeGuildChannel {
             guild_id,
-            channel_id: item.channel_id,
+            channel_id,
         })
     }
 
-    /// Cards for a non-forum channel's currently active threads. Discord's
-    /// Gateway owns this set, so inactive or archived threads disappear without
-    /// a separate REST search changing the list.
-    pub(super) fn channel_thread_card_items(
-        &self,
-        channel_id: Id<ChannelMarker>,
-    ) -> Vec<ChannelThreadItem> {
-        let active_ids = self.discord.cache.active_thread_ids_for_parent(channel_id);
-        self.thread_card_section_items(&active_ids, channel_id, "Active threads")
+    pub(super) fn clear_thread_card_list_cache(&mut self) {
+        self.thread_cards.cached.get_mut().take();
     }
 
-    fn thread_card_section_items(
+    fn selected_thread_card_entries(&self) -> Ref<'_, [ThreadCardListEntry]> {
+        let source = self.message_pane_source();
+        let needs_rebuild = self
+            .thread_cards
+            .cached
+            .borrow()
+            .as_ref()
+            .is_none_or(|cached| cached.source != source);
+        if needs_rebuild {
+            let entries = self.build_thread_card_entries(source);
+            self.thread_cards
+                .cached
+                .replace(Some(CachedThreadCardList { source, entries }));
+        }
+        Ref::map(self.thread_cards.cached.borrow(), |cached| {
+            cached
+                .as_ref()
+                .expect("thread card cache is initialized")
+                .entries
+                .as_slice()
+        })
+    }
+
+    fn build_thread_card_entries(
+        &self,
+        source: Option<MessagePaneSource>,
+    ) -> Vec<ThreadCardListEntry> {
+        let mut entries = match source {
+            Some(MessagePaneSource::ForumPosts { channel_id }) => {
+                self.forum_thread_card_entries(channel_id)
+            }
+            Some(MessagePaneSource::ChannelThreads { channel_id }) => {
+                let active_ids = self.discord.cache.active_thread_ids_for_parent(channel_id);
+                self.active_thread_card_entries(&active_ids, channel_id, "Active threads")
+            }
+            Some(
+                MessagePaneSource::ChannelMessages { .. }
+                | MessagePaneSource::PinnedMessages { .. },
+            )
+            | None => Vec::new(),
+        };
+        let mut rendered_row_start = 0usize;
+        for entry in &mut entries {
+            entry.rendered_row_start = rendered_row_start;
+            rendered_row_start = rendered_row_start.saturating_add(entry.rendered_height);
+        }
+        entries
+    }
+
+    fn forum_thread_card_entries(&self, channel_id: Id<ChannelMarker>) -> Vec<ThreadCardListEntry> {
+        let Some(channel) = self
+            .discord
+            .cache
+            .channel(channel_id)
+            .filter(|channel| channel.is_forum())
+        else {
+            return Vec::new();
+        };
+        let active_post_ids = self.discord.cache.active_thread_ids_for_parent(channel.id);
+        let active_post_ids_set = active_post_ids.iter().copied().collect::<BTreeSet<_>>();
+        let archived_post_ids = self
+            .discord
+            .cache
+            .archived_thread_ids_for_parent(channel.id)
+            .into_iter()
+            .filter(|post_id| !active_post_ids_set.contains(post_id))
+            .collect::<Vec<_>>();
+        let mut entries =
+            self.active_thread_card_entries(&active_post_ids, channel.id, "Active posts");
+        entries.extend(self.archived_forum_thread_card_entries(&archived_post_ids, channel.id));
+        entries
+    }
+
+    fn active_thread_card_entries(
         &self,
         thread_ids: &[Id<ChannelMarker>],
         parent_channel_id: Id<ChannelMarker>,
-        section_label: &str,
-    ) -> Vec<ChannelThreadItem> {
+        section_label: &'static str,
+    ) -> Vec<ThreadCardListEntry> {
         // Discord displays pinned posts first, then orders the remaining active
         // posts by recent activity. The last message snowflake is updated by
         // Gateway events and gives this view a stable local ordering.
@@ -353,21 +441,21 @@ impl DashboardState {
             .chain(rest)
             .enumerate()
             .map(|(index, thread)| {
-                self.thread_card_item(
+                ThreadCardListEntry::new(
                     thread,
-                    (index == 0).then(|| section_label.to_owned()),
+                    (index == 0).then_some(section_label),
                     false,
+                    self.thread_card_has_visible_tags(thread),
                 )
             })
             .collect()
     }
 
-    fn archived_forum_post_section_items(
+    fn archived_forum_thread_card_entries(
         &self,
         post_ids: &[Id<ChannelMarker>],
         forum_channel_id: Id<ChannelMarker>,
-        section_label: &str,
-    ) -> Vec<ChannelThreadItem> {
+    ) -> Vec<ThreadCardListEntry> {
         // The archived endpoint already orders rows by archive timestamp,
         // newest first. Preserve that order instead of re-sorting by message
         // snowflake, which can differ from the time a post was archived.
@@ -382,9 +470,68 @@ impl DashboardState {
             })
             .enumerate()
             .map(|(index, post)| {
-                self.thread_card_item(post, (index == 0).then(|| section_label.to_owned()), true)
+                ThreadCardListEntry::new(
+                    post,
+                    (index == 0).then_some("Archived posts"),
+                    true,
+                    self.thread_card_has_visible_tags(post),
+                )
             })
             .collect()
+    }
+
+    fn thread_card_has_visible_tags(&self, channel: &ChannelState) -> bool {
+        let Some(parent) = channel
+            .parent_id
+            .and_then(|parent_id| self.discord.cache.channel(parent_id))
+        else {
+            return false;
+        };
+        channel
+            .applied_tags
+            .iter()
+            .any(|tag_id| parent.available_tags.iter().any(|tag| tag.id == *tag_id))
+    }
+
+    fn materialize_thread_card(&self, entry: ThreadCardListEntry) -> Option<ChannelThreadItem> {
+        let channel = self.discord.cache.channel(entry.channel_id)?;
+        Some(self.thread_card_item(
+            channel,
+            entry.section_label.map(str::to_owned),
+            entry.archived,
+        ))
+    }
+
+    pub(super) fn selected_thread_card_count(&self) -> usize {
+        self.selected_thread_card_entries().len()
+    }
+
+    pub(crate) fn thread_card_rendered_rows_before(&self, index: usize) -> usize {
+        let entries = self.selected_thread_card_entries();
+        entries.get(index).map_or_else(
+            || {
+                entries
+                    .last()
+                    .map(|entry| {
+                        entry
+                            .rendered_row_start
+                            .saturating_add(entry.rendered_height)
+                    })
+                    .unwrap_or(0)
+            },
+            |entry| entry.rendered_row_start,
+        )
+    }
+
+    pub(crate) fn thread_card_total_rendered_rows(&self) -> usize {
+        self.selected_thread_card_entries()
+            .last()
+            .map(|entry| {
+                entry
+                    .rendered_row_start
+                    .saturating_add(entry.rendered_height)
+            })
+            .unwrap_or(0)
     }
 
     pub(super) fn thread_card_item(

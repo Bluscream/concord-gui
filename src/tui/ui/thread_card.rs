@@ -55,7 +55,7 @@ pub(super) fn thread_card_viewport_lines_with_custom_emoji_images(
         ))];
     }
 
-    let mut lines = Vec::new();
+    let mut lines = Vec::with_capacity(posts.iter().map(ChannelThreadItem::rendered_height).sum());
     for (index, post) in posts.iter().enumerate() {
         if let Some(label) = post.section_label.as_deref() {
             lines.push(thread_card_section_header_line(label, width));

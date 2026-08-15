@@ -288,6 +288,7 @@ fn post_data_hydrates_active_cards_without_changing_joined_sidebar_state() {
     ));
     state.confirm_selected_guild();
     state.activate_channel(forum_id);
+    state.set_message_view_height(20);
 
     assert_eq!(sidebar_thread_ids(&state), vec![joined_id]);
     assert_eq!(
@@ -295,7 +296,7 @@ fn post_data_hydrates_active_cards_without_changing_joined_sidebar_state() {
         Some(crate::discord::ForumPostDataRequestTarget {
             guild_id,
             channel_id: forum_id,
-            thread_ids: vec![joined_id, unjoined_ids[0], unjoined_ids[1]],
+            thread_ids: vec![unjoined_ids[1], unjoined_ids[0], joined_id],
         })
     );
 
@@ -308,7 +309,7 @@ fn post_data_hydrates_active_cards_without_changing_joined_sidebar_state() {
     };
     state.push_event(AppEvent::ForumPostDataLoaded {
         channel_id: forum_id,
-        requested_thread_ids: vec![joined_id, unjoined_ids[0]],
+        requested_thread_ids: vec![unjoined_ids[1], unjoined_ids[0]],
         posts: vec![ForumPostDataInfo {
             thread_id: unjoined_ids[0],
             owner: Some(member_info(owner_id, "Alice")),
@@ -323,7 +324,7 @@ fn post_data_hydrates_active_cards_without_changing_joined_sidebar_state() {
         Some(crate::discord::ForumPostDataRequestTarget {
             guild_id,
             channel_id: forum_id,
-            thread_ids: vec![unjoined_ids[1]],
+            thread_ids: vec![joined_id],
         })
     );
     let hydrated = state
@@ -333,6 +334,59 @@ fn post_data_hydrates_active_cards_without_changing_joined_sidebar_state() {
         .expect("the hydrated active post should remain visible");
     assert_eq!(hydrated.preview_author.as_deref(), Some("Alice"));
     assert_eq!(hydrated.preview_content.as_deref(), Some("starter body"));
+}
+
+#[test]
+fn forum_post_data_target_advances_with_the_visible_viewport() {
+    let guild_id = Id::new(1);
+    let forum_id = Id::new(20);
+    let thread_ids = (100..108).map(Id::new).collect::<Vec<_>>();
+    let mut state = DashboardState::new();
+    state.push_event(crate::discord::test_builders::guild_create_event(
+        GuildCreateFixture {
+            channels: std::iter::once(forum_channel(guild_id, forum_id))
+                .chain(thread_ids.iter().map(|thread_id| {
+                    active_thread(
+                        guild_id,
+                        forum_id,
+                        *thread_id,
+                        format!("post {}", thread_id.get()),
+                    )
+                }))
+                .collect(),
+            ..GuildCreateFixture::new(guild_id)
+        },
+    ));
+    state.confirm_selected_guild();
+    state.activate_channel(forum_id);
+    state.set_message_view_height(13);
+
+    let first_visible_ids = vec![thread_ids[7], thread_ids[6]];
+    assert_eq!(
+        state.selected_forum_post_data_target(),
+        Some(crate::discord::ForumPostDataRequestTarget {
+            guild_id,
+            channel_id: forum_id,
+            thread_ids: first_visible_ids.clone(),
+        })
+    );
+
+    state.push_event(AppEvent::ForumPostDataLoaded {
+        channel_id: forum_id,
+        requested_thread_ids: first_visible_ids,
+        posts: Vec::new(),
+    });
+    state.messages.selected_message = 2;
+    state.messages.message_scroll = 2;
+
+    assert_eq!(
+        state.selected_forum_post_data_target(),
+        Some(crate::discord::ForumPostDataRequestTarget {
+            guild_id,
+            channel_id: forum_id,
+            thread_ids: vec![thread_ids[5], thread_ids[4]],
+        })
+    );
 }
 
 #[test]
@@ -471,7 +525,7 @@ fn forum_body_appends_archived_posts_without_adding_sidebar_rows() {
         Some(crate::discord::ForumPostDataRequestTarget {
             guild_id,
             channel_id: forum_id,
-            thread_ids: vec![active_id, archived_ids[1], archived_ids[0]],
+            thread_ids: vec![active_id],
         })
     );
 

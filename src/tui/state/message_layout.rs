@@ -21,12 +21,7 @@ impl DashboardState {
         max_preview_height: u16,
     ) -> usize {
         if self.message_pane_uses_thread_cards() {
-            return self
-                .selected_thread_card_items()
-                .into_iter()
-                .take(self.messages.message_scroll)
-                .map(|post| post.rendered_height())
-                .sum();
+            return self.thread_card_rendered_rows_before(self.messages.message_scroll);
         }
         (0..self.messages.message_scroll)
             .map(|index| {
@@ -48,11 +43,7 @@ impl DashboardState {
         max_preview_height: u16,
     ) -> usize {
         if self.message_pane_uses_thread_cards() {
-            return self
-                .selected_thread_card_items()
-                .into_iter()
-                .map(|post| post.rendered_height())
-                .sum();
+            return self.thread_card_total_rendered_rows();
         }
         (0..self.messages().len())
             .map(|index| {

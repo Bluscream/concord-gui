@@ -501,7 +501,7 @@ impl DashboardState {
         }
 
         if self.message_pane_uses_thread_cards() {
-            let len = self.selected_thread_card_items().len();
+            let len = self.selected_thread_card_count();
             move_index_down(&mut self.messages.message_scroll, len);
             self.messages.message_auto_follow = false;
             self.messages.message_keep_selection_visible = false;
@@ -1222,7 +1222,7 @@ impl DashboardState {
         match self.message_pane_source() {
             Some(
                 MessagePaneSource::ForumPosts { .. } | MessagePaneSource::ChannelThreads { .. },
-            ) => self.selected_thread_card_items().len(),
+            ) => self.selected_thread_card_count(),
             Some(
                 MessagePaneSource::ChannelMessages { .. }
                 | MessagePaneSource::PinnedMessages { .. },

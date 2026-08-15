@@ -116,20 +116,24 @@ fn forum_post_data_requests_batch_dedupe_and_retry() {
 
     let first = requests
         .next(Some(target()))
-        .expect("the first ten posts should be requested");
-    assert_eq!(first.thread_ids, thread_ids[..10]);
+        .expect("the first five posts should be requested");
+    assert_eq!(first.thread_ids, thread_ids[..5]);
     let second = requests
         .next(Some(target()))
-        .expect("the remaining posts should form a second batch");
-    assert_eq!(second.thread_ids, thread_ids[10..]);
+        .expect("the next five posts should be requested");
+    assert_eq!(second.thread_ids, thread_ids[5..10]);
+    let third = requests
+        .next(Some(target()))
+        .expect("the final posts should be requested");
+    assert_eq!(third.thread_ids, thread_ids[10..]);
     assert_eq!(requests.next(Some(target())), None);
 
     requests.record_event(&AppEvent::ForumPostDataLoadFailed {
         channel_id: forum_id,
-        thread_ids: second.thread_ids.clone(),
+        thread_ids: third.thread_ids.clone(),
         message: "temporary failure".to_owned(),
     });
-    let retry_thread_ids = second.thread_ids;
+    let retry_thread_ids = third.thread_ids;
     assert_eq!(
         requests.next(Some(ForumPostDataRequestTarget {
             guild_id,

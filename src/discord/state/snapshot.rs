@@ -122,6 +122,11 @@ impl SnapshotAreas {
 }
 
 impl DiscordSnapshot {
+    pub(crate) fn thread_card_catalog_changed_from(&self, state: &DiscordState) -> bool {
+        !Arc::ptr_eq(&self.navigation.navigation, &state.navigation)
+            || !Arc::ptr_eq(&self.navigation.threads, &state.threads)
+    }
+
     pub fn to_state(&self) -> DiscordState {
         let mut state = DiscordState::default();
         state.attach_snapshot_areas(self, SnapshotAreas::all());
