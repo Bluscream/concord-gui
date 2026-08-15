@@ -29,18 +29,32 @@ commands
 
 ### Missing
 
-Nothing. Every TUI action that is a feature rather than an input primitive has
-an equivalent here, verified by re-deriving the list from
-`src/tui/keybindings/actions.rs` rather than from memory.
+Audited by diffing which `AppCommand` variants each client sends, which is a
+stronger check than the action enum: a command the TUI can issue and the GUI
+cannot is a real gap regardless of what the keybinding is called. The TUI
+sends all 69; the GUI sent 43.
 
-Two caveats worth keeping in view:
-
-* Parity is against *actions*, not against having been used. None of this has
-  run against a real Discord account - it is verified by 92 tests, the offline
-  fixture and the type checker.
-* Three actions have no GUI analogue and are excluded rather than implemented:
-  `RefreshScreen` (a terminal redraw), and the horizontal-scroll pair, which
-  exist because a terminal cannot wrap wide content.
+| Command | Feature |
+|---|---|
+| `TriggerTyping` | Others never see this client typing |
+| `SignOut` | Sign-out is local only; Discord is never told |
+| `UpdateCurrentUserStatus` | Set online/idle/dnd/invisible |
+| `UpdateCurrentUserActivity` | Set a custom status |
+| `LeaveGuild` | Leave a server |
+| `CreateForumPost` | Forum posts *can* be created - only threads cannot |
+| `DeleteThread`, `EditThread` | Rename or delete a thread |
+| `SetThreadLocked`, `SetThreadMuted`, `SetThreadPinned` | Remaining thread management |
+| `SearchGuildMembers`, `LoadGuildMembersByIds` | Member search and hydration |
+| `LoadVoiceAudioSources`, `UpdateVoiceAudioSources` | Input/output device selection |
+| `UpdateVoiceCapturePermission` | Microphone permission |
+| `WatchVoiceStream` | Watch someone else's stream |
+| `RequestApplicationCommandAutocomplete` | Argument autocomplete for bot commands |
+| `LoadMessageHistoryAfter`, `RefreshMessageHistory` | Page forward, refresh a channel |
+| `ScheduleAckChannel` | Deferred read marking |
+| `LoadAttachmentPreview`, `LoadProfileAvatarPreview` | Attachment and avatar previews |
+| `LoadThreadPreview` | Thread preview without opening |
+| `LoadInboxChannelHistory` | Context around an inbox mention |
+| `UpdateGuildFolderSettings` | Guild folders |
 
 ### Not possible against this core
 
