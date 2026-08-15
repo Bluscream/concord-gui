@@ -668,9 +668,219 @@ fn handle_command(
             publish_event!(AppEvent::StreamBroadcastEnded { scope, channel_id });
         }
 
-        // Navigation, subscriptions, typing and history are all satisfied by
-        // the fixture already being fully loaded, so they need no reply.
-        _ => {}
+        // ---- moderation ---------------------------------------------------
+        //
+        // Kicking and banning both remove the member locally, which is what
+        // they look like from the moderator's side.
+        AppCommand::KickMember {
+            guild_id, user_id, ..
+        }
+        | AppCommand::BanMember {
+            guild_id, user_id, ..
+        } => {
+            fixtures::remove_member(state, guild_id, user_id);
+            publish_state!();
+        }
+
+        AppCommand::SetMemberRoles {
+            guild_id,
+            user_id,
+            role_ids,
+            ..
+        } => {
+            fixtures::set_member_roles(state, guild_id, user_id, &role_ids);
+            publish_state!();
+        }
+
+        // Nothing offline can show a timeout or an unban: the fixture has no
+        // timeout state, and the ban list it answers with is canned.
+        AppCommand::TimeoutMember { .. } | AppCommand::UnbanMember { .. } => {}
+
+        // ---- mutes and threads ---------------------------------------------
+        AppCommand::SetGuildMuted {
+            guild_id, muted, ..
+        } => {
+            fixtures::set_guild_muted(state, guild_id, muted);
+            publish_state!();
+        }
+
+        AppCommand::SetChannelMuted {
+            channel_id, muted, ..
+        } => {
+            fixtures::set_channel_muted(state, channel_id, muted);
+            publish_state!();
+        }
+
+        AppCommand::SetThreadArchived {
+            channel_id,
+            archived,
+            ..
+        } => {
+            fixtures::set_thread_archived(state, channel_id, archived);
+            publish_state!();
+        }
+
+        AppCommand::SetThreadFollowed {
+            channel_id,
+            followed,
+            ..
+        } => {
+            fixtures::set_thread_followed(state, channel_id, followed);
+            publish_state!();
+        }
+
+        // ---- own presence and profile ---------------------------------------
+        AppCommand::UpdateCurrentUserStatus { status, .. } => {
+            fixtures::set_current_presence(state, status);
+            publish_state!();
+        }
+
+        AppCommand::SignOut => {
+            publish_event!(AppEvent::SignedOut);
+        }
+
+        // ---- messages --------------------------------------------------------
+        AppCommand::SendTtsMessage {
+            channel_id,
+            content,
+            ..
+        } => {
+            let guild_id = guild_of(state, channel_id);
+            fixtures::append_message(
+                state,
+                channel_id,
+                guild_id,
+                fixtures::demo_user_id(),
+                "blu",
+                &content,
+            );
+            publish_state!();
+        }
+
+        AppCommand::RemoveMessageEmbeds {
+            channel_id,
+            message_id,
+        } => {
+            fixtures::remove_embeds(state, channel_id, message_id);
+            publish_state!();
+        }
+
+        AppCommand::LoadMessageHistoryAround { .. } => {
+            // The fixture holds one page per channel, and it is already loaded.
+            publish_state!();
+        }
+
+        AppCommand::LoadReactionUsers {
+            channel_id,
+            message_id,
+            emoji,
+            after,
+        } => {
+            // One page, so there is no cursor to follow. `after` is echoed
+            // back because it decides whether the reply replaces the list or
+            // appends to it.
+            publish_event!(AppEvent::ReactionUsersLoaded {
+                channel_id,
+                message_id,
+                emoji,
+                users: vec![
+                    concord::discord::ReactionUserInfo {
+                        user_id: concord::discord::Id::new(1002),
+                        display_name: "ferris".to_string(),
+                    },
+                    concord::discord::ReactionUserInfo {
+                        user_id: concord::discord::Id::new(1003),
+                        display_name: "turing".to_string(),
+                    },
+                ],
+                next_after: None,
+                after,
+            });
+        }
+
+        AppCommand::LoadApplicationCommands { guild_id } => {
+            // No bots in the fixture, so an empty list is the honest answer
+            // rather than no reply at all.
+            publish_event!(AppEvent::ApplicationCommandsLoaded {
+                guild_id,
+                commands: Vec::new(),
+            });
+        }
+
+        AppCommand::LoadVoiceAudioSources { request_id } => {
+            // Plausible device names so the picker can be exercised offline.
+            publish_event!(AppEvent::VoiceAudioSourcesLoaded {
+                request_id,
+                inputs: vec![
+                    ("default".to_string(), "System default".to_string()),
+                    ("demo-mic".to_string(), "Demo microphone".to_string()),
+                ],
+                outputs: vec![
+                    ("default".to_string(), "System default".to_string()),
+                    ("demo-out".to_string(), "Demo headphones".to_string()),
+                ],
+                error: None,
+            });
+        }
+
+        AppCommand::DeleteInboxMention { message_id } => {
+            publish_event!(AppEvent::InboxRecentMentionDeleted { message_id });
+        }
+
+        AppCommand::LeaveGuild { guild_id, .. } => {
+            // Removed from the fixture, which is what leaving looks like -
+            // and a reminder that rule 7 will change this to "inert but
+            // browsable" once the cache work lands.
+            fixtures::leave_guild(state, guild_id);
+            publish_state!();
+        }
+
+        AppCommand::SetThreadNotificationLevel { .. } => {
+            // The fixture carries no per-thread notification level, so there
+            // is nothing to show a change against.
+        }
+
+        AppCommand::UpdateCurrentUserActivity { status, .. } => {
+            fixtures::set_current_presence(state, status);
+            publish_state!();
+        }
+
+        AppCommand::UpdateUserProfile { .. } => {
+            // Editing your own profile offline would need the fixture to model
+            // a mutable self-profile, which it does not.
+        }
+
+        AppCommand::RunApplicationCommand { .. } => {
+            // No bots in the fixture, so nothing would answer.
+        }
+
+        // ---- deliberately inert ----------------------------------------------
+        //
+        // Navigation, subscriptions and typing need no reply: the fixture is
+        // already fully loaded, and nothing is listening for an ack.
+        AppCommand::SetSelectedGuild { .. }
+        | AppCommand::SetSelectedMessageChannel { .. }
+        | AppCommand::SubscribeGuildChannel { .. }
+        | AppCommand::SubscribeDirectMessage { .. }
+        | AppCommand::UpdateMemberListSubscription { .. }
+        | AppCommand::TriggerTyping { .. } => {}
+
+        // These reach outside the process - a browser, a media player, the
+        // file system, an audio device - so offline they would either do the
+        // real thing or nothing. Nothing is the safer default in a demo.
+        AppCommand::OpenUrl { .. }
+        | AppCommand::PlayMedia { .. }
+        | AppCommand::DownloadAttachment { .. }
+        | AppCommand::WatchVoiceStream { .. }
+        | AppCommand::UpdateVoiceAudioSources { .. }
+        | AppCommand::UpdateVoiceCapturePermission { .. }
+        | AppCommand::UpdateVoiceParticipantPlayback { .. } => {}
+
+        // No catch-all: the match is exhaustive on purpose. Demo mode is the
+        // default build while the project is pre-release, so a command with no
+        // arm would silently do nothing for anyone who has not signed in.
+        // Adding one to the core now fails to compile here instead - which is
+        // how the 36 that had gone unnoticed were meant to be caught.
     }
 
     true

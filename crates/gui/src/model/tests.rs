@@ -1269,3 +1269,47 @@ fn forwarding_targets_the_picked_channel_not_the_current_one() {
     assert_eq!(taken, purpose);
     assert_eq!(held, SwitcherPurpose::Navigate);
 }
+
+#[test]
+fn demo_mode_answers_every_command_the_ui_can_send() {
+    // Demo mode is the default build while the project is pre-release, so a
+    // command it ignores is a feature that silently does nothing for anyone
+    // who has not signed in. This asserts the diff stays closed:
+    //
+    //   comm -23 <(grep -rhoE "AppCommand::[A-Z][A-Za-z]+" crates/gui/src/ui/ | sort -u) \
+    //            <(grep -rhoE "AppCommand::[A-Z][A-Za-z]+" crates/gui/src/demo.rs | sort -u)
+    //
+    // Kept as a source scan rather than a runtime check because the handler
+    // is a match with a catch-all: an unhandled command is invisible at
+    // runtime by construction, which is exactly why 36 of them went unnoticed.
+    use std::collections::BTreeSet;
+
+    let extract = |source: &str| -> BTreeSet<String> {
+        source
+            .split("AppCommand::")
+            .skip(1)
+            .filter_map(|rest| {
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                (!name.is_empty()).then_some(name)
+            })
+            .collect()
+    };
+
+    let ui = extract(
+        &[
+            include_str!("../ui/workspace.rs"),
+            include_str!("../ui/messages.rs"),
+        ]
+        .concat(),
+    );
+    let demo = extract(include_str!("../demo.rs"));
+
+    let unanswered: Vec<_> = ui.difference(&demo).cloned().collect();
+    assert!(
+        unanswered.is_empty(),
+        "demo mode ignores these commands: {unanswered:?}"
+    );
+}

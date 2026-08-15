@@ -1366,3 +1366,130 @@ pub fn demo_preview_png(seed: u64) -> Vec<u8> {
     // result is preferable to a panic in a demo path.
     if encoded.is_err() { Vec::new() } else { out }
 }
+
+/// Mute or unmute a guild.
+pub fn set_guild_muted(state: &mut DiscordState, guild_id: Id<marker::GuildMarker>, muted: bool) {
+    let notifications = Arc::make_mut(&mut state.notifications);
+    notifications.set_fixture_guild_muted(guild_id, muted);
+}
+
+/// Mute or unmute one channel.
+pub fn set_channel_muted(
+    state: &mut DiscordState,
+    channel_id: Id<marker::ChannelMarker>,
+    muted: bool,
+) {
+    // Channel overrides hang off the guild's settings, so a channel with no
+    // guild - a DM - has nowhere to store one.
+    let Some(guild_id) = state
+        .channel(channel_id)
+        .and_then(|channel| channel.guild_id)
+    else {
+        return;
+    };
+    let notifications = Arc::make_mut(&mut state.notifications);
+    notifications.set_fixture_channel_muted(guild_id, channel_id, muted);
+}
+
+/// Archive or restore a thread.
+pub fn set_thread_archived(
+    state: &mut DiscordState,
+    channel_id: Id<marker::ChannelMarker>,
+    archived: bool,
+) {
+    let navigation = Arc::make_mut(&mut state.navigation);
+    if let Some(channel) = navigation.channels.get_mut(&channel_id)
+        && let Some(metadata) = channel.thread_metadata.as_mut()
+    {
+        metadata.archived = archived;
+    }
+}
+
+/// Join or leave a thread.
+pub fn set_thread_followed(
+    state: &mut DiscordState,
+    channel_id: Id<marker::ChannelMarker>,
+    followed: bool,
+) {
+    let navigation = Arc::make_mut(&mut state.navigation);
+    if let Some(channel) = navigation.channels.get_mut(&channel_id) {
+        channel.current_user_joined_thread = followed;
+    }
+}
+
+/// Remove a member from a guild, as a kick or ban does.
+pub fn remove_member(
+    state: &mut DiscordState,
+    guild_id: Id<marker::GuildMarker>,
+    user_id: Id<marker::UserMarker>,
+) {
+    {
+        let guild_details = Arc::make_mut(&mut state.guild_details);
+        if let Some(members) = guild_details.members.get_mut(&guild_id) {
+            members.remove(&user_id);
+        }
+    }
+    // The member list is a separate projection kept as a whole snapshot, so
+    // it is rebuilt without the removed member rather than edited in place.
+    let remaining: Vec<_> = state
+        .member_list_entries_for_guild(guild_id)
+        .into_iter()
+        .filter(|(_, entry)| !matches!(entry, crate::discord::GuildMemberListEntry::Member { user_id: id } if *id == user_id))
+        .map(|(index, entry)| (index, entry.clone()))
+        .collect();
+
+    let guild_details = Arc::make_mut(&mut state.guild_details);
+    guild_details.set_fixture_member_list(guild_id, remaining);
+}
+
+/// Replace a member's roles.
+pub fn set_member_roles(
+    state: &mut DiscordState,
+    guild_id: Id<marker::GuildMarker>,
+    user_id: Id<marker::UserMarker>,
+    role_ids: &[Id<marker::RoleMarker>],
+) {
+    let guild_details = Arc::make_mut(&mut state.guild_details);
+    if let Some(member) = guild_details
+        .members
+        .get_mut(&guild_id)
+        .and_then(|members| members.get_mut(&user_id))
+    {
+        member.role_ids = role_ids.to_vec();
+        member.role_ids_known = true;
+    }
+}
+
+/// Set the demo user's presence.
+pub fn set_current_presence(state: &mut DiscordState, status: PresenceStatus) {
+    let presence = Arc::make_mut(&mut state.presence);
+    presence
+        .guild_user_presences
+        .insert((guild_id(10), demo_user_id()), status);
+    presence.user_presences.insert(demo_user_id(), status);
+}
+
+/// Drop the embeds from a message, as "remove embeds" does.
+pub fn remove_embeds(
+    state: &mut DiscordState,
+    channel_id: Id<marker::ChannelMarker>,
+    target: Id<marker::MessageMarker>,
+) {
+    let cache = Arc::make_mut(&mut state.message_cache);
+    if let Some(timeline) = cache.timelines.get_mut(&channel_id)
+        && let Some(message) = timeline.messages.iter_mut().find(|m| m.id == target)
+    {
+        message.embeds.clear();
+    }
+}
+
+/// Remove a guild, as leaving does.
+pub fn leave_guild(state: &mut DiscordState, guild_id: Id<marker::GuildMarker>) {
+    let navigation = Arc::make_mut(&mut state.navigation);
+    navigation.guilds.remove(&guild_id);
+    // Its channels go with it, or the sidebar keeps offering channels in a
+    // guild that is no longer listed.
+    navigation
+        .channels
+        .retain(|_, channel| channel.guild_id != Some(guild_id));
+}

@@ -62,7 +62,7 @@ pub(in crate::discord) struct MessageNotificationInput<'a> {
     pub(in crate::discord) flags: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct ChannelNotificationSettingsState {
     message_notifications: Option<NotificationLevel>,
     muted: bool,
@@ -71,7 +71,14 @@ struct ChannelNotificationSettingsState {
     flags: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl ChannelNotificationSettingsState {
+    fn set_fixture_muted(&mut self, muted: bool) {
+        self.muted = muted;
+        self.mute_end_time = None;
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(in crate::discord) struct GuildNotificationSettingsState {
     message_notifications: Option<NotificationLevel>,
     muted: bool,
@@ -827,6 +834,31 @@ impl super::super::state::caches::NotificationCache {
         let state = self.read_states.entry(channel_id).or_default();
         state.mention_count = mentions;
         state.notification_count = notifications;
+    }
+
+    /// Mute or unmute a guild in fixture mode.
+    pub(in crate::discord) fn set_fixture_guild_muted(
+        &mut self,
+        guild_id: Id<GuildMarker>,
+        muted: bool,
+    ) {
+        let settings = self.notification_settings.entry(guild_id).or_default();
+        settings.muted = muted;
+        // Any previous expiry is cleared: a fixture mute is indefinite, and a
+        // stale end time in the past would read as unmuted.
+        settings.mute_end_time = None;
+    }
+
+    /// Mute or unmute one channel in fixture mode.
+    pub(in crate::discord) fn set_fixture_channel_muted(
+        &mut self,
+        guild_id: Id<GuildMarker>,
+        channel_id: Id<ChannelMarker>,
+        muted: bool,
+    ) {
+        let settings = self.notification_settings.entry(guild_id).or_default();
+        let overrides = settings.channel_overrides.entry(channel_id).or_default();
+        overrides.set_fixture_muted(muted);
     }
 
     /// Ack a channel up to `message_id` in fixture mode.
