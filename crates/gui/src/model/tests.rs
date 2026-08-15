@@ -991,5 +991,9 @@ fn zoom_scales_type_and_clamps_at_both_ends() {
     assert!(theme::scaled(14.0) < base, "zooming out must shrink it");
 
     theme::set_zoom(1.0);
-    assert_eq!(theme::scaled(14.0), base, "reset must restore the base size");
+    assert_eq!(
+        theme::scaled(14.0),
+        base,
+        "reset must restore the base size"
+    );
 }

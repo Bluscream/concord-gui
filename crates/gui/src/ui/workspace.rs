@@ -7,13 +7,13 @@
 
 use concord::config::{self, AppOptions, CredentialStoreMode, UiStateOptions};
 use concord::discord::{
-    AppCommand, AppEvent, ApplicationCommandInfo, ApplicationCommandInvocation,
-    AttachmentDownloadId, BuiltinSlashCommandParse, BuiltinSlashCommandSubmit,
-    DownloadAttachmentSource, ForumPostArchiveState, GlobalUserProfileUpdate,
-    GuildUserProfileUpdate, Id, MAX_UPLOAD_ATTACHMENT_COUNT, MediaPlaybackSource,
-    MediaPlaybackTarget, MessageAttachmentUpload, MessageSearchQuery, MuteDuration, ReactionEmoji,
-    ReplyReference, StreamCaptureTargetsRequestId, UserProfileUpdate,
-    VoiceParticipantPlaybackSettings, VoiceParticipantVolumePercent, VoiceScope,
+    ActivityInfo, ActivityKind, AppCommand, AppEvent, ApplicationCommandInfo,
+    ApplicationCommandInvocation, AttachmentDownloadId, BuiltinSlashCommandParse,
+    BuiltinSlashCommandSubmit, DownloadAttachmentSource, ForumPostArchiveState,
+    GlobalUserProfileUpdate, GuildUserProfileUpdate, Id, MAX_UPLOAD_ATTACHMENT_COUNT,
+    MediaPlaybackSource, MediaPlaybackTarget, MessageAttachmentUpload, MessageSearchQuery,
+    MuteDuration, PresenceStatus, ReactionEmoji, ReplyReference, StreamCaptureTargetsRequestId,
+    UserProfileUpdate, VoiceParticipantPlaybackSettings, VoiceParticipantVolumePercent, VoiceScope,
     VoiceVolumePercent, application_command_content_is_complete, marker, next_message_nonce,
     parse_builtin_slash_command,
     password_auth::{MfaMethod, PasswordAuthEvent},
@@ -261,6 +261,10 @@ pub struct Workspace {
     pub guild_muted: bool,
     /// Recent error-log lines, shown when the debug panel is open.
     pub debug_log: Option<Vec<String>>,
+    /// When this client last told the server it was typing.
+    pub last_typing: Option<std::time::Instant>,
+    /// Presence others see.
+    pub status: PresenceStatus,
     /// Whether sends go out as text-to-speech.
     pub send_as_tts: bool,
     /// A destructive action awaiting confirmation.
@@ -347,6 +351,8 @@ impl Workspace {
             voice_scope_joined: None,
             channel_muted: false,
             guild_muted: false,
+            last_typing: None,
+            status: PresenceStatus::Online,
             send_as_tts: false,
             confirming: None,
             selected_message: None,
@@ -413,6 +419,12 @@ impl Workspace {
     /// disk would silently log back in on the next launch, which is the
     /// opposite of what the action means.
     pub fn sign_out(&mut self, cx: &mut Context<Self>) {
+        // Told to the server first: a purely local sign-out leaves the session
+        // alive on Discord's side.
+        if let Some(handle) = &self.handle {
+            handle.send(AppCommand::SignOut);
+        }
+
         let _ = token_store::delete_token(self.options.credentials.store);
 
         // Drop everything session-scoped, so nothing from the old account is
@@ -643,6 +655,83 @@ impl Workspace {
         let height = self.message_scroll.bounds().size.height;
         self.message_scroll
             .set_offset(gpui::point(offset.x, offset.y + height * pages));
+    }
+
+    /// Tell the server this client is typing.
+    ///
+    /// Discord expects roughly one of these every ten seconds while composing,
+    /// so it is rate-limited here: sending on every keystroke would be a burst
+    /// of requests that reads as abusive traffic.
+    fn notify_typing(&mut self) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+
+        let now = std::time::Instant::now();
+        let due = self
+            .last_typing
+            .is_none_or(|last| now.duration_since(last).as_secs() >= 8);
+        if !due {
+            return;
+        }
+
+        self.last_typing = Some(now);
+        handle.send(AppCommand::TriggerTyping { channel_id });
+    }
+
+    /// Set the presence others see.
+    pub fn set_status(&mut self, status: PresenceStatus) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        self.status = status;
+        handle.send(AppCommand::UpdateCurrentUserStatus { status });
+    }
+
+    /// Set a custom status line.
+    pub fn set_custom_activity(&mut self, text: String) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+
+        let activities = if text.trim().is_empty() {
+            Vec::new()
+        } else {
+            vec![ActivityInfo {
+                kind: ActivityKind::Custom,
+                name: "Custom Status".to_string(),
+                // Discord carries a custom status in `state`, not `details`;
+                // putting it in the wrong field shows nothing to anyone.
+                state: Some(text),
+                details: None,
+                url: None,
+                application_id: None,
+                emoji: None,
+                timestamps: None,
+                assets: None,
+                party: None,
+                buttons: Vec::new(),
+            }]
+        };
+
+        handle.send(AppCommand::UpdateCurrentUserActivity {
+            status: self.status,
+            activities,
+            // Manual, so the RPC server must not overwrite it with a game.
+            track_client_id: None,
+        });
+    }
+
+    /// Leave the open guild.
+    pub fn leave_guild(&mut self) {
+        let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
+            return;
+        };
+        handle.send(AppCommand::LeaveGuild {
+            guild_id,
+            label: String::new(),
+        });
+        self.open_guild(None);
     }
 
     /// Widen or narrow the focused pane, persisting the width.
@@ -3778,7 +3867,7 @@ impl Workspace {
         )
     }
 
-    fn status_bar(&self) -> impl IntoElement {
+    fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         row()
             .w_full()
             .h(px(24.))
@@ -3789,6 +3878,31 @@ impl Workspace {
             .border_color(rgb(active().border))
             .text_size(px(scaled(text::XS)))
             .text_color(rgb(active().text_subtle))
+            .children(
+                [
+                    (0usize, "online", PresenceStatus::Online),
+                    (1, "idle", PresenceStatus::Idle),
+                    (2, "dnd", PresenceStatus::DoNotDisturb),
+                    (3, "invisible", PresenceStatus::Offline),
+                ]
+                .map(|(slot, label, status)| {
+                    gpui::div()
+                        .id(("status", slot))
+                        .px(px(space::SM))
+                        .rounded(px(layout::RADIUS))
+                        .cursor_pointer()
+                        .text_color(rgb(if self.status == status {
+                            active().text
+                        } else {
+                            active().text_subtle
+                        }))
+                        .child(label)
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.set_status(status);
+                            cx.notify();
+                        }))
+                }),
+            )
             .child(presence_dot(if self.model.connected {
                 Presence::Online
             } else {
@@ -4226,6 +4340,9 @@ impl Render for Workspace {
                                 this.send_message();
                             } else {
                                 this.refresh_slash();
+                                if !this.composer.is_empty() {
+                                    this.notify_typing();
+                                }
                             }
                         }
                     }
@@ -4266,7 +4383,7 @@ impl Render for Workspace {
                             |d| d.child(self.member_pane(cx)),
                         ),
                 )
-                .child(self.status_bar())
+                .child(self.status_bar(cx))
             })
     }
 }
