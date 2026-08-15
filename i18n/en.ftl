@@ -174,3 +174,21 @@ hint-animate-images = Turn off on slow hardware
 toggle-notification-sounds = Notification sounds
 hint-notification-sounds = Separate from the popup
 settings-voice = Voice & Audio
+
+label-activity = Activity
+label-activity-name = Name
+hint-activity-name = What you are doing
+label-activity-details = Details
+hint-activity-details = The line under it
+label-activity-state = State
+hint-activity-state = The line under that
+action-clear-activity = Clear
+activity-playing = Playing
+activity-listening = Listening to
+activity-watching = Watching
+activity-competing = Competing in
+activity-streaming = Streaming
+activity-custom = Custom
+
+action-set-status = set status
+action-set-activity = set activity

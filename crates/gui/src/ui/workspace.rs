@@ -248,6 +248,92 @@ pub enum SwitcherPurpose {
 }
 
 /// One open channel tab.
+/// The verb Discord puts in front of an activity name.
+///
+/// Translated here rather than in the core because the core's verb is part of
+/// the wire-facing display line, and a translated one there would change what
+/// gets stored and compared.
+fn activity_kind_label(kind: ActivityKind) -> String {
+    match kind {
+        ActivityKind::Playing => t!("activity-playing"),
+        ActivityKind::Listening => t!("activity-listening"),
+        ActivityKind::Watching => t!("activity-watching"),
+        ActivityKind::Competing => t!("activity-competing"),
+        ActivityKind::Streaming => t!("activity-streaming"),
+        ActivityKind::Custom | ActivityKind::Unknown => t!("activity-custom"),
+    }
+}
+
+/// An activity being composed.
+///
+/// One editor per field rather than one shared one, so switching fields keeps
+/// what was typed in the others - a form that forgets is worse than no form.
+pub struct ActivityDraft {
+    pub kind: ActivityKind,
+    pub fields: [Composer; ActivityDraft::FIELDS],
+    pub focused: usize,
+}
+
+impl ActivityDraft {
+    pub const FIELDS: usize = 3;
+
+    /// The kinds worth offering.
+    ///
+    /// Streaming is left out because it renders as nothing without a verified
+    /// Twitch or YouTube URL, and Custom has its own simpler prompt.
+    pub const KINDS: [ActivityKind; 4] = [
+        ActivityKind::Playing,
+        ActivityKind::Listening,
+        ActivityKind::Watching,
+        ActivityKind::Competing,
+    ];
+
+    /// What the draft broadcasts.
+    ///
+    /// An empty name yields nothing rather than a nameless activity, which
+    /// Discord happily shows to everyone as a blank line.
+    fn to_activities(&self) -> Vec<ActivityInfo> {
+        let name = self.fields[0].text().trim().to_owned();
+        if name.is_empty() {
+            return Vec::new();
+        }
+        let text = |index: usize| {
+            let value = self.fields[index].text().trim().to_owned();
+            (!value.is_empty()).then_some(value)
+        };
+        vec![ActivityInfo {
+            kind: self.kind,
+            name,
+            details: text(1),
+            state: text(2),
+            url: None,
+            application_id: None,
+            emoji: None,
+            timestamps: None,
+            assets: None,
+            party: None,
+            buttons: Vec::new(),
+        }]
+    }
+
+    fn from_current(current: Option<&ActivityInfo>) -> Self {
+        let mut draft = Self {
+            kind: current
+                .map(|activity| activity.kind)
+                .filter(|kind| Self::KINDS.contains(kind))
+                .unwrap_or(ActivityKind::Playing),
+            fields: std::array::from_fn(|_| Composer::default()),
+            focused: 0,
+        };
+        if let Some(activity) = current {
+            draft.fields[0].set_text(&activity.name);
+            draft.fields[1].set_text(activity.details.as_deref().unwrap_or_default());
+            draft.fields[2].set_text(activity.state.as_deref().unwrap_or_default());
+        }
+        draft
+    }
+}
+
 pub struct ChannelTab {
     pub channel_id: Id<marker::ChannelMarker>,
     /// The guild it was opened from, so switching tabs restores the sidebar
@@ -545,6 +631,10 @@ pub struct Workspace {
     pub custom_status: String,
     /// Custom status being typed, when the editor is open.
     pub editing_status: Option<Composer>,
+    /// The activity being composed, if the editor is open.
+    pub editing_activity: Option<ActivityDraft>,
+    /// What is currently being broadcast, so the editor reopens on it.
+    pub current_activity: Option<ActivityInfo>,
     /// The user's keymap, shared with the TUI.
     pub keymap: Keymap,
     /// Complaints from the config parsers, shown once at startup.
@@ -670,6 +760,8 @@ impl Workspace {
             invite: None,
             custom_status: String::new(),
             editing_status: None,
+            editing_activity: None,
+            current_activity: None,
             keymap,
             config_warnings,
             locally_muted: std::collections::HashSet::new(),
@@ -1097,6 +1189,47 @@ impl Workspace {
         };
         self.status = status;
         handle.send(AppCommand::UpdateCurrentUserStatus { status });
+    }
+
+    /// Open the activity editor, seeded with whatever is being broadcast.
+    pub fn open_activity_editor(&mut self) {
+        self.editing_activity = Some(ActivityDraft::from_current(self.current_activity.as_ref()));
+    }
+
+    /// Send the composed activity.
+    ///
+    /// An empty name clears rather than broadcasting a nameless activity,
+    /// which Discord shows as an empty line to everyone who looks.
+    pub fn submit_activity(&mut self) {
+        let Some(draft) = self.editing_activity.take() else {
+            return;
+        };
+        let Some(handle) = &self.handle else {
+            return;
+        };
+
+        let activities = draft.to_activities();
+        self.current_activity = activities.first().cloned();
+
+        handle.send(AppCommand::UpdateCurrentUserActivity {
+            status: self.status,
+            activities,
+            // Typed by hand, so an RPC-detected game must not replace it.
+            track_client_id: None,
+        });
+    }
+
+    /// Stop broadcasting an activity.
+    pub fn clear_activity(&mut self) {
+        self.editing_activity = None;
+        self.current_activity = None;
+        if let Some(handle) = &self.handle {
+            handle.send(AppCommand::UpdateCurrentUserActivity {
+                status: self.status,
+                activities: Vec::new(),
+                track_client_id: None,
+            });
+        }
     }
 
     /// Set a custom status line.
@@ -1609,6 +1742,7 @@ impl Workspace {
             || self.confirming.take().is_some()
             || self.prompt.take().is_some()
             || self.editing_status.take().is_some()
+            || self.editing_activity.take().is_some()
             || self.renaming_folder.take().is_some()
             || self.picker.take().is_some()
             || self.stream_picker.take().is_some()
@@ -4760,6 +4894,25 @@ impl Workspace {
     /// represented in the state store, such as transient errors.
     fn absorb(&mut self, event: AppEvent) {
         match &event {
+            // Our own presence, so the activity button and the editor show
+            // what is actually being broadcast - including when another
+            // client or the RPC socket set it rather than this one.
+            AppEvent::PresenceUpdate { presence, .. }
+                if Some(presence.user_id) == self.current_user =>
+            {
+                self.status = presence.status;
+                self.current_activity = presence
+                    .activities
+                    .iter()
+                    .find(|activity| activity.kind != ActivityKind::Custom)
+                    .cloned();
+                self.custom_status = presence
+                    .activities
+                    .iter()
+                    .find(|activity| activity.kind == ActivityKind::Custom)
+                    .and_then(|activity| activity.state.clone())
+                    .unwrap_or_default();
+            }
             // A reconnect can have dropped messages while the socket was down.
             // Neither paging direction fills that hole, because both extend
             // from what is already cached.
@@ -5974,6 +6127,84 @@ impl Workspace {
             )));
         }
 
+        if let Some(draft) = &self.editing_activity {
+            let kinds: Vec<(String, bool)> = ActivityDraft::KINDS
+                .iter()
+                .map(|kind| (activity_kind_label(*kind), *kind == draft.kind))
+                .collect();
+            let labels = [
+                ("label-activity-name", "hint-activity-name"),
+                ("label-activity-details", "hint-activity-details"),
+                ("label-activity-state", "hint-activity-state"),
+            ];
+            let fields: Vec<overlay::ActivityField> = labels
+                .iter()
+                .enumerate()
+                .map(|(index, (label, hint))| overlay::ActivityField {
+                    label: t!(*label),
+                    placeholder: t!(*hint),
+                    value: draft.fields[index].text().to_owned(),
+                    focused: draft.focused == index,
+                })
+                .collect();
+
+            return Some(overlay::scrim().child(overlay::activity_editor_view(
+                &kinds,
+                &fields,
+                {
+                    let entity = entity.clone();
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            if let Some(draft) = &mut workspace.editing_activity
+                                && let Some(kind) = ActivityDraft::KINDS.get(index)
+                            {
+                                draft.kind = *kind;
+                            }
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            if let Some(draft) = &mut workspace.editing_activity {
+                                draft.focused = index.min(ActivityDraft::FIELDS - 1);
+                            }
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.submit_activity();
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.clear_activity();
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.editing_activity = None;
+                            cx.notify();
+                        });
+                    }
+                },
+            )));
+        }
+
         if let Some(text) = &self.editing_status {
             return Some(overlay::scrim().child(overlay::text_prompt_view(
                 "Custom status",
@@ -6803,12 +7034,33 @@ impl Workspace {
                     .text_color(rgb(active().text_subtle))
                     .hover(|style| style.text_color(rgb(active().text)))
                     .child(if self.custom_status.is_empty() {
-                        "set status".to_string()
+                        t!("action-set-status")
                     } else {
                         self.custom_status.clone()
                     })
                     .on_click(cx.listener(|this, _event, _window, cx| {
                         this.editing_status = Some(Composer::default());
+                        cx.notify();
+                    })),
+            )
+            // The activity sits next to the status because they are the two
+            // halves of the same thing - what others see under your name.
+            .child(
+                gpui::div()
+                    .id("set-activity")
+                    .px(px(space::SM))
+                    .rounded(px(layout::RADIUS))
+                    .cursor_pointer()
+                    .text_color(rgb(active().text_subtle))
+                    .hover(|style| style.text_color(rgb(active().text)))
+                    .child(match &self.current_activity {
+                        Some(activity) => {
+                            format!("{} {}", activity_kind_label(activity.kind), activity.name)
+                        }
+                        None => t!("action-set-activity"),
+                    })
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.open_activity_editor();
                         cx.notify();
                     })),
             )
@@ -7037,6 +7289,7 @@ impl Render for Workspace {
                         let modal_text = this.pane_filter.is_some()
                             || this.prompt.is_some()
                             || this.editing_status.is_some()
+                            || this.editing_activity.is_some()
                             || this.renaming_folder.is_some()
                             // The search panel owns typing whenever it is open;
                             // it has no separate focus flag.
@@ -7110,6 +7363,39 @@ impl Render for Workspace {
                                         .flatten();
                                     if let Some((_, text)) = &mut this.prompt {
                                         text.handle_key_with_clipboard(event, pasted);
+                                    }
+                                }
+                            }
+                        } else if this.editing_activity.is_some() {
+                            match key {
+                                "escape" => this.editing_activity = None,
+                                "enter" => this.submit_activity(),
+                                // Tab walks the form, which is what a form is
+                                // expected to do and cheaper than reaching for
+                                // the mouse between three short fields.
+                                "tab" => {
+                                    if let Some(draft) = &mut this.editing_activity {
+                                        let back = event.keystroke.modifiers.shift;
+                                        draft.focused = if back {
+                                            (draft.focused + ActivityDraft::FIELDS - 1)
+                                                % ActivityDraft::FIELDS
+                                        } else {
+                                            (draft.focused + 1) % ActivityDraft::FIELDS
+                                        };
+                                    }
+                                }
+                                _ => {
+                                    let pasted = (key == "v"
+                                        && (event.keystroke.modifiers.control
+                                            || event.keystroke.modifiers.platform))
+                                        .then(|| {
+                                            cx.read_from_clipboard().and_then(|item| item.text())
+                                        })
+                                        .flatten();
+                                    if let Some(draft) = &mut this.editing_activity {
+                                        let focused = draft.focused;
+                                        draft.fields[focused]
+                                            .handle_key_with_clipboard(event, pasted);
                                     }
                                 }
                             }
@@ -7440,5 +7726,82 @@ pub fn image_format_for(url: &str) -> Option<gpui::ImageFormat> {
         "bmp" => Some(gpui::ImageFormat::Bmp),
         "tiff" | "tif" => Some(gpui::ImageFormat::Tiff),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod activity_tests {
+    use super::*;
+
+    fn draft(kind: ActivityKind, values: [&str; ActivityDraft::FIELDS]) -> ActivityDraft {
+        let mut draft = ActivityDraft::from_current(None);
+        draft.kind = kind;
+        for (field, value) in draft.fields.iter_mut().zip(values) {
+            field.set_text(value);
+        }
+        draft
+    }
+
+    #[test]
+    fn a_named_activity_carries_its_three_lines() {
+        let activities = draft(
+            ActivityKind::Listening,
+            ["a record", "side two", "on vinyl"],
+        )
+        .to_activities();
+
+        assert_eq!(activities.len(), 1);
+        assert_eq!(activities[0].kind, ActivityKind::Listening);
+        assert_eq!(activities[0].name, "a record");
+        assert_eq!(activities[0].details.as_deref(), Some("side two"));
+        assert_eq!(activities[0].state.as_deref(), Some("on vinyl"));
+    }
+
+    #[test]
+    fn empty_optional_lines_are_omitted_rather_than_sent_blank() {
+        let activities = draft(ActivityKind::Playing, ["chess", "  ", ""]).to_activities();
+
+        assert_eq!(activities[0].details, None);
+        assert_eq!(activities[0].state, None);
+    }
+
+    #[test]
+    fn a_nameless_activity_broadcasts_nothing() {
+        // Otherwise everyone who looks at the profile sees an empty line under
+        // the name, which reads as a bug rather than as no activity.
+        assert!(
+            draft(ActivityKind::Playing, ["   ", "details", ""])
+                .to_activities()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn reopening_the_editor_shows_what_is_being_broadcast() {
+        let current = draft(ActivityKind::Watching, ["a film", "reel one", ""])
+            .to_activities()
+            .remove(0);
+        let reopened = ActivityDraft::from_current(Some(&current));
+
+        assert_eq!(reopened.kind, ActivityKind::Watching);
+        assert_eq!(reopened.fields[0].text(), "a film");
+        assert_eq!(reopened.fields[1].text(), "reel one");
+        assert_eq!(reopened.fields[2].text(), "");
+    }
+
+    #[test]
+    fn a_kind_the_editor_does_not_offer_falls_back_rather_than_vanishing() {
+        // A custom status or an RPC stream reopens as Playing: the editor has
+        // no control for those kinds, and silently keeping one would send it
+        // back unchanged with whatever the user typed attached to it.
+        let mut custom = draft(ActivityKind::Playing, ["something", "", ""])
+            .to_activities()
+            .remove(0);
+        custom.kind = ActivityKind::Streaming;
+
+        assert_eq!(
+            ActivityDraft::from_current(Some(&custom)).kind,
+            ActivityKind::Playing
+        );
     }
 }

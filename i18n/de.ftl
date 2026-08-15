@@ -172,3 +172,21 @@ hint-animate-images = Auf langsamer Hardware ausschalten
 toggle-notification-sounds = Benachrichtigungstöne
 hint-notification-sounds = Unabhängig vom Hinweisfenster
 settings-voice = Sprache & Audio
+
+label-activity = Aktivität
+label-activity-name = Name
+hint-activity-name = Was du gerade tust
+label-activity-details = Details
+hint-activity-details = Die Zeile darunter
+label-activity-state = Status
+hint-activity-state = Die Zeile darunter
+action-clear-activity = Löschen
+activity-playing = Spielt
+activity-listening = Hört
+activity-watching = Schaut
+activity-competing = Tritt an in
+activity-streaming = Streamt
+activity-custom = Benutzerdefiniert
+
+action-set-status = Status setzen
+action-set-activity = Aktivität setzen

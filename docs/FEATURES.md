@@ -42,7 +42,7 @@ third-party Discord clients actually expect.
 | Cross-platform | 17 | partial |
 | Token login | 16 | done |
 | Keybindings / vim | 16 | done |
-| Rich presence / activity | 15 | partial |
+| Rich presence / activity | 15 | yes |
 | Reactions | 14 | done |
 | Moderation (kick/ban) | 14 | done |
 | Voice / calls | 14 | done |
@@ -117,7 +117,13 @@ Upload, rename and delete guild emoji.
 
 ## Partial
 
-- **Rich presence / activity** — Custom status works; showing and setting full activities does not. Tracked as task 7.
+- **Rich presence / activity** - Both clients show activities and can set one.
+  The GUI's editor offers Playing, Listening, Watching and Competing plus the
+  three lines Discord renders; Streaming is left out because it shows nothing
+  without a verified stream URL, and a custom status keeps its own prompt.
+  An activity set elsewhere - another client, or a local app over the RPC
+  socket - is absorbed from our own presence update, so the button shows what
+  is really being broadcast rather than only what this client last sent.
 - **Server management** — Kick, ban, timeout and roles are done. Invites, emoji and audit log are not.
 - **Invite management** — Joining by invite works. Creating, listing and revoking invites does not.
 - **Animated emoji and avatars** — These already worked; the survey entry was

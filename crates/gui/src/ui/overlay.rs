@@ -820,3 +820,135 @@ pub fn risk_warning_view(
                 )),
         )
 }
+
+/// One field of the activity editor.
+pub struct ActivityField {
+    pub label: String,
+    pub placeholder: String,
+    pub value: String,
+    /// Which field typing goes into, since only one caret can be live.
+    pub focused: bool,
+}
+
+/// A rich activity: what kind it is, and the three lines Discord shows.
+///
+/// Beyond a custom status, which is all the GUI could set before. The kinds
+/// offered are the ones a user can honestly claim - Streaming is excluded
+/// because it needs a verified stream URL to render as anything, and Custom
+/// has its own simpler prompt.
+pub fn activity_editor_view(
+    kinds: &[(String, bool)],
+    fields: &[ActivityField],
+    on_kind: impl Fn(usize, &mut gpui::App) + Clone + 'static,
+    on_field: impl Fn(usize, &mut gpui::App) + Clone + 'static,
+    on_save: impl Fn(&mut gpui::App) + 'static,
+    on_clear: impl Fn(&mut gpui::App) + 'static,
+    on_cancel: impl Fn(&mut gpui::App) + 'static,
+) -> Div {
+    let mut kind_row = row()
+        .w_full()
+        .px(px(space::LG))
+        .py(px(space::SM))
+        .gap(px(space::XS))
+        .flex_wrap();
+
+    for (index, (label, selected)) in kinds.iter().enumerate() {
+        let pick = on_kind.clone();
+        kind_row = kind_row.child(
+            gpui::div()
+                .id(("activity-kind", index))
+                .px(px(space::SM))
+                .py(px(space::XS))
+                .rounded(px(4.))
+                .cursor_pointer()
+                .text_size(px(scaled(text::SM)))
+                .bg(rgb(if *selected {
+                    active().accent
+                } else {
+                    active().surface
+                }))
+                .text_color(rgb(if *selected {
+                    active().text
+                } else {
+                    active().text_muted
+                }))
+                .hover(|style| style.bg(rgb(active().surface_hover)))
+                .on_click(move |_event, _window, cx| pick(index, cx))
+                .child(label.clone()),
+        );
+    }
+
+    let mut form = column().w_full();
+    for (index, field) in fields.iter().enumerate() {
+        let focus = on_field.clone();
+        form = form.child(
+            column()
+                .id(("activity-field", index))
+                .w_full()
+                .px(px(space::LG))
+                .py(px(space::XS))
+                .gap(px(space::XS))
+                .cursor_pointer()
+                .on_click(move |_event, _window, cx| focus(index, cx))
+                .child(
+                    gpui::div()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().text_subtle))
+                        .child(field.label.clone()),
+                )
+                .child(
+                    gpui::div()
+                        .w_full()
+                        .px(px(space::SM))
+                        .py(px(space::XS))
+                        .rounded(px(4.))
+                        .border_1()
+                        // The border carries the focus, because a caret alone
+                        // is easy to lose in a form of near-identical rows.
+                        .border_color(rgb(if field.focused {
+                            active().accent
+                        } else {
+                            active().border
+                        }))
+                        .text_size(px(scaled(text::SM)))
+                        .text_color(rgb(if field.value.is_empty() {
+                            active().text_subtle
+                        } else {
+                            active().text
+                        }))
+                        .child(if field.value.is_empty() {
+                            field.placeholder.clone()
+                        } else {
+                            field.value.clone()
+                        }),
+                ),
+        );
+    }
+
+    panel(&t!("label-activity"), 420.)
+        .child(kind_row)
+        .child(form)
+        .child(
+            row()
+                .w_full()
+                .px(px(space::LG))
+                .py(px(space::MD))
+                .gap(px(space::SM))
+                .justify_end()
+                // Clearing is its own button rather than "save an empty name":
+                // stopping a broadcast should not require guessing that.
+                .child(button(
+                    "activity-clear",
+                    &t!("action-clear-activity"),
+                    false,
+                    on_clear,
+                ))
+                .child(button(
+                    "activity-cancel",
+                    &t!("action-cancel"),
+                    false,
+                    on_cancel,
+                ))
+                .child(button("activity-save", &t!("action-save"), true, on_save)),
+        )
+}
