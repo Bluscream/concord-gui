@@ -5,7 +5,7 @@
 //! rebuilds from `DiscordState` on every snapshot revision. Nothing here
 //! touches core types directly except to issue commands.
 
-use concord::config::{self, AppOptions, CredentialStoreMode};
+use concord::config::{self, AppOptions, CredentialStoreMode, UiStateOptions};
 use concord::discord::{
     AppCommand, AppEvent, ApplicationCommandInfo, ApplicationCommandInvocation,
     AttachmentDownloadId, BuiltinSlashCommandParse, BuiltinSlashCommandSubmit,
@@ -143,6 +143,14 @@ impl WorkspaceModel {
     }
 }
 
+/// A pane that can be shown or hidden.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Pane {
+    Guilds,
+    Channels,
+    Members,
+}
+
 /// One entry in the mention inbox.
 pub struct InboxMention {
     pub channel_id: Id<marker::ChannelMarker>,
@@ -219,6 +227,10 @@ pub struct Workspace {
     pub channel_muted: bool,
     /// Whether the open guild is muted.
     pub guild_muted: bool,
+    /// Scroll position of the message list, so navigation can move it.
+    pub message_scroll: gpui::ScrollHandle,
+    /// Pane visibility and widths, shared with the TUI through ui_state.toml.
+    pub ui_state: UiStateOptions,
     /// Slash commands published by bots in the open guild.
     pub app_commands: Vec<ApplicationCommandInfo>,
     /// The authenticated user, once READY reports it.
@@ -291,6 +303,10 @@ impl Workspace {
             voice_scope_joined: None,
             channel_muted: false,
             guild_muted: false,
+            message_scroll: gpui::ScrollHandle::new(),
+            ui_state: config::load_ui_state_options_with_warnings()
+                .map(|(options, _)| options)
+                .unwrap_or_default(),
             app_commands: Vec::new(),
             current_user: None,
             slash: None,
@@ -549,6 +565,37 @@ impl Workspace {
             },
         });
         true
+    }
+
+    /// Move the message viewport by a fraction of its height.
+    ///
+    /// A fraction rather than a fixed pixel count, so half-page means the same
+    /// thing on a tall window as on a short one.
+    fn scroll_by_pages(&mut self, pages: f32) {
+        let offset = self.message_scroll.offset();
+        let height = self.message_scroll.bounds().size.height;
+        self.message_scroll
+            .set_offset(gpui::point(offset.x, offset.y + height * pages));
+    }
+
+    /// Show or hide a pane, persisting the choice.
+    ///
+    /// Written through the same ui_state the TUI uses, so a layout chosen in
+    /// one client is the layout in the other.
+    fn toggle_pane(&mut self, pane: Pane) {
+        let state = &mut self.ui_state;
+        let field = match pane {
+            Pane::Guilds => &mut state.guild_pane_visible,
+            Pane::Channels => &mut state.channel_pane_visible,
+            Pane::Members => &mut state.member_pane_visible,
+        };
+        *field = !*field;
+
+        // Persisted immediately: a layout that reverted on restart would be
+        // worse than one that could not be changed.
+        if let Err(error) = config::save_ui_state_options(&self.ui_state) {
+            tracing::debug!("could not save pane layout: {error}");
+        }
     }
 
     /// Fetch the slash commands available in the open guild.
@@ -3227,6 +3274,7 @@ impl Workspace {
             )
             .child(message_list(
                 &self.messages,
+                &self.message_scroll,
                 self.options.display.show_avatars,
                 self.options.display.circular_avatars,
                 self.options.display.hour_format_24,
@@ -3554,6 +3602,26 @@ impl Render for Workspace {
                             && event.keystroke.modifiers.shift
                         {
                             this.compose_externally(cx);
+                        } else if event.keystroke.modifiers.control && matches!(key, "d" | "u") {
+                            // ctrl-d / ctrl-u: half page, as in vim and less.
+                            this.scroll_by_pages(if key == "d" { 0.5 } else { -0.5 });
+                        } else if event.keystroke.modifiers.control && matches!(key, "home" | "end")
+                        {
+                            if key == "home" {
+                                this.message_scroll
+                                    .set_offset(gpui::point(gpui::px(0.), gpui::px(0.)));
+                            } else {
+                                this.message_scroll.scroll_to_bottom();
+                            }
+                        } else if event.keystroke.modifiers.control
+                            && matches!(key, "1" | "2" | "3")
+                        {
+                            let pane = match key {
+                                "1" => Pane::Guilds,
+                                "2" => Pane::Channels,
+                                _ => Pane::Members,
+                            };
+                            this.toggle_pane(pane);
                         } else if key == "i" && event.keystroke.modifiers.control {
                             this.open_inbox();
                         } else if key == "f" && event.keystroke.modifiers.control {
@@ -3650,8 +3718,12 @@ impl Render for Workspace {
                         .flex_1()
                         .w_full()
                         .overflow_hidden()
-                        .child(self.guild_rail(cx))
-                        .child(self.channel_sidebar(cx))
+                        .when(self.ui_state.guild_pane_visible, |d| {
+                            d.child(self.guild_rail(cx))
+                        })
+                        .when(self.ui_state.channel_pane_visible, |d| {
+                            d.child(self.channel_sidebar(cx))
+                        })
                         .child(self.content(window, cx))
                         // Right column precedence: profile, then search, then
                         // the member list. Only one occupies it at a time so

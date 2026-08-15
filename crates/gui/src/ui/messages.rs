@@ -95,6 +95,7 @@ pub enum MessageAction {
 /// so the list carries a stable id and scroll position survives re-renders.
 pub fn message_list(
     rows: &[MessageRow],
+    scroll: &gpui::ScrollHandle,
     show_avatars: bool,
     circular_avatars: bool,
     hour24: bool,
@@ -103,6 +104,9 @@ pub fn message_list(
 ) -> impl IntoElement {
     let mut list = column()
         .id("message-list")
+        // Tracked so navigation can drive it: paging and jumping need to move
+        // the viewport, not just re-render it.
+        .track_scroll(scroll)
         .flex_1()
         .w_full()
         .px(px(space::LG))

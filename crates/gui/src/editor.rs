@@ -120,9 +120,16 @@ fn spawn_editor(path: &PathBuf) -> Result<bool, EditorError> {
 }
 
 fn non_empty(variable: &str) -> Option<String> {
-    std::env::var(variable)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
+    usable(std::env::var(variable).ok())
+}
+
+/// Whether a configured value names an actual program.
+///
+/// Split out from the environment lookup so it can be tested without mutating
+/// process-global state: `set_var` races with other tests running in parallel,
+/// which made an earlier version of this test intermittently fail.
+fn usable(value: Option<String>) -> Option<String> {
+    value.filter(|value| !value.trim().is_empty())
 }
 
 /// Whether a program exists on PATH.
@@ -154,11 +161,12 @@ mod tests {
     }
 
     #[test]
-    fn an_unset_variable_reads_as_absent() {
+    fn a_blank_value_reads_as_absent() {
         // A variable set to whitespace is as good as unset; treating it as a
         // program name would spawn something nameless.
-        unsafe { std::env::set_var("CONCORD_TEST_EDITOR_BLANK", "   ") };
-        assert!(non_empty("CONCORD_TEST_EDITOR_BLANK").is_none());
-        unsafe { std::env::remove_var("CONCORD_TEST_EDITOR_BLANK") };
+        assert!(usable(Some("   ".to_string())).is_none());
+        assert!(usable(Some(String::new())).is_none());
+        assert!(usable(None).is_none());
+        assert_eq!(usable(Some("nvim".to_string())).as_deref(), Some("nvim"));
     }
 }
