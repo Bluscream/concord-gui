@@ -931,9 +931,9 @@ impl KeyBindings {
         match kind {
             GuildActionKind::MarkAsRead => vec![char_chord('m')],
             GuildActionKind::ToggleMute => vec![char_chord('u')],
+            GuildActionKind::JoinServer => vec![char_chord('j')],
             GuildActionKind::LeaveServer => vec![char_chord('l')],
             GuildActionKind::FolderSettings => vec![char_chord('r')],
-            GuildActionKind::NoActionsYet => Vec::new(),
         }
     }
 

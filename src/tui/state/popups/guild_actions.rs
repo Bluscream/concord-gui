@@ -86,15 +86,22 @@ impl DashboardState {
                     ActionAvailability::Enabled,
                 ),
                 GuildActionItem::new(
+                    GuildActionKind::JoinServer,
+                    "Join a server",
+                    ActionAvailability::Enabled,
+                ),
+                GuildActionItem::new(
                     GuildActionKind::LeaveServer,
                     "Leave server",
                     ActionAvailability::Enabled,
                 ),
             ],
+            // Joining works from the DM list too: it does not depend on which
+            // server is selected, so requiring one first would be arbitrary.
             Some(GuildPaneEntry::DirectMessages) => vec![GuildActionItem::new(
-                GuildActionKind::NoActionsYet,
-                "No server actions yet",
-                ActionAvailability::Disabled("select a server".to_owned()),
+                GuildActionKind::JoinServer,
+                "Join a server",
+                ActionAvailability::Enabled,
             )],
             Some(GuildPaneEntry::FolderHeader { folder, .. }) => {
                 vec![GuildActionItem::new(
@@ -186,6 +193,11 @@ impl DashboardState {
                             None
                         }
                     }
+                    GuildActionKind::JoinServer => {
+                        self.close_guild_action_menu();
+                        self.open_join_server();
+                        None
+                    }
                     GuildActionKind::LeaveServer => {
                         self.close_guild_action_menu();
                         self.open_current_guild_leave_confirmation();
@@ -196,7 +208,6 @@ impl DashboardState {
                         self.open_selected_folder_settings();
                         None
                     }
-                    GuildActionKind::NoActionsYet => None,
                 }
             }
             GuildActionMenuState::MuteDuration { selection } => {

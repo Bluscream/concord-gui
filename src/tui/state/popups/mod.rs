@@ -27,6 +27,7 @@ mod channel_switcher;
 mod diagnostics;
 mod forum_post;
 mod guild_actions;
+mod join_server;
 mod message_actions;
 mod notification_inbox;
 mod options;
@@ -37,6 +38,7 @@ mod thread_actions;
 mod thread_edit;
 mod user;
 mod voice_participant_audio;
+pub(in crate::tui) use join_server::JoinServerState;
 pub(in crate::tui) use voice_participant_audio::VoiceParticipantAudioField;
 use voice_participant_audio::{
     VOICE_PARTICIPANT_AUDIO_FIELD_COUNT, VoiceParticipantAudioPopupState,
@@ -134,6 +136,7 @@ define_modal_popups! {
     ThreadActionMenu(ThreadActionMenuState),
     ThreadDeleteConfirmation(ThreadDeleteConfirmationState),
     VoiceParticipantAudio(VoiceParticipantAudioPopupState),
+    JoinServer(JoinServerState),
 }
 
 /// The input behavior of the topmost visible popup layer.
@@ -1290,6 +1293,13 @@ impl PopupUiState {
     }
 
     modal_popup_accessors!(
+        join_server,
+        join_server_mut,
+        JoinServer,
+        JoinServerState,
+        state
+    );
+    modal_popup_accessors!(
         message_action_menu,
         message_action_menu_mut,
         MessageActionMenu,
@@ -1715,6 +1725,7 @@ impl DashboardState {
             }
             ActiveModalPopupKind::NotificationInbox => self.close_notification_inbox(),
             ActiveModalPopupKind::Search => self.close_search_popup(),
+            ActiveModalPopupKind::JoinServer => self.close_join_server(),
             ActiveModalPopupKind::ForumPostComposer => {
                 self.close_or_cancel_forum_post_composer();
             }
@@ -1975,6 +1986,11 @@ impl DashboardState {
                         ScrollablePopupTarget::ForumPostComposer,
                     ),
                 )
+            }
+            // A single field with no list to move through, so it navigates
+            // nowhere and every key that is not a control is text.
+            ModalPopup::JoinServer(_) => {
+                ActivePopupPolicy::text_entry(kind, ActivePopupInteraction::NoNavigation)
             }
             ModalPopup::ForumPostComposer(_) => {
                 ActivePopupPolicy::scrollable(kind, ScrollablePopupTarget::ForumPostComposer)

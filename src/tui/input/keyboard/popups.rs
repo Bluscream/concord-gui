@@ -11,6 +11,7 @@ use crate::tui::keybindings::{
 use crate::tui::state::{
     ActiveModalPopupKind, ConfirmationButton, DashboardState, PopupInputMode, PopupKeymapContext,
 };
+use crate::tui::text_input::TextEditAction;
 
 use super::is_key_sequence_cancel_key;
 
@@ -199,6 +200,9 @@ fn dispatch_popup_key(
         ),
         ActiveModalPopupKind::Search => {
             route_fallback_key(state, key, stage, handle_search_popup_key)
+        }
+        ActiveModalPopupKind::JoinServer => {
+            route_fallback_key(state, key, stage, handle_join_server_key)
         }
         ActiveModalPopupKind::ForumPostComposer => route_popup_key(
             state,
@@ -838,6 +842,37 @@ fn handle_search_popup_key(state: &mut DashboardState, key: KeyEvent) -> Option<
         }
         None => None,
     }
+}
+
+/// The join-server prompt: one field, plus submit and cancel.
+///
+/// Reuses the composer's key mapping so editing behaves the way every other
+/// text field in this client does, including any rebinding in keymap.toml.
+fn handle_join_server_key(state: &mut DashboardState, key: KeyEvent) -> Option<AppCommand> {
+    match state.key_bindings().composer_action(key) {
+        ComposerAction::Submit => return state.submit_join_server(),
+        ComposerAction::Close => state.close_join_server(),
+        ComposerAction::ClearInput => {
+            state.edit_join_server_input(TextEditAction::DeleteToLineStart);
+        }
+        ComposerAction::EditText(action) => {
+            state.edit_join_server_input(action);
+        }
+        ComposerAction::InsertChar(value) => {
+            state.insert_join_server_char(value);
+        }
+        // Invites are pasted far more often than typed, so this path matters
+        // more here than in most fields.
+        ComposerAction::PasteClipboard => state.request_paste_clipboard(),
+        // Newlines, the external editor, attachments and reply pings have no
+        // meaning in a one-line invite field.
+        ComposerAction::InsertNewline
+        | ComposerAction::OpenInEditor
+        | ComposerAction::RemoveLastAttachment
+        | ComposerAction::ToggleReplyPing
+        | ComposerAction::Ignore => {}
+    }
+    None
 }
 
 fn handle_message_url_picker_fixed_key(

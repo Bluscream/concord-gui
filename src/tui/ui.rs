@@ -78,9 +78,9 @@ use self::popups::{
     render_channel_action_menu, render_channel_switcher_popup, render_debug_log_popup,
     render_downloads_popup, render_emoji_reaction_picker, render_folder_settings_popup,
     render_forum_post_composer, render_forum_post_tag_picker, render_guild_action_menu,
-    render_guild_leave_confirmation, render_key_sequence_hint, render_keymap_help_popup,
-    render_long_message_confirmation, render_member_action_menu, render_message_action_menu,
-    render_message_confirmation, render_message_url_picker,
+    render_guild_leave_confirmation, render_join_server, render_key_sequence_hint,
+    render_keymap_help_popup, render_long_message_confirmation, render_member_action_menu,
+    render_message_action_menu, render_message_confirmation, render_message_url_picker,
     render_notification_inbox_mark_all_confirmation, render_notification_inbox_popup,
     render_options_popup, render_poll_vote_picker, render_quit_confirmation,
     render_reaction_users_popup, render_search_popup, render_stream_info,
@@ -342,6 +342,7 @@ pub(in crate::tui) fn render_with_message_viewport_plan(
     render_message_action_menu(frame, popup_area, state);
     render_thread_action_menu(frame, popup_area, state);
     render_message_url_picker(frame, popup_area, state);
+    render_join_server(frame, popup_area, state);
     render_long_message_confirmation(frame, popup_area, state);
     render_message_confirmation(frame, popup_area, state);
     render_quit_confirmation(frame, popup_area, state);

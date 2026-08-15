@@ -851,9 +851,9 @@ impl GuildActionKind {
 
     fn name(self) -> &'static str {
         match self {
-            Self::NoActionsYet => "NoActionsYet",
             Self::MarkAsRead => "MarkAsRead",
             Self::ToggleMute => "ToggleMute",
+            Self::JoinServer => "JoinServer",
             Self::LeaveServer => "LeaveServer",
             Self::FolderSettings => "FolderSettings",
         }

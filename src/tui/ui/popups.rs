@@ -15,6 +15,7 @@ mod debug_log;
 mod downloads;
 mod folder_settings;
 mod forum_post;
+mod join_server;
 mod keymap;
 mod notification_inbox;
 mod options;
@@ -251,6 +252,7 @@ pub(super) use forum_post::{
     forum_post_composer_metrics, forum_post_composer_popup_area, forum_post_tag_picker_list_layout,
     render_forum_post_composer, render_forum_post_tag_picker,
 };
+pub(super) use join_server::render_join_server;
 #[cfg(test)]
 pub(super) use keymap::keymap_help_popup_lines;
 pub(super) use keymap::{
@@ -447,6 +449,12 @@ pub(super) fn background_media_occlusion_areas(
 fn active_modal_popup_area(frame_area: Rect, state: &DashboardState) -> Option<Rect> {
     let kind = state.active_modal_popup_kind()?;
     match kind {
+        ActiveModalPopupKind::JoinServer => Some(join_server::join_server_popup_area(
+            frame_area,
+            // Matches the renderer's own minimum, so the hit area and the
+            // drawn box cannot disagree.
+            0,
+        )),
         ActiveModalPopupKind::MessageActionMenu => {
             let actions = state.selected_message_action_items();
             (!actions.is_empty()).then(|| action_menu_area(frame_area, actions.len()))

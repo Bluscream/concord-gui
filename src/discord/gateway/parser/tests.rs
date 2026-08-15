@@ -3014,6 +3014,7 @@ fn message_create_parser_keeps_reply_preview() {
             author: "Alex".to_owned(),
             content: Some("잘되는군".to_owned()),
             sticker_names: Vec::new(),
+            stickers: Vec::new(),
             mentions: Vec::new(),
         })
     );

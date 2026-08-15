@@ -279,15 +279,17 @@ fn guild_action_menu_lists_disabled_mark_server_read_when_guild_is_read() {
 
     assert!(state.is_guild_action_menu_active());
     let actions = state.selected_guild_action_items();
-    assert_eq!(actions.len(), 3);
+    assert_eq!(actions.len(), 4);
     assert_eq!(actions[0].kind, GuildActionKind::MarkAsRead);
     assert_eq!(actions[0].label, "Mark server as read");
     assert!(!actions[0].is_enabled());
     assert_eq!(actions[0].disabled_reason(), Some("no unread messages"));
     assert_eq!(actions[1].kind, GuildActionKind::ToggleMute);
     assert_eq!(actions[1].label, "Mute server");
-    assert_eq!(actions[2].kind, GuildActionKind::LeaveServer);
-    assert_eq!(actions[2].label, "Leave server");
+    assert_eq!(actions[2].kind, GuildActionKind::JoinServer);
+    assert_eq!(actions[2].label, "Join a server");
+    assert_eq!(actions[3].kind, GuildActionKind::LeaveServer);
+    assert_eq!(actions[3].label, "Leave server");
     assert_eq!(state.activate_selected_guild_action(), None);
 }
 
@@ -459,7 +461,8 @@ fn guild_action_menu_leave_server_opens_confirmation() {
     state.focus_pane(FocusPane::Guilds);
     state.move_down();
     state.open_selected_guild_actions();
-    state.select_guild_action_row(2);
+    // Leaving moved down a row when joining was added above it.
+    state.select_guild_action_row(3);
 
     assert_eq!(state.activate_selected_guild_action(), None);
 
@@ -576,15 +579,93 @@ fn guild_action_menu_skips_hidden_channels_when_marking_server_read() {
 }
 
 #[test]
-fn direct_messages_keep_placeholder_guild_action() {
+fn direct_messages_offer_joining_a_server() {
     let mut state = DashboardState::new();
     state.focus_pane(FocusPane::Guilds);
     state.move_up();
     state.open_selected_guild_actions();
 
+    // The DM list used to show a disabled placeholder. Joining does not depend
+    // on which server is selected, so it is offered here rather than requiring
+    // the user to select a server they may not have yet.
     let actions = state.selected_guild_action_items();
     assert_eq!(actions.len(), 1);
-    assert_eq!(actions[0].kind, GuildActionKind::NoActionsYet);
-    assert_eq!(actions[0].label, "No server actions yet");
-    assert!(!actions[0].is_enabled());
+    assert_eq!(actions[0].kind, GuildActionKind::JoinServer);
+    assert_eq!(actions[0].label, "Join a server");
+    assert!(actions[0].is_enabled());
+}
+
+#[test]
+fn joining_a_server_previews_the_invite_before_accepting() {
+    use crate::discord::InvitePreview;
+
+    let mut state = state_with_many_guilds(1);
+    state.open_join_server();
+
+    // Nothing is joined on the first submit: an invite code says nothing about
+    // where it leads, so it is resolved and shown first.
+    state.insert_join_server_str("https://discord.gg/aBc-123");
+    let command = state.submit_join_server();
+    assert!(
+        matches!(command, Some(AppCommand::ResolveInvite { ref code }) if code == "aBc-123"),
+        "first submit must resolve, not join"
+    );
+
+    state.apply_resolved_invite(InvitePreview {
+        code: "aBc-123".to_owned(),
+        guild_name: "Rust Community".to_owned(),
+        already_joined: false,
+        ..InvitePreview::default()
+    });
+    assert!(
+        state
+            .join_server_state()
+            .is_some_and(|join| join.is_joinable())
+    );
+
+    // Only now does submitting join.
+    let command = state.submit_join_server();
+    assert!(
+        matches!(command, Some(AppCommand::AcceptInvite { ref code }) if code == "aBc-123"),
+        "second submit must accept the resolved invite"
+    );
+}
+
+#[test]
+fn an_invite_to_a_server_already_joined_cannot_be_accepted() {
+    use crate::discord::InvitePreview;
+
+    let mut state = state_with_many_guilds(1);
+    state.open_join_server();
+    state.apply_resolved_invite(InvitePreview {
+        code: "aBc-123".to_owned(),
+        guild_name: "Rust Community".to_owned(),
+        already_joined: true,
+        ..InvitePreview::default()
+    });
+
+    assert!(
+        !state
+            .join_server_state()
+            .is_some_and(|join| join.is_joinable())
+    );
+    // Submitting must do nothing rather than send a join for a guild the
+    // account is already in.
+    assert_eq!(state.submit_join_server(), None);
+}
+
+#[test]
+fn text_that_is_not_an_invite_is_refused_without_a_request() {
+    let mut state = state_with_many_guilds(1);
+    state.open_join_server();
+    state.insert_join_server_str("hello there");
+
+    assert_eq!(state.submit_join_server(), None);
+    assert!(
+        state
+            .join_server_state()
+            .and_then(|join| join.error())
+            .is_some(),
+        "the prompt must say why rather than silently doing nothing"
+    );
 }

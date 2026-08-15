@@ -72,6 +72,10 @@ pub(super) fn effect_forces_redraw(event: &AppEvent) -> bool {
             | AppEvent::AttachmentDownloadCompleted { .. }
             | AppEvent::AttachmentDownloadFailed { .. }
             | AppEvent::GatewayError { .. }
+            | AppEvent::InviteResolved { .. }
+            | AppEvent::InviteResolveFailed { .. }
+            | AppEvent::InviteAccepted { .. }
+            | AppEvent::InviteAcceptFailed { .. }
             | AppEvent::MediaPlaybackWindowReady { .. }
             | AppEvent::GatewayResumed
             | AppEvent::GatewayReidentified
@@ -180,6 +184,20 @@ fn push_dashboard_effect(event: AppEvent, ctx: &mut EffectContext<'_>) {
     if matches!(event, AppEvent::SignedOut) {
         ctx.state.sign_out();
         return;
+    }
+    // Invite results belong to the join-server prompt, which is the only
+    // thing that can act on them.
+    match event {
+        AppEvent::InviteResolved { preview } => {
+            ctx.state.apply_resolved_invite(preview);
+            return;
+        }
+        AppEvent::InviteResolveFailed { message, .. }
+        | AppEvent::InviteAcceptFailed { message, .. } => {
+            ctx.state.apply_invite_failure(message);
+            return;
+        }
+        _ => {}
     }
     if matches!(event, AppEvent::GatewayReidentified)
         && let Some(command) = ctx.state.selected_channel_subscription_command()

@@ -8,6 +8,15 @@ pub fn handle_paste(state: &mut DashboardState, text: &str) -> bool {
         return true;
     }
 
+    // The invite field, which is pasted into far more often than typed.
+    if state.join_server_state().is_some() {
+        let pasted: String = text.chars().filter(|value| *value != '\r').collect();
+        if pasted.is_empty() {
+            return false;
+        }
+        return state.insert_join_server_str(&pasted);
+    }
+
     if state.is_user_profile_popup_editing() {
         let pasted: String = text.chars().filter(|value| *value != '\r').collect();
         if pasted.is_empty() {

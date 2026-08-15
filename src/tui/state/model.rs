@@ -439,10 +439,10 @@ pub type ThreadActionItem = ActionItem<ThreadActionKind>;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum GuildActionKind {
-    NoActionsYet,
     MarkAsRead,
     ToggleMute,
     LeaveServer,
+    JoinServer,
     FolderSettings,
 }
 

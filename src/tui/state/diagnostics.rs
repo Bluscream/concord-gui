@@ -35,6 +35,7 @@ impl DashboardState {
 
     pub fn accepts_clipboard_paste(&self) -> bool {
         self.is_composing()
+            || self.join_server_state().is_some()
             || self.is_forum_post_composer_active()
             || self.is_user_profile_popup_editing()
             || self.accepts_user_profile_avatar_paste()

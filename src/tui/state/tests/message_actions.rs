@@ -37,6 +37,7 @@ fn message_action_items_reflect_message_and_channel_capabilities() {
             MessageActionKind::CopyContent,
             MessageActionKind::OpenReactionPicker,
             MessageActionKind::Reply,
+            MessageActionKind::Forward,
             MessageActionKind::OpenDeleteConfirmation,
             MessageActionKind::Edit,
             MessageActionKind::OpenUrl,
@@ -933,6 +934,7 @@ fn message_action_detects_urls_in_reply_quote_and_forwarded_snapshot() {
                 author: "alice".to_owned(),
                 content: Some("check https://reply.example/page".to_owned()),
                 sticker_names: Vec::new(),
+                stickers: Vec::new(),
                 mentions: Vec::new(),
             }),
             forwarded_snapshots: vec![MessageSnapshotInfo {
