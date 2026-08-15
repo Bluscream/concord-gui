@@ -394,6 +394,8 @@ pub struct Workspace {
     pub custom_status: String,
     /// Custom status being typed, when the editor is open.
     pub editing_status: Option<Composer>,
+    /// Complaints from the config parsers, shown once at startup.
+    pub config_warnings: Vec<String>,
     /// Participants muted locally, which no one else can see.
     pub locally_muted: std::collections::HashSet<Id<marker::UserMarker>>,
     /// A one-line prompt awaiting input: what it is for, and the text so far.
@@ -431,7 +433,18 @@ pub struct Workspace {
 
 impl Workspace {
     pub fn new(model: WorkspaceModel, screen: Screen, cx: &mut Context<Self>) -> Self {
-        let options = config::load_options().unwrap_or_default();
+        // Warnings are kept, not discarded. The parsers are deliberately
+        // tolerant - one bad line is skipped rather than failing the file -
+        // which means a typo silently does nothing unless it is reported.
+        let (options, mut config_warnings) =
+            config::load_options_with_warnings().unwrap_or_default();
+        let ui_state = match config::load_ui_state_options_with_warnings() {
+            Ok((ui_state, warnings)) => {
+                config_warnings.extend(warnings);
+                ui_state
+            }
+            Err(_) => Default::default(),
+        };
 
         Self {
             screen,
@@ -458,9 +471,7 @@ impl Workspace {
             pane_filter: None,
             debug_log: None,
             message_scroll: gpui::ScrollHandle::new(),
-            ui_state: config::load_ui_state_options_with_warnings()
-                .map(|(options, _)| options)
-                .unwrap_or_default(),
+            ui_state,
             app_commands: Vec::new(),
             current_user: None,
             slash: None,
@@ -479,6 +490,7 @@ impl Workspace {
             requested_previews: std::collections::HashSet::new(),
             custom_status: String::new(),
             editing_status: None,
+            config_warnings,
             locally_muted: std::collections::HashSet::new(),
             prompt: None,
             pending_sends: std::collections::HashMap::new(),
@@ -5313,6 +5325,28 @@ impl Workspace {
                     .text_color(rgb(active().danger))
                     .child(error.clone())
             }))
+            // Config complaints, listed once so a typo in config.toml is not
+            // indistinguishable from a setting that simply does nothing.
+            .children(
+                self.config_warnings
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, warning)| {
+                        gpui::div()
+                            .id(("config-warning", slot))
+                            .px(px(space::MD))
+                            .text_size(px(scaled(text::XS)))
+                            .text_color(rgb(active().danger))
+                            .cursor_pointer()
+                            // Clicking dismisses the whole list: they are startup
+                            // notices, not a log to work through.
+                            .child(format!("config: {warning}"))
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.config_warnings.clear();
+                                cx.notify();
+                            }))
+                    }),
+            )
             // Whether the last settings write actually landed. Silently
             // failing to persist a preference is worse than saying so.
             .children(self.settings_note.as_ref().map(|note| {
