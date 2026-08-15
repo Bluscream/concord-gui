@@ -87,6 +87,16 @@ pub(super) async fn run_dashboard(
             config::AppOptions::default()
         }
     };
+    // Language before the first draw. The TUI's own strings are not yet
+    // translated, but honouring the setting here keeps the two clients from
+    // disagreeing about which language is active.
+    crate::i18n::set_language(
+        options
+            .display
+            .language
+            .unwrap_or_else(crate::i18n::language_from_system),
+    );
+
     let ui_state_options = match config::load_ui_state_options_with_warnings() {
         Ok((options, warnings)) => {
             config_warnings.extend(warnings);

@@ -874,13 +874,11 @@ fn handle_command(
         | AppCommand::WatchVoiceStream { .. }
         | AppCommand::UpdateVoiceAudioSources { .. }
         | AppCommand::UpdateVoiceCapturePermission { .. }
-        | AppCommand::UpdateVoiceParticipantPlayback { .. } => {}
-
-        // No catch-all: the match is exhaustive on purpose. Demo mode is the
-        // default build while the project is pre-release, so a command with no
-        // arm would silently do nothing for anyone who has not signed in.
-        // Adding one to the core now fails to compile here instead - which is
-        // how the 36 that had gone unnoticed were meant to be caught.
+        | AppCommand::UpdateVoiceParticipantPlayback { .. } => {} // No catch-all: the match is exhaustive on purpose. Demo mode is the
+                                                                  // default build while the project is pre-release, so a command with no
+                                                                  // arm would silently do nothing for anyone who has not signed in.
+                                                                  // Adding one to the core now fails to compile here instead - which is
+                                                                  // how the 36 that had gone unnoticed were meant to be caught.
     }
 
     true

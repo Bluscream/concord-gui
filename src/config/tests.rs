@@ -42,6 +42,7 @@ fn global_disable_overrides_individual_toggles() {
         circular_avatars: false,
         hour_format_24: true,
         light_mode: false,
+        language: None,
     };
 
     assert!(!options.avatars_visible());
@@ -690,6 +691,7 @@ fn options_save_and_load_round_trip() {
             circular_avatars: true,
             hour_format_24: false,
             light_mode: false,
+            language: Some(crate::i18n::Language::German),
         },
         composer: ComposerOptions {
             emojis_as_links: true,

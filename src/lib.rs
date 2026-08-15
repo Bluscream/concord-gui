@@ -2,6 +2,7 @@ pub mod app;
 pub mod config;
 pub mod discord;
 pub mod error;
+pub mod i18n;
 pub mod logging;
 mod support;
 pub mod tui;

@@ -228,3 +228,108 @@ pub fn voice_participant_row(
                 .on_click(move |_event, _window, cx| on_toggle_mute(cx)),
         )
 }
+
+/// A hover tooltip.
+///
+/// GPUI supplies the mechanism but no view, so this is the one every tooltip
+/// in the client uses - one place to style them, and one place to make sure
+/// the text goes through translation.
+pub struct Tooltip {
+    text: gpui::SharedString,
+}
+
+impl Tooltip {
+    pub fn new(text: impl Into<gpui::SharedString>) -> Self {
+        Self { text: text.into() }
+    }
+}
+
+impl gpui::Render for Tooltip {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl IntoElement {
+        gpui::div()
+            .px(px(space::SM))
+            .py(px(space::XS))
+            .rounded(px(layout::RADIUS))
+            .bg(rgb(active().surface_sunken))
+            .border_1()
+            .border_color(rgb(active().border))
+            .text_size(px(scaled(text::XS)))
+            .text_color(rgb(active().text))
+            .child(self.text.clone())
+    }
+}
+
+/// An icon button: a glyph, a tooltip, and an active state.
+///
+/// Glyphs must come from the Basic Multilingual Plane. Emoji such as U+1F3A4
+/// render as empty boxes here - the shipped fonts have no colour-emoji
+/// coverage - which is what the first version of the voice controls did.
+/// Geometric and technical symbols (U+25xx, U+26xx, U+27xx) are safe.
+pub fn icon_button(
+    id: &'static str,
+    glyph: &'static str,
+    tooltip: &'static str,
+    active_state: bool,
+) -> gpui::Stateful<Div> {
+    gpui::div()
+        .id(id)
+        .w(px(28.))
+        .h(px(28.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(layout::RADIUS))
+        .cursor_pointer()
+        .text_size(px(scaled(text::BASE)))
+        .bg(rgb(if active_state {
+            active().danger
+        } else {
+            active().surface_sunken
+        }))
+        .text_color(rgb(if active_state {
+            active().on_accent
+        } else {
+            active().text_muted
+        }))
+        .hover(|style| style.bg(rgb(active().surface_hover)))
+        .child(glyph)
+        .tooltip(move |_window, cx| cx.new(|_| Tooltip::new(tooltip)).into())
+}
+
+/// A presence swatch with a tooltip, for picking a status.
+///
+/// Drawn rather than lettered: a filled circle always renders, where the
+/// obvious emoji for it does not.
+pub fn presence_swatch(
+    id: &'static str,
+    presence: Presence,
+    tooltip: &'static str,
+    selected: bool,
+) -> gpui::Stateful<Div> {
+    gpui::div()
+        .id(id)
+        .w(px(20.))
+        .h(px(20.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(layout::RADIUS))
+        .cursor_pointer()
+        .when(selected, |swatch| swatch.bg(rgb(active().surface_active)))
+        .hover(|style| style.bg(rgb(active().surface_hover)))
+        .child(
+            gpui::div()
+                .w(px(10.))
+                .h(px(10.))
+                .rounded_full()
+                .bg(rgb(presence.color(active())))
+                // An unselected status is dimmed rather than hidden, so the
+                // row reads as a set of choices with one of them current.
+                .when(!selected, |dot| dot.opacity(0.55)),
+        )
+        .tooltip(move |_window, cx| cx.new(|_| Tooltip::new(tooltip)).into())
+}

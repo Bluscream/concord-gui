@@ -21,6 +21,7 @@ use concord::discord::{
     password_auth::{MfaMethod, PasswordAuthEvent},
     qr_auth::QrEvent,
 };
+use concord::t;
 use concord::token_store;
 use gpui::{
     ClipboardItem, Context, FocusHandle, KeyDownEvent, PathPromptOptions, Window, WindowHandle,
@@ -38,8 +39,8 @@ use concord::tui::keybindings::external::Resolution;
 use crate::keymap::{self, Keymap};
 use crate::theme::{self, Presence, active, layout, scaled, space, text};
 use crate::ui::chrome::{
-    VoiceRow, avatar, avatar_with_url, column, header, panel_sunken, presence_dot, row,
-    section_label, sidebar_row, voice_participant_row,
+    VoiceRow, avatar, avatar_with_url, column, header, icon_button, panel_sunken, presence_dot,
+    presence_swatch, row, section_label, sidebar_row, voice_participant_row,
 };
 use crate::ui::composer::{ClipboardIntent, Composer, composer_view};
 use crate::ui::emoji::{self, EmojiPicker};
@@ -510,6 +511,15 @@ impl Workspace {
         // theme.toml, applied over the built-in palettes. Once per process:
         // active() is read thousands of times per frame.
         config_warnings.extend(theme::load_overrides());
+
+        // Language, before anything renders: every label reads it, and
+        // switching mid-frame would leave a half-translated window.
+        concord::i18n::set_language(
+            options
+                .display
+                .language
+                .unwrap_or_else(concord::i18n::language_from_system),
+        );
 
         let ui_state = match config::load_ui_state_options_with_warnings() {
             Ok((ui_state, warnings)) => {
@@ -3326,7 +3336,7 @@ impl Workspace {
                         gpui::div()
                             .text_size(px(14.))
                             .text_color(rgb(active().success))
-                            .child("📶"),
+                            .child("~"),
                     )
                     .child(
                         column()
@@ -3354,7 +3364,7 @@ impl Workspace {
                             .hover(|s| s.bg(rgb(active().surface_hover)))
                             .text_size(px(14.))
                             .text_color(rgb(active().danger))
-                            .child("📞")
+                            .child("\u{2715}")
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.leave_voice();
                                 cx.notify();
@@ -3368,58 +3378,38 @@ impl Workspace {
                     .gap(px(space::XS))
                     .justify_around()
                     .child(
-                        gpui::div()
-                            .id("card-mute")
-                            .flex_1()
-                            .h(px(28.))
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(layout::RADIUS))
-                            .bg(rgb(if mute {
-                                active().danger
+                        icon_button(
+                            "card-mute",
+                            if mute { "\u{2298}" } else { "\u{25CB}" },
+                            if mute {
+                                t!("action.unmute")
                             } else {
-                                active().surface_sunken
-                            }))
-                            .text_size(px(12.))
-                            .text_color(rgb(if mute {
-                                active().on_accent
-                            } else {
-                                active().text
-                            }))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(rgb(active().surface_hover)))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.toggle_voice_flag(false);
-                                cx.notify();
-                            }))
-                            .child(if mute { "🎤̸" } else { "🎤" }),
+                                t!("action.mute")
+                            },
+                            mute,
+                        )
+                        .flex_1()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.toggle_voice_flag(false);
+                            cx.notify();
+                        })),
                     )
                     .child(
-                        gpui::div()
-                            .id("card-deafen")
-                            .flex_1()
-                            .h(px(28.))
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(layout::RADIUS))
-                            .bg(rgb(if deaf {
-                                active().danger
+                        icon_button(
+                            "card-deafen",
+                            if deaf { "\u{2297}" } else { "\u{25D1}" },
+                            if deaf {
+                                t!("action.undeafen")
                             } else {
-                                active().surface_sunken
-                            }))
-                            .text_size(px(12.))
-                            .text_color(rgb(if deaf {
-                                active().on_accent
-                            } else {
-                                active().text
-                            }))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(rgb(active().surface_hover)))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.toggle_voice_flag(true);
-                                cx.notify();
-                            }))
-                            .child(if deaf { "🎧̸" } else { "🎧" }),
+                                t!("action.deafen")
+                            },
+                            deaf,
+                        )
+                        .flex_1()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.toggle_voice_flag(true);
+                            cx.notify();
+                        })),
                     )
                     .child(
                         gpui::div()
@@ -3447,49 +3437,31 @@ impl Workspace {
                             })),
                     )
                     .child(
-                        gpui::div()
-                            .id("card-devices")
-                            .flex_1()
-                            .h(px(28.))
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(layout::RADIUS))
-                            .bg(rgb(active().surface_sunken))
-                            .text_size(px(12.))
-                            .text_color(rgb(active().text))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(rgb(active().surface_hover)))
-                            .child("🎚")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.open_audio_devices();
-                                cx.notify();
-                            })),
+                        icon_button(
+                            "card-devices",
+                            "\u{2699}",
+                            t!("action.audio_devices"),
+                            false,
+                        )
+                        .flex_1()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.open_audio_devices();
+                            cx.notify();
+                        })),
                     )
                     .child(
-                        gpui::div()
-                            .id("card-mic-permission")
-                            .flex_1()
-                            .h(px(28.))
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(layout::RADIUS))
-                            .bg(rgb(if self.allow_microphone_transmit {
-                                active().surface_sunken
-                            } else {
-                                active().danger
-                            }))
-                            .text_size(px(12.))
-                            .text_color(rgb(active().text))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(rgb(active().surface_hover)))
-                            // Distinct from mute: this decides whether the
-                            // capture device is opened at all.
-                            .child("🎙")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                let allowed = !this.allow_microphone_transmit;
-                                this.set_microphone_allowed(allowed);
-                                cx.notify();
-                            })),
+                        icon_button(
+                            "card-mic-permission",
+                            "\u{25C9}",
+                            t!("action.microphone"),
+                            !self.allow_microphone_transmit,
+                        )
+                        .flex_1()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let allowed = !this.allow_microphone_transmit;
+                            this.set_microphone_allowed(allowed);
+                            cx.notify();
+                        })),
                     ),
             )
     }
@@ -3597,7 +3569,7 @@ impl Workspace {
                                 this.toggle_voice_flag(false);
                                 cx.notify();
                             }))
-                            .child(if mute { "🎤̸" } else { "🎤" }),
+                            .child(if mute { "\u{2298}" } else { "\u{25CB}" }),
                     )
                     .child(
                         gpui::div()
@@ -3627,7 +3599,7 @@ impl Workspace {
                                 this.toggle_voice_flag(true);
                                 cx.notify();
                             }))
-                            .child(if deaf { "🎧̸" } else { "🎧" }),
+                            .child(if deaf { "\u{2297}" } else { "\u{25D1}" }),
                     )
                     .child(
                         gpui::div()
@@ -6334,29 +6306,44 @@ impl Workspace {
             .border_color(rgb(active().border))
             .text_size(px(scaled(text::XS)))
             .text_color(rgb(active().text_subtle))
+            // Coloured dots rather than the words "online idle dnd invisible":
+            // the state is a colour everywhere else in the client, and the
+            // name belongs in a tooltip. Drawn rather than emoji - the obvious
+            // glyphs have no coverage in the shipped fonts and render as boxes.
             .children(
                 [
-                    (0usize, "online", PresenceStatus::Online),
-                    (1, "idle", PresenceStatus::Idle),
-                    (2, "dnd", PresenceStatus::DoNotDisturb),
-                    (3, "invisible", PresenceStatus::Offline),
+                    (
+                        "status-online",
+                        Presence::Online,
+                        PresenceStatus::Online,
+                        t!("presence.online"),
+                    ),
+                    (
+                        "status-idle",
+                        Presence::Idle,
+                        PresenceStatus::Idle,
+                        t!("presence.idle"),
+                    ),
+                    (
+                        "status-dnd",
+                        Presence::Dnd,
+                        PresenceStatus::DoNotDisturb,
+                        t!("presence.dnd"),
+                    ),
+                    (
+                        "status-invisible",
+                        Presence::Offline,
+                        PresenceStatus::Offline,
+                        t!("presence.invisible"),
+                    ),
                 ]
-                .map(|(slot, label, status)| {
-                    gpui::div()
-                        .id(("status", slot))
-                        .px(px(space::SM))
-                        .rounded(px(layout::RADIUS))
-                        .cursor_pointer()
-                        .text_color(rgb(if self.status == status {
-                            active().text
-                        } else {
-                            active().text_subtle
-                        }))
-                        .child(label)
-                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                .map(|(id, presence, status, tooltip)| {
+                    presence_swatch(id, presence, tooltip, self.status == status).on_click(
+                        cx.listener(move |this, _event, _window, cx| {
                             this.set_status(status);
                             cx.notify();
-                        }))
+                        }),
+                    )
                 }),
             )
             .child(

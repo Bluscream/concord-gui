@@ -15,6 +15,9 @@ pub const DEFAULT_MEMBER_LIST_WIDTH: u16 = 26;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DisplayOptions {
+    /// Interface language. `None` follows the system locale, which is what
+    /// someone who has never opened the setting expects.
+    pub language: Option<crate::i18n::Language>,
     pub disable_image_preview: bool,
     pub show_avatars: bool,
     pub show_images: bool,
@@ -660,6 +663,8 @@ impl Default for CredentialOptions {
 impl Default for DisplayOptions {
     fn default() -> Self {
         Self {
+            // Follows the system locale until the user chooses otherwise.
+            language: None,
             disable_image_preview: false,
             show_avatars: true,
             show_images: true,
