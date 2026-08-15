@@ -121,6 +121,63 @@ uses API v9 throughout, and deliberately avoids endpoints the web client does
 not itself use. New requests should follow that principle — if the official
 web client would not send it, think hard before we do.
 
+## Planned: merged multi-account
+
+The largest feature on the roadmap, described here because the design is
+specific and the details are what make it work.
+
+Several accounts are signed in at once and presented as **one client**: a
+single DM list, a single server list, a single unread state. The accounts are
+plumbing; the user should mostly not have to think about which one a
+conversation belongs to.
+
+### How a source is shown
+
+Avatars carry two pieces of information at once:
+
+- **A coloured ring** around the avatar is the person's online status - the
+  ring is presence, and nothing else.
+- **A small badge in the lower-right corner** is the *source*: the profile
+  picture of whichever of your accounts this DM or guild came through.
+
+So at a glance: the ring says how they are, the corner says who you are to
+them.
+
+### When several accounts share a conversation
+
+If two or more of your accounts have a DM with the same person, it is **one
+chat**, not two. Messages you sent appear under whichever account sent them,
+so the thread reads as a single conversation with your side attributed. The
+corner badge changes from one account's picture to a *multiple people* icon
+(the [flaticon 33308](https://cdn-icons-png.flaticon.com/512/33/33308.png)
+shape) to say "more than one of you is here".
+
+Guilds work the same way: a guild several of your accounts are in appears
+once, badged as multi-source.
+
+### Sending, when there is a choice
+
+Where only one account can send, sending just works. Where more than one
+could - a shared DM, a shared guild - the composer grows a **source selector
+on its left**, so the account being spoken as is visible before the message
+goes and changeable without leaving the input.
+
+### What this implies
+
+Worth knowing before starting:
+
+- The core is single-session today: one `DiscordState`, one gateway, one token.
+  Merging needs state keyed by account plus a merge layer above it, and that
+  layer belongs in `src/discord/` so both front ends get it - a merge done in
+  the GUI would have to be written twice and would drift.
+- The merge keys are the obvious ones: recipient user id for DMs, guild id for
+  guilds. Everything else - unread counts, read state, typing, notifications -
+  has to merge or dedupe on top of those.
+- Notifications need deduping, or a shared guild notifies once per account.
+- Several simultaneous sessions is exactly the pattern rule 6 warns about.
+  Reconnect behaviour should be gentle, and connecting many accounts at once
+  is worth a warning.
+
 ## Practical notes
 
 - **Building**: the host is immutable, so builds run in the `arch` distrobox

@@ -89,7 +89,13 @@ The single most common thing this fork lacks. Open several channels at once and 
 
 *3 clients* — TriCord, acheron, endcord
 
-One session per process today. Needs the token store, gateway and state to be keyed by account, which touches the core deeply.
+One session per process today. Needs the token store, gateway and state keyed
+by account, which touches the core deeply.
+
+The plan here goes further than any of those three: not an account switcher
+but a **merge** - one DM list, one server list, one unread state, with the
+source account shown as a corner badge on each avatar and a source selector in
+the composer when more than one account could send. Design in AGENTS.md.
 
 ### Video / camera
 
