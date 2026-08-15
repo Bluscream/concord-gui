@@ -35,13 +35,16 @@ called this list finished; it was not. What follows is the corrected set.
 
 | Feature | TUI action | Notes |
 |---|---|---|
-| Voice volume | `AdjustVolume`, `UpdateVoiceParticipantPlayback` | No output or per-participant volume control. |
-| Notification levels | `OpenNotificationOptions` | Only mute/unmute; no all/mentions/nothing. |
 | Pane resize | `ResizePaneLeft/Right` | Widths persist in `ui_state` but cannot be changed. |
 | Zoom | `ToggleZoom`, `ZoomIn/Out` | |
 | Composer options | `OpenComposerOptions` | |
 
 ### Not possible against this core
+
+Guild and channel notification *levels* have no command either: the core
+exposes mute/unmute for both, and `SetThreadNotificationLevel` only for
+threads, which is also all the TUI uses. The level control is therefore
+offered on threads alone.
 
 `OpenThread` opens an existing thread; the core exposes no thread *creation*
 command at all. Threads arrive from Discord or from a forum post, so

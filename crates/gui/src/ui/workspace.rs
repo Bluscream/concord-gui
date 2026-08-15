@@ -12,8 +12,9 @@ use concord::discord::{
     DownloadAttachmentSource, ForumPostArchiveState, GlobalUserProfileUpdate,
     GuildUserProfileUpdate, Id, MAX_UPLOAD_ATTACHMENT_COUNT, MediaPlaybackSource,
     MediaPlaybackTarget, MessageAttachmentUpload, MessageSearchQuery, MuteDuration, ReactionEmoji,
-    ReplyReference, StreamCaptureTargetsRequestId, UserProfileUpdate, VoiceScope,
-    application_command_content_is_complete, marker, next_message_nonce,
+    ReplyReference, StreamCaptureTargetsRequestId, UserProfileUpdate,
+    VoiceParticipantPlaybackSettings, VoiceParticipantVolumePercent, VoiceScope,
+    VoiceVolumePercent, application_command_content_is_complete, marker, next_message_nonce,
     parse_builtin_slash_command,
     password_auth::{MfaMethod, PasswordAuthEvent},
     qr_auth::QrEvent,
@@ -106,6 +107,8 @@ impl ChannelKind {
 
 /// A participant in a voice channel.
 pub struct VoiceMember {
+    /// Needed to address per-participant playback settings.
+    pub user_id: Id<marker::UserMarker>,
     pub name: String,
     pub muted: bool,
     pub deafened: bool,
@@ -639,6 +642,62 @@ impl Workspace {
             .set_offset(gpui::point(offset.x, offset.y + height * pages));
     }
 
+    /// Set how loudly one participant is played, or mute them locally.
+    ///
+    /// Local only: this changes playback here, not what anyone else hears.
+    fn set_participant_playback(
+        &mut self,
+        user_id: Id<marker::UserMarker>,
+        volume: u16,
+        muted: bool,
+    ) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        handle.send(AppCommand::UpdateVoiceParticipantPlayback {
+            user_id,
+            settings: VoiceParticipantPlaybackSettings {
+                volume: VoiceParticipantVolumePercent::new(volume),
+                muted,
+            },
+        });
+    }
+
+    /// Step the output volume, persisting it for the next connection.
+    ///
+    /// The core takes output volume when joining rather than as a standalone
+    /// command, so a change applies to the next join; saying so is better than
+    /// appearing to do nothing now.
+    fn adjust_output_volume(&mut self, delta: i16) {
+        let current = self.options.voice.voice_output_volume;
+        let next = (current.value() as i16 + delta).clamp(0, 200) as u8;
+        self.options.voice.voice_output_volume = VoiceVolumePercent::new(next);
+
+        if let Err(error) = config::save_options(&self.options) {
+            self.settings_note = Some(format!("Could not save volume: {error}"));
+        }
+        self.model.status_line = format!("Output volume {next}% (applies on next connect)");
+    }
+
+    /// Set a thread's notification level.
+    ///
+    /// Threads are the only scope the core can set a level for; guilds and
+    /// channels expose mute alone, so those keep the mute control.
+    ///
+    /// The flags are the thread-specific ones the command documents (2 all,
+    /// 4 mentions, 8 nothing), not the `NotificationLevel` codes - the two
+    /// vocabularies differ and mixing them would set the wrong level silently.
+    pub fn set_thread_notification_level(&mut self, flags: u64) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        handle.send(AppCommand::SetThreadNotificationLevel {
+            channel_id,
+            flags,
+            label: String::new(),
+        });
+    }
+
     /// Carry out the pending confirmation.
     fn confirm(&mut self) {
         let Some(pending) = self.confirming.take() else {
@@ -928,6 +987,7 @@ impl Workspace {
                     member.deafened = self.self_deaf;
                 } else {
                     channel.voice.push(VoiceMember {
+                        user_id: self.current_user.unwrap_or(Id::new(1)),
                         name: user_name,
                         muted: self.self_mute,
                         deafened: self.self_deaf,
@@ -3302,6 +3362,8 @@ impl Workspace {
 
             // Occupants render nested under their voice channel.
             for participant in &channel.voice {
+                let participant_id = participant.user_id;
+                let participant_muted = participant.muted;
                 list = list.child(voice_participant_row(
                     &participant.name,
                     participant.muted,
@@ -3491,6 +3553,54 @@ impl Workspace {
                                     .child("follow")
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.set_thread_followed(true);
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                gpui::div()
+                                    .id("thread-notify-all")
+                                    .px(px(space::SM))
+                                    .py(px(space::XS))
+                                    .rounded(px(layout::RADIUS))
+                                    .cursor_pointer()
+                                    .text_size(px(text::XS))
+                                    .text_color(rgb(active().text_muted))
+                                    .hover(|style| style.bg(rgb(active().surface_hover)))
+                                    .child("all")
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.set_thread_notification_level(2);
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                gpui::div()
+                                    .id("thread-notify-mentions")
+                                    .px(px(space::SM))
+                                    .py(px(space::XS))
+                                    .rounded(px(layout::RADIUS))
+                                    .cursor_pointer()
+                                    .text_size(px(text::XS))
+                                    .text_color(rgb(active().text_muted))
+                                    .hover(|style| style.bg(rgb(active().surface_hover)))
+                                    .child("mentions")
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.set_thread_notification_level(4);
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                gpui::div()
+                                    .id("thread-notify-none")
+                                    .px(px(space::SM))
+                                    .py(px(space::XS))
+                                    .rounded(px(layout::RADIUS))
+                                    .cursor_pointer()
+                                    .text_size(px(text::XS))
+                                    .text_color(rgb(active().text_muted))
+                                    .hover(|style| style.bg(rgb(active().surface_hover)))
+                                    .child("none")
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.set_thread_notification_level(8);
                                         cx.notify();
                                     })),
                             )

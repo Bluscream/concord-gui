@@ -312,6 +312,7 @@ pub fn voice_participants(
         .voice_participants_for_channel(guild_id, channel_id)
         .into_iter()
         .map(|participant| VoiceMember {
+            user_id: participant.user_id,
             name: participant.display_name,
             // Server mute/deafen and self mute/deafen are shown identically:
             // from the listener's side the audible result is the same.
