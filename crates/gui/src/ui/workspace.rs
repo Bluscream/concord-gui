@@ -247,6 +247,20 @@ pub enum SwitcherPurpose {
     },
 }
 
+/// One open channel tab.
+pub struct ChannelTab {
+    pub channel_id: Id<marker::ChannelMarker>,
+    /// The guild it was opened from, so switching tabs restores the sidebar
+    /// rather than leaving the wrong channel list showing.
+    pub selection: Selection,
+    pub name: String,
+    /// What was typed and not sent. Restored on return.
+    pub draft: String,
+    /// Where the log was scrolled to, so returning does not jump to the
+    /// bottom and lose the reader's place.
+    pub scroll: gpui::Point<gpui::Pixels>,
+}
+
 /// An action Discord's anti-spam checks watch, which is warned about before
 /// it is carried out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -478,6 +492,13 @@ pub struct Workspace {
     requested_previews: std::collections::HashSet<String>,
     /// What the open switcher will do with its selection.
     switcher_purpose: SwitcherPurpose,
+    /// Index of the active tab within `tabs`.
+    pub active_tab: usize,
+    /// Channels held open as tabs, in strip order.
+    ///
+    /// A tab keeps its own draft and scroll position, which is the point:
+    /// switching away and back should land where you left, mid-sentence.
+    pub tabs: Vec<ChannelTab>,
     /// A risk warning awaiting an answer, with the "don't ask again" box as
     /// currently ticked.
     pub risk: Option<(RiskAction, bool)>,
@@ -610,6 +631,8 @@ impl Workspace {
             attachment_previews: std::collections::HashMap::new(),
             requested_previews: std::collections::HashSet::new(),
             switcher_purpose: SwitcherPurpose::Navigate,
+            tabs: Vec::new(),
+            active_tab: 0,
             risk: None,
             bans: None,
             editing_roles: None,
@@ -1961,7 +1984,151 @@ impl Workspace {
     /// selected channel (for read-state and typing), history must be requested
     /// because the cache is lazily populated, and a gateway subscription is
     /// required before Discord will push updates for it.
+    /// Open a channel in the active tab, or in a new one.
+    ///
+    /// Replacing by default matches how a channel list is usually used - most
+    /// clicks are navigation, not a request for another pane.
+    pub fn open_channel_in_new_tab(&mut self, channel_id: Id<marker::ChannelMarker>) {
+        self.stash_active_tab();
+        let name = self.channel_name(channel_id);
+        self.tabs.push(ChannelTab {
+            channel_id,
+            selection: self.nav.selection,
+            name,
+            draft: String::new(),
+            scroll: gpui::point(gpui::px(0.), gpui::px(0.)),
+        });
+        self.active_tab = self.tabs.len() - 1;
+        self.open_channel(channel_id);
+    }
+
+    /// Switch to a tab, restoring its draft and scroll position.
+    pub fn activate_tab(&mut self, index: usize) {
+        let Some(tab) = self.tabs.get(index) else {
+            return;
+        };
+        let (channel_id, selection, draft, scroll) =
+            (tab.channel_id, tab.selection, tab.draft.clone(), tab.scroll);
+
+        self.stash_active_tab();
+        self.active_tab = index;
+
+        // The guild goes first, or the sidebar shows a different guild's
+        // channels than the one the tab belongs to.
+        if self.nav.selection != selection {
+            self.nav.selection = selection;
+        }
+        self.open_channel(channel_id);
+        self.composer.set_text(&draft);
+        self.message_scroll.set_offset(scroll);
+        self.persist_tabs();
+    }
+
+    /// Close a tab, moving to a neighbour if it was the active one.
+    pub fn close_tab(&mut self, index: usize) {
+        if index >= self.tabs.len() {
+            return;
+        }
+        self.tabs.remove(index);
+
+        if self.tabs.is_empty() {
+            self.active_tab = 0;
+            self.persist_tabs();
+            return;
+        }
+
+        // Prefer the tab to the left, which is where attention was before the
+        // closed one existed.
+        self.active_tab = self.active_tab.min(self.tabs.len() - 1);
+        if index <= self.active_tab && self.active_tab > 0 {
+            self.active_tab -= 1;
+        }
+        let target = self.active_tab;
+        self.activate_tab(target);
+    }
+
+    /// Rebuild the strip from the last session.
+    ///
+    /// Done on Ready rather than at construction: channel names come from the
+    /// snapshot, and restoring earlier would give a strip of bare ids.
+    fn restore_tabs(&mut self) {
+        if !self.tabs.is_empty() || self.ui_state.open_tabs.is_empty() {
+            return;
+        }
+
+        let saved: Vec<_> = self.ui_state.open_tabs.clone();
+        let active = self.ui_state.active_tab;
+
+        self.tabs = saved
+            .into_iter()
+            // A channel that has since been deleted, or that this account can
+            // no longer see, would be a tab that opens nothing.
+            .filter(|channel_id| {
+                self.model
+                    .channels
+                    .iter()
+                    .any(|channel| channel.id == Some(*channel_id))
+            })
+            .map(|channel_id| ChannelTab {
+                channel_id,
+                selection: self.nav.selection,
+                name: self.channel_name(channel_id),
+                draft: String::new(),
+                scroll: gpui::point(gpui::px(0.), gpui::px(0.)),
+            })
+            .collect();
+
+        self.active_tab = active.min(self.tabs.len().saturating_sub(1));
+    }
+
+    /// Save the active tab's draft and scroll before leaving it.
+    fn stash_active_tab(&mut self) {
+        let draft = self.composer.text().to_string();
+        let scroll = self.message_scroll.offset();
+        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            tab.draft = draft;
+            tab.scroll = scroll;
+        }
+    }
+
+    fn channel_name(&self, channel_id: Id<marker::ChannelMarker>) -> String {
+        self.model
+            .channels
+            .iter()
+            .find(|channel| channel.id == Some(channel_id))
+            .map(|channel| channel.name.clone())
+            .unwrap_or_else(|| channel_id.get().to_string())
+    }
+
+    /// Write the open set to the shared UI state, so it survives a restart
+    /// and the TUI can adopt it later.
+    fn persist_tabs(&mut self) {
+        self.ui_state.open_tabs = self.tabs.iter().map(|tab| tab.channel_id).collect();
+        self.ui_state.active_tab = self.active_tab;
+        let _ = config::save_ui_state_options(&self.ui_state);
+    }
+
     pub fn open_channel(&mut self, channel_id: Id<marker::ChannelMarker>) {
+        // The active tab follows the channel, so an ordinary click reuses the
+        // tab rather than growing the strip without being asked.
+        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            if tab.channel_id != channel_id {
+                tab.channel_id = channel_id;
+                tab.selection = self.nav.selection;
+                tab.draft = String::new();
+                tab.scroll = gpui::point(gpui::px(0.), gpui::px(0.));
+            }
+        } else if self.tabs.is_empty() {
+            self.tabs.push(ChannelTab {
+                channel_id,
+                selection: self.nav.selection,
+                name: String::new(),
+                draft: String::new(),
+                scroll: gpui::point(gpui::px(0.), gpui::px(0.)),
+            });
+            self.active_tab = 0;
+        }
+
         self.nav.channel = Some(channel_id);
         self.messages.clear();
 
@@ -4805,6 +4972,7 @@ impl Workspace {
             AppEvent::Ready { .. } => {
                 self.refresh_history();
                 self.hydrate_missing_members();
+                self.restore_tabs();
             }
             _ => {}
         }
@@ -5305,11 +5473,21 @@ impl Workspace {
                 Some(channel_id) => entry
                     .id(("channel", index))
                     .cursor_pointer()
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.forum = None;
-                        this.open_channel(channel_id);
-                        cx.notify();
-                    }))
+                    .on_click(
+                        cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
+                            this.forum = None;
+                            // Ctrl- or cmd-click opens another tab, as it does in
+                            // a browser. A plain click reuses the current one,
+                            // because most clicks are navigation.
+                            let modifiers = event.modifiers();
+                            if modifiers.control || modifiers.platform {
+                                this.open_channel_in_new_tab(channel_id);
+                            } else {
+                                this.open_channel(channel_id);
+                            }
+                            cx.notify();
+                        }),
+                    )
                     .into_any_element(),
                 None => entry.into_any_element(),
             };
@@ -5968,6 +6146,76 @@ impl Workspace {
         self.chat_content(window, cx).into_any_element()
     }
 
+    /// The tab strip, shown only once more than one channel is open.
+    ///
+    /// A single tab is just "the channel you are in", and a strip showing one
+    /// item is noise.
+    fn tab_strip(&self, cx: &mut Context<Self>) -> Option<gpui::Stateful<gpui::Div>> {
+        if self.tabs.len() < 2 {
+            return None;
+        }
+
+        let mut strip = row()
+            .id("tab-strip")
+            .w_full()
+            .h(px(28.))
+            .gap(px(space::XS))
+            .px(px(space::SM))
+            .bg(rgb(active().surface_sunken))
+            .border_b_1()
+            .border_color(rgb(active().border))
+            .overflow_x_scroll();
+
+        for (index, tab) in self.tabs.iter().enumerate() {
+            let selected = index == self.active_tab;
+            let name = if tab.name.is_empty() {
+                self.channel_name(tab.channel_id)
+            } else {
+                tab.name.clone()
+            };
+
+            strip = strip.child(
+                row()
+                    .id(("tab", index))
+                    .px(px(space::SM))
+                    .gap(px(space::XS))
+                    .items_center()
+                    .rounded(px(layout::RADIUS))
+                    .cursor_pointer()
+                    .text_size(px(scaled(text::XS)))
+                    .when(selected, |tab| tab.bg(rgb(active().surface_active)))
+                    .text_color(rgb(if selected {
+                        active().text
+                    } else {
+                        active().text_muted
+                    }))
+                    .hover(|style| style.bg(rgb(active().surface_hover)))
+                    .child(format!("# {name}"))
+                    .child(
+                        gpui::div()
+                            .id(("tab-close", index))
+                            .px(px(space::XS))
+                            .text_color(rgb(active().text_subtle))
+                            .hover(|style| style.text_color(rgb(active().danger)))
+                            .child("\u{2715}")
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                // Stopped, or closing would also switch to the
+                                // tab being closed.
+                                cx.stop_propagation();
+                                this.close_tab(index);
+                                cx.notify();
+                            })),
+                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.activate_tab(index);
+                        cx.notify();
+                    })),
+            );
+        }
+
+        Some(strip)
+    }
+
     /// The ordinary message view.
     fn chat_content(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let channel_name = self
@@ -5981,6 +6229,9 @@ impl Workspace {
             .flex_1()
             .h_full()
             .bg(rgb(active().surface))
+            // Above the header, so the header describes whichever tab is
+            // active rather than sitting above the whole strip.
+            .children(self.tab_strip(cx))
             .child(
                 header()
                     .child(

@@ -575,6 +575,15 @@ pub struct UiStateOptions {
     pub channel_list_width: u16,
     #[serde(default = "default_member_list_width")]
     pub member_list_width: u16,
+    /// Channels the user has open as tabs, in strip order.
+    ///
+    /// Shared with the TUI through this file, the way pane widths already
+    /// are, so opening a set of channels in one client carries to the other.
+    #[serde(default)]
+    pub open_tabs: Vec<Id<ChannelMarker>>,
+    /// Which tab is active, as an index into `open_tabs`.
+    #[serde(default)]
+    pub active_tab: usize,
     pub collapsed_channel_categories: Vec<Id<ChannelMarker>>,
     pub collapsed_server_folder_ids: Vec<u64>,
     pub collapsed_server_folder_guilds: Vec<Vec<Id<GuildMarker>>>,
@@ -594,6 +603,8 @@ impl Default for UiStateOptions {
             server_width: default_server_width(),
             channel_list_width: default_channel_list_width(),
             member_list_width: default_member_list_width(),
+            open_tabs: Vec::new(),
+            active_tab: 0,
             collapsed_channel_categories: Vec::new(),
             collapsed_server_folder_ids: Vec::new(),
             collapsed_server_folder_guilds: Vec::new(),

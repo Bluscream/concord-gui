@@ -1464,3 +1464,30 @@ fn german_reaches_the_interface_end_to_end() {
     set_language(Language::English);
     assert_eq!(translate("action-close"), "Close");
 }
+
+#[test]
+fn closing_a_tab_moves_to_a_sensible_neighbour() {
+    // The rule the close handler implements: prefer the tab to the left,
+    // which is where attention was before the closed one existed, and never
+    // leave the index past the end.
+    let next_active = |count: usize, active: usize, closed: usize| -> usize {
+        let remaining = count - 1;
+        if remaining == 0 {
+            return 0;
+        }
+        let mut next = active.min(remaining - 1);
+        if closed <= next && next > 0 {
+            next -= 1;
+        }
+        next
+    };
+
+    // Closing the active tab in the middle steps left.
+    assert_eq!(next_active(3, 1, 1), 0);
+    // Closing one to the right of the active leaves it where it is.
+    assert_eq!(next_active(3, 0, 2), 0);
+    // Closing the last tab clamps rather than pointing past the end.
+    assert_eq!(next_active(2, 1, 1), 0);
+    // Closing the only tab is not an index at all.
+    assert_eq!(next_active(1, 0, 0), 0);
+}

@@ -70,6 +70,9 @@ pub(super) struct SettingsState {
     // the user's Rich Presence choice instead of resetting it to the default.
     pub(super) presence_options: PresenceOptions,
     pub(super) warning_options: crate::config::WarningOptions,
+    /// Tab state written by the GUI. Held so a TUI save does not discard it.
+    pub(super) ui_state_open_tabs: Vec<crate::discord::Id<crate::discord::marker::ChannelMarker>>,
+    pub(super) ui_state_active_tab: usize,
     pub(super) key_bindings: KeyBindings,
     pub(super) voice_participant_playback:
         BTreeMap<Id<UserMarker>, VoiceParticipantPlaybackSettings>,
@@ -172,6 +175,10 @@ impl DashboardState {
         if !self.is_pane_visible(self.navigation.focus) {
             self.navigation.focus = FocusPane::Messages;
         }
+        // Held rather than used: the TUI has no tab strip yet, and dropping
+        // these on load would delete the GUI's tabs on the next save.
+        self.options.ui_state_open_tabs = options.open_tabs.clone();
+        self.options.ui_state_active_tab = options.active_tab;
         self.navigation.channels.collapsed_channel_categories =
             options.collapsed_channel_categories.into_iter().collect();
         self.navigation.channels.established_dms = options.established_dms.into_iter().collect();
@@ -235,6 +242,10 @@ impl DashboardState {
             server_width: self.navigation.guilds.width,
             channel_list_width: self.navigation.channels.width,
             member_list_width: self.navigation.members.width,
+            // The TUI has no tab strip yet, so it preserves whatever the GUI
+            // wrote rather than clearing it on every save.
+            open_tabs: self.options.ui_state_open_tabs.clone(),
+            active_tab: self.options.ui_state_active_tab,
             collapsed_channel_categories,
             collapsed_server_folder_ids,
             collapsed_server_folder_guilds,

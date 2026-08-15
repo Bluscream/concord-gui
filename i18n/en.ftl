@@ -130,3 +130,7 @@ hint-media-playback = Opens video and audio in an external player
 hint-noise-suppression = Applied when joining a voice channel
 hint-share-rich-presence = Lets others see what you are playing
 hint-light-mode = Switch between Dark and Light mode interface themes
+
+# Tabs
+action-close-tab = Close tab
+action-open-in-new-tab = Open in a new tab

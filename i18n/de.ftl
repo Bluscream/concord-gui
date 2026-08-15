@@ -128,3 +128,7 @@ hint-media-playback = Öffnet Video und Audio in einem externen Player
 hint-noise-suppression = Wird beim Betreten eines Sprachkanals angewendet
 hint-share-rich-presence = Zeigt anderen, was du gerade spielst
 hint-light-mode = Zwischen dunklem und hellem Design wechseln
+
+# Tabs
+action-close-tab = Tab schließen
+action-open-in-new-tab = In neuem Tab öffnen
