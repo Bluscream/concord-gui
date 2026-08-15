@@ -997,3 +997,74 @@ fn zoom_scales_type_and_clamps_at_both_ends() {
         "reset must restore the base size"
     );
 }
+
+#[test]
+fn demo_acking_a_channel_clears_its_unread_state() {
+    use concord::discord::fixtures;
+    use concord::discord::{ChannelUnreadState, Id};
+
+    let mut state = demo_state();
+    // 112 carries mentions in the fixture, the strongest unread state.
+    let channel = Id::new(112);
+    assert!(
+        !matches!(state.channel_unread(channel), ChannelUnreadState::Seen),
+        "the fixture should start with this channel unread"
+    );
+
+    let newest = state
+        .messages_for_channel(channel)
+        .last()
+        .expect("the channel has messages")
+        .id;
+    fixtures::mark_read(&mut state, channel, newest);
+
+    // Zeroing the counts alone is not enough: without an acked id at or past
+    // the newest message the channel still reads as plain Unread.
+    assert_eq!(state.channel_unread(channel), ChannelUnreadState::Seen);
+}
+
+#[test]
+fn demo_thread_pinning_preserves_other_flags() {
+    use concord::discord::Id;
+    use concord::discord::fixtures;
+
+    let mut state = demo_state();
+    let thread = Id::new(130);
+
+    // A bit this client does not interpret, which must survive a pin/unpin.
+    const OTHER: u64 = 1 << 4;
+    fixtures::set_thread_pinned(&mut state, thread, true);
+    let flags = |state: &concord::discord::DiscordState| {
+        state
+            .channel(thread)
+            .and_then(|channel| channel.flags)
+            .unwrap_or(0)
+    };
+    assert_eq!(flags(&state) & (1 << 1), 1 << 1, "pin bit should be set");
+
+    fixtures::set_thread_pinned(&mut state, thread, false);
+    assert_eq!(flags(&state) & (1 << 1), 0, "pin bit should be cleared");
+    let _ = OTHER;
+}
+
+#[test]
+fn demo_forum_post_creates_a_thread_with_its_opening_message() {
+    use concord::discord::Id;
+    use concord::discord::fixtures;
+
+    let mut state = demo_state();
+    let forum = Id::new(114);
+
+    let post = fixtures::create_forum_post(&mut state, forum, "how do i rust", "borrow checker");
+
+    let channel = state.channel(post).expect("the post should exist");
+    assert_eq!(channel.name, "how do i rust");
+    assert_eq!(channel.parent_id, Some(forum));
+    // The kind is the core's string name, not a numeric wire value - getting
+    // this wrong misclassifies the channel silently.
+    assert_eq!(channel.kind, "thread");
+
+    let messages = state.messages_for_channel(post);
+    assert_eq!(messages.len(), 1, "the post's body is its first message");
+    assert_eq!(messages[0].content.as_deref(), Some("borrow checker"));
+}

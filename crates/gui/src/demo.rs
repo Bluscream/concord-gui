@@ -293,6 +293,56 @@ fn handle_command(
             }
         }
 
+        AppCommand::RefreshMessageHistory { channel_id } => {
+            // Paging state resets with it: after a refresh the loaded range
+            // starts over, so the next backward page must start over too.
+            history_pages.remove(&channel_id);
+            publish_state!();
+        }
+
+        AppCommand::LoadMessageHistoryAfter { .. } => {
+            // The fixture holds no messages past the newest, so there is
+            // nothing to page forward into. Answered rather than dropped so
+            // the caller does not sit waiting.
+            publish_state!();
+        }
+
+        AppCommand::ScheduleAckChannel {
+            channel_id,
+            message_id,
+        } => {
+            fixtures::mark_read(state, channel_id, message_id);
+            publish_state!();
+        }
+
+        AppCommand::SearchGuildMembers {
+            guild_id, query, ..
+        } => {
+            // Every fixture member is already cached, so the search only has
+            // to confirm the command reached something.
+            let _ = fixtures::search_members(state, guild_id, &query);
+            publish_state!();
+        }
+
+        AppCommand::AckChannel {
+            channel_id,
+            message_id,
+        } => {
+            fixtures::mark_read(state, channel_id, message_id);
+            publish_state!();
+        }
+
+        AppCommand::AckChannels { targets } => {
+            for (channel_id, message_id) in targets {
+                fixtures::mark_read(state, channel_id, message_id);
+            }
+            publish_state!();
+        }
+
+        AppCommand::LoadGuildMembersByIds { .. } => {
+            // Every fixture member is already fully hydrated.
+        }
+
         AppCommand::EditMessage {
             channel_id,
             message_id,

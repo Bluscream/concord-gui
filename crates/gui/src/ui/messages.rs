@@ -49,6 +49,7 @@ impl MessageAction {
             MessageAction::RemoveEmbeds => 16,
             MessageAction::OpenLink(_) => 17,
             MessageAction::OpenThread => 18,
+            MessageAction::LoadNewer => 19,
         }
     }
 }
@@ -65,6 +66,8 @@ pub enum MessageAction {
     OpenProfile,
     /// Fetch the page of messages before the oldest one loaded.
     LoadOlder,
+    /// Fetch the page of messages after the newest one loaded.
+    LoadNewer,
     /// Jump to the message this one replies to.
     JumpToReplied,
     /// Copy the message body.
@@ -107,6 +110,8 @@ pub fn message_list(
     circular_avatars: bool,
     hour24: bool,
     show_emoji: bool,
+    // Whether newer messages exist beyond the loaded range.
+    has_newer: bool,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> impl IntoElement {
     let mut list = column()
@@ -163,6 +168,27 @@ pub fn message_list(
             show_emoji,
             on_action.clone(),
         ));
+    }
+
+    // The forward counterpart. Only offered when the loaded range is not at
+    // the live end of the channel - jumping to a search result or an inbox
+    // mention lands mid-history, and there is no other way back down.
+    if has_newer {
+        let handler = on_action.clone();
+        list = list.child(
+            gpui::div()
+                .id("load-newer")
+                .w_full()
+                .py(px(space::SM))
+                .flex()
+                .justify_center()
+                .cursor_pointer()
+                .text_size(px(scaled(text::XS)))
+                .text_color(rgb(active().accent))
+                .hover(|style| style.bg(rgb(active().surface_hover)))
+                .child("Load newer messages")
+                .on_click(move |_event, _window, cx| handler(0, MessageAction::LoadNewer, cx)),
+        );
     }
 
     list

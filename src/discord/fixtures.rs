@@ -586,11 +586,31 @@ pub fn demo_state() -> DiscordState {
     //
     // `channel_unread` short-circuits to Seen unless the channel has a
     // `last_message_id`, so every channel carrying unread state needs one.
+    //
+    // It is taken from the newest cached message rather than invented: an
+    // id past the end of the timeline can never be acked, so the badge would
+    // be permanently stuck unread with no way for a client to clear it.
     {
+        let newest: Vec<_> = [(112u64, 21u64), (113, 40), (300, 31), (111, 8)]
+            .into_iter()
+            .map(|(channel, fallback)| {
+                let id = channel_id(channel);
+                // A channel with no cached timeline keeps a synthetic id: it
+                // still reads as unread, which is what an unvisited channel
+                // looks like before its history is fetched.
+                let latest = state
+                    .messages_for_channel(id)
+                    .last()
+                    .map(|message| message.id)
+                    .unwrap_or_else(|| message_id(snowflake_at(60).max(fallback)));
+                (id, latest)
+            })
+            .collect();
+
         let navigation = Arc::make_mut(&mut state.navigation);
-        for (channel, latest) in [(112u64, 21u64), (113, 40), (300, 31), (111, 8)] {
-            if let Some(channel) = navigation.channels.get_mut(&channel_id(channel)) {
-                channel.last_message_id = Some(message_id(snowflake_at(60).max(latest)));
+        for (channel, latest) in newest {
+            if let Some(channel) = navigation.channels.get_mut(&channel) {
+                channel.last_message_id = Some(latest);
             }
         }
     }
@@ -1260,4 +1280,43 @@ pub fn create_forum_post(
     append_message(state, id, guild_id, demo_user_id(), "blu", content);
 
     id
+}
+
+/// Mark a channel read up to a message.
+pub fn mark_read(
+    state: &mut DiscordState,
+    channel_id: Id<marker::ChannelMarker>,
+    message_id: Id<marker::MessageMarker>,
+) {
+    let notifications = Arc::make_mut(&mut state.notifications);
+    notifications.set_fixture_acked(channel_id, message_id);
+}
+
+/// Answer a member search.
+///
+/// The fixture's members are all already present, so this exists to make the
+/// command observable rather than to add anyone: a search that silently did
+/// nothing would look identical to one that was dropped.
+pub fn search_members(
+    state: &mut DiscordState,
+    guild_id: Id<marker::GuildMarker>,
+    query: &str,
+) -> Vec<Id<marker::UserMarker>> {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+
+    state
+        .members_for_guild(guild_id)
+        .into_iter()
+        .filter(|member| {
+            member.display_name.to_lowercase().contains(&needle)
+                || member
+                    .username
+                    .as_deref()
+                    .is_some_and(|name| name.to_lowercase().contains(&needle))
+        })
+        .map(|member| member.user_id)
+        .collect()
 }

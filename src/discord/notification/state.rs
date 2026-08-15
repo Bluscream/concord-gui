@@ -828,4 +828,20 @@ impl super::super::state::caches::NotificationCache {
         state.mention_count = mentions;
         state.notification_count = notifications;
     }
+
+    /// Ack a channel up to `message_id` in fixture mode.
+    ///
+    /// Clearing the counts is not enough on its own: with them at zero the
+    /// channel still reads as Unread until an acked id at or past the newest
+    /// message is recorded.
+    pub(in crate::discord) fn set_fixture_acked(
+        &mut self,
+        channel_id: Id<ChannelMarker>,
+        message_id: Id<MessageMarker>,
+    ) {
+        let state = self.read_states.entry(channel_id).or_default();
+        state.last_acked_message_id = Some(message_id);
+        state.mention_count = 0;
+        state.notification_count = 0;
+    }
 }

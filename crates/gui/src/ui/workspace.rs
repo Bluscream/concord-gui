@@ -11,10 +11,11 @@ use concord::discord::{
     ApplicationCommandInvocation, AttachmentDownloadId, BuiltinSlashCommandParse,
     BuiltinSlashCommandSubmit, DownloadAttachmentSource, ForumPostArchiveState, ForumPostCreate,
     GlobalUserProfileUpdate, GuildUserProfileUpdate, Id, MAX_UPLOAD_ATTACHMENT_COUNT,
-    MediaPlaybackSource, MediaPlaybackTarget, MessageAttachmentUpload, MessageSearchQuery,
-    MuteDuration, PresenceStatus, ReactionEmoji, ReplyReference, StreamCaptureTargetsRequestId,
-    UserProfileUpdate, VoiceParticipantPlaybackSettings, VoiceParticipantVolumePercent, VoiceScope,
-    VoiceVolumePercent, application_command_content_is_complete, marker, next_message_nonce,
+    MediaPlaybackSource, MediaPlaybackTarget, MessageAttachmentUpload, MessageHistoryAfterMode,
+    MessageSearchQuery, MuteDuration, PresenceStatus, ReactionEmoji, ReplyReference,
+    StreamCaptureTargetsRequestId, UserProfileUpdate, VoiceParticipantPlaybackSettings,
+    VoiceParticipantVolumePercent, VoiceScope, VoiceVolumePercent,
+    application_command_content_is_complete, marker, next_message_nonce,
     parse_builtin_slash_command,
     password_auth::{MfaMethod, PasswordAuthEvent},
     qr_auth::QrEvent,
@@ -1924,6 +1925,7 @@ impl Workspace {
                 });
             }
             MessageAction::LoadOlder => self.load_older_messages(),
+            MessageAction::LoadNewer => self.load_newer_messages(MessageHistoryAfterMode::GapFill),
             MessageAction::JumpToReplied => {
                 if let Some(target) = self
                     .messages
@@ -3225,6 +3227,124 @@ impl Workspace {
         });
     }
 
+    /// Request the page of messages after the newest one loaded.
+    ///
+    /// Needed whenever the loaded range is not anchored to the live end of the
+    /// channel: jumping to a search result or an inbox mention lands mid-history,
+    /// and without forward paging the view is stuck there.
+    pub fn load_newer_messages(&mut self, mode: MessageHistoryAfterMode) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        let Some(newest) = self.messages.last().map(|row| row.id) else {
+            return;
+        };
+
+        handle.send(AppCommand::LoadMessageHistoryAfter {
+            channel_id,
+            after: newest,
+            mode,
+        });
+    }
+
+    /// Whether the channel has messages newer than the loaded range.
+    ///
+    /// Compared against the channel's own `last_message_id` rather than a
+    /// scroll position: after jumping to a search result the view is at the
+    /// bottom of what is loaded, which is not the bottom of the channel.
+    fn has_newer_messages(&self) -> bool {
+        let (Some(channel_id), Some(newest)) =
+            (self.nav.channel, self.messages.last().map(|row| row.id))
+        else {
+            return false;
+        };
+
+        self.model
+            .channels
+            .iter()
+            .find(|channel| channel.id == Some(channel_id))
+            .and_then(|channel| channel.last_message)
+            .is_some_and(|last| last > newest)
+    }
+
+    /// Re-fetch the open channel from scratch.
+    ///
+    /// The gateway can drop messages across a reconnect, leaving a hole that no
+    /// amount of scrolling fills, because both paging directions extend from
+    /// what is already cached.
+    pub fn refresh_history(&mut self) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        handle.send(AppCommand::RefreshMessageHistory { channel_id });
+    }
+
+    /// Mark the open channel read, after a delay.
+    ///
+    /// Used when the newest message arrives while the channel is on screen.
+    /// An immediate ack would race the user's eyes - and, sent on every
+    /// incoming message, would be a request per message.
+    pub fn schedule_mark_read(&mut self) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        let Some(newest) = self.messages.last().map(|row| row.id) else {
+            return;
+        };
+
+        handle.send(AppCommand::ScheduleAckChannel {
+            channel_id,
+            message_id: newest,
+        });
+    }
+
+    /// Ask the server for members matching a query.
+    ///
+    /// The member list only holds the windowed ranges this client subscribed
+    /// to, so a mention for someone further down it has never seen would
+    /// otherwise not resolve.
+    pub fn search_members(&mut self, query: String) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Selection::Guild(guild_id) = self.nav.selection else {
+            return;
+        };
+        if query.trim().is_empty() {
+            return;
+        }
+
+        handle.send(AppCommand::SearchGuildMembers {
+            guild_id,
+            query,
+            limit: 25,
+        });
+    }
+
+    /// Fetch members referenced on screen but absent from the cache.
+    ///
+    /// Without this an unhydrated author renders as a raw id, and a mention of
+    /// someone outside the subscribed window stays unresolved.
+    ///
+    /// The demand comes from the core rather than from a scan of the visible
+    /// rows: it already tracks voice, typing and thread participants too, and
+    /// a second heuristic here would drift from the one the TUI uses.
+    pub fn hydrate_missing_members(&mut self) {
+        let (Some(handle), Some(state)) = (&self.handle, self.last_state.as_ref()) else {
+            return;
+        };
+        let selected = match self.nav.selection {
+            Selection::Guild(guild_id) => Some(guild_id),
+            Selection::DirectMessages => None,
+        };
+
+        for (guild_id, user_ids) in
+            state.missing_member_hydration_requests(selected, std::time::Instant::now())
+        {
+            handle.send(AppCommand::LoadGuildMembersByIds { guild_id, user_ids });
+        }
+    }
+
     /// Switch the open guild, clearing the channel selection.
     pub fn open_guild(&mut self, guild_id: Option<Id<marker::GuildMarker>>) {
         self.nav.selection = match guild_id {
@@ -3250,6 +3370,23 @@ impl Workspace {
     /// Most state arrives through reprojection; this handles only what is not
     /// represented in the state store, such as transient errors.
     fn absorb(&mut self, event: AppEvent) {
+        match &event {
+            // A message landing in the channel on screen means the user is
+            // most likely looking at it, so schedule the ack rather than
+            // letting the badge sit there. The core owns the delay.
+            AppEvent::MessageCreate { message } if Some(message.channel_id) == self.nav.channel => {
+                self.schedule_mark_read();
+            }
+            // A reconnect can have dropped messages while the socket was down.
+            // Neither paging direction fills that hole, because both extend
+            // from what is already cached.
+            AppEvent::Ready { .. } => {
+                self.refresh_history();
+                self.hydrate_missing_members();
+            }
+            _ => {}
+        }
+
         match event {
             AppEvent::GatewayError { message } => {
                 self.model.status_line = message;
@@ -3997,6 +4134,7 @@ impl Workspace {
                 self.options.display.circular_avatars,
                 self.options.display.hour_format_24,
                 self.options.display.show_custom_emoji,
+                self.has_newer_messages(),
                 {
                     // Click handlers run with only an `App`, so the workspace is
                     // reached through its entity handle rather than captured.
@@ -4380,6 +4518,17 @@ impl Render for Workspace {
                                 && filter.handle_key(event)
                             {
                                 this.pane_filter = None;
+                            } else if this.focus_pane == Pane::Members {
+                                // Filtering members searches the server too:
+                                // the member list holds only the ranges this
+                                // client subscribed to, so filtering alone
+                                // cannot find someone further down it.
+                                let query = this
+                                    .pane_filter
+                                    .as_ref()
+                                    .map(|filter| filter.text().to_string())
+                                    .unwrap_or_default();
+                                this.search_members(query);
                             }
                         } else if this.focus_pane == Pane::Messages
                             && matches!(
