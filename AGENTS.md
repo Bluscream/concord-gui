@@ -151,7 +151,45 @@ guilds need a flag for why they are inert, the gateway must not treat a
 GUILD_DELETE as "drop everything", and read-only needs to be a first-class
 state in both front ends rather than a permission check that happens to fail.
 
-### 8. Lurkable guilds - partially confirmed, worth research
+### 8. Offline first
+
+Rule 7 keeps data; this is what to do with it. The client should be useful
+with no connection at all, not merely survive losing one.
+
+**Everything known stays browsable.** Guild and channel lists, past messages,
+member lists, profiles, pins, attachments already fetched. Nothing that is
+already on disk should require the network to look at again.
+
+**Search works locally.** Over cached messages, without the server. A remote
+search adds results it could not have known about; it should not be the only
+way to find something the client already has.
+
+**Actions queue instead of failing.** Sending a message, joining a voice
+channel or call, reacting, editing - these are accepted while offline and
+carried out when the connection returns. A queued action is visible as queued,
+and cancellable, rather than looking sent.
+
+#### Draining the queue
+
+This is the part to get right, because rule 6 applies directly: a burst of
+traffic immediately after reconnecting is one of the patterns that gets
+third-party clients flagged.
+
+- **Pace the drain.** Space queued sends out rather than flushing them at
+  once. Reconnecting and then emitting ten messages in a second is precisely
+  the shape of a bot.
+- **Keep order.** Messages queued for one channel send in the order they were
+  written, or a conversation arrives scrambled.
+- **Survive a restart.** The queue is on disk. Closing the client with unsent
+  messages must not discard them silently.
+- **Report failures.** A queued send can fail for reasons that did not exist
+  when it was queued - the channel is gone, permissions changed, the guild was
+  left. Say so and keep the text, per rule 5. Never drop it quietly.
+- **Voice is a request, not a resumption.** A queued call join should ask
+  again on reconnect rather than silently connecting audio to a channel the
+  user queued an hour ago. Confirm if it is stale.
+
+### 9. Lurkable guilds - partially confirmed, worth research
 
 There is a real mechanism here, though not quite the one it is often
 described as. What the references confirm:
