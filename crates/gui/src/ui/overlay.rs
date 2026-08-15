@@ -318,3 +318,38 @@ pub fn audio_devices_view(
             .child(button("devices-close", "Close", false, on_close)),
     )
 }
+
+/// Rename dialog for a guild folder.
+pub fn rename_folder_view(
+    current: &str,
+    on_submit: impl Fn(&mut gpui::App) + 'static,
+    on_cancel: impl Fn(&mut gpui::App) + 'static,
+) -> Div {
+    panel("Rename folder", 380.)
+        .child(
+            gpui::div()
+                .px(px(space::LG))
+                .py(px(space::MD))
+                .text_size(px(scaled(text::SM)))
+                .text_color(rgb(if current.is_empty() {
+                    active().text_subtle
+                } else {
+                    active().text
+                }))
+                .child(if current.is_empty() {
+                    "Type a name".to_string()
+                } else {
+                    current.to_string()
+                }),
+        )
+        .child(
+            row()
+                .w_full()
+                .px(px(space::LG))
+                .py(px(space::MD))
+                .gap(px(space::SM))
+                .justify_end()
+                .child(button("folder-cancel", "Cancel", false, on_cancel))
+                .child(button("folder-save", "Save", false, on_submit)),
+        )
+}

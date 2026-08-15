@@ -110,6 +110,7 @@ pub fn message_list(
     circular_avatars: bool,
     hour24: bool,
     show_emoji: bool,
+    show_images: bool,
     // Whether newer messages exist beyond the loaded range.
     has_newer: bool,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
@@ -166,6 +167,7 @@ pub fn message_list(
             circular_avatars,
             hour24,
             show_emoji,
+            show_images,
             on_action.clone(),
         ));
     }
@@ -207,6 +209,7 @@ fn message_row(
     circular_avatars: bool,
     hour24: bool,
     show_emoji: bool,
+    show_images: bool,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> impl IntoElement {
     let own = message.own;
@@ -231,6 +234,7 @@ fn message_row(
             circular_avatars,
             hour24,
             show_emoji,
+            show_images,
             on_action.clone(),
         ))
         .child(
@@ -325,6 +329,7 @@ fn message_block(
     circular_avatars: bool,
     hour24: bool,
     show_emoji: bool,
+    show_images: bool,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> Div {
     let mut block = column()
@@ -356,7 +361,13 @@ fn message_block(
                         .text_color(rgb(active().text_subtle))
                         .child(message.short_time(hour24)),
                 )
-                .child(message_body(index, message, show_emoji, on_action)),
+                .child(message_body(
+                    index,
+                    message,
+                    show_emoji,
+                    show_images,
+                    on_action,
+                )),
         )
     } else {
         block
@@ -391,7 +402,13 @@ fn message_block(
                     .w_full()
                     .items_start()
                     .child(gpui::div().w(px(GUTTER)).flex_none())
-                    .child(message_body(index, message, show_emoji, on_action)),
+                    .child(message_body(
+                        index,
+                        message,
+                        show_emoji,
+                        show_images,
+                        on_action,
+                    )),
             )
     }
 }
@@ -441,6 +458,7 @@ fn message_body(
     index: usize,
     message: &MessageRow,
     show_emoji: bool,
+    show_images: bool,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> Div {
     let mut body = column().flex_1().gap(px(space::XS));
@@ -475,6 +493,24 @@ fn message_body(
     }
 
     for (position, attachment) in message.attachments.iter().enumerate() {
+        // Images render inline rather than only as a chip. GPUI fetches them
+        // through the app's HTTP client, so unlike the TUI - which has to pull
+        // the bytes itself to encode them for the terminal - no separate
+        // preview request is needed.
+        //
+        // Gated on the same display option the chip respects, and skipped for
+        // demo attachments, which have no URL to fetch.
+        if attachment.is_image && show_images && !attachment.url.is_empty() {
+            body = body.child(
+                gpui::img(gpui::SharedUri::from(attachment.url.clone()))
+                    // Bounded so one large image cannot push the rest of the
+                    // conversation off screen.
+                    .max_w(px(400.))
+                    .max_h(px(300.))
+                    .rounded(px(layout::RADIUS)),
+            );
+        }
+
         let handler = on_action.clone();
         body = body.child(
             attachment_chip(

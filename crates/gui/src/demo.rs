@@ -339,6 +339,45 @@ fn handle_command(
             publish_state!();
         }
 
+        AppCommand::LoadThreadPreview {
+            channel_id,
+            message_id,
+        } => {
+            // The thread's newest message, which is what a preview shows.
+            match state
+                .messages_for_channel(channel_id)
+                .last()
+                .map(|message| fixtures::message_info(message))
+            {
+                Some(message) => publish_event!(AppEvent::ThreadPreviewLoaded {
+                    channel_id,
+                    message,
+                }),
+                None => publish_event!(AppEvent::ThreadPreviewLoadFailed {
+                    channel_id,
+                    message_id,
+                }),
+            }
+        }
+
+        AppCommand::LoadInboxChannelHistory { .. } => {
+            // The fixture's channels are already fully populated, so the
+            // context around a mention is on screen without fetching.
+            publish_state!();
+        }
+
+        AppCommand::UpdateGuildFolderSettings { .. } => {
+            // No folders in the fixture; answered so the caller is not left
+            // waiting on a command that will never be acknowledged.
+            publish_state!();
+        }
+
+        AppCommand::LoadProfileAvatarPreview { .. }
+        | AppCommand::RequestApplicationCommandAutocomplete { .. } => {
+            // Both need a real upload or a real bot; there is nothing
+            // meaningful the fixture can answer with.
+        }
+
         AppCommand::LoadGuildMembersByIds { .. } => {
             // Every fixture member is already fully hydrated.
         }

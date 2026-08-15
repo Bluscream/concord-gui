@@ -16,7 +16,8 @@ use crate::theme::Presence;
 use crate::ui::profile::ProfileView;
 use crate::ui::switcher::Candidate;
 use crate::ui::workspace::{
-    ChannelEntry, ChannelKind, GuildEntry, MemberEntry, VoiceMember, WorkspaceModel,
+    ChannelEntry, ChannelKind, GuildEntry, GuildFolderEntry, MemberEntry, VoiceMember,
+    WorkspaceModel,
 };
 
 /// Identifies what the user currently has open.
@@ -130,10 +131,35 @@ fn project_guilds(state: &DiscordState) -> Vec<GuildEntry> {
         name: "Direct Messages".to_string(),
         unread: dm_unread > 0,
         mentions: dm_unread as u32,
+        folder: None,
     }];
 
+    // Folder membership, so guilds can be grouped the way the user arranged
+    // them on another client. A folder with no id is Discord's representation
+    // of a single ungrouped guild, not a real folder.
+    let mut folder_of = std::collections::HashMap::new();
+    for folder in state.guild_folders() {
+        let Some(id) = folder.id else {
+            continue;
+        };
+        let entry = GuildFolderEntry {
+            id,
+            name: folder.name.clone(),
+            color: folder.color,
+        };
+        for guild_id in &folder.guild_ids {
+            folder_of.insert(*guild_id, entry.clone());
+        }
+    }
+
     let mut guilds = state.guilds();
-    guilds.sort_by(|a, b| a.name.cmp(&b.name));
+    // Grouped first, so a folder's guilds are adjacent; alphabetical within.
+    guilds.sort_by(|a, b| {
+        let folder = |id| folder_of.get(id).map(|folder: &GuildFolderEntry| folder.id);
+        folder(&a.id)
+            .cmp(&folder(&b.id))
+            .then_with(|| a.name.cmp(&b.name))
+    });
 
     entries.extend(guilds.into_iter().map(|guild| {
         let unread = state.guild_sidebar_unread(guild.id);
@@ -142,6 +168,7 @@ fn project_guilds(state: &DiscordState) -> Vec<GuildEntry> {
             name: guild.name.clone(),
             unread: !matches!(unread, ChannelUnreadState::Seen),
             mentions: mention_count(unread),
+            folder: folder_of.get(&guild.id).cloned(),
         }
     }));
 

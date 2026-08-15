@@ -7,15 +7,15 @@
 
 use concord::config::{self, AppOptions, CredentialStoreMode, UiStateOptions};
 use concord::discord::{
-    ActivityInfo, ActivityKind, AppCommand, AppEvent, ApplicationCommandInfo,
-    ApplicationCommandInvocation, AttachmentDownloadId, BuiltinSlashCommandParse,
-    BuiltinSlashCommandSubmit, DownloadAttachmentSource, ForumPostArchiveState, ForumPostCreate,
-    GlobalUserProfileUpdate, GuildUserProfileUpdate, Id, MAX_UPLOAD_ATTACHMENT_COUNT,
-    MediaPlaybackSource, MediaPlaybackTarget, MessageAttachmentUpload, MessageHistoryAfterMode,
-    MessageSearchQuery, MuteDuration, PresenceStatus, ReactionEmoji, ReplyReference,
-    StreamCaptureTargetsRequestId, UserProfileUpdate, VoiceParticipantPlaybackSettings,
-    VoiceParticipantVolumePercent, VoiceScope, VoiceVolumePercent,
-    application_command_content_is_complete, marker, next_message_nonce,
+    ActivityInfo, ActivityKind, AppCommand, AppEvent, ApplicationCommandAutocompleteInvocation,
+    ApplicationCommandInfo, ApplicationCommandInvocation, AttachmentDownloadId,
+    BuiltinSlashCommandParse, BuiltinSlashCommandSubmit, DownloadAttachmentSource,
+    ForumPostArchiveState, ForumPostCreate, GlobalUserProfileUpdate, GuildUserProfileUpdate, Id,
+    MAX_UPLOAD_ATTACHMENT_COUNT, MediaPlaybackSource, MediaPlaybackTarget, MessageAttachmentUpload,
+    MessageHistoryAfterMode, MessageSearchQuery, MuteDuration, PresenceStatus, ProfileAvatarUpload,
+    ReactionEmoji, ReplyReference, StreamCaptureTargetsRequestId, UserProfileUpdate,
+    VoiceParticipantPlaybackSettings, VoiceParticipantVolumePercent, VoiceScope,
+    VoiceVolumePercent, application_command_content_is_complete, marker, next_message_nonce,
     parse_builtin_slash_command,
     password_auth::{MfaMethod, PasswordAuthEvent},
     qr_auth::QrEvent,
@@ -66,6 +66,18 @@ pub struct GuildEntry {
     pub name: String,
     pub unread: bool,
     pub mentions: u32,
+    /// Folder this guild sits in, if any: its id, name and colour.
+    ///
+    /// Carried per guild rather than as a separate tree because the rail is a
+    /// flat list; a folder is a run of adjacent guilds sharing this value.
+    pub folder: Option<GuildFolderEntry>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct GuildFolderEntry {
+    pub id: u64,
+    pub name: Option<String>,
+    pub color: Option<u32>,
 }
 
 pub struct ChannelEntry {
@@ -336,6 +348,14 @@ pub struct Workspace {
     /// Sequence number for device-list requests, so a slow earlier reply
     /// cannot overwrite the list from a later one.
     audio_sources_request: u64,
+    /// Sequence number for inbox-context requests.
+    inbox_history_request: u64,
+    /// Folder being renamed, with the new name as typed.
+    pub renaming_folder: Option<(u64, Composer)>,
+    /// Key of the avatar preview being awaited, if any.
+    pub pending_avatar: Option<String>,
+    /// Threads a preview has already been requested for.
+    thread_previews: std::collections::HashSet<Id<marker::ChannelMarker>>,
     /// Search state. `None` when the search panel is closed.
     pub search: Option<Search>,
     /// Emoji picker, anchored to the message being reacted to.
@@ -406,6 +426,10 @@ impl Workspace {
             broadcasting: false,
             audio_devices: None,
             audio_sources_request: 0,
+            inbox_history_request: 0,
+            renaming_folder: None,
+            pending_avatar: None,
+            thread_previews: std::collections::HashSet::new(),
             allow_microphone_transmit: true,
             watching: None,
             self_mute: false,
@@ -534,6 +558,12 @@ impl Workspace {
     /// Refresh slash autocomplete after the composer changes.
     fn refresh_slash(&mut self) {
         self.slash = SlashPicker::for_input(self.composer.text(), &self.app_commands);
+
+        // Past the command name the picker closes, and completion becomes the
+        // bot's job rather than ours.
+        if self.slash.is_none() {
+            self.request_command_autocomplete();
+        }
     }
 
     /// Accept the highlighted completion.
@@ -990,6 +1020,102 @@ impl Workspace {
         self.open_channel(thread);
     }
 
+    /// Ask for a thread's most recent message, to show under its starter.
+    ///
+    /// A preview is what makes a thread worth noticing: "3 messages" says
+    /// nothing about whether the conversation moved.
+    fn request_thread_preview(
+        &self,
+        channel_id: Id<marker::ChannelMarker>,
+        message_id: Id<marker::MessageMarker>,
+    ) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        handle.send(AppCommand::LoadThreadPreview {
+            channel_id,
+            message_id,
+        });
+    }
+
+    /// Apply the typed folder name.
+    fn submit_folder_rename(&mut self) {
+        let Some((folder_id, name)) = self.renaming_folder.take() else {
+            return;
+        };
+        let name = name.text().trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        // Colour is left alone: the command carries both fields, and passing
+        // None means unchanged rather than cleared.
+        self.update_guild_folder(folder_id, Some(name), None);
+    }
+
+    /// Rename or recolour a guild folder.
+    pub fn update_guild_folder(
+        &mut self,
+        folder_id: u64,
+        name: Option<String>,
+        color: Option<u32>,
+    ) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        handle.send(AppCommand::UpdateGuildFolderSettings {
+            folder_id,
+            name,
+            color,
+        });
+    }
+
+    /// Ask a bot to complete the argument being typed.
+    ///
+    /// Only for application commands: builtins are parsed locally and have no
+    /// remote side to ask.
+    fn request_command_autocomplete(&mut self) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+
+        let content = self.composer.text().to_string();
+        let Some(rest) = content.strip_prefix('/') else {
+            return;
+        };
+        let Some((name, _)) = rest.split_once(char::is_whitespace) else {
+            // No argument started yet, so there is nothing to complete.
+            return;
+        };
+
+        let Some(command) = self
+            .app_commands
+            .iter()
+            .find(|command| command.name.eq_ignore_ascii_case(name))
+        else {
+            return;
+        };
+
+        let guild_id = match self.nav.selection {
+            Selection::Guild(guild_id) => Some(guild_id),
+            Selection::DirectMessages => None,
+        };
+
+        handle.send(AppCommand::RequestApplicationCommandAutocomplete {
+            invocation: ApplicationCommandAutocompleteInvocation {
+                guild_id,
+                channel_id,
+                command_identity: command.identity(),
+                command_version: command.version.clone(),
+                command_name: command.name.clone(),
+                content,
+                // The core resolves which option the cursor sits in; an empty
+                // name means "the one being typed".
+                focused_option_name: String::new(),
+                nonce: next_message_nonce().to_string(),
+            },
+        });
+    }
+
     /// Move the message selection, entering the log if not already in it.
     ///
     /// Selection starts at the newest message rather than the oldest: that is
@@ -1238,6 +1364,19 @@ impl Workspace {
             ),
             None => (Vec::new(), Vec::new()),
         };
+
+        // Previews for threads visible in the log. Requested once each: the
+        // reprojection runs on every snapshot, and re-asking each time would
+        // be a request per thread per state change.
+        let pending: Vec<_> = self
+            .messages
+            .iter()
+            .filter_map(|row| row.thread.map(|thread| (thread, row.id)))
+            .filter(|(thread, _)| self.thread_previews.insert(*thread))
+            .collect();
+        for (thread, message_id) in pending {
+            self.request_thread_preview(thread, message_id);
+        }
 
         if let Some((voice_channel_id, _)) = &self.voice_channel {
             if let Some(channel) = self
@@ -2128,6 +2267,43 @@ impl Workspace {
         .detach();
     }
 
+    /// Pick a new avatar and ask for a preview of it.
+    ///
+    /// The preview comes first because the upload is not reversible in any
+    /// useful sense: Discord keeps whatever is sent, so seeing the crop before
+    /// committing is the whole point of the step.
+    fn change_avatar(&mut self, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose avatar".into()),
+        });
+
+        cx.spawn(async move |workspace, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+
+            let _ = workspace.update(cx, |workspace, cx| {
+                let Some(handle) = &workspace.handle else {
+                    return;
+                };
+                let upload = ProfileAvatarUpload::from_path(path);
+                // The key identifies which preview a reply belongs to; the
+                // filename is enough, since only one is ever in flight.
+                let key = upload.filename.clone();
+                workspace.pending_avatar = Some(key.clone());
+                handle.send(AppCommand::LoadProfileAvatarPreview { key, upload });
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Validate and stage picked files.
     fn stage_attachments(&mut self, paths: Vec<std::path::PathBuf>) {
         self.attachment_error = None;
@@ -2629,9 +2805,18 @@ impl Workspace {
                     }))
                     .child(
                         gpui::div()
+                            .id("bar-avatar")
                             .relative()
+                            .cursor_pointer()
                             .child(avatar(32., &user_name))
-                            .child(presence_dot(Presence::Online)),
+                            .child(presence_dot(Presence::Online))
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                // Without this the row's own handler also runs
+                                // and opens the profile behind the file picker.
+                                cx.stop_propagation();
+                                this.change_avatar(cx);
+                                cx.notify();
+                            })),
                     )
                     .child(
                         column()
@@ -2929,6 +3114,16 @@ impl Workspace {
         }
         self.forum = None;
         self.jump_to(channel_id, message_id);
+
+        // The surrounding conversation, so the mention has context rather than
+        // arriving as one isolated line.
+        if let Some(handle) = &self.handle {
+            self.inbox_history_request = self.inbox_history_request.wrapping_add(1);
+            handle.send(AppCommand::LoadInboxChannelHistory {
+                channel_id,
+                request_id: self.inbox_history_request,
+            });
+        }
     }
 
     /// Dismiss a mention without visiting it.
@@ -3687,9 +3882,45 @@ impl Workspace {
             .pt(px(space::MD))
             .gap(px(space::SM));
 
+        let mut open_folder: Option<u64> = None;
+
         for (index, guild) in self.model.guilds.iter().enumerate() {
             let selected = index == self.model.selected_guild;
             let guild_id = guild.id;
+
+            // A folder header precedes the first guild in each run. Runs are
+            // adjacent by construction, so a change of folder id is the
+            // boundary.
+            if let Some(folder) = &guild.folder
+                && open_folder != Some(folder.id)
+            {
+                open_folder = Some(folder.id);
+                let folder_id = folder.id;
+                let label = folder.name.clone().unwrap_or_else(|| "Folder".to_string());
+                let color = folder.color.unwrap_or(active().text_subtle);
+
+                rail = rail.child(
+                    gpui::div()
+                        .id(("folder", folder_id as usize))
+                        .w(px(44.))
+                        .py(px(space::XS))
+                        .flex()
+                        .justify_center()
+                        .cursor_pointer()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(color))
+                        .hover(|style| style.bg(rgb(active().surface_hover)))
+                        // Truncated because the rail is one avatar wide; the
+                        // full name is not the point, telling folders apart is.
+                        .child(label.chars().take(6).collect::<String>())
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            this.renaming_folder = Some((folder_id, Composer::default()));
+                            cx.notify();
+                        })),
+                );
+            } else if guild.folder.is_none() {
+                open_folder = None;
+            }
             rail = rail.child(
                 gpui::div()
                     .id(("guild", index))
@@ -4020,6 +4251,30 @@ impl Workspace {
                     move |cx: &mut gpui::App| {
                         entity.update(cx, |workspace, cx| {
                             workspace.confirming = None;
+                            cx.notify();
+                        });
+                    }
+                },
+            )));
+        }
+
+        if let Some((_, name)) = &self.renaming_folder {
+            return Some(overlay::scrim().child(overlay::rename_folder_view(
+                name.text(),
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.submit_folder_rename();
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.renaming_folder = None;
                             cx.notify();
                         });
                     }
@@ -4449,6 +4704,7 @@ impl Workspace {
                 self.options.display.circular_avatars,
                 self.options.display.hour_format_24,
                 self.options.display.show_custom_emoji,
+                self.options.display.show_images && !self.options.display.disable_image_preview,
                 self.has_newer_messages(),
                 {
                     // Click handlers run with only an `App`, so the workspace is
@@ -4755,6 +5011,23 @@ impl Render for Workspace {
                                 || event.keystroke.modifiers.platform)
                         {
                             this.open_switcher();
+                        } else if this.renaming_folder.is_some() {
+                            match key {
+                                "escape" => this.renaming_folder = None,
+                                "enter" => this.submit_folder_rename(),
+                                _ => {
+                                    let pasted = (key == "v"
+                                        && (event.keystroke.modifiers.control
+                                            || event.keystroke.modifiers.platform))
+                                        .then(|| {
+                                            cx.read_from_clipboard().and_then(|item| item.text())
+                                        })
+                                        .flatten();
+                                    if let Some((_, name)) = &mut this.renaming_folder {
+                                        name.handle_key_with_clipboard(event, pasted);
+                                    }
+                                }
+                            }
                         } else if this.stream_picker.is_some() && key == "escape" {
                             this.stream_picker = None;
                         } else if this.picker.is_some() {
