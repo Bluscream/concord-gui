@@ -717,24 +717,64 @@ fn presence_update_payload_includes_manual_activity() {
 #[test]
 fn presence_update_payload_serializes_rich_activity_fields() {
     let activity = ActivityInfo {
+        id: Some("receive-only-id".to_owned()),
+        kind: ActivityKind::Hang,
+        name: "Hang Status".to_owned(),
+        created_at: Some(1_700_000_000_000),
+        session_id: Some("receive-only-session".to_owned()),
+        platform: Some("xbox".to_owned()),
+        supported_platforms: vec!["xbox".to_owned(), "desktop".to_owned()],
+        details: Some("Building Concord".to_owned()),
+        details_url: Some("https://example.com/details".to_owned()),
+        state: Some("custom".to_owned()),
+        state_url: Some("https://example.com/state".to_owned()),
+        application_id: Some("12345".to_owned()),
+        parent_application_id: Some("54321".to_owned()),
+        status_display_type: Some(2),
+        sync_id: Some("sync-1".to_owned()),
+        flags: Some(16),
         timestamps: Some(crate::discord::ActivityTimestamps {
             start: Some(1_700_000_000_000),
-            end: None,
+            end: Some(1_700_000_100_000),
         }),
         assets: Some(crate::discord::ActivityAssets {
             large_image: Some("cover".to_owned()),
             large_text: Some("On the main menu".to_owned()),
-            small_image: None,
-            small_text: None,
+            large_url: Some("https://example.com/large".to_owned()),
+            small_image: Some("small".to_owned()),
+            small_text: Some("Small".to_owned()),
+            small_url: Some("https://example.com/small".to_owned()),
+            invite_cover_image: Some("invite".to_owned()),
+            extra_fields: [("future_asset".to_owned(), json!(true))]
+                .into_iter()
+                .collect(),
         }),
         party: Some(crate::discord::ActivityParty {
             id: Some("party-1".to_owned()),
             size: Some((2, 5)),
+            privacy: Some(1),
+            extra_fields: [("future_party".to_owned(), json!("kept"))]
+                .into_iter()
+                .collect(),
+        }),
+        secrets: Some(crate::discord::ActivitySecrets {
+            join: Some("join-secret".to_owned()),
+            spectate: Some("spectate-secret".to_owned()),
+            extra_fields: [("future_secret".to_owned(), json!(7))]
+                .into_iter()
+                .collect(),
         }),
         buttons: vec![crate::discord::ActivityButton {
             label: "Join".to_owned(),
             url: "https://example.com/join".to_owned(),
         }],
+        instance: Some(true),
+        metadata: [("artist_ids".to_owned(), json!(["artist-1"]))]
+            .into_iter()
+            .collect(),
+        extra_fields: [("future_activity".to_owned(), json!({ "value": 1 }))]
+            .into_iter()
+            .collect(),
         ..ActivityInfo::playing("Concord")
     };
     let payload: serde_json::Value = serde_json::from_str(&presence_update_payload(
@@ -744,24 +784,82 @@ fn presence_update_payload_serializes_rich_activity_fields() {
     .expect("presence payload should be valid json");
     let entry = &payload["d"]["activities"][0];
 
+    assert_eq!(entry["type"].as_u64(), Some(6));
+    assert_eq!(entry["name"].as_str(), Some("Hang Status"));
+    assert!(entry.get("id").is_none());
+    assert!(entry.get("created_at").is_none());
+    assert!(entry.get("session_id").is_none());
+    assert_eq!(entry["platform"].as_str(), Some("xbox"));
+    assert_eq!(entry["supported_platforms"], json!(["xbox", "desktop"]));
+    assert_eq!(entry["details"].as_str(), Some("Building Concord"));
+    assert_eq!(
+        entry["details_url"].as_str(),
+        Some("https://example.com/details")
+    );
+    assert_eq!(entry["state"].as_str(), Some("custom"));
+    assert_eq!(
+        entry["state_url"].as_str(),
+        Some("https://example.com/state")
+    );
+    assert_eq!(entry["application_id"].as_str(), Some("12345"));
+    assert_eq!(entry["parent_application_id"].as_str(), Some("54321"));
+    assert_eq!(entry["status_display_type"].as_u64(), Some(2));
+    assert_eq!(entry["sync_id"].as_str(), Some("sync-1"));
+    assert_eq!(entry["flags"].as_u64(), Some(17));
     assert_eq!(
         entry["timestamps"]["start"].as_i64(),
         Some(1_700_000_000_000)
     );
-    assert!(entry["timestamps"].get("end").is_none());
+    assert_eq!(entry["timestamps"]["end"].as_i64(), Some(1_700_000_100_000));
     assert_eq!(entry["assets"]["large_image"].as_str(), Some("cover"));
     assert_eq!(
         entry["assets"]["large_text"].as_str(),
         Some("On the main menu")
     );
-    assert!(entry["assets"].get("small_image").is_none());
+    assert_eq!(
+        entry["assets"]["large_url"].as_str(),
+        Some("https://example.com/large")
+    );
+    assert_eq!(entry["assets"]["small_image"].as_str(), Some("small"));
+    assert_eq!(entry["assets"]["small_text"].as_str(), Some("Small"));
+    assert_eq!(
+        entry["assets"]["small_url"].as_str(),
+        Some("https://example.com/small")
+    );
+    assert_eq!(
+        entry["assets"]["invite_cover_image"].as_str(),
+        Some("invite")
+    );
+    assert_eq!(entry["assets"]["future_asset"], json!(true));
     assert_eq!(entry["party"]["id"].as_str(), Some("party-1"));
     assert_eq!(entry["party"]["size"], json!([2, 5]));
+    assert_eq!(entry["party"]["privacy"].as_u64(), Some(1));
+    assert_eq!(entry["party"]["future_party"], json!("kept"));
+    assert_eq!(entry["secrets"]["join"].as_str(), Some("join-secret"));
+    assert_eq!(
+        entry["secrets"]["spectate"].as_str(),
+        Some("spectate-secret")
+    );
+    assert_eq!(entry["secrets"]["future_secret"], json!(7));
     assert_eq!(entry["buttons"], json!(["Join"]));
     assert_eq!(
         entry["metadata"]["button_urls"],
         json!(["https://example.com/join"])
     );
+    assert_eq!(entry["metadata"]["artist_ids"], json!(["artist-1"]));
+    assert_eq!(entry["future_activity"], json!({ "value": 1 }));
+}
+
+#[test]
+fn presence_update_payload_preserves_unknown_activity_type() {
+    let activity = ActivityInfo::test(ActivityKind::Unknown(99), "Future activity");
+    let payload: serde_json::Value = serde_json::from_str(&presence_update_payload(
+        PresenceStatus::Online,
+        &[activity],
+    ))
+    .expect("presence payload should be valid json");
+
+    assert_eq!(payload["d"]["activities"][0]["type"].as_u64(), Some(99));
 }
 
 #[test]

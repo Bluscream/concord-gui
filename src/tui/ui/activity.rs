@@ -165,7 +165,8 @@ pub(super) fn build_activity_render(
                 sanitize_for_display_width(&activity.name)
             ),
         },
-        ActivityKind::Unknown => ActivityRender {
+        ActivityKind::Hang => build_custom(activity, emoji_images),
+        ActivityKind::Unknown(_) => ActivityRender {
             leading: ActivityLeading::None,
             body: sanitize_for_display_width(&activity.name),
         },

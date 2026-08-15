@@ -369,10 +369,13 @@ impl DiscordState {
             }
             AppEvent::ChannelUpsert(channel) => {
                 if super::channel::is_thread_kind(&channel.kind) {
-                    self.apply_thread_gateway_upsert(&super::ThreadGatewayInfo {
-                        channel: channel.clone(),
-                        current_user_member: None,
-                    });
+                    self.apply_thread_gateway_upsert(
+                        &super::ThreadGatewayInfo {
+                            channel: channel.clone(),
+                            current_user_member: None,
+                        },
+                        false,
+                    );
                 } else {
                     self.upsert_channel(channel);
                 }
@@ -416,7 +419,9 @@ impl DiscordState {
                 channel_id,
                 user_id,
             } => self.apply_channel_recipient_remove(*channel_id, *user_id),
-            AppEvent::ThreadUpsert { thread } => self.apply_thread_gateway_upsert(thread),
+            AppEvent::ThreadUpsert { thread, created } => {
+                self.apply_thread_gateway_upsert(thread, *created);
+            }
             AppEvent::ThreadListSync { sync } => {
                 self.apply_thread_list_sync(sync);
                 if let Some(current_user_members) = &sync.current_user_members {
@@ -855,7 +860,9 @@ impl DiscordState {
                 self.apply_relationship_upsert(relationship);
             }
             AppEvent::RelationshipUpdate { update } => self.apply_relationship_update(update),
-            AppEvent::RelationshipRemove { user_id } => self.apply_relationship_remove(user_id),
+            AppEvent::RelationshipRemove { user_id, status } => {
+                self.apply_relationship_remove(user_id, *status)
+            }
             AppEvent::UserIdentityUpdate {
                 user_id,
                 username,
@@ -1328,10 +1335,13 @@ impl DiscordState {
         }
         for channel in channels {
             if super::channel::is_thread_kind(&channel.kind) {
-                self.apply_thread_gateway_upsert(&super::ThreadGatewayInfo {
-                    channel: channel.clone(),
-                    current_user_member: None,
-                });
+                self.apply_thread_gateway_upsert(
+                    &super::ThreadGatewayInfo {
+                        channel: channel.clone(),
+                        current_user_member: None,
+                    },
+                    false,
+                );
             } else {
                 self.upsert_channel(channel);
             }
@@ -1454,8 +1464,9 @@ impl DiscordState {
             mention_everyone: message.mention_everyone,
             mention_roles: &message.mention_roles,
             flags: message.flags,
+            message_kind: message.message_kind,
         }) {
-            MessageNotificationKind::Mention => {
+            MessageNotificationKind::Mention { .. } => {
                 let entry = self
                     .notifications_mut()
                     .read_states
@@ -1610,6 +1621,14 @@ impl DiscordState {
             relationship.status,
             previous.as_ref(),
         );
+        match relationship.status {
+            FriendStatus::IncomingRequest => self.adjust_notification_center_badge(true),
+            FriendStatus::Friend => self.adjust_notification_center_badge(false),
+            FriendStatus::None
+            | FriendStatus::Blocked
+            | FriendStatus::OutgoingRequest
+            | FriendStatus::Implicit => {}
+        }
     }
 
     fn apply_relationship_update(&mut self, update: &RelationshipUpdateInfo) {
@@ -1639,6 +1658,9 @@ impl DiscordState {
                     .as_ref()
                     .and_then(|relationship| relationship.username.clone())
             }),
+            ignored: update
+                .ignored
+                .unwrap_or_else(|| previous.as_ref().is_some_and(|value| value.ignored)),
         };
         self.profiles_mut()
             .relationships
@@ -1646,9 +1668,36 @@ impl DiscordState {
         self.finish_relationship_change(update.user_id, relationship.status, previous.as_ref());
     }
 
-    fn apply_relationship_remove(&mut self, user_id: &Id<UserMarker>) {
+    fn apply_relationship_remove(
+        &mut self,
+        user_id: &Id<UserMarker>,
+        removed_status: Option<FriendStatus>,
+    ) {
         let previous = self.profiles_mut().relationships.remove(user_id);
+        if removed_status.or_else(|| previous.as_ref().map(|relationship| relationship.status))
+            == Some(FriendStatus::IncomingRequest)
+        {
+            self.adjust_notification_center_badge(false);
+        }
         self.finish_relationship_change(*user_id, FriendStatus::None, previous.as_ref());
+    }
+
+    fn adjust_notification_center_badge(&mut self, increment: bool) {
+        const NOTIFICATION_CENTER_READ_STATE: u8 = 2;
+
+        let Some(current_user_id) = self.session.current_user_id else {
+            return;
+        };
+        let state = self
+            .notifications_mut()
+            .non_channel_read_states
+            .entry((NOTIFICATION_CENTER_READ_STATE, current_user_id.get()))
+            .or_default();
+        state.badge_count = if increment {
+            state.badge_count.saturating_add(1)
+        } else {
+            state.badge_count.saturating_sub(1)
+        };
     }
 
     fn finish_relationship_change(
@@ -2087,6 +2136,7 @@ fn merge_relationship_info(
             .username
             .clone()
             .or_else(|| previous.and_then(|relationship| relationship.username.clone())),
+        ignored: incoming.ignored,
     }
 }
 

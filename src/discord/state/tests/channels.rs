@@ -211,6 +211,7 @@ fn archived_or_removed_thread_updates_leave_the_active_set() {
             channel: test_thread(guild_id, parent_id, thread_id, "post"),
             current_user_member: None,
         },
+        created: false,
     });
     assert_eq!(
         state.active_thread_ids_for_parent(parent_id),
@@ -224,6 +225,7 @@ fn archived_or_removed_thread_updates_leave_the_active_set() {
             channel: removed,
             current_user_member: None,
         },
+        created: false,
     });
     assert!(state.active_thread_ids_for_parent(parent_id).is_empty());
 
@@ -238,6 +240,7 @@ fn archived_or_removed_thread_updates_leave_the_active_set() {
             channel: partial,
             current_user_member: None,
         },
+        created: false,
     });
     assert!(state.active_thread_ids_for_parent(parent_id).is_empty());
 
@@ -249,6 +252,7 @@ fn archived_or_removed_thread_updates_leave_the_active_set() {
             channel: archived,
             current_user_member: None,
         },
+        created: false,
     });
     assert!(state.active_thread_ids_for_parent(parent_id).is_empty());
 }
@@ -364,6 +368,7 @@ fn archived_response_keeps_membership_without_promoting_sidebar_state() {
             channel: test_thread(guild_id, forum_id, archived_ids[0], "reopened"),
             current_user_member: None,
         },
+        created: false,
     });
 
     assert!(state.thread_is_sidebar_active(archived_ids[0]));
@@ -595,6 +600,7 @@ fn partial_relationship_update_changes_and_clears_friend_nickname() {
             nickname: Some(Some("Pal".to_owned())),
             display_name: None,
             username: None,
+            ignored: None,
         },
     });
     assert_eq!(
@@ -609,6 +615,7 @@ fn partial_relationship_update_changes_and_clears_friend_nickname() {
             nickname: Some(None),
             display_name: None,
             username: None,
+            ignored: None,
         },
     });
     assert_eq!(

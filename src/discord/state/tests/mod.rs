@@ -68,6 +68,7 @@ fn relationship_info(
         nickname: nickname.map(str::to_owned),
         display_name: display_name.map(str::to_owned),
         username: username.map(str::to_owned),
+        ignored: false,
     }
 }
 

@@ -98,11 +98,11 @@ fn compact_activity_has_visible_content(activity: &ActivityInfo) -> bool {
         ActivityKind::Listening => {
             !activity.name.trim().is_empty() || has_text(activity.details.as_deref())
         }
-        ActivityKind::Competing => true,
+        ActivityKind::Competing | ActivityKind::Hang => true,
         ActivityKind::Playing
         | ActivityKind::Streaming
         | ActivityKind::Watching
-        | ActivityKind::Unknown => !activity.name.trim().is_empty(),
+        | ActivityKind::Unknown(_) => !activity.name.trim().is_empty(),
     }
 }
 
@@ -114,7 +114,8 @@ fn compact_activity_priority(kind: ActivityKind) -> u8 {
         ActivityKind::Watching => 3,
         ActivityKind::Competing => 4,
         ActivityKind::Custom => 5,
-        ActivityKind::Unknown => 6,
+        ActivityKind::Hang => 6,
+        ActivityKind::Unknown(_) => 7,
     }
 }
 

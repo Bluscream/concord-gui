@@ -133,6 +133,7 @@ pub(super) fn build_ready_payload(user: Option<(String, String)>) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::{Command, build_ready_payload, parse_command, parse_handshake_client_id};
+    use crate::discord::ActivityKind;
     use serde_json::json;
 
     #[test]
@@ -212,6 +213,63 @@ mod tests {
                 .timestamps
                 .and_then(|t| t.start),
             Some(millis)
+        );
+    }
+
+    #[test]
+    fn parse_command_preserves_rpc_activity_fields() {
+        let payload = json!({
+            "cmd": "SET_ACTIVITY",
+            "args": {
+                "pid": 1,
+                "activity": {
+                    "type": 6,
+                    "name": "Hang Status",
+                    "details_url": "https://example.com/details",
+                    "state_url": "https://example.com/state",
+                    "supported_platforms": ["desktop", "xbox"],
+                    "party": {
+                        "id": "party-1",
+                        "size": [2, 5],
+                        "privacy": 1
+                    },
+                    "secrets": {
+                        "join": "join-secret",
+                        "spectate": "spectate-secret"
+                    },
+                    "instance": true,
+                    "future_rpc_field": { "kept": true }
+                }
+            }
+        })
+        .to_string();
+
+        let command = parse_command(payload.as_bytes(), "999").expect("command parses");
+        let Command::SetActivity { activity, .. } = command else {
+            panic!("expected SET_ACTIVITY");
+        };
+        let activity = activity.expect("activity present");
+        assert_eq!(activity.kind, ActivityKind::Hang);
+        assert_eq!(
+            activity.details_url.as_deref(),
+            Some("https://example.com/details")
+        );
+        assert_eq!(
+            activity.state_url.as_deref(),
+            Some("https://example.com/state")
+        );
+        assert_eq!(activity.supported_platforms, ["desktop", "xbox"]);
+        let party = activity.party.expect("party present");
+        assert_eq!(party.id.as_deref(), Some("party-1"));
+        assert_eq!(party.size, Some((2, 5)));
+        assert_eq!(party.privacy, Some(1));
+        let secrets = activity.secrets.expect("secrets present");
+        assert_eq!(secrets.join.as_deref(), Some("join-secret"));
+        assert_eq!(secrets.spectate.as_deref(), Some("spectate-secret"));
+        assert_eq!(activity.instance, Some(true));
+        assert_eq!(
+            activity.extra_fields["future_rpc_field"],
+            json!({ "kept": true })
         );
     }
 

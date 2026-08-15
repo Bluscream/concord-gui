@@ -788,6 +788,7 @@ fn relationship_payloads_emit_upserts_and_authoritative_empty_lists() {
                 "id": "20",
                 "type": 1,
                 "nickname": "Bestie",
+                "user_ignored": true,
                 "user": {
                     "id": "20",
                     "global_name": "Alice Global",
@@ -806,6 +807,7 @@ fn relationship_payloads_emit_upserts_and_authoritative_empty_lists() {
                 && relationship.nickname.as_deref() == Some("Bestie")
                 && relationship.display_name.as_deref() == Some("Alice Global")
                 && relationship.username.as_deref() == Some("alice")
+                && relationship.ignored
     ));
 
     let ready = parse_user_account_event(
@@ -845,6 +847,7 @@ fn relationship_update_accepts_a_partial_nickname_patch() {
                 && update.nickname == Some(Some("New nickname".to_owned()))
                 && update.display_name.is_none()
                 && update.username.is_none()
+                && update.ignored.is_none()
     ));
 }
 
@@ -860,7 +863,8 @@ fn relationship_remove_emits_event() {
     assert_eq!(events.len(), 1);
     assert!(matches!(
         &events[0],
-        AppEvent::RelationshipRemove { user_id } if *user_id == Id::new(20)
+        AppEvent::RelationshipRemove { user_id, status }
+            if *user_id == Id::new(20) && *status == Some(FriendStatus::IncomingRequest)
     ));
 }
 
@@ -1026,6 +1030,41 @@ fn raw_ready_parser_adds_current_user_to_group_dm_recipients() {
         event,
         AppEvent::PresenceUpdate { guild_id: None, presence }
             if presence.user_id == Id::new(99) && presence.status == PresenceStatus::Idle
+    )));
+}
+
+#[test]
+fn ready_uses_the_overall_session_status_and_activities() {
+    let events = parse_user_account_event(
+        &json!({
+            "t": "READY",
+            "d": {
+                "user": { "id": "99", "username": "neo" },
+                "sessions": [
+                    {
+                        "session_id": "desktop",
+                        "status": "idle",
+                        "activities": [{ "type": 0, "name": "Wrong session" }]
+                    },
+                    {
+                        "session_id": "all",
+                        "status": "dnd",
+                        "activities": [{ "type": 0, "name": "Concord" }]
+                    }
+                ],
+                "guilds": []
+            }
+        })
+        .to_string(),
+    );
+
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AppEvent::PresenceUpdate { guild_id: None, presence }
+            if presence.user_id == Id::new(99)
+                && presence.status == PresenceStatus::DoNotDisturb
+                && presence.activities.len() == 1
+                && presence.activities[0].name == "Concord"
     )));
 }
 
@@ -1497,14 +1536,53 @@ fn raw_presence_update_parses_rich_activity_fields() {
                 "user": { "id": "20" },
                 "status": "online",
                 "activities": [{
-                    "type": 0,
-                    "name": "Concord",
+                    "id": "activity-1",
+                    "type": 6,
+                    "name": "Hang Status",
+                    "created_at": "1700000000000",
+                    "session_id": "session-1",
+                    "platform": "xbox",
+                    "supported_platforms": ["xbox", "desktop"],
                     "application_id": "12345",
-                    "timestamps": { "start": 1_700_000_000_000i64 },
-                    "assets": { "large_image": "cover", "large_text": "Main menu" },
-                    "party": { "id": "party-1", "size": [2, 5] },
+                    "parent_application_id": "54321",
+                    "status_display_type": 2,
+                    "details": "Building Concord",
+                    "details_url": "https://example.com/details",
+                    "state": "custom",
+                    "state_url": "https://example.com/state",
+                    "sync_id": "sync-1",
+                    "flags": 17,
+                    "timestamps": {
+                        "start": "1700000000000",
+                        "end": 1_700_000_100_000i64
+                    },
+                    "assets": {
+                        "large_image": "cover",
+                        "large_text": "Main menu",
+                        "large_url": "https://example.com/large",
+                        "small_image": "small",
+                        "small_text": "Small",
+                        "small_url": "https://example.com/small",
+                        "invite_cover_image": "invite",
+                        "future_asset": true
+                    },
+                    "party": {
+                        "id": "party-1",
+                        "size": [2, 5],
+                        "privacy": 1,
+                        "future_party": "kept"
+                    },
+                    "secrets": {
+                        "join": "join-secret",
+                        "spectate": "spectate-secret",
+                        "future_secret": 7
+                    },
                     "buttons": ["Join"],
-                    "metadata": { "button_urls": ["https://example.com/join"] }
+                    "metadata": {
+                        "button_urls": ["https://example.com/join"],
+                        "artist_ids": ["artist-1"]
+                    },
+                    "future_activity": { "value": 1 }
                 }]
             }
         })
@@ -1515,18 +1593,66 @@ fn raw_presence_update_parses_rich_activity_fields() {
         panic!("expected a single presence update, got {events:?}");
     };
     let activity = &presence.activities[0];
+    assert_eq!(activity.id.as_deref(), Some("activity-1"));
+    assert_eq!(activity.kind, ActivityKind::Hang);
+    assert_eq!(activity.created_at, Some(1_700_000_000_000));
+    assert_eq!(activity.session_id.as_deref(), Some("session-1"));
+    assert_eq!(activity.platform.as_deref(), Some("xbox"));
+    assert_eq!(activity.supported_platforms, ["xbox", "desktop"]);
+    assert_eq!(activity.application_id.as_deref(), Some("12345"));
+    assert_eq!(activity.parent_application_id.as_deref(), Some("54321"));
+    assert_eq!(activity.status_display_type, Some(2));
+    assert_eq!(activity.details.as_deref(), Some("Building Concord"));
+    assert_eq!(
+        activity.details_url.as_deref(),
+        Some("https://example.com/details")
+    );
+    assert_eq!(activity.state.as_deref(), Some("custom"));
+    assert_eq!(
+        activity.state_url.as_deref(),
+        Some("https://example.com/state")
+    );
+    assert_eq!(activity.sync_id.as_deref(), Some("sync-1"));
+    assert_eq!(activity.flags, Some(17));
     assert_eq!(
         activity.timestamps.and_then(|t| t.start),
         Some(1_700_000_000_000)
     );
+    assert_eq!(
+        activity.timestamps.and_then(|t| t.end),
+        Some(1_700_000_100_000)
+    );
     let assets = activity.assets.as_ref().expect("assets parsed");
     assert_eq!(assets.large_image.as_deref(), Some("cover"));
     assert_eq!(assets.large_text.as_deref(), Some("Main menu"));
+    assert_eq!(
+        assets.large_url.as_deref(),
+        Some("https://example.com/large")
+    );
+    assert_eq!(assets.small_image.as_deref(), Some("small"));
+    assert_eq!(assets.small_text.as_deref(), Some("Small"));
+    assert_eq!(
+        assets.small_url.as_deref(),
+        Some("https://example.com/small")
+    );
+    assert_eq!(assets.invite_cover_image.as_deref(), Some("invite"));
+    assert_eq!(assets.extra_fields["future_asset"], json!(true));
     let party = activity.party.as_ref().expect("party parsed");
     assert_eq!(party.size, Some((2, 5)));
+    assert_eq!(party.privacy, Some(1));
+    assert_eq!(party.extra_fields["future_party"], json!("kept"));
+    let secrets = activity.secrets.as_ref().expect("secrets parsed");
+    assert_eq!(secrets.join.as_deref(), Some("join-secret"));
+    assert_eq!(secrets.spectate.as_deref(), Some("spectate-secret"));
+    assert_eq!(secrets.extra_fields["future_secret"], json!(7));
     assert_eq!(activity.buttons.len(), 1);
     assert_eq!(activity.buttons[0].label, "Join");
     assert_eq!(activity.buttons[0].url, "https://example.com/join");
+    assert_eq!(activity.metadata["artist_ids"], json!(["artist-1"]));
+    assert_eq!(
+        activity.extra_fields["future_activity"],
+        json!({ "value": 1 })
+    );
 }
 
 #[test]
@@ -1542,9 +1668,10 @@ fn thread_gateway_events_keep_active_metadata_and_membership_separate() {
     for (payload, expected_member) in [(joined, true), (thread_payload(11, "not joined"), false)] {
         let events =
             parse_user_account_event(&json!({ "t": "THREAD_CREATE", "d": payload }).to_string());
-        let [AppEvent::ThreadUpsert { thread }] = events.as_slice() else {
+        let [AppEvent::ThreadUpsert { thread, created }] = events.as_slice() else {
             panic!("expected one thread upsert, got {events:?}");
         };
+        assert!(*created);
         assert_eq!(thread.current_user_member.is_some(), expected_member);
         if let Some(member) = &thread.current_user_member {
             assert_eq!(member.thread_id, Some(thread.channel.channel_id));
@@ -1702,7 +1829,7 @@ fn ready_supplemental_marks_user_snapshot_threads_as_joined() {
     );
 
     let thread = events.iter().find_map(|event| match event {
-        AppEvent::ThreadUpsert { thread } => Some(thread),
+        AppEvent::ThreadUpsert { thread, .. } => Some(thread),
         _ => None,
     });
     let thread = thread.expect("supplemental thread should use the thread event path");

@@ -256,6 +256,7 @@ fn inactive_sync_and_flags_remove_threads_without_promoting_unjoined_posts() {
             channel: removed,
             current_user_member: None,
         },
+        created: false,
     });
     assert!(sidebar_thread_ids(&state).is_empty());
     assert!(state.selected_forum_post_items().is_empty());

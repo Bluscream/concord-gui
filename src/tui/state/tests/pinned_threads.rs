@@ -259,6 +259,7 @@ fn missing_thread_preview_requests_exact_latest_message_until_loaded() {
             },
             current_user_member: None,
         },
+        created: false,
     });
 
     assert_eq!(
@@ -347,6 +348,7 @@ fn thread_summary_suppresses_preview_when_channel_latest_is_newer_than_cache() {
             },
             current_user_member: None,
         },
+        created: false,
     });
     state.push_event(AppEvent::ThreadPreviewLoaded {
         channel_id: Id::new(10),

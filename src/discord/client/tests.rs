@@ -1795,6 +1795,7 @@ fn thread_upsert_event(
                 extra_fields: Default::default(),
             }),
         },
+        created: false,
     }
 }
 

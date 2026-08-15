@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::discord::ids::{
     Id,
-    marker::{ChannelMarker, GuildMarker, UserMarker},
+    marker::{ChannelMarker, GuildMarker, MessageMarker, UserMarker},
 };
 use crate::discord::state::DiscordState;
 
@@ -494,7 +494,24 @@ impl DiscordState {
         })
     }
 
-    pub(in crate::discord) fn apply_thread_gateway_upsert(&mut self, thread: &ThreadGatewayInfo) {
+    pub(in crate::discord) fn apply_thread_gateway_upsert(
+        &mut self,
+        thread: &ThreadGatewayInfo,
+        created: bool,
+    ) {
+        let parent_to_ack = if created
+            && thread.channel.owner_id == self.session.current_user_id
+        {
+            thread.channel.parent_id.filter(|parent_id| {
+                self.navigation
+                    .channels
+                    .get(parent_id)
+                    .is_some_and(|parent| parent.is_forum())
+            })
+        } else {
+            None
+        };
+
         self.upsert_channel(&thread.channel);
         self.refresh_active_thread(thread.channel.channel_id);
         if let Some(member) = &thread.current_user_member {
@@ -503,6 +520,12 @@ impl DiscordState {
                 thread.channel.channel_id,
                 guild_id,
                 member,
+            );
+        }
+        if let Some(parent_id) = parent_to_ack {
+            self.mark_message_read_locally(
+                parent_id,
+                Id::<MessageMarker>::new(thread.channel.channel_id.get()),
             );
         }
     }

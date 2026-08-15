@@ -85,6 +85,7 @@ fn channel_switcher_includes_joined_active_threads_and_forums_with_type_icons() 
                 extra_fields: BTreeMap::new(),
             }),
         },
+        created: false,
     });
 
     state.open_channel_switcher();

@@ -109,7 +109,7 @@ pub(crate) use permission::PermissionDecision;
 pub use permission::{DiscordPermission, PermissionDataGap};
 pub use presence::{
     ActivityAssets, ActivityButton, ActivityEmoji, ActivityInfo, ActivityKind, ActivityParty,
-    ActivityTimestamps, PresenceStatus,
+    ActivitySecrets, ActivityTimestamps, PresenceStatus,
 };
 pub use profile::{
     FriendStatus, MutualGuildInfo, RelationshipInfo, RelationshipUpdateInfo, UserProfileInfo,

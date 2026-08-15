@@ -122,7 +122,8 @@ fn parse_user_account_event_data(event_type: &str, data: &Value) -> Vec<AppEvent
                 .collect()
         }
         "CHANNEL_CREATE" | "CHANNEL_UPDATE" => parse_channel_upsert(data).into_iter().collect(),
-        "THREAD_CREATE" | "THREAD_UPDATE" => parse_thread_upsert(data).into_iter().collect(),
+        "THREAD_CREATE" => parse_thread_upsert(data, true).into_iter().collect(),
+        "THREAD_UPDATE" => parse_thread_upsert(data, false).into_iter().collect(),
         "CHANNEL_DELETE" | "THREAD_DELETE" => parse_channel_delete(data).into_iter().collect(),
         "CHANNEL_RECIPIENT_ADD" => parse_channel_recipient_add(data).into_iter().collect(),
         "CHANNEL_RECIPIENT_REMOVE" => parse_channel_recipient_remove(data).into_iter().collect(),

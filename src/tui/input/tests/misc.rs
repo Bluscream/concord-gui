@@ -77,6 +77,7 @@ fn forum_blank_bottom_rows_do_not_select_hidden_posts() {
             },
             current_user_member: None,
         },
+        created: false,
     });
     state.focus_pane(FocusPane::Messages);
     state.set_message_view_height(14);

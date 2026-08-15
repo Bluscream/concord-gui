@@ -19,7 +19,7 @@ use super::{
         parse_user_guild_settings_entries, parse_user_premium_tier,
     },
     members::{parse_current_user_verification, parse_member_info},
-    presence::parse_presence_entry,
+    presence::{parse_activities, parse_presence_entry},
     relationships::parse_relationship_entry,
     shared::{display_name_from_parts_or_unknown, parse_id, parse_status},
     user_settings::parse_user_settings_info,
@@ -34,7 +34,7 @@ pub(super) fn parse_ready(data: &Value) -> Vec<AppEvent> {
     let mut events = Vec::new();
     let mut current_user = None;
     let mut current_user_id = None;
-    let mut current_user_status = None;
+    let mut current_user_presence = None;
 
     if let Some(user) = data.get("user") {
         let user_id = user.get("id").and_then(parse_id::<UserMarker>);
@@ -55,9 +55,11 @@ pub(super) fn parse_ready(data: &Value) -> Vec<AppEvent> {
         }
         current_user_id = user_id;
         current_user = parse_channel_recipient_info(user);
-        current_user_status = parse_current_user_session_status(data);
-        if let (Some(user), Some(status)) = (current_user.as_mut(), current_user_status) {
-            user.status = Some(status);
+        current_user_presence = parse_current_user_session_presence(data);
+        if let (Some(user), Some((status, _))) =
+            (current_user.as_mut(), current_user_presence.as_ref())
+        {
+            user.status = Some(*status);
         }
     }
 
@@ -134,13 +136,13 @@ pub(super) fn parse_ready(data: &Value) -> Vec<AppEvent> {
         }
     }
 
-    if let (Some(user_id), Some(status)) = (current_user_id, current_user_status) {
+    if let (Some(user_id), Some((status, activities))) = (current_user_id, current_user_presence) {
         events.push(AppEvent::PresenceUpdate {
             guild_id: None,
             presence: PresenceEventFields {
                 user_id,
                 status,
-                activities: Vec::new(),
+                activities,
             },
         });
     }
@@ -377,7 +379,10 @@ fn parse_supplemental_guild_events(data: &Value) -> Vec<AppEvent> {
                     thread.current_user_member =
                         Some(ThreadMemberInfo::joined_snapshot(thread.channel.channel_id));
                 }
-                Some(AppEvent::ThreadUpsert { thread })
+                Some(AppEvent::ThreadUpsert {
+                    thread,
+                    created: false,
+                })
             }));
         }
         if let Some(members) = guild.get("members").and_then(Value::as_array) {
@@ -423,18 +428,23 @@ fn parse_merged_presences(data: &Value) -> MergedPresences {
     presences
 }
 
-fn parse_current_user_session_status(data: &Value) -> Option<PresenceStatus> {
-    data.get("sessions")
-        .and_then(Value::as_array)
-        .and_then(|sessions| {
-            sessions.iter().find_map(|session| {
-                let status = session
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .map(parse_status)?;
-                (status != PresenceStatus::Unknown).then_some(status)
-            })
-        })
+fn parse_current_user_session_presence(
+    data: &Value,
+) -> Option<(PresenceStatus, Vec<crate::discord::ActivityInfo>)> {
+    let sessions = data.get("sessions").and_then(Value::as_array)?;
+    let parse = |session: &Value| {
+        let status = session
+            .get("status")
+            .and_then(Value::as_str)
+            .map(parse_status)?;
+        Some((status, parse_activities(session)))
+    };
+
+    sessions
+        .iter()
+        .find(|session| session.get("session_id").and_then(Value::as_str) == Some("all"))
+        .and_then(parse)
+        .or_else(|| sessions.iter().find_map(parse))
 }
 
 fn collect_presence_entries(value: &Value, presences: &mut MergedPresences) {

@@ -291,6 +291,7 @@ fn thread_notification_policy_uses_membership_activity_permissions_mute_and_leve
         flags: Option<u64>,
         mentions_current_user: bool,
         audible: bool,
+        unread_count: usize,
         inbox: ChannelUnreadState,
     }
 
@@ -310,6 +311,7 @@ fn thread_notification_policy_uses_membership_activity_permissions_mute_and_leve
             flags: None,
             mentions_current_user: false,
             audible: true,
+            unread_count: 1,
             inbox: ChannelUnreadState::Notified(1),
         },
         Case {
@@ -321,6 +323,7 @@ fn thread_notification_policy_uses_membership_activity_permissions_mute_and_leve
             flags: Some(2),
             mentions_current_user: true,
             audible: false,
+            unread_count: 1,
             inbox: ChannelUnreadState::Seen,
         },
         Case {
@@ -332,6 +335,7 @@ fn thread_notification_policy_uses_membership_activity_permissions_mute_and_leve
             flags: Some(2),
             mentions_current_user: true,
             audible: false,
+            unread_count: 1,
             inbox: ChannelUnreadState::Seen,
         },
         Case {
@@ -343,6 +347,7 @@ fn thread_notification_policy_uses_membership_activity_permissions_mute_and_leve
             flags: Some(2),
             mentions_current_user: true,
             audible: false,
+            unread_count: 1,
             inbox: ChannelUnreadState::Seen,
         },
         Case {
@@ -354,6 +359,7 @@ fn thread_notification_policy_uses_membership_activity_permissions_mute_and_leve
             flags: Some(2),
             mentions_current_user: true,
             audible: false,
+            unread_count: 1,
             inbox: ChannelUnreadState::Seen,
         },
         Case {
@@ -365,6 +371,7 @@ fn thread_notification_policy_uses_membership_activity_permissions_mute_and_leve
             flags: Some(2),
             mentions_current_user: false,
             audible: true,
+            unread_count: 1,
             inbox: ChannelUnreadState::Notified(1),
         },
         Case {
@@ -376,6 +383,7 @@ fn thread_notification_policy_uses_membership_activity_permissions_mute_and_leve
             flags: Some(4),
             mentions_current_user: false,
             audible: false,
+            unread_count: 0,
             inbox: ChannelUnreadState::Unread,
         },
         Case {
@@ -387,6 +395,7 @@ fn thread_notification_policy_uses_membership_activity_permissions_mute_and_leve
             flags: Some(4),
             mentions_current_user: true,
             audible: true,
+            unread_count: 1,
             inbox: ChannelUnreadState::Mentioned(1),
         },
         Case {
@@ -398,7 +407,8 @@ fn thread_notification_policy_uses_membership_activity_permissions_mute_and_leve
             flags: Some(8),
             mentions_current_user: true,
             audible: false,
-            inbox: ChannelUnreadState::Unread,
+            unread_count: 1,
+            inbox: ChannelUnreadState::Mentioned(1),
         },
     ] {
         let parent_permissions = if case.can_view { VIEW_CHANNEL } else { 0 };
@@ -475,6 +485,12 @@ fn thread_notification_policy_uses_membership_activity_permissions_mute_and_leve
             case.name
         );
         state.apply_event(&event);
+        assert_eq!(
+            state.channel_unread_message_count(thread_id),
+            case.unread_count,
+            "{}",
+            case.name
+        );
         assert_eq!(
             state.channel_inbox_unread(thread_id),
             case.inbox,
@@ -575,12 +591,12 @@ fn only_mentions_settings_use_resolved_mentions() {
             Vec::new(),
             suppress_notifications,
         ),
-        (ChannelUnreadState::Unread, 0)
+        (ChannelUnreadState::Mentioned(1), 1)
     );
 }
 
 #[test]
-fn private_all_messages_settings_show_numeric_badge() {
+fn private_messages_increment_discord_mention_count() {
     let channel_id = Id::new(2);
     let current_user_id = Id::new(10);
     let author_id = Id::new(20);
@@ -606,7 +622,7 @@ fn private_all_messages_settings_show_numeric_badge() {
 
     assert_eq!(
         state.channel_unread(channel_id),
-        ChannelUnreadState::Notified(1)
+        ChannelUnreadState::Mentioned(1)
     );
     assert_eq!(state.channel_unread_message_count(channel_id), 1);
 }
@@ -621,6 +637,9 @@ fn private_notification_settings_control_unread_surfaces() {
         name,
         scope_muted,
         channel_override,
+        mentions_current_user,
+        unread_count,
+        unread,
         sidebar_unread,
         inbox_unread,
         direct_message_unread,
@@ -632,8 +651,11 @@ fn private_notification_settings_control_unread_surfaces() {
                 message_notifications: Some(NotificationLevel::NoMessages),
                 ..ChannelNotificationOverrideInfo::test(channel_id)
             }),
-            ChannelUnreadState::Unread,
-            ChannelUnreadState::Unread,
+            false,
+            1,
+            ChannelUnreadState::Mentioned(1),
+            ChannelUnreadState::Mentioned(1),
+            ChannelUnreadState::Mentioned(1),
             1,
         ),
         (
@@ -644,6 +666,24 @@ fn private_notification_settings_control_unread_surfaces() {
                 muted: true,
                 ..ChannelNotificationOverrideInfo::test(channel_id)
             }),
+            false,
+            0,
+            ChannelUnreadState::Unread,
+            ChannelUnreadState::Seen,
+            ChannelUnreadState::Seen,
+            0,
+        ),
+        (
+            "muted channel with a direct mention",
+            false,
+            Some(ChannelNotificationOverrideInfo {
+                message_notifications: Some(NotificationLevel::AllMessages),
+                muted: true,
+                ..ChannelNotificationOverrideInfo::test(channel_id)
+            }),
+            true,
+            1,
+            ChannelUnreadState::Mentioned(1),
             ChannelUnreadState::Seen,
             ChannelUnreadState::Seen,
             0,
@@ -652,7 +692,21 @@ fn private_notification_settings_control_unread_surfaces() {
             "muted private scope",
             true,
             None,
+            false,
+            0,
             ChannelUnreadState::Unread,
+            ChannelUnreadState::Unread,
+            ChannelUnreadState::Seen,
+            0,
+        ),
+        (
+            "muted private scope with a direct mention",
+            true,
+            None,
+            true,
+            1,
+            ChannelUnreadState::Mentioned(1),
+            ChannelUnreadState::Mentioned(1),
             ChannelUnreadState::Seen,
             0,
         ),
@@ -669,21 +723,20 @@ fn private_notification_settings_control_unread_surfaces() {
         state.apply_event(&AppEvent::ChannelUpsert(dm_channel(channel_id, "dm")));
         state.apply_event(&user_guild_settings_init(vec![settings]));
 
-        state.apply_event(&message_create(
-            None,
-            channel_id,
-            Id::new(30),
-            author_id,
-            "hello",
-            Vec::new(),
-        ));
+        let mentions = mentions_current_user
+            .then(|| mention_info(current_user_id.get(), "me"))
+            .into_iter()
+            .collect();
+        let event = message_create(None, channel_id, Id::new(30), author_id, "hello", mentions);
+        assert!(!state.message_event_triggers_notification(&event), "{name}");
+        state.apply_event(&event);
 
-        assert_eq!(state.channel_unread_message_count(channel_id), 0, "{name}");
         assert_eq!(
-            state.channel_unread(channel_id),
-            ChannelUnreadState::Unread,
+            state.channel_unread_message_count(channel_id),
+            unread_count,
             "{name}"
         );
+        assert_eq!(state.channel_unread(channel_id), unread, "{name}");
         assert_eq!(
             state.channel_sidebar_unread(channel_id),
             sidebar_unread,
@@ -703,7 +756,235 @@ fn private_notification_settings_control_unread_surfaces() {
 }
 
 #[test]
-fn notification_settings_init_replaces_private_settings() {
+fn recipient_remove_does_not_increment_private_channel_mentions() {
+    let channel_id = Id::new(2);
+    let current_user_id = Id::new(10);
+    let mut state = DiscordState::default();
+    state.apply_event(&AppEvent::Ready {
+        user: "me".to_owned(),
+        user_id: Some(current_user_id),
+    });
+    state.apply_event(&AppEvent::ChannelUpsert(dm_channel(channel_id, "dm")));
+    state.apply_event(&message_create_event(MessageCreateFixture {
+        channel_id,
+        message_id: Id::new(30),
+        author_id: Id::new(20),
+        message_kind: MessageKind::new(2),
+        mentions: vec![mention_info(current_user_id.get(), "me")],
+        ..MessageCreateFixture::test_fixture_default()
+    }));
+
+    assert_eq!(state.channel_unread_message_count(channel_id), 0);
+    assert_eq!(state.channel_unread(channel_id), ChannelUnreadState::Unread);
+}
+
+#[test]
+fn blocked_and_ignored_authors_do_not_increment_mentions() {
+    let guild_id = Id::new(1);
+    let channel_id = Id::new(2);
+    let current_user_id = Id::new(10);
+
+    for (name, mut relationship) in [
+        (
+            "blocked",
+            relationship_info(20, FriendStatus::Blocked, None, None, None),
+        ),
+        (
+            "ignored",
+            relationship_info(20, FriendStatus::Friend, None, None, None),
+        ),
+    ] {
+        relationship.ignored = name == "ignored";
+        let mut state = DiscordState::default();
+        state.apply_event(&AppEvent::Ready {
+            user: "me".to_owned(),
+            user_id: Some(current_user_id),
+        });
+        state.apply_event(&guild_create_event(GuildCreateFixture {
+            guild_id,
+            channels: vec![ChannelInfo {
+                guild_id: Some(guild_id),
+                name: "general".to_owned(),
+                ..channel_info(channel_id, "GuildText", Vec::new())
+            }],
+            ..GuildCreateFixture::new(guild_id)
+        }));
+        state.apply_event(&AppEvent::RelationshipsLoaded {
+            relationships: vec![relationship],
+        });
+        state.apply_event(&user_guild_settings_init(vec![notification_settings(
+            guild_id,
+            NotificationLevel::AllMessages,
+        )]));
+
+        state.apply_event(&message_create(
+            Some(guild_id),
+            channel_id,
+            Id::new(30),
+            Id::new(20),
+            "hello @me",
+            vec![mention_info(current_user_id.get(), "me")],
+        ));
+
+        assert_eq!(state.channel_unread_message_count(channel_id), 0, "{name}");
+        assert_eq!(
+            state.channel_unread(channel_id),
+            ChannelUnreadState::Unread,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn voice_and_stage_messages_do_not_create_low_importance_mentions() {
+    let guild_id = Id::new(1);
+    let current_user_id = Id::new(10);
+
+    for (channel_id, kind) in [(Id::new(2), "voice"), (Id::new(3), "stage")] {
+        let mut state = DiscordState::default();
+        state.apply_event(&AppEvent::Ready {
+            user: "me".to_owned(),
+            user_id: Some(current_user_id),
+        });
+        state.apply_event(&guild_create_event(GuildCreateFixture {
+            guild_id,
+            channels: vec![ChannelInfo {
+                guild_id: Some(guild_id),
+                name: kind.to_owned(),
+                ..channel_info(channel_id, kind, Vec::new())
+            }],
+            ..GuildCreateFixture::new(guild_id)
+        }));
+        state.apply_event(&user_guild_settings_init(vec![notification_settings(
+            guild_id,
+            NotificationLevel::AllMessages,
+        )]));
+        state.apply_event(&AppEvent::UserNotificationSettingsUpdate { flags: 1 << 5 });
+
+        state.apply_event(&message_create(
+            Some(guild_id),
+            channel_id,
+            Id::new(30),
+            Id::new(20),
+            "hello",
+            Vec::new(),
+        ));
+
+        assert_eq!(state.channel_unread_message_count(channel_id), 0, "{kind}");
+        assert_eq!(
+            state.channel_unread(channel_id),
+            ChannelUnreadState::Unread,
+            "{kind}"
+        );
+    }
+}
+
+#[test]
+fn relationship_events_update_the_notification_center_badge() {
+    let current_user_id = Id::new(10);
+    let requester_id = Id::new(20);
+    let mut state = DiscordState::default();
+    state.apply_event(&AppEvent::Ready {
+        user: "me".to_owned(),
+        user_id: Some(current_user_id),
+    });
+
+    state.apply_event(&AppEvent::RelationshipUpsert {
+        relationship: relationship_info(
+            requester_id.get(),
+            FriendStatus::IncomingRequest,
+            None,
+            None,
+            None,
+        ),
+    });
+    assert_eq!(notification_center_badge(&state, current_user_id), 1);
+
+    state.apply_event(&AppEvent::RelationshipUpsert {
+        relationship: relationship_info(requester_id.get(), FriendStatus::Friend, None, None, None),
+    });
+    assert_eq!(notification_center_badge(&state, current_user_id), 0);
+
+    state.apply_event(&AppEvent::RelationshipUpsert {
+        relationship: relationship_info(
+            requester_id.get(),
+            FriendStatus::IncomingRequest,
+            None,
+            None,
+            None,
+        ),
+    });
+    state.apply_event(&AppEvent::RelationshipRemove {
+        user_id: requester_id,
+        status: Some(FriendStatus::IncomingRequest),
+    });
+    state.apply_event(&AppEvent::RelationshipRemove {
+        user_id: requester_id,
+        status: Some(FriendStatus::IncomingRequest),
+    });
+    assert_eq!(notification_center_badge(&state, current_user_id), 0);
+}
+
+#[test]
+fn current_user_thread_create_marks_the_forum_parent_read() {
+    let guild_id = Id::new(1);
+    let forum_id = Id::new(2);
+    let thread_id = Id::new(30);
+    let current_user_id = Id::new(10);
+    let mut state = DiscordState::default();
+    state.apply_event(&AppEvent::Ready {
+        user: "me".to_owned(),
+        user_id: Some(current_user_id),
+    });
+    state.apply_event(&guild_create_event(GuildCreateFixture {
+        guild_id,
+        channels: vec![ChannelInfo {
+            guild_id: Some(guild_id),
+            last_message_id: Some(Id::new(thread_id.get())),
+            name: "forum".to_owned(),
+            ..channel_info(forum_id, "forum", Vec::new())
+        }],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+    state.apply_event(&AppEvent::ReadStateInit {
+        entries: vec![ReadStateInfo {
+            last_acked_message_id: Some(Id::new(20)),
+            mention_count: 2,
+            ..ReadStateInfo::test(forum_id)
+        }],
+    });
+
+    state.apply_event(&AppEvent::ThreadUpsert {
+        thread: ThreadGatewayInfo {
+            channel: ChannelInfo {
+                guild_id: Some(guild_id),
+                parent_id: Some(forum_id),
+                owner_id: Some(current_user_id),
+                name: "post".to_owned(),
+                ..channel_info(thread_id, "GuildPublicThread", Vec::new())
+            },
+            current_user_member: None,
+        },
+        created: true,
+    });
+
+    assert_eq!(
+        state.channel_last_acked_message_id(forum_id),
+        Some(Id::new(thread_id.get()))
+    );
+    assert_eq!(state.channel_unread(forum_id), ChannelUnreadState::Seen);
+}
+
+fn notification_center_badge(state: &DiscordState, current_user_id: Id<UserMarker>) -> u32 {
+    state
+        .notifications
+        .non_channel_read_states
+        .get(&(2, current_user_id.get()))
+        .map_or(0, |read_state| read_state.badge_count)
+}
+
+#[test]
+fn notification_settings_init_clears_private_settings() {
     let guild_id = Id::new(1);
     let guild_channel_id = Id::new(2);
     let private_channel_id = Id::new(3);
@@ -742,7 +1023,7 @@ fn notification_settings_init_replaces_private_settings() {
     ));
     assert_eq!(
         state.channel_unread(private_channel_id),
-        ChannelUnreadState::Unread
+        ChannelUnreadState::Mentioned(1)
     );
 
     state.apply_event(&user_guild_settings_init(vec![notification_settings(
@@ -751,8 +1032,14 @@ fn notification_settings_init_replaces_private_settings() {
     )]));
 
     assert_eq!(
+        state
+            .guild_notification_settings_info(None)
+            .message_notifications,
+        None
+    );
+    assert_eq!(
         state.channel_unread(private_channel_id),
-        ChannelUnreadState::Notified(1)
+        ChannelUnreadState::Mentioned(1)
     );
 }
 

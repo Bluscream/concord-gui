@@ -2370,18 +2370,33 @@ fn current_gateway_presence(state: &DiscordState) -> Option<GatewayPresence> {
 }
 
 fn activity_gateway_payload(activity: &ActivityInfo) -> Value {
-    let mut value = json!({
-        "name": activity.name.as_str(),
-        "type": activity.kind.gateway_code(),
-    });
+    let mut fields: serde_json::Map<String, Value> =
+        activity.extra_fields.clone().into_iter().collect();
+    fields.insert("name".to_owned(), json!(activity.name));
+    fields.insert("type".to_owned(), json!(activity.kind.gateway_code()));
     if let Some(details) = activity.details.as_deref() {
-        value["details"] = json!(details);
+        fields.insert("details".to_owned(), json!(details));
+    }
+    if let Some(details_url) = activity.details_url.as_deref() {
+        fields.insert("details_url".to_owned(), json!(details_url));
     }
     if let Some(state) = activity.state.as_deref() {
-        value["state"] = json!(state);
+        fields.insert("state".to_owned(), json!(state));
+    }
+    if let Some(state_url) = activity.state_url.as_deref() {
+        fields.insert("state_url".to_owned(), json!(state_url));
     }
     if let Some(url) = activity.url.as_deref() {
-        value["url"] = json!(url);
+        fields.insert("url".to_owned(), json!(url));
+    }
+    if let Some(platform) = activity.platform.as_deref() {
+        fields.insert("platform".to_owned(), json!(platform));
+    }
+    if !activity.supported_platforms.is_empty() {
+        fields.insert(
+            "supported_platforms".to_owned(),
+            json!(activity.supported_platforms),
+        );
     }
     // A Custom status carries its emoji here. Without it a status change would
     // re-broadcast the activity and drop the emoji.
@@ -2393,10 +2408,22 @@ fn activity_gateway_payload(activity: &ActivityInfo) -> Value {
         if emoji.animated {
             node["animated"] = json!(true);
         }
-        value["emoji"] = node;
+        fields.insert("emoji".to_owned(), node);
     }
     if let Some(application_id) = activity.application_id.as_deref() {
-        value["application_id"] = json!(application_id);
+        fields.insert("application_id".to_owned(), json!(application_id));
+    }
+    if let Some(parent_application_id) = activity.parent_application_id.as_deref() {
+        fields.insert(
+            "parent_application_id".to_owned(),
+            json!(parent_application_id),
+        );
+    }
+    if let Some(status_display_type) = activity.status_display_type {
+        fields.insert("status_display_type".to_owned(), json!(status_display_type));
+    }
+    if let Some(sync_id) = activity.sync_id.as_deref() {
+        fields.insert("sync_id".to_owned(), json!(sync_id));
     }
     if let Some(timestamps) = activity.timestamps.as_ref() {
         let mut node = json!({});
@@ -2406,34 +2433,75 @@ fn activity_gateway_payload(activity: &ActivityInfo) -> Value {
         if let Some(end) = timestamps.end {
             node["end"] = json!(end);
         }
-        value["timestamps"] = node;
+        fields.insert("timestamps".to_owned(), node);
     }
     if let Some(assets) = activity.assets.as_ref() {
-        let mut node = json!({});
+        let mut node: serde_json::Map<String, Value> =
+            assets.extra_fields.clone().into_iter().collect();
         if let Some(large_image) = assets.large_image.as_deref() {
-            node["large_image"] = json!(large_image);
+            node.insert("large_image".to_owned(), json!(large_image));
         }
         if let Some(large_text) = assets.large_text.as_deref() {
-            node["large_text"] = json!(large_text);
+            node.insert("large_text".to_owned(), json!(large_text));
+        }
+        if let Some(large_url) = assets.large_url.as_deref() {
+            node.insert("large_url".to_owned(), json!(large_url));
         }
         if let Some(small_image) = assets.small_image.as_deref() {
-            node["small_image"] = json!(small_image);
+            node.insert("small_image".to_owned(), json!(small_image));
         }
         if let Some(small_text) = assets.small_text.as_deref() {
-            node["small_text"] = json!(small_text);
+            node.insert("small_text".to_owned(), json!(small_text));
         }
-        value["assets"] = node;
+        if let Some(small_url) = assets.small_url.as_deref() {
+            node.insert("small_url".to_owned(), json!(small_url));
+        }
+        if let Some(invite_cover_image) = assets.invite_cover_image.as_deref() {
+            node.insert("invite_cover_image".to_owned(), json!(invite_cover_image));
+        }
+        fields.insert("assets".to_owned(), Value::Object(node));
     }
     if let Some(party) = activity.party.as_ref() {
-        let mut node = json!({});
+        let mut node: serde_json::Map<String, Value> =
+            party.extra_fields.clone().into_iter().collect();
         if let Some(id) = party.id.as_deref() {
-            node["id"] = json!(id);
+            node.insert("id".to_owned(), json!(id));
         }
         if let Some((current, max)) = party.size {
-            node["size"] = json!([current, max]);
+            node.insert("size".to_owned(), json!([current, max]));
         }
-        value["party"] = node;
+        if let Some(privacy) = party.privacy {
+            node.insert("privacy".to_owned(), json!(privacy));
+        }
+        fields.insert("party".to_owned(), Value::Object(node));
     }
+    if let Some(secrets) = activity.secrets.as_ref() {
+        let mut node: serde_json::Map<String, Value> =
+            secrets.extra_fields.clone().into_iter().collect();
+        if let Some(join) = secrets.join.as_deref() {
+            node.insert("join".to_owned(), json!(join));
+        }
+        if let Some(spectate) = secrets.spectate.as_deref() {
+            node.insert("spectate".to_owned(), json!(spectate));
+        }
+        fields.insert("secrets".to_owned(), Value::Object(node));
+    }
+
+    let mut flags = activity.flags;
+    if let Some(instance) = activity.instance {
+        let updated = if instance {
+            flags.unwrap_or_default() | 1
+        } else {
+            flags.unwrap_or_default() & !1
+        };
+        flags = Some(updated);
+    }
+    if let Some(flags) = flags {
+        fields.insert("flags".to_owned(), json!(flags));
+    }
+
+    let mut metadata: serde_json::Map<String, Value> =
+        activity.metadata.clone().into_iter().collect();
     // User-account presence encodes buttons as a parallel pair: an array of
     // labels under `buttons` and their URLs under `metadata.button_urls`. This
     // differs from the bot `[{label, url}]` shape.
@@ -2448,10 +2516,14 @@ fn activity_gateway_payload(activity: &ActivityInfo) -> Value {
             .iter()
             .map(|button| button.url.as_str())
             .collect();
-        value["buttons"] = json!(labels);
-        value["metadata"] = json!({ "button_urls": urls });
+        fields.insert("buttons".to_owned(), json!(labels));
+        metadata.insert("button_urls".to_owned(), json!(urls));
     }
-    value
+    if !metadata.is_empty() {
+        fields.insert("metadata".to_owned(), Value::Object(metadata));
+    }
+
+    Value::Object(fields)
 }
 
 #[cfg(test)]

@@ -14,13 +14,14 @@ use super::commands::{
 };
 use super::{
     ActivityInfo, AttachmentUpdate, ChannelInfo, ChannelRecipientInfo, CustomEmojiInfo, EmbedInfo,
-    GuildBoostTier, GuildNotificationSettingsInfo, GuildOnboardingInfo, GuildVerificationLevel,
-    MemberInfo, MentionInfo, MessageInfo, PollInfo, PremiumTier, PresenceStatus, ReactionUserInfo,
-    ReadStateInfo, RelationshipInfo, RelationshipUpdateInfo, RoleInfo, SnapshotAreas,
-    StreamCaptureTarget, StreamCreateInfo, StreamDeleteInfo, StreamServerInfo, StreamUpdateInfo,
-    ThreadGatewayInfo, ThreadListSyncInfo, ThreadMemberInfo, ThreadMemberListUpdateInfo,
-    ThreadMembersUpdateInfo, UserProfileInfo, UserSettingsInfo, VoiceConnectionStatus, VoiceScope,
-    VoiceServerInfo, VoiceSoundKind, VoiceStateInfo, is_thread_kind,
+    FriendStatus, GuildBoostTier, GuildNotificationSettingsInfo, GuildOnboardingInfo,
+    GuildVerificationLevel, MemberInfo, MentionInfo, MessageInfo, PollInfo, PremiumTier,
+    PresenceStatus, ReactionUserInfo, ReadStateInfo, RelationshipInfo, RelationshipUpdateInfo,
+    RoleInfo, SnapshotAreas, StreamCaptureTarget, StreamCreateInfo, StreamDeleteInfo,
+    StreamServerInfo, StreamUpdateInfo, ThreadGatewayInfo, ThreadListSyncInfo, ThreadMemberInfo,
+    ThreadMemberListUpdateInfo, ThreadMembersUpdateInfo, UserProfileInfo, UserSettingsInfo,
+    VoiceConnectionStatus, VoiceScope, VoiceServerInfo, VoiceSoundKind, VoiceStateInfo,
+    is_thread_kind,
 };
 use super::{ApplicationCommandChoiceInfo, ApplicationCommandInfo};
 use super::{ArchivedThreadsPage, ForumPostDataInfo};
@@ -342,6 +343,7 @@ pub enum AppEvent {
     },
     ThreadUpsert {
         thread: ThreadGatewayInfo,
+        created: bool,
     },
     ThreadListSync {
         sync: ThreadListSyncInfo,
@@ -759,6 +761,7 @@ pub enum AppEvent {
     },
     RelationshipRemove {
         user_id: Id<UserMarker>,
+        status: Option<FriendStatus>,
     },
     /// Full read-state replacement used by internal and test data sources.
     ReadStateInit {
@@ -1875,14 +1878,16 @@ impl AppEventKind {
             | AppEventKind::ThreadMemberListUpdate
             | AppEventKind::ThreadMemberUpdate
             | AppEventKind::RelationshipsLoaded
-            | AppEventKind::RelationshipUpsert
             | AppEventKind::RelationshipUpdate
             | AppEventKind::UserIdentityUpdate
-            | AppEventKind::RelationshipRemove
             | AppEventKind::VoiceStateUpdate
             | AppEventKind::TypingStart
             | AppEventKind::ReadyUserDirectory => {
                 AppEventMetadata::mutating(SnapshotAreas::navigation_and_message())
+            }
+
+            AppEventKind::RelationshipUpsert | AppEventKind::RelationshipRemove => {
+                AppEventMetadata::mutating(SnapshotAreas::all())
             }
 
             AppEventKind::GuildUnavailable => AppEventMetadata::inert(),
@@ -2001,6 +2006,9 @@ impl AppEvent {
         match self {
             AppEvent::ChannelUpsert(channel) if channel_upsert_needs_effect_delivery(channel) => {
                 AppEventMetadata::mutating_effect(SnapshotAreas::navigation())
+            }
+            AppEvent::ThreadUpsert { created: true, .. } => {
+                AppEventMetadata::mutating_effect(SnapshotAreas::all())
             }
             _ => self.kind().metadata(),
         }
@@ -2194,6 +2202,18 @@ mod tests {
                     message: "temporary failure".to_owned(),
                 },
                 Some(SnapshotAreas::navigation()),
+                true,
+            ),
+            (
+                "current-user thread creation can acknowledge its parent",
+                AppEvent::ThreadUpsert {
+                    thread: ThreadGatewayInfo {
+                        channel: ChannelInfo::test(Id::new(10), "GuildPublicThread"),
+                        current_user_member: None,
+                    },
+                    created: true,
+                },
+                Some(SnapshotAreas::all()),
                 true,
             ),
         ];

@@ -574,6 +574,7 @@ fn desktop_notification_and_sound_suppress_ineligible_channels() {
                     current_user_member: joined
                         .then(|| current_user_thread_member(thread_id, thread_muted)),
                 },
+                created: false,
             });
             thread_id
         };

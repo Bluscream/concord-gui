@@ -886,6 +886,7 @@ fn threads_inherit_parent_permissions_but_require_thread_send_permission() {
                     extra_fields: BTreeMap::new(),
                 }),
             },
+            created: false,
         });
 
         let thread_state = state.channel(thread).expect("thread");

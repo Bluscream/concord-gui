@@ -284,9 +284,10 @@ pub(super) fn parse_thread_gateway_info(
     })
 }
 
-pub(super) fn parse_thread_upsert(data: &Value) -> Option<AppEvent> {
+pub(super) fn parse_thread_upsert(data: &Value, created: bool) -> Option<AppEvent> {
     Some(AppEvent::ThreadUpsert {
         thread: parse_thread_gateway_info(data, None)?,
+        created,
     })
 }
 

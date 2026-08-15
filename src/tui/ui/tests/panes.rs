@@ -535,7 +535,10 @@ fn dm_activity_uses_the_full_channel_row_width() {
         presence: crate::discord::PresenceEventFields {
             user_id,
             status: PresenceStatus::Online,
-            activities: vec![ActivityInfo::test(ActivityKind::Unknown, "abcdefghijklmn")],
+            activities: vec![ActivityInfo::test(
+                ActivityKind::Unknown(99),
+                "abcdefghijklmn",
+            )],
         },
     });
     state.confirm_selected_guild();

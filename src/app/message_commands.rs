@@ -90,6 +90,7 @@ pub(super) async fn create_forum_post(client: DiscordClient, post: ForumPostCrea
                         channel: created.thread,
                         current_user_member,
                     },
+                    created: true,
                 })
                 .await;
             if let Some(message) = created.first_message {

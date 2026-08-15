@@ -14,6 +14,7 @@ pub enum FriendStatus {
     Blocked,
     IncomingRequest,
     OutgoingRequest,
+    Implicit,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -27,6 +28,9 @@ pub struct RelationshipInfo {
     /// usually `global_name` and otherwise the username.
     pub display_name: Option<String>,
     pub username: Option<String>,
+    /// Ignoring is independent of the relationship type and suppresses unread
+    /// automation for messages from this user.
+    pub ignored: bool,
 }
 
 /// Fields carried by `RELATIONSHIP_UPDATE`. Discord documents this dispatch
@@ -39,6 +43,7 @@ pub struct RelationshipUpdateInfo {
     pub nickname: Option<Option<String>>,
     pub display_name: Option<Option<String>>,
     pub username: Option<Option<String>>,
+    pub ignored: Option<bool>,
 }
 
 #[cfg(test)]
@@ -51,6 +56,7 @@ impl RelationshipInfo {
             nickname: None,
             display_name: None,
             username: None,
+            ignored: false,
         }
     }
 }
