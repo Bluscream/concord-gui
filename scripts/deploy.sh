@@ -4,14 +4,20 @@
 #
 # Everything is user-scoped: no root, no system paths. Undo with --uninstall.
 #
-#   ./scripts/deploy.sh              build release, install, launch
-#   ./scripts/deploy.sh --test       build WITH demo data and launch offline
+#   ./scripts/deploy.sh              build release WITH demo data, install, launch
+#   ./scripts/deploy.sh --test       same as the default, kept explicit
+#   ./scripts/deploy.sh --no-test    build WITHOUT demo data (a real install)
 #   ./scripts/deploy.sh --media      build WITH voice playback and screenshare
 #                                    (experimental - see docs/REWRITE.md)
 #   ./scripts/deploy.sh --debug      build the debug profile (much faster to compile)
 #   ./scripts/deploy.sh --no-run     install without launching
 #   ./scripts/deploy.sh --run-only   skip the build, just launch what is installed
 #   ./scripts/deploy.sh --uninstall  remove binary, shortcuts and icon
+#
+# Demo data is in by default while the project is pre-release: it is the only
+# way to exercise the UI without an account, and a build without it turns the
+# login screen's Demo option into a login that fails with a bare 4004. Once a
+# real release ships, --no-test becomes the default and --test the opt-in.
 #
 # The build runs inside the Arch distrobox because the host (Bazzite) is an
 # immutable OS without cmake, which opusic-sys requires. The resulting binary
@@ -30,12 +36,14 @@ MENU_DIR="$HOME/.local/share/applications"
 DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")"
 
 PROFILE="release"
-# Demo mode is a build-time feature, enabled only by --test. A daily-driver
-# install should not carry synthetic state or accept the "test" token.
-FEATURES=""
+# Demo mode is on by default while the project is pre-release: it is the only
+# way to exercise the UI without a real account, and a build without it silently
+# turns the login screen's Demo option into a failed login. Flip this to off,
+# and keep --test as the opt-in, once the first real release ships.
+FEATURES="fixtures"
 RUN=1
 BUILD=1
-TEST_MODE=0
+TEST_MODE=1
 
 info()  { printf '\033[1;34m::\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33m!!\033[0m %s\n' "$*"; }
@@ -55,7 +63,14 @@ uninstall() {
 
 for arg in "$@"; do
     case "$arg" in
-        --test)      TEST_MODE=1; FEATURES="${FEATURES:+$FEATURES,}fixtures" ;;
+        # Kept for symmetry and for when the default flips back.
+        --test)      TEST_MODE=1
+                     case ",$FEATURES," in *,fixtures,*) ;;
+                        *) FEATURES="${FEATURES:+$FEATURES,}fixtures" ;; esac ;;
+        # Builds without demo data: no fixtures, and the login screen hides
+        # its Demo option rather than offering one that cannot work.
+        --no-test)   TEST_MODE=0
+                     FEATURES="$(printf '%s' "$FEATURES" | sed 's/fixtures,\{0,1\}//; s/,$//')" ;;
         # Pulls in pipewire, openh264 and cpal, so it is opt-in: the default
         # build stays quick and dependency-light.
         --media)     FEATURES="${FEATURES:+$FEATURES,}media"

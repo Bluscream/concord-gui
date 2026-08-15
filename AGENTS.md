@@ -188,6 +188,13 @@ Worth knowing before starting:
 
 - **Building**: the host is immutable, so builds run in the `arch` distrobox
   (`opusic-sys` needs cmake). `scripts/deploy.sh` builds, installs and runs.
+  It includes demo data **by default** while the project is pre-release -
+  `--no-test` builds without. That default must flip before the first real
+  release; a shipped build should not carry synthetic state or accept the
+  literal `test` token.
+- **Verify in release too.** A dead-code warning that only the release profile
+  reports has already caught a feature whose button was never actually added.
+  `cargo build --release` before claiming a UI change landed.
 - **Demo mode**: `--token test` loads an offline fixture — guilds, channels,
   DMs, messages, voice — so the UI can be exercised without an account. New
   commands should be answered in `crates/gui/src/demo.rs`, or the feature
