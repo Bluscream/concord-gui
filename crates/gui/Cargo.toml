@@ -30,9 +30,21 @@ serde_json = "1"
 notify-rust = { version = "4", default-features = false, features = ["d"] }
 
 [features]
-default = []
-# Mirrors the upstream feature of the same purpose; enables voice playback and
-# screenshare broadcast by turning the core's default features back on.
+# Voice playback, screenshare and camera are not optional. A Discord client
+# that cannot hear a call or see a stream is not a Discord client, and making
+# them a build flag meant the paths nobody built were the paths nobody tested -
+# which is exactly how the "media does not build" claim survived long after it
+# had stopped being true.
+default = ["media"]
+# Kept as a name so the core's two features are turned on together, and so
+# `--no-default-features` remains a way to build the interface alone when
+# working on it.
+#
+# QUIRK, unverified: while media was opt-in, deploy.sh warned that a zbus
+# worker panicked at startup - non-fatal, affecting the desktop portal. It has
+# not been reproduced since, and the build error that made media opt-in in the
+# first place had already stopped happening long before anyone re-checked.
+# Treat both as stale until seen again on real hardware.
 media = ["concord/voice-playback", "concord/stream-broadcast"]
 # Offline demo state, selected at runtime with the token "test".
 fixtures = ["concord/fixtures"]

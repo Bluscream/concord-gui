@@ -106,20 +106,46 @@ that already exist.
 ### Video
 
 Camera in a call, and receiving anyone else's camera. Camera capture exists and
-goes out over Go Live; the voice connection's own video path does not. See task
-23 for why that is scoped separately.
+goes out over Go Live; the voice connection's own video path does not. Streams
+and camera feeds should also be poppable into their own windows.
+
+Media is no longer a build flag. A client that cannot hear a call or see a
+stream is not a client, and making it optional meant the paths nobody built
+were the paths nobody tested - which is how the claim that it did not build
+survived long after it had stopped being true.
+
+### Per-user controls
+
+Locally muting someone, hiding their camera, and ignoring them - Discord's
+lighter-touch alternative to blocking. Per-participant volume already exists.
 
 ### Voice channel status
 
 Setting the short status line on a voice channel.
 
+### AutoMod
+
+Keyword filters, spam presets, allow lists, and the actions a rule takes. None
+of it exists.
+
+### Members, onboarding and welcome
+
+Browsing and searching members from settings, pruning, bulk-ban; the welcome
+screen, onboarding questions, new-member actions, and membership screening -
+which the client detects as a participation restriction but can neither
+configure nor complete.
+
+### Scheduled events, stages, templates, discovery
+
+All absent. Stage channels were previously listed as a maybe and are now in
+scope.
+
 ## Deliberately out of scope
 
 Nitro and its shop, boosts as a purchase flow, quests, the activity launcher
 and Watch Together, message effects, avatar decorations, profile themes, Clyde,
-and the gift inventory. All of these are Discord selling something rather than
-Discord working.
+and the gift inventory - Discord selling something rather than Discord working.
 
-Stage channels are a maybe: they are real functionality, but they matter to a
-vanishingly small number of servers and they carry a large protocol surface.
-Revisit if anyone asks.
+Also out: creator monetisation, role subscriptions, entitlements, SKUs,
+premium referrals, billing, payments, the store, promotions, guild analytics
+and top-games. Selling and measuring, neither of which this client does.

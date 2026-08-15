@@ -7,7 +7,7 @@
 #   ./scripts/deploy.sh              build release WITH demo data, install, launch
 #   ./scripts/deploy.sh --test       same as the default, kept explicit
 #   ./scripts/deploy.sh --no-test    build WITHOUT demo data (a real install)
-#   ./scripts/deploy.sh --media      build WITH voice playback and screenshare
+#   ./scripts/deploy.sh --no-media   build WITHOUT voice playback and screenshare
 #                                    (experimental - see docs/REWRITE.md)
 #   ./scripts/deploy.sh --debug      build the debug profile (much faster to compile)
 #   ./scripts/deploy.sh --no-run     install without launching
@@ -73,8 +73,9 @@ for arg in "$@"; do
                      FEATURES="$(printf '%s' "$FEATURES" | sed 's/fixtures,\{0,1\}//; s/,$//')" ;;
         # Pulls in pipewire, openh264 and cpal, so it is opt-in: the default
         # build stays quick and dependency-light.
-        --media)     FEATURES="${FEATURES:+$FEATURES,}media"
-                     warn "--media is experimental: a zbus worker panics at startup (non-fatal, portal features affected)" ;;
+        # Media is on by default now: a client that cannot hear a call or see
+        # a stream is not a client. This is for working on the interface alone.
+        --no-media)  NO_MEDIA=1 ;;
         --debug)     PROFILE="debug" ;;
         --no-run)    RUN=0 ;;
         --run-only)  BUILD=0 ;;
@@ -108,7 +109,7 @@ if [[ $BUILD -eq 1 ]]; then
 
     # The media feature binds to PipeWire. Without its headers the failure is
     # a build-script panic deep in libspa-sys, which says nothing useful.
-    if [[ "$FEATURES" == *media* ]]; then
+    if [[ -z "${NO_MEDIA:-}" ]]; then
         if ! distrobox enter "$BOX" -- pkg-config --exists libpipewire-0.3 2>/dev/null; then
             die "--media needs PipeWire headers in '$BOX'. Install them with:
        distrobox enter $BOX -- sudo pacman -S --needed pipewire clang"
@@ -116,6 +117,7 @@ if [[ $BUILD -eq 1 ]]; then
     fi
 
     BUILD_ARGS=(build -p concord-gui)
+    [[ -n "${NO_MEDIA:-}" ]] && BUILD_ARGS+=(--no-default-features)
     [[ -n "$FEATURES" ]] && BUILD_ARGS+=(--features "$FEATURES")
     [[ "$PROFILE" == "release" ]] && BUILD_ARGS+=(--release)
 

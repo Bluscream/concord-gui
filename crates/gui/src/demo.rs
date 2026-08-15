@@ -447,6 +447,39 @@ fn handle_command(
         // Nothing offline can show these: the lists above are canned, so a
         // revoke or a rename would be undone by the next load and read as the
         // action having silently failed.
+        // The fixture has no voice connection, so a sound has nowhere to
+        // play; the lists are answered with the defaults' shape so the picker
+        // can be exercised offline.
+        AppCommand::LoadSoundboardSounds { guild_id } => {
+            publish_event!(AppEvent::SoundboardSoundsLoaded {
+                guild_id,
+                sounds: vec![
+                    concord::discord::SoundboardSound {
+                        sound_id: 1,
+                        name: "airhorn".to_string(),
+                        volume: 1.0,
+                        emoji_id: None,
+                        emoji_name: Some("\u{1F4E3}".to_string()),
+                        guild_id,
+                        available: true,
+                    },
+                    concord::discord::SoundboardSound {
+                        sound_id: 2,
+                        name: "quack".to_string(),
+                        volume: 0.5,
+                        emoji_id: None,
+                        emoji_name: None,
+                        guild_id,
+                        // Shown and refused, so the reason is visible.
+                        available: false,
+                    },
+                ],
+            });
+        }
+        AppCommand::PlaySoundboardSound { .. }
+        | AppCommand::RenameSoundboardSound { .. }
+        | AppCommand::DeleteSoundboardSound { .. } => {}
+
         AppCommand::RevokeInvite { .. }
         | AppCommand::CreateEmoji { .. }
         | AppCommand::RenameEmoji { .. }
