@@ -196,50 +196,37 @@ third-party clients flagged.
   again on reconnect rather than silently connecting audio to a channel the
   user queued an hour ago. Confirm if it is stale.
 
-### 9. Lurkable guilds - partially confirmed, worth research
+### 9. Lurkable guilds - confirmed
 
-There is a real mechanism here, though not quite the one it is often
-described as. What the references confirm:
+Lurking is a real Discord state, and it is entered explicitly. What the
+references establish:
 
-- **Widget endpoints are unauthenticated.** `reflectcord` exempts
-  `/guilds/{id}/widget.(json|png)` from auth entirely. But widget.json carries
-  channel names and an online count - *not* messages.
-- **"Lurking" is a genuine protocol concept.** The `dm` client sends
-  `{"lurking": false}` when leaving a guild, so a membership can be a lurk
-  rather than a full join. discordgo notes that "only textual channels that
-  are visible to everyone in a **lurkable guild**" appear in some payloads,
-  and Spacebar's server carries a "TODO: Lurker mode".
+- **`joinGuild` takes a `lurker` flag.** A Vencord patch in
+  `discord-screenaudio`'s bundle matches `guildId:(\i),lurker:(\i)` in the
+  official client's own join call, and skips its auto-mute when the join was a
+  lurk. So lurking is a *join* with `lurker: true`, not a side effect of
+  reading a guild you have no relationship with.
+- **Leaving distinguishes the two.** `DELETE /users/@me/guilds/{id}` carries
+  `{"lurking": bool}` - the `dm` client sends `false`, and chorus models it as
+  `GuildLeaveSchema { lurking }`. A lurk is left the same way a membership is,
+  with the flag saying which it was.
+- **"Lurkable" is a documented guild property.** discordgo: only textual
+  channels "visible to everyone in a lurkable guild" appear in
+  `mention_channels`. That is about channel visibility, not about message
+  access for strangers.
+- **Widget endpoints are unauthenticated** (`reflectcord` exempts
+  `/guilds/{id}/widget.(json|png)` from auth), but widget.json carries channel
+  names and an online count - *not* messages.
 
-So discoverable and community guilds do support being read without a normal
-join - that is how the official client previews servers in discovery. What is
-**not** established is the stronger claim that such guilds answer chat
-requests from someone with no relationship to them at all; the evidence
-points at a lurk state being established first.
+**The practical consequence, which matters more than the mechanism:** lurking
+still goes through the join endpoint. Anything this client does to browse a
+discoverable server without really joining is a join as far as Discord's
+anti-spam heuristics are concerned, so it belongs behind the rule 6 warning
+exactly like a normal join does - see `RiskKind::JoinGuild`.
 
-Worth confirming against a real account before relying on it. If it holds, it
-pairs well with rule 7: a public guild you left could stay genuinely live
-rather than only browsable from cache.
-
-## Sequencing
-
-Rules 7, 8 and the merged multi-account design below are **architectural work
-to start last**. Before any of them: everything collected from the other
-clients - `docs/FEATURES.md` and the task list - should be implemented,
-tested, fixed and actually working.
-
-The reason is that those three all rewire how state is stored, shared and
-fanned out. Doing them over a moving feature set means doing them twice, and
-doing them first means a long stretch with nothing a user can see.
-
-## Planned: merged multi-account
-
-The largest feature on the roadmap, described here because the design is
-specific and the details are what make it work.
-
-Several accounts are signed in at once and presented as **one client**: a
-single DM list, a single server list, a single unread state. The accounts are
-plumbing; the user should mostly not have to think about which one a
-conversation belongs to.
+The stronger claim that a discoverable guild answers message requests from
+someone with no relationship to it at all is **not** supported by anything in
+the references, and the `lurker` flag is positive evidence against it.
 
 ### How a source is shown
 
