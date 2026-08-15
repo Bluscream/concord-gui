@@ -936,3 +936,43 @@ fn application_commands_complete_with_a_trailing_space() {
     // the next keystroke would run into the command.
     assert_eq!(completion, "/weather ");
 }
+
+#[test]
+fn message_links_are_collected_from_the_rendered_body() {
+    use concord::discord::fixtures;
+
+    let mut state = demo_state();
+    let channel = concord::discord::Id::new(111);
+    fixtures::append_message(
+        &mut state,
+        channel,
+        Some(concord::discord::Id::new(10)),
+        fixtures::demo_user_id(),
+        "blu",
+        "see https://example.com/one and https://example.com/two",
+    );
+
+    let rows = project_messages(&state, channel, state.current_user_id());
+    let row = rows.last().unwrap();
+
+    // What is openable must be exactly what was rendered as a link, or a
+    // click would open something the user did not see.
+    assert_eq!(row.links.len(), 2);
+    assert_eq!(row.links[0], "https://example.com/one");
+    assert_eq!(row.links[1], "https://example.com/two");
+}
+
+#[test]
+fn plain_messages_expose_no_links() {
+    let state = demo_state();
+    let rows = project_messages(
+        &state,
+        concord::discord::Id::new(111),
+        state.current_user_id(),
+    );
+
+    assert!(
+        rows.iter().any(|row| row.links.is_empty()),
+        "ordinary messages should not manufacture links"
+    );
+}

@@ -69,6 +69,8 @@ pub struct ChannelEntry {
     pub id: Option<Id<marker::ChannelMarker>>,
     /// Newest message, needed to mark the channel read.
     pub last_message: Option<Id<marker::MessageMarker>>,
+    /// Category this channel sits under, for collapse.
+    pub parent: Option<Id<marker::ChannelMarker>>,
     pub name: String,
     pub kind: ChannelKind,
     /// Archived threads are shown dimmed rather than hidden, so a thread the
@@ -596,6 +598,34 @@ impl Workspace {
         let height = self.message_scroll.bounds().size.height;
         self.message_scroll
             .set_offset(gpui::point(offset.x, offset.y + height * pages));
+    }
+
+    /// Quit the application.
+    ///
+    /// Explicit rather than window-close only, since the TUI has a quit key
+    /// and muscle memory carries over.
+    fn quit(&mut self, cx: &mut Context<Self>) {
+        cx.quit();
+    }
+
+    /// Collapse or expand a channel category.
+    fn toggle_category(&mut self, channel_id: Id<marker::ChannelMarker>) {
+        let collapsed = &mut self.ui_state.collapsed_channel_categories;
+        if let Some(position) = collapsed.iter().position(|id| *id == channel_id) {
+            collapsed.remove(position);
+        } else {
+            collapsed.push(channel_id);
+        }
+
+        if let Err(error) = config::save_ui_state_options(&self.ui_state) {
+            tracing::debug!("could not save collapsed categories: {error}");
+        }
+    }
+
+    fn category_collapsed(&self, channel_id: Id<marker::ChannelMarker>) -> bool {
+        self.ui_state
+            .collapsed_channel_categories
+            .contains(&channel_id)
     }
 
     /// Show or hide a pane, persisting the choice.
@@ -1458,6 +1488,7 @@ impl Workspace {
                 self.play_attachment(index, attachment);
             }
             MessageAction::RemoveEmbeds => self.remove_embeds(index),
+            MessageAction::OpenLink(link) => self.open_link(index, link),
             MessageAction::TogglePin => {
                 let pinned = self
                     .messages
@@ -2366,6 +2397,27 @@ impl Workspace {
         });
     }
 
+    /// Open a link from a message in the system browser.
+    ///
+    /// Routed through the core's OpenUrl rather than launched here, so the
+    /// same URL policy applies in both clients - the core normalises and
+    /// rejects schemes that should not be handed to a browser.
+    fn open_link(&mut self, index: usize, link: usize) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(url) = self
+            .messages
+            .get(index)
+            .and_then(|row| row.links.get(link))
+            .cloned()
+        else {
+            return;
+        };
+
+        handle.send(AppCommand::OpenUrl { url });
+    }
+
     /// Strip embeds from a message.
     ///
     /// Useful when a link unfurls into something large or unwanted; the
@@ -2950,9 +3002,43 @@ impl Workspace {
             .gap(px(1.))
             .overflow_y_scroll();
 
+        // Set while walking a collapsed category, so its children can be
+        // skipped without a lookup per row.
+        let mut hidden_parent: Option<Id<marker::ChannelMarker>> = None;
+
         for (index, channel) in self.model.channels.iter().enumerate() {
             if channel.kind == ChannelKind::Category {
-                list = list.child(section_label(channel.name.clone()));
+                let collapsed = channel.id.is_some_and(|id| self.category_collapsed(id));
+                let category_id = channel.id;
+
+                list = list.child(
+                    row()
+                        .id(("category", index))
+                        .w_full()
+                        .cursor_pointer()
+                        .child(section_label(format!(
+                            "{} {}",
+                            if collapsed { "\u{25b8}" } else { "\u{25be}" },
+                            channel.name
+                        )))
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            if let Some(id) = category_id {
+                                this.toggle_category(id);
+                            }
+                            cx.notify();
+                        })),
+                );
+
+                // Remember which category we are under, so its children can be
+                // hidden without another lookup per row.
+                hidden_parent = collapsed.then_some(channel.id).flatten();
+                continue;
+            }
+
+            // Children of a collapsed category are skipped entirely rather
+            // than rendered zero-height, so keyboard order matches what is
+            // visible.
+            if hidden_parent.is_some() && channel.parent == hidden_parent {
                 continue;
             }
 
@@ -3642,6 +3728,11 @@ impl Render for Workspace {
                                 _ => Pane::Members,
                             };
                             this.toggle_pane(pane);
+                        } else if key == "q"
+                            && event.keystroke.modifiers.control
+                            && !event.keystroke.modifiers.shift
+                        {
+                            this.quit(cx);
                         } else if key == "l"
                             && event.keystroke.modifiers.control
                             && event.keystroke.modifiers.shift

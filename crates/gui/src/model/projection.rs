@@ -186,6 +186,7 @@ fn project_channels(state: &DiscordState, nav: &Navigation) -> Vec<ChannelEntry>
             ChannelEntry {
                 id: Some(channel.id),
                 last_message: channel.last_message_id,
+                parent: channel.parent_id,
                 name: if channel.is_category() {
                     channel.name.to_uppercase()
                 } else {

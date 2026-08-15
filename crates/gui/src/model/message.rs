@@ -128,6 +128,8 @@ pub struct MessageRow {
     pub poll: Option<PollRow>,
     /// Set once the user clicks a hidden spoiler in this message.
     pub spoiler_revealed: bool,
+    /// Links found in the body, in order, so they can be opened.
+    pub links: Vec<String>,
     /// Whether the authenticated user wrote this message, which gates the
     /// edit and delete actions.
     pub own: bool,
@@ -231,8 +233,21 @@ pub fn project_messages(
             embed_count: message.embeds.len(),
             poll: message.poll.as_ref().map(project_poll),
             spoiler_revealed: false,
+            links: Vec::new(),
             own: current_user == Some(message.author_id),
         });
+
+        // Links are read back off the parsed body, so what is openable is
+        // exactly what was rendered as a link.
+        if let Some(row) = rows.last_mut() {
+            row.links = row
+                .body
+                .runs
+                .iter()
+                .filter(|(_, style)| style.kind == markdown::Kind::Url)
+                .map(|(range, _)| row.body.text[range.clone()].to_string())
+                .collect();
+        }
 
         previous = Some((message.author_id, created));
     }

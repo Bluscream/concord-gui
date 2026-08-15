@@ -47,6 +47,7 @@ impl MessageAction {
             MessageAction::DownloadAttachment(_) => 14,
             MessageAction::PlayAttachment(_) => 15,
             MessageAction::RemoveEmbeds => 16,
+            MessageAction::OpenLink(_) => 17,
         }
     }
 }
@@ -81,6 +82,8 @@ pub enum MessageAction {
     PlayAttachment(usize),
     /// Strip embeds from this message.
     RemoveEmbeds,
+    /// Open a link found in this message's body.
+    OpenLink(usize),
     /// Toggle an existing reaction, identified by its index in the row's
     /// reaction list. Carrying the index avoids threading emoji identity
     /// through the callback.
@@ -466,6 +469,35 @@ fn message_body(
 
     if let Some(poll) = &message.poll {
         body = body.child(poll_view(index, poll, on_action.clone()));
+    }
+
+    if !message.links.is_empty() {
+        let mut links = row().flex_wrap().gap(px(space::XS));
+
+        for (position, link) in message.links.iter().enumerate() {
+            let handler = on_action.clone();
+            // Truncated: a long tracking URL would otherwise dominate the row.
+            let label: String = link.chars().take(60).collect();
+
+            links = links.child(
+                gpui::div()
+                    .id(("link", index * 16 + position))
+                    .px(px(space::SM))
+                    .py(px(2.))
+                    .rounded(px(layout::RADIUS))
+                    .cursor_pointer()
+                    .bg(rgb(active().surface_hover))
+                    .text_size(px(text::XS))
+                    .text_color(rgb(active().accent))
+                    .hover(|style| style.bg(rgb(active().surface_active)))
+                    .child(label)
+                    .on_click(move |_event, _window, cx| {
+                        handler(index, MessageAction::OpenLink(position), cx)
+                    }),
+            );
+        }
+
+        body = body.child(links);
     }
 
     if message.embed_count > 0 {
