@@ -140,22 +140,12 @@ pub(in crate::tui::ui) fn render_messages(
             .into_iter()
             .filter(|preview| preview.thread_card)
         {
-            let Some(mut preview_area) = thread_card::thread_card_image_preview_area(
+            render_thread_card_image_preview(
+                frame,
                 message_areas.list,
-                image_preview.preview_y_offset_rows as isize,
-                image_preview.preview_x_offset_columns,
-                image_preview.preview_width,
-                image_preview.preview_height,
-            ) else {
-                continue;
-            };
-            preview_area.height = preview_area
-                .height
-                .min(image_preview.visible_preview_height);
-            if intersects_any(preview_area, media_occlusion_areas) {
-                continue;
-            }
-            render_image_preview(frame, preview_area, image_preview.state);
+                image_preview,
+                media_occlusion_areas,
+            );
         }
         render_vertical_scrollbar(
             frame,
@@ -257,6 +247,12 @@ pub(in crate::tui::ui) fn render_messages(
     );
     for image_preview in media.image_previews.into_iter() {
         if image_preview.thread_card {
+            render_thread_card_image_preview(
+                frame,
+                message_areas.list,
+                image_preview,
+                media_occlusion_areas,
+            );
             continue;
         }
         let Some(row_plan) = render_plan.row(image_preview.message_index) else {
@@ -660,6 +656,30 @@ pub(in crate::tui::ui) fn render_image_preview(
             frame.render_widget(RatatuiImage::new(protocol), area);
         }
     }
+}
+
+fn render_thread_card_image_preview(
+    frame: &mut Frame,
+    list: Rect,
+    image_preview: ImagePreview<'_>,
+    occlusion_areas: &[Rect],
+) {
+    let Some(mut preview_area) = thread_card::thread_card_image_preview_area(
+        list,
+        image_preview.preview_y_offset_rows as isize,
+        image_preview.preview_x_offset_columns,
+        image_preview.preview_width,
+        image_preview.preview_height,
+    ) else {
+        return;
+    };
+    preview_area.height = preview_area
+        .height
+        .min(image_preview.visible_preview_height);
+    if intersects_any(preview_area, occlusion_areas) {
+        return;
+    }
+    render_image_preview(frame, preview_area, image_preview.state);
 }
 
 #[cfg(test)]

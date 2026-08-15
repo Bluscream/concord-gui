@@ -12,9 +12,10 @@ use super::super::{
     message::{format::format_message_content_lines, layout::MessageViewportPlan},
     selection,
     state::{
-        ActiveModalPopupKind, DashboardState, MAX_MENTION_PICKER_VISIBLE, SelectablePopupTarget,
+        ActiveModalPopupKind, ChannelThreadItem, DashboardState, MAX_MENTION_PICKER_VISIBLE,
+        SelectablePopupTarget,
     },
-    ui::{ImagePreviewLayout, thread_card},
+    ui::{ImagePreviewLayout, avatar_gutter_width, thread_card},
 };
 
 /// Wide-enough wrap width for the prefetch walk. URL emission is
@@ -183,7 +184,7 @@ pub(in crate::tui) fn visible_image_preview_targets_from_plan(
         return visible_thread_card_image_preview_targets(state, layout);
     }
 
-    let mut targets = Vec::new();
+    let mut targets = visible_embedded_thread_card_image_preview_targets(state, layout, plan);
     let quality = state.image_preview_quality();
 
     for (message_index, row) in plan.rows().iter().enumerate() {
@@ -252,62 +253,113 @@ fn visible_thread_card_image_preview_targets(
             break;
         }
 
-        let Some(image) = post.preview_image.as_ref() else {
-            rendered_row = rendered_row.saturating_add(post.card_height());
-            continue;
-        };
-        let Some(slot) = thread_card::thread_card_image_slot(post, card_width, true) else {
-            rendered_row = rendered_row.saturating_add(post.card_height());
-            continue;
-        };
-        let Some(preview) = image.attachment.inline_preview_info() else {
-            rendered_row = rendered_row.saturating_add(post.card_height());
-            continue;
-        };
-        let (preview_width, preview_height) = image_preview_size_for_dimensions(
-            slot.width,
-            slot.height,
-            preview.width,
-            preview.height,
-            false,
+        if let Some(target) = thread_card_image_preview_target(
+            post,
+            post_index,
+            card_width,
+            isize::try_from(rendered_row).unwrap_or(isize::MAX),
+            0,
+            layout.list_height,
             layout.font_size,
-        );
-        if preview_width == 0 || preview_height == 0 {
-            rendered_row = rendered_row.saturating_add(post.card_height());
-            continue;
-        }
-
-        let preview_top = rendered_row
-            .saturating_add(1)
-            .saturating_add(usize::from(slot.height.saturating_sub(preview_height) / 2));
-        let preview_bottom = preview_top.saturating_add(usize::from(preview_height));
-        let visible_bottom = preview_bottom.min(layout.list_height);
-        if preview_top < visible_bottom {
-            targets.push(ImagePreviewTarget {
-                viewer: false,
-                thread_card: true,
-                message_index: post_index,
-                preview_index: 0,
-                preview_x_offset_columns: slot
-                    .column
-                    .saturating_add(slot.width.saturating_sub(preview_width)),
-                preview_y_offset_rows: preview_top,
-                preview_width,
-                preview_height,
-                visible_preview_height: u16::try_from(visible_bottom - preview_top)
-                    .unwrap_or(u16::MAX),
-                top_clip_rows: 0,
-                accent_color: None,
-                show_play_marker: false,
-                message_id: image.message_id,
-                url: preview_request_url(preview, preview_width, preview_height, quality),
-                filename: preview.filename.to_owned(),
-            });
+            quality,
+        ) {
+            targets.push(target);
         }
         rendered_row = rendered_row.saturating_add(post.card_height());
     }
 
     targets
+}
+
+fn visible_embedded_thread_card_image_preview_targets(
+    state: &DashboardState,
+    layout: ImagePreviewLayout,
+    plan: &MessageViewportPlan<'_>,
+) -> Vec<ImagePreviewTarget> {
+    let card_width = thread_card::thread_card_width_in_message(layout.content_width);
+    let card_left = avatar_gutter_width(state.show_avatars());
+    let quality = state.image_preview_quality();
+
+    plan.rows()
+        .iter()
+        .enumerate()
+        .take_while(|(_, row)| row.message_top < layout.list_height as isize)
+        .filter_map(|(message_index, row)| {
+            let post = state.thread_card_item_for_message(row.message)?;
+            let card_top = row
+                .body_top
+                .saturating_add(row.metrics.header_rows as isize)
+                .saturating_add(1);
+            thread_card_image_preview_target(
+                &post,
+                message_index,
+                card_width,
+                card_top,
+                card_left,
+                layout.list_height,
+                layout.font_size,
+                quality,
+            )
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn thread_card_image_preview_target(
+    post: &ChannelThreadItem,
+    message_index: usize,
+    card_width: usize,
+    card_top: isize,
+    card_left: u16,
+    list_height: usize,
+    font_size: Option<(u16, u16)>,
+    quality: ImagePreviewQualityPreset,
+) -> Option<ImagePreviewTarget> {
+    let image = post.preview_image.as_ref()?;
+    let slot = thread_card::thread_card_image_slot(post, card_width, true)?;
+    let preview = image.attachment.inline_preview_info()?;
+    let (preview_width, preview_height) = image_preview_size_for_dimensions(
+        slot.width,
+        slot.height,
+        preview.width,
+        preview.height,
+        false,
+        font_size,
+    );
+    if preview_width == 0 || preview_height == 0 {
+        return None;
+    }
+
+    let centered_row =
+        1usize.saturating_add(usize::from(slot.height.saturating_sub(preview_height) / 2));
+    let preview_top = card_top.saturating_add(isize::try_from(centered_row).unwrap_or(isize::MAX));
+    let preview_bottom =
+        preview_top.saturating_add(isize::try_from(preview_height).unwrap_or(isize::MAX));
+    let visible_top = preview_top.max(0);
+    let visible_bottom = preview_bottom.min(isize::try_from(list_height).unwrap_or(isize::MAX));
+    if visible_top >= visible_bottom {
+        return None;
+    }
+
+    Some(ImagePreviewTarget {
+        viewer: false,
+        thread_card: true,
+        message_index,
+        preview_index: 0,
+        preview_x_offset_columns: card_left
+            .saturating_add(slot.column)
+            .saturating_add(slot.width.saturating_sub(preview_width)),
+        preview_y_offset_rows: usize::try_from(visible_top).ok()?,
+        preview_width,
+        preview_height,
+        visible_preview_height: u16::try_from(visible_bottom - visible_top).unwrap_or(u16::MAX),
+        top_clip_rows: u16::try_from(visible_top - preview_top).unwrap_or(u16::MAX),
+        accent_color: None,
+        show_play_marker: false,
+        message_id: image.message_id,
+        url: preview_request_url(preview, preview_width, preview_height, quality),
+        filename: preview.filename.to_owned(),
+    })
 }
 
 fn image_preview_size_for_dimensions(

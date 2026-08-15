@@ -2202,6 +2202,75 @@ fn image_preview_targets_place_thread_attachments_in_the_card_right_column() {
     assert!(target.preview_width <= 20);
     assert!(target.preview_height <= 4);
     assert_eq!(target.filename, "image-8.png");
+
+    let parent_channel_id = Id::new(60);
+    let embedded_thread_id = Id::new(70);
+    let mut state = DashboardState::new();
+    state.push_event(guild_create_event(GuildCreateFixture {
+        channels: vec![
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                name: "general".to_owned(),
+                ..ChannelInfo::test(parent_channel_id, "GuildText")
+            },
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                parent_id: Some(parent_channel_id),
+                last_message_id: Some(Id::new(700)),
+                name: "image thread".to_owned(),
+                message_count: Some(1),
+                total_message_sent: Some(1),
+                thread_metadata: Some(crate::discord::ThreadMetadataInfo::test(false, false)),
+                ..ChannelInfo::test(embedded_thread_id, "GuildPublicThread")
+            },
+        ],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+    state.confirm_selected_guild();
+    state.confirm_selected_channel();
+    state.push_event(message_create_event(MessageCreateFixture {
+        guild_id: Some(guild_id),
+        channel_id: parent_channel_id,
+        message_id: Id::new(600),
+        content: Some("image thread".to_owned()),
+        message_kind: crate::discord::MessageKind::new(18),
+        ..guild_message_create_fixture()
+    }));
+    state.push_event(message_create_event(MessageCreateFixture {
+        guild_id: Some(guild_id),
+        channel_id: embedded_thread_id,
+        message_id: Id::new(700),
+        content: Some(String::new()),
+        attachments: vec![image_attachment(9)],
+        ..guild_message_create_fixture()
+    }));
+    let mut embedded_layout = layout(30);
+    embedded_layout.list_width = 100;
+    embedded_layout.content_width = 88;
+
+    let targets = visible_image_preview_targets(&state, embedded_layout);
+
+    assert_eq!(targets.len(), 1);
+    let target = &targets[0];
+    assert!(target.thread_card);
+    assert_eq!(target.message_id, Id::new(700));
+    assert!(target.preview_y_offset_rows >= 2);
+    let card_left = crate::tui::ui::avatar_gutter_width(state.show_avatars());
+    let card_right = card_left.saturating_add(
+        u16::try_from(crate::tui::ui::thread_card::thread_card_width_in_message(
+            embedded_layout.content_width,
+        ))
+        .expect("embedded card width fits u16"),
+    );
+    assert!(target.preview_x_offset_columns >= card_right.saturating_sub(20));
+    assert!(
+        target
+            .preview_x_offset_columns
+            .saturating_add(target.preview_width)
+            <= card_right
+    );
+    assert!(target.preview_height <= 4);
+    assert_eq!(target.filename, "image-9.png");
 }
 
 #[test]

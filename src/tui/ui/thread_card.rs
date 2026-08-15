@@ -3,13 +3,13 @@ use super::*;
 use crate::tui::ui::emoji_overlay::{EmojiSlot, overlay_emoji_slots};
 use crate::tui::ui::loading_indicator::AsciiLoadingIndicator;
 
-const FORUM_POST_IMAGE_GAP: usize = 2;
-const FORUM_POST_IMAGE_MAX_WIDTH: usize = 20;
-const FORUM_POST_IMAGE_MIN_WIDTH: usize = 10;
-const FORUM_POST_IMAGE_MIN_TEXT_WIDTH: usize = 24;
+const THREAD_CARD_IMAGE_GAP: usize = 2;
+const THREAD_CARD_IMAGE_MAX_WIDTH: usize = 20;
+const THREAD_CARD_IMAGE_MIN_WIDTH: usize = 10;
+const THREAD_CARD_IMAGE_MIN_TEXT_WIDTH: usize = 24;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::tui) struct ForumPostImageSlot {
+pub(in crate::tui) struct ThreadCardImageSlot {
     pub(in crate::tui) column: u16,
     pub(in crate::tui) width: u16,
     pub(in crate::tui) height: u16,
@@ -60,13 +60,12 @@ pub(super) fn thread_card_viewport_lines_with_custom_emoji_images(
         if let Some(label) = post.section_label.as_deref() {
             lines.push(thread_card_section_header_line(label, width));
         }
-        lines.extend(thread_card_lines_with_layout(
+        lines.extend(thread_card_lines(
             post,
             selected == Some(index),
             width,
             show_custom_emoji,
             show_images,
-            true,
         ));
     }
     lines
@@ -76,22 +75,12 @@ pub(super) fn thread_card_scrollbar_visible_count(list_height: u16) -> usize {
     usize::from(list_height).max(1)
 }
 
-pub(in crate::tui) fn compact_thread_card_lines(
-    post: &ChannelThreadItem,
-    selected: bool,
-    width: usize,
-    show_custom_emoji: bool,
-) -> Vec<Line<'static>> {
-    thread_card_lines_with_layout(post, selected, width, show_custom_emoji, false, false)
-}
-
-fn thread_card_lines_with_layout(
+pub(in crate::tui) fn thread_card_lines(
     post: &ChannelThreadItem,
     selected: bool,
     width: usize,
     show_custom_emoji: bool,
     show_images: bool,
-    separate_title_and_body: bool,
 ) -> Vec<Line<'static>> {
     let marker = if selected { "› " } else { "  " };
     let card_width = width.saturating_sub(marker.width()).max(4);
@@ -127,14 +116,12 @@ fn thread_card_lines_with_layout(
             selected,
         ),
     ];
-    if separate_title_and_body {
-        lines.push(thread_card_inner_line(
-            "  ",
-            Vec::new(),
-            inner_width,
-            selected,
-        ));
-    }
+    lines.push(thread_card_inner_line(
+        "  ",
+        Vec::new(),
+        inner_width,
+        selected,
+    ));
     lines.push(thread_card_inner_line(
         "  ",
         thread_card_preview_spans(post, text_width),
@@ -171,6 +158,15 @@ fn thread_card_lines_with_layout(
         ),
     ]));
     lines
+}
+
+/// Keeps an embedded card within the message content while preserving the
+/// historical maximum width used by thread-created system messages.
+pub(in crate::tui) fn thread_card_width_in_message(content_width: usize) -> usize {
+    content_width
+        .saturating_sub(2)
+        .clamp(4, 72)
+        .saturating_add(2)
 }
 
 fn thread_card_section_header_line(label: &str, width: usize) -> Line<'static> {
@@ -297,22 +293,22 @@ pub(in crate::tui) fn thread_card_image_slot(
     post: &ChannelThreadItem,
     width: usize,
     show_images: bool,
-) -> Option<ForumPostImageSlot> {
+) -> Option<ThreadCardImageSlot> {
     if !show_images || post.preview_image.is_none() {
         return None;
     }
     let inner_width = thread_card_inner_width_for_reactions(width);
     let available = inner_width
-        .saturating_sub(FORUM_POST_IMAGE_MIN_TEXT_WIDTH)
-        .saturating_sub(FORUM_POST_IMAGE_GAP);
-    let preview_width = available.min(FORUM_POST_IMAGE_MAX_WIDTH);
-    if preview_width < FORUM_POST_IMAGE_MIN_WIDTH {
+        .saturating_sub(THREAD_CARD_IMAGE_MIN_TEXT_WIDTH)
+        .saturating_sub(THREAD_CARD_IMAGE_GAP);
+    let preview_width = available.min(THREAD_CARD_IMAGE_MAX_WIDTH);
+    if preview_width < THREAD_CARD_IMAGE_MIN_WIDTH {
         return None;
     }
     let column = 4usize
         .saturating_add(inner_width)
         .saturating_sub(preview_width);
-    Some(ForumPostImageSlot {
+    Some(ThreadCardImageSlot {
         column: u16::try_from(column).unwrap_or(u16::MAX),
         width: u16::try_from(preview_width).unwrap_or(u16::MAX),
         height: u16::try_from(post.card_height().saturating_sub(2)).unwrap_or(u16::MAX),
@@ -348,7 +344,7 @@ fn thread_card_text_width(
         .map(|slot| {
             inner_width
                 .saturating_sub(usize::from(slot.width))
-                .saturating_sub(FORUM_POST_IMAGE_GAP)
+                .saturating_sub(THREAD_CARD_IMAGE_GAP)
                 .max(1)
         })
         .unwrap_or(inner_width)
