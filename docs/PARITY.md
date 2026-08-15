@@ -7,7 +7,7 @@ the parts we do not want.
 
 ### How this is measured
 
-Three checks, because the first two each missed real gaps:
+Five checks, because each one missed gaps the next found:
 
 1. **Keybinding actions.** The TUI's 152 actions in
    `src/tui/keybindings/actions.rs`. Too weak: it counts names, not behaviour.
@@ -44,15 +44,24 @@ Three checks, because the first two each missed real gaps:
    everything else for free, but these carry information stored nowhere, so
    ignoring one loses it outright - `MessageSendFailed` meant a rejected
    message vanished silently. 24 were unhandled.
+5. **Compiler warnings.** `never used`, `never read` and `never constructed`
+   are the same reachability question the compiler already answers. Reading
+   them found staged attachments that rendered nothing, guild mention counts
+   projected and never drawn, three settings with labels and no row, and
+   pin confirmations nothing constructed. Build with `--tests` too: a helper
+   used only by tests looks dead to `cargo check`, and removing it breaks the
+   test build without breaking the normal one.
 
-The lesson from all four: a proxy for functionality is not functionality.
-Any future parity claim should re-run 2 and 4, which are exact, and sweep 3.
+The lesson from all five: a proxy for functionality is not functionality.
+Checks 2 and 4 are exact and should be re-run before any parity claim; 3 and
+5 are cheap and should be swept. The pattern so far is that each new check
+found what the earlier ones structurally could not, so a clean run means
+"the checks I know how to write pass", not "nothing is missing".
 
 ### Status
 
-Command coverage is **68 of 69**, event coverage **44 of 46**, and both the
-uncalled-function sweep and the render sweep are clean. The one command the GUI does not send is
-`LoadAttachmentPreview`, and this is deliberate - see below.
+Command coverage **69 of 69**, event coverage **46 of 46**, the uncalled
+sweep empty, and the GUI crate compiles with zero warnings.
 
 Working: login (token, QR, password, MFA) · guild/channel navigation ·
 threads, including rename, delete, lock, mute, pin and previews · forums,
@@ -70,16 +79,18 @@ reaction users · pins · mute channel · notification inbox with context ·
 builtin slash commands · application commands with autocomplete · status and
 custom status · leave guild · sign out · guild folders with rename
 
-### Deliberate difference
+### A reversed decision, worth recording
 
-`LoadAttachmentPreview` fetches image bytes into the process. The TUI needs
-this because a terminal cannot fetch an image itself - the bytes have to be
-re-encoded into a terminal graphics protocol. GPUI loads images from a URL
-through the application's HTTP client, so the GUI renders the same previews
-without the round trip through core state.
+`LoadAttachmentPreview` was initially left unsent, on the grounds that GPUI
+can load an image from a URL and sending it would fetch twice. That was half
+right. It avoided the double fetch but routed image loading around the
+session's headers and the core's cache, and left demo mode with no previews
+at all. `gpui::Image::from_bytes` renders the core's bytes directly, which
+gets one fetch on the path the TUI already uses.
 
-The feature is present; the command is not the way it is delivered. Sending it
-anyway would fetch every image twice.
+The general shape of the mistake: "the GUI achieves this differently" is
+worth stating out loud, because saying it exposes whether it is a better
+route or a rationalisation.
 
 ### Not possible against this core
 
