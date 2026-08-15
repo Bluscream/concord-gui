@@ -263,32 +263,38 @@ pub struct ChannelTab {
 
 /// An action Discord's anti-spam checks watch, which is warned about before
 /// it is carried out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RiskAction {
     JoinGuild,
     LeaveGuild,
+    /// Changing your profile while connected through a third-party client.
+    /// Carries the change, since it has to survive the confirmation.
+    ProfileEdit(Id<marker::GuildMarker>, String),
 }
 
 impl RiskAction {
-    fn body(self) -> String {
+    fn body(&self) -> String {
         match self {
             Self::JoinGuild => t!("warning-join-guild"),
             Self::LeaveGuild => t!("warning-leave-guild"),
+            Self::ProfileEdit(..) => t!("warning-profile-edit"),
         }
     }
 
     /// Whether the user has already asked not to be warned about this.
-    fn suppressed(self, options: &AppOptions) -> bool {
+    fn suppressed(&self, options: &AppOptions) -> bool {
         match self {
             Self::JoinGuild => options.warnings.suppress_join_guild,
             Self::LeaveGuild => options.warnings.suppress_leave_guild,
+            Self::ProfileEdit(..) => options.warnings.suppress_profile_edit,
         }
     }
 
-    fn suppress(self, options: &mut AppOptions) {
+    fn suppress(&self, options: &mut AppOptions) {
         match self {
             Self::JoinGuild => options.warnings.suppress_join_guild = true,
             Self::LeaveGuild => options.warnings.suppress_leave_guild = true,
+            Self::ProfileEdit(..) => options.warnings.suppress_profile_edit = true,
         }
     }
 }
@@ -839,22 +845,11 @@ impl Workspace {
                     return true;
                 };
 
-                handle.send(AppCommand::UpdateUserProfile {
-                    update: Box::new(UserProfileUpdate {
-                        user_id,
-                        guild_id: Some(guild_id),
-                        global: GlobalUserProfileUpdate::default(),
-                        guild: Some(GuildUserProfileUpdate {
-                            guild_id,
-                            nickname: Some(nickname),
-                            // /nick changes only the nickname; the rest of the
-                            // guild identity is left as it is.
-                            pronouns: None,
-                            bio: None,
-                            avatar: None,
-                        }),
-                    }),
-                });
+                // Editing a profile from a third-party client is one of the
+                // actions Discord's anti-spam checks watch, so it asks first.
+                if self.confirm_risk(RiskAction::ProfileEdit(guild_id, nickname.clone())) {
+                    self.set_nickname_confirmed(guild_id, nickname);
+                }
                 true
             }
             BuiltinSlashCommandParse::Ready(BuiltinSlashCommandSubmit::Unsupported { message }) => {
@@ -1412,6 +1407,30 @@ impl Workspace {
         false
     }
 
+    /// Change a guild nickname, once the risk has been accepted.
+    fn set_nickname_confirmed(&mut self, guild_id: Id<marker::GuildMarker>, nickname: String) {
+        let (Some(handle), Some(user_id)) = (&self.handle, self.current_user) else {
+            return;
+        };
+
+        handle.send(AppCommand::UpdateUserProfile {
+            update: Box::new(UserProfileUpdate {
+                user_id,
+                guild_id: Some(guild_id),
+                global: GlobalUserProfileUpdate::default(),
+                guild: Some(GuildUserProfileUpdate {
+                    guild_id,
+                    nickname: Some(nickname),
+                    // /nick changes only the nickname; the rest of the guild
+                    // identity is left as it is.
+                    pronouns: None,
+                    bio: None,
+                    avatar: None,
+                }),
+            }),
+        });
+    }
+
     /// Carry out whatever the open warning was about.
     fn accept_risk(&mut self) {
         let Some((action, dont_ask)) = self.risk.take() else {
@@ -1429,6 +1448,9 @@ impl Workspace {
         match action {
             RiskAction::JoinGuild => self.accept_invite_confirmed(),
             RiskAction::LeaveGuild => self.leave_guild_confirmed(),
+            RiskAction::ProfileEdit(guild_id, nickname) => {
+                self.set_nickname_confirmed(guild_id, nickname)
+            }
         }
     }
 
@@ -5675,7 +5697,8 @@ impl Workspace {
             )));
         }
 
-        if let Some((action, dont_ask)) = self.risk {
+        if let Some((action, dont_ask)) = &self.risk {
+            let dont_ask = *dont_ask;
             return Some(overlay::scrim().child(overlay::risk_warning_view(
                 &t!("warning-title"),
                 &action.body(),

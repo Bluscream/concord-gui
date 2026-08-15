@@ -249,8 +249,6 @@ pub struct WarningOptions {
     /// Joining a server: the action most likely to get a client flagged.
     pub suppress_join_guild: bool,
     pub suppress_leave_guild: bool,
-    /// Starting a conversation with someone new.
-    pub suppress_new_dm: bool,
     /// Editing your profile while connected through a third-party client.
     pub suppress_profile_edit: bool,
 }

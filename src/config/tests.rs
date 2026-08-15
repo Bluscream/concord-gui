@@ -726,7 +726,6 @@ fn options_save_and_load_round_trip() {
         warnings: WarningOptions {
             suppress_join_guild: true,
             suppress_leave_guild: false,
-            suppress_new_dm: true,
             suppress_profile_edit: false,
         },
     };
