@@ -150,6 +150,7 @@ impl WorkspaceModel {
 pub enum Pane {
     Guilds,
     Channels,
+    Messages,
     Members,
 }
 
@@ -231,6 +232,8 @@ pub struct Workspace {
     pub guild_muted: bool,
     /// Recent error-log lines, shown when the debug panel is open.
     pub debug_log: Option<Vec<String>>,
+    /// Message the keyboard is on, when navigating the log without a mouse.
+    pub selected_message: Option<usize>,
     /// Which pane keyboard focus is on, for cycling and filtering.
     pub focus_pane: Pane,
     /// Filter text for the focused pane, when filtering is active.
@@ -311,6 +314,7 @@ impl Workspace {
             voice_scope_joined: None,
             channel_muted: false,
             guild_muted: false,
+            selected_message: None,
             focus_pane: Pane::Channels,
             pane_filter: None,
             debug_log: None,
@@ -606,11 +610,44 @@ impl Workspace {
             .set_offset(gpui::point(offset.x, offset.y + height * pages));
     }
 
+    /// Move the message selection, entering the log if not already in it.
+    ///
+    /// Selection starts at the newest message rather than the oldest: that is
+    /// where attention is, and the TUI does the same.
+    fn move_message_selection(&mut self, delta: isize) {
+        if self.messages.is_empty() {
+            return;
+        }
+
+        let last = self.messages.len() - 1;
+        let next = match self.selected_message {
+            None => last,
+            Some(current) => (current as isize + delta).clamp(0, last as isize) as usize,
+        };
+
+        self.selected_message = Some(next);
+        // Keep the selection on screen; a selection scrolled out of view is
+        // indistinguishable from none.
+        self.message_scroll.scroll_to_item(next);
+    }
+
+    fn clear_message_selection(&mut self) {
+        self.selected_message = None;
+    }
+
+    /// Apply an action to the selected message, if any.
+    fn act_on_selection(&mut self, action: MessageAction) {
+        let Some(index) = self.selected_message else {
+            return;
+        };
+        self.handle_message_action(index, action);
+    }
+
     /// Move keyboard focus between panes.
     fn cycle_focus(&mut self, forward: bool) {
         // Cycling only visits panes that are actually shown; focusing a hidden
         // pane would silently swallow keys.
-        let order = [Pane::Guilds, Pane::Channels, Pane::Members];
+        let order = [Pane::Guilds, Pane::Channels, Pane::Messages, Pane::Members];
         let visible: Vec<Pane> = order
             .into_iter()
             .filter(|pane| self.pane_visible(*pane))
@@ -636,6 +673,9 @@ impl Workspace {
         match pane {
             Pane::Guilds => self.ui_state.guild_pane_visible,
             Pane::Channels => self.ui_state.channel_pane_visible,
+            // Always focusable: the log is the content area, so there is no
+            // state in which it can be hidden.
+            Pane::Messages => true,
             Pane::Members => self.ui_state.member_pane_visible && self.shows_members(),
         }
     }
@@ -697,6 +737,8 @@ impl Workspace {
             Pane::Guilds => &mut state.guild_pane_visible,
             Pane::Channels => &mut state.channel_pane_visible,
             Pane::Members => &mut state.member_pane_visible,
+            // The message log has no visibility toggle; it is the content.
+            Pane::Messages => return,
         };
         *field = !*field;
 
@@ -3468,6 +3510,7 @@ impl Workspace {
             )
             .child(message_list(
                 &self.messages,
+                self.selected_message,
                 &self.message_scroll,
                 self.options.display.show_avatars,
                 self.options.display.circular_avatars,
@@ -3825,6 +3868,25 @@ impl Render for Workspace {
                                 && filter.handle_key(event)
                             {
                                 this.pane_filter = None;
+                            }
+                        } else if this.focus_pane == Pane::Messages
+                            && matches!(
+                                key,
+                                "up" | "down" | "escape" | "r" | "e" | "y" | "p" | "delete"
+                            )
+                            && this.composer.is_empty()
+                        {
+                            // Only when the composer is empty: otherwise these
+                            // are ordinary characters being typed.
+                            match key {
+                                "up" => this.move_message_selection(-1),
+                                "down" => this.move_message_selection(1),
+                                "escape" => this.clear_message_selection(),
+                                "r" => this.act_on_selection(MessageAction::Reply),
+                                "e" => this.act_on_selection(MessageAction::Edit),
+                                "y" => this.act_on_selection(MessageAction::CopyText),
+                                "p" => this.act_on_selection(MessageAction::TogglePin),
+                                _ => this.act_on_selection(MessageAction::Delete),
                             }
                         } else if key == "slash" && event.keystroke.modifiers.control {
                             this.toggle_pane_filter();

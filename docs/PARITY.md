@@ -35,7 +35,6 @@ called this list finished; it was not. What follows is the corrected set.
 
 | Feature | TUI action | Notes |
 |---|---|---|
-| Keyboard message selection | `SelectNext/Previous`, `ToggleSelected`, `ActivateSelected` | The TUI drives messages entirely from the keyboard; the GUI needs the mouse for every message action. |
 | Confirmation prompts | `OpenDeleteConfirmation`, `OpenPinConfirmation` | Delete and pin act immediately. |
 | Voice volume | `AdjustVolume`, `UpdateVoiceParticipantPlayback` | No output or per-participant volume control. |
 | Notification levels | `OpenNotificationOptions` | Only mute/unmute; no all/mentions/nothing. |

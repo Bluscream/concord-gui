@@ -98,6 +98,7 @@ pub enum MessageAction {
 /// so the list carries a stable id and scroll position survives re-renders.
 pub fn message_list(
     rows: &[MessageRow],
+    selected: Option<usize>,
     scroll: &gpui::ScrollHandle,
     show_avatars: bool,
     circular_avatars: bool,
@@ -152,6 +153,7 @@ pub fn message_list(
         list = list.child(message_row(
             index,
             message,
+            selected == Some(index),
             show_avatars,
             circular_avatars,
             hour24,
@@ -171,6 +173,7 @@ pub fn message_list(
 fn message_row(
     index: usize,
     message: &MessageRow,
+    selected: bool,
     show_avatars: bool,
     circular_avatars: bool,
     hour24: bool,
@@ -185,6 +188,13 @@ fn message_row(
         .w_full()
         .group("message")
         .hover(|style| style.bg(rgb(active().surface_hover)))
+        // A keyboard selection needs a marker that survives the mouse leaving:
+        // the hover tint alone would vanish and lose the user's place.
+        .when(selected, |d| {
+            d.bg(rgb(active().surface_hover))
+                .border_l_2()
+                .border_color(rgb(active().accent))
+        })
         .child(message_block(
             index,
             message,
