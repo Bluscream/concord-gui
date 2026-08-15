@@ -79,6 +79,34 @@ reaction users · pins · mute channel · notification inbox with context ·
 builtin slash commands · application commands with autocomplete · status and
 custom status · leave guild · sign out · guild folders with rename
 
+### Known gaps
+
+Found by a sixth check - which config surfaces each client reads. The five
+earlier checks cannot see these, because the GUI hardcodes equivalent
+behaviour: commands, events and reachability all look clean while the user's
+own configuration is ignored.
+
+| Surface | State |
+|---|---|
+| `config.toml` | Read, and its warnings are now reported |
+| `ui_state.toml` | Read and written, shared with the TUI |
+| `keymap.toml` | **Ignored.** The GUI hardcodes its keys |
+| `theme.toml` | **Ignored** |
+
+`keymap.toml` is the substantive one. The TUI resolves a user-defined map of
+152 actions, with a leader key and multi-chord sequences, and honours custom
+bindings over defaults with conflict resolution. The GUI matches on key names
+in one hardcoded arm. Someone who has customised their TUI bindings gets none
+of them here, and there is no leader-key support at all. Closing it means
+routing GUI input through `UiAction` rather than through string keys.
+
+`theme.toml` is a different shape of problem. Its accessors are
+`pub(crate)`, so the GUI cannot read it without a core change, and its
+contents are terminal-oriented - ratatui highlight groups and border shapes -
+so there is no mechanical mapping onto GPUI colours. It needs a decision
+about what a shared theme should even mean across the two front ends, not
+just an implementation.
+
 ### A reversed decision, worth recording
 
 `LoadAttachmentPreview` was initially left unsent, on the grounds that GPUI
