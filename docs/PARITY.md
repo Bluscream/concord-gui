@@ -6,7 +6,7 @@ the parts we do not want.
 ## Against the concord TUI
 
 Derived from the TUI's 152 keybinding actions (`src/tui/keybindings/actions.rs`)
-and its 12 builtin slash commands (`src/discord/builtin_commands.rs`). Pure
+and its 12 builtin slash commands · reply-ping toggle (`src/discord/builtin_commands.rs`). Pure
 input primitives (`Char`, `Ctrl`, `Key`, `ModifiedKey`) are excluded - they are
 not features.
 
@@ -36,7 +36,6 @@ Ordered roughly by how much a daily driver misses them.
 | Sign out | `SignOut` | No way to switch accounts without editing config. |
 | Create thread | `OpenThread` | Threads are readable, not creatable. |
 | Remove embeds | `RemoveEmbeds`, `RemoveMessageEmbeds` | |
-| Reply ping toggle | `ToggleReplyPing` | Currently always mentions the author. |
 | Application commands | `RunApplicationCommand` | Server-side slash commands. |
 | Compose in external editor | `OpenInEditor` | |
 | Pane show/hide, resize, zoom | `Toggle*Pane`, `Resize*`, `ToggleZoom` | Layout is fixed. |

@@ -205,6 +205,9 @@ pub struct Workspace {
     pub typing: Vec<String>,
     /// Message being replied to, shown above the composer until cleared.
     pub replying_to: Option<(Id<marker::MessageMarker>, String)>,
+    /// Whether a reply mentions its author. Discord defaults this on, and it
+    /// is the setting people most often want to change per message.
+    pub reply_ping: bool,
     /// Message being edited. While set, the composer edits instead of sends.
     pub editing: Option<Id<marker::MessageMarker>>,
     /// Channel the user is connected to by voice, if any.
@@ -277,6 +280,7 @@ impl Workspace {
             composer: Composer::default(),
             typing: Vec::new(),
             replying_to: None,
+            reply_ping: true,
             editing: None,
             voice_channel: None,
             voice_scope_joined: None,
@@ -455,7 +459,7 @@ impl Workspace {
             .take()
             .map(|(message_id, _)| ReplyReference {
                 message_id,
-                mention_author: true,
+                mention_author: self.reply_ping,
             });
 
         handle.send(AppCommand::SendMessage {
