@@ -1438,3 +1438,29 @@ fn no_icon_glyph_needs_a_font_we_do_not_ship() {
         }
     }
 }
+
+#[test]
+fn german_reaches_the_interface_end_to_end() {
+    use concord::i18n::{Language, set_language, translate, translate_text};
+
+    // The whole chain: a .ftl file, a bundle, a lookup, a fallback. Testing
+    // the pieces separately would not have caught a key renamed in one file
+    // and not the other.
+    set_language(Language::German);
+
+    assert_eq!(translate("action-close"), "Schließen");
+    assert_eq!(translate("label-bans"), "Banns");
+    assert_eq!(
+        translate("settings-language-follow-system"),
+        "System folgen"
+    );
+
+    // Arguments substitute in the translated string, not the English one.
+    assert_eq!(
+        translate_text("label-reacted-with", &[("emoji", "\u{1F44D}")]),
+        "Reagiert mit \u{1F44D}"
+    );
+
+    set_language(Language::English);
+    assert_eq!(translate("action-close"), "Close");
+}

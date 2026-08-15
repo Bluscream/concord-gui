@@ -11,6 +11,8 @@
 
 use gpui::{Div, Stateful, prelude::*, px, rgb};
 
+use concord::t;
+
 use crate::theme::{active, layout, scaled, space, text};
 use crate::ui::chrome::{column, row};
 
@@ -86,7 +88,7 @@ pub fn confirm_view(
     on_confirm: impl Fn(&mut gpui::App) + 'static,
     on_cancel: impl Fn(&mut gpui::App) + 'static,
 ) -> Div {
-    panel("Confirm", 380.)
+    panel(&t!("label-confirm"), 380.)
         .child(
             gpui::div()
                 .px(px(space::LG))
@@ -102,8 +104,18 @@ pub fn confirm_view(
                 .py(px(space::MD))
                 .gap(px(space::SM))
                 .justify_end()
-                .child(button("confirm-cancel", "Cancel", false, on_cancel))
-                .child(button("confirm-ok", "Confirm", true, on_confirm)),
+                .child(button(
+                    "confirm-cancel",
+                    &t!("action-cancel"),
+                    false,
+                    on_cancel,
+                ))
+                .child(button(
+                    "confirm-ok",
+                    &t!("action-confirm"),
+                    true,
+                    on_confirm,
+                )),
         )
 }
 
@@ -127,7 +139,7 @@ pub fn reaction_users_view(
                 .text_color(rgb(active().text_subtle))
                 // Distinct from "nobody reacted": the reaction exists, so the
                 // list is still arriving.
-                .child("Loading..."),
+                .child(t!("status-loading")),
         );
     }
 
@@ -143,16 +155,24 @@ pub fn reaction_users_view(
         );
     }
 
-    panel(&format!("Reacted with {glyph}"), 320.)
-        .child(list)
-        .child(
-            row()
-                .w_full()
-                .px(px(space::LG))
-                .py(px(space::MD))
-                .justify_end()
-                .child(button("reaction-users-close", "Close", false, on_close)),
-        )
+    panel(
+        &concord::i18n::translate_text("label-reacted-with", &[("emoji", glyph)]),
+        320.,
+    )
+    .child(list)
+    .child(
+        row()
+            .w_full()
+            .px(px(space::LG))
+            .py(px(space::MD))
+            .justify_end()
+            .child(button(
+                "reaction-users-close",
+                &t!("action-close"),
+                false,
+                on_close,
+            )),
+    )
 }
 
 /// One entry in the mention inbox, as rendered.
@@ -180,7 +200,7 @@ pub fn inbox_view(
                 .py(px(space::MD))
                 .text_size(px(scaled(text::SM)))
                 .text_color(rgb(active().text_subtle))
-                .child("No recent mentions"),
+                .child(t!("status-no-mentions")),
         );
     }
 
@@ -229,13 +249,13 @@ pub fn inbox_view(
         );
     }
 
-    panel("Mentions", 460.).child(list).child(
+    panel(&t!("label-mentions"), 460.).child(list).child(
         row()
             .w_full()
             .px(px(space::LG))
             .py(px(space::MD))
             .justify_end()
-            .child(button("inbox-close", "Close", false, on_close)),
+            .child(button("inbox-close", &t!("action-close"), false, on_close)),
     )
 }
 
@@ -278,7 +298,7 @@ pub fn audio_devices_view(
                     .text_color(rgb(active().text_subtle))
                     // The device list is fetched, so an empty one before the
                     // reply arrives is not the same as having no devices.
-                    .child("No devices reported"),
+                    .child(t!("status-no-devices")),
             );
         }
 
@@ -309,13 +329,18 @@ pub fn audio_devices_view(
         }
     }
 
-    panel("Audio devices", 400.).child(body).child(
+    panel(&t!("label-audio-devices"), 400.).child(body).child(
         row()
             .w_full()
             .px(px(space::LG))
             .py(px(space::MD))
             .justify_end()
-            .child(button("devices-close", "Close", false, on_close)),
+            .child(button(
+                "devices-close",
+                &t!("action-close"),
+                false,
+                on_close,
+            )),
     )
 }
 
@@ -351,8 +376,13 @@ pub fn text_prompt_view(
                 .py(px(space::MD))
                 .gap(px(space::SM))
                 .justify_end()
-                .child(button("prompt-cancel", "Cancel", false, on_cancel))
-                .child(button("prompt-save", "Save", false, on_submit)),
+                .child(button(
+                    "prompt-cancel",
+                    &t!("action-cancel"),
+                    false,
+                    on_cancel,
+                ))
+                .child(button("prompt-save", &t!("action-save"), false, on_submit)),
         )
 }
 
@@ -427,19 +457,24 @@ pub fn invite_view(
             gpui::div()
                 .text_size(px(scaled(text::XS)))
                 .text_color(rgb(active().text_muted))
-                .child("You are already in this server"),
+                .child(t!("status-already-joined")),
         );
     }
 
-    panel("Join server", 400.).child(body).child(
+    panel(&t!("label-join-server"), 400.).child(body).child(
         row()
             .w_full()
             .px(px(space::LG))
             .py(px(space::MD))
             .gap(px(space::SM))
             .justify_end()
-            .child(button("invite-cancel", "Cancel", false, on_cancel))
-            .children(joinable.then(|| button("invite-join", "Join", true, on_accept))),
+            .child(button(
+                "invite-cancel",
+                &t!("action-cancel"),
+                false,
+                on_cancel,
+            ))
+            .children(joinable.then(|| button("invite-join", &t!("action-join"), true, on_accept))),
     )
 }
 
@@ -472,7 +507,7 @@ pub fn sticker_picker_view(
                 .text_color(rgb(active().text_subtle))
                 // Only the guild's own stickers are sendable without Nitro,
                 // so a guild with none has nothing to offer here.
-                .child("This server has no stickers"),
+                .child(t!("status-no-stickers")),
         );
     }
 
@@ -502,13 +537,18 @@ pub fn sticker_picker_view(
         );
     }
 
-    panel("Stickers", 420.).child(body).child(
+    panel(&t!("label-stickers"), 420.).child(body).child(
         row()
             .w_full()
             .px(px(space::LG))
             .py(px(space::MD))
             .justify_end()
-            .child(button("sticker-close", "Close", false, on_close)),
+            .child(button(
+                "sticker-close",
+                &t!("action-close"),
+                false,
+                on_close,
+            )),
     )
 }
 
@@ -537,7 +577,7 @@ pub fn role_picker_view(
                 .py(px(space::MD))
                 .text_size(px(scaled(text::SM)))
                 .text_color(rgb(active().text_subtle))
-                .child("This server has no assignable roles"),
+                .child(t!("status-no-assignable-roles")),
         );
     }
 
@@ -592,15 +632,20 @@ pub fn role_picker_view(
         );
     }
 
-    panel("Roles", 420.).child(list).child(
+    panel(&t!("label-roles"), 420.).child(list).child(
         row()
             .w_full()
             .px(px(space::LG))
             .py(px(space::MD))
             .gap(px(space::SM))
             .justify_end()
-            .child(button("roles-cancel", "Cancel", false, on_cancel))
-            .child(button("roles-save", "Save", true, on_save)),
+            .child(button(
+                "roles-cancel",
+                &t!("action-cancel"),
+                false,
+                on_cancel,
+            ))
+            .child(button("roles-save", &t!("action-save"), true, on_save)),
     )
 }
 
@@ -672,13 +717,13 @@ pub fn ban_list_view(
         );
     }
 
-    panel("Bans", 460.).child(list).child(
+    panel(&t!("label-bans"), 460.).child(list).child(
         row()
             .w_full()
             .px(px(space::LG))
             .py(px(space::MD))
             .justify_end()
-            .child(button("bans-close", "Close", false, on_close)),
+            .child(button("bans-close", &t!("action-close"), false, on_close)),
     )
 }
 

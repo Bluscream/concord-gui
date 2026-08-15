@@ -206,6 +206,18 @@ fn lookup(language: Language, key: &str, args: Option<&FluentArgs<'_>>) -> Optio
     Some(text.into_owned())
 }
 
+/// Translate with text arguments.
+///
+/// Front ends use this rather than building Fluent types themselves, so
+/// `fluent_bundle` stays an implementation detail of this module.
+pub fn translate_text(key: &str, pairs: &[(&str, &str)]) -> String {
+    let mut args = FluentArgs::new();
+    for (name, value) in pairs {
+        args.set(*name, FluentValue::from(*value));
+    }
+    translate_args(key, Some(&args))
+}
+
 /// Build arguments for [`translate_args`].
 pub fn args<'a>(pairs: &[(&'a str, i64)]) -> FluentArgs<'a> {
     let mut built = FluentArgs::new();

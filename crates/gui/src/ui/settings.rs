@@ -294,6 +294,9 @@ impl Render for SettingsWindow {
                             )
                             // --- Section 3: Interface & Display ---
                             .child(section_title("Interface & Display", theme))
+                            // Language, first in this section because it
+                            // changes every other label under it.
+                            .child(language_row(options.display.language, theme, cx))
                             .child(toggle_row(
                                 Toggle::ShowAvatars,
                                 options.display.show_avatars,
@@ -501,4 +504,89 @@ fn switch(on: bool, theme: &Palette) -> Div {
     } else {
         track.justify_start().child(knob.ml(px(2.)))
     }
+}
+
+/// The language picker.
+///
+/// Languages are listed by their own name - somebody looking for German is
+/// looking for "Deutsch", not for whatever the current interface calls it -
+/// so these are deliberately not translated.
+fn language_row(
+    current: Option<concord::i18n::Language>,
+    theme: &Palette,
+    cx: &mut Context<SettingsWindow>,
+) -> Div {
+    let mut choices = row().gap(px(space::XS)).flex_wrap();
+
+    // "Follow system" is a real choice rather than an absence, so it is
+    // offered as its own option.
+    choices = choices.child(language_choice(
+        "language-system",
+        concord::t!("settings-language-follow-system"),
+        current.is_none(),
+        theme,
+        cx.listener(|this, _, _, cx| {
+            this.options.display.language = None;
+            concord::i18n::set_language(concord::i18n::language_from_system());
+            this.save_options(cx);
+            cx.notify();
+        }),
+    ));
+
+    for language in concord::i18n::Language::ALL {
+        let language = *language;
+        choices = choices.child(language_choice(
+            language.tag(),
+            language.endonym().to_owned(),
+            current == Some(language),
+            theme,
+            cx.listener(move |this, _, _, cx| {
+                this.options.display.language = Some(language);
+                concord::i18n::set_language(language);
+                this.save_options(cx);
+                cx.notify();
+            }),
+        ));
+    }
+
+    column()
+        .w_full()
+        .px(px(space::LG))
+        .py(px(space::SM))
+        .gap(px(space::XS))
+        .child(
+            gpui::div()
+                .text_size(px(scaled(text::SM)))
+                .text_color(rgb(theme.text))
+                .child(concord::t!("label-language")),
+        )
+        .child(choices)
+}
+
+fn language_choice(
+    id: &'static str,
+    label: String,
+    selected: bool,
+    theme: &Palette,
+    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+) -> gpui::Stateful<Div> {
+    gpui::div()
+        .id(id)
+        .px(px(space::SM))
+        .py(px(space::XS))
+        .rounded(px(layout::RADIUS))
+        .cursor_pointer()
+        .text_size(px(scaled(text::XS)))
+        .bg(rgb(if selected {
+            theme.surface_active
+        } else {
+            theme.surface_sunken
+        }))
+        .text_color(rgb(if selected {
+            theme.text
+        } else {
+            theme.text_muted
+        }))
+        .child(label)
+        .on_click(on_click)
 }

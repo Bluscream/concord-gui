@@ -89,3 +89,19 @@ action-open-thread = Open thread
 action-copy-link = Copy link
 action-remove-embeds = Remove embeds
 action-jump-to-replied = Jump to the replied message
+
+# Settings
+settings-language-follow-system = Follow system
+
+# Overlays
+label-confirm = Confirm
+label-audio-devices = Audio devices
+label-join-server = Join server
+label-input = Input
+label-output = Output
+status-no-devices = No devices reported
+status-no-member-data = No member data
+status-no-assignable-roles = This server has no assignable roles
+status-type-and-press-enter = Type and press Enter
+label-search = Search
+label-reacted-with = Reacted with { $emoji }

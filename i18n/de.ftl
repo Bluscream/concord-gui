@@ -87,3 +87,19 @@ action-open-thread = Thread öffnen
 action-copy-link = Link kopieren
 action-remove-embeds = Einbettungen entfernen
 action-jump-to-replied = Zur beantworteten Nachricht springen
+
+# Einstellungen
+settings-language-follow-system = System folgen
+
+# Overlagerungen
+label-confirm = Bestätigen
+label-audio-devices = Audiogeräte
+label-join-server = Server beitreten
+label-input = Eingang
+label-output = Ausgang
+status-no-devices = Keine Geräte gemeldet
+status-no-member-data = Keine Mitgliederdaten
+status-no-assignable-roles = Dieser Server hat keine zuweisbaren Rollen
+status-type-and-press-enter = Tippen und Enter drücken
+label-search = Suche
+label-reacted-with = Reagiert mit { $emoji }
