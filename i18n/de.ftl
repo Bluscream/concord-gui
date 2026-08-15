@@ -162,3 +162,6 @@ label-active = Aktiv
 label-archived = Archiviert
 login-totp-hint = Gib den 6-stelligen Code aus deiner Authenticator-App ein
 status-connecting-ellipsis = Verbinde …
+
+status-share-screen-hint = Bildschirm oder Fenster teilen
+status-no-search-results = Keine Ergebnisse

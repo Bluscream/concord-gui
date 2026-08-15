@@ -164,3 +164,6 @@ label-active = Active
 label-archived = Archived
 login-totp-hint = Enter the 6-digit code from your authenticator
 status-connecting-ellipsis = Connecting…
+
+status-share-screen-hint = Share a screen or window
+status-no-search-results = No results

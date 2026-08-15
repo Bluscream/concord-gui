@@ -15,6 +15,8 @@
 use concord::discord::{StreamCaptureTarget, StreamCaptureTargetKind};
 use gpui::{Div, prelude::*, px, rgb};
 
+use concord::t;
+
 use crate::theme::{active, layout, scaled, space, text};
 use crate::ui::chrome::{column, row};
 
@@ -65,7 +67,7 @@ pub fn picker_view(
             gpui::div()
                 .text_size(px(scaled(text::SM)))
                 .text_color(rgb(active().text))
-                .child("Share a screen or window"),
+                .child(t!("status-share-screen-hint")),
         );
 
     if picker.loading {

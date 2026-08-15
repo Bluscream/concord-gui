@@ -3526,7 +3526,7 @@ impl Workspace {
                 .border_color(rgb(active().border))
                 .text_size(px(scaled(text::SM)))
                 .text_color(rgb(active().text))
-                .child("Search"),
+                .child(t!("label-search")),
         );
 
         // Query field.
@@ -3544,7 +3544,7 @@ impl Workspace {
                     .child(if search.input.text().is_empty() {
                         gpui::div()
                             .text_color(rgb(active().text_subtle))
-                            .child("Type and press Enter")
+                            .child(t!("status-type-and-press-enter"))
                     } else {
                         gpui::div()
                             .text_color(rgb(active().text))
@@ -3648,7 +3648,7 @@ impl Workspace {
                                 gpui::div()
                                     .text_size(px(scaled(text::XS)))
                                     .text_color(rgb(active().success))
-                                    .child("Voice Connected"),
+                                    .child(t!("label-voice-connected")),
                             )
                             .child(
                                 gpui::div()
@@ -5613,7 +5613,7 @@ impl Workspace {
                     .pt(px(space::MD))
                     .text_size(px(scaled(text::XS)))
                     .text_color(rgb(active().text_subtle))
-                    .child("No member data"),
+                    .child(t!("status-no-member-data")),
             );
         }
 
