@@ -907,7 +907,7 @@ fn renaming_an_emoji_seeds_the_field_and_applies_locally() {
         state
             .server_management_state()
             .and_then(|p| p.renaming())
-            .map(|input| input.value()),
+            .map(|(_, input)| input.value()),
         Some("ferris")
     );
 
@@ -1055,4 +1055,56 @@ fn closing_a_tab_falls_back_to_the_one_on_its_left() {
     assert!(state.channel_tabs().is_empty());
     state.cycle_channel_tab(true);
     state.close_active_channel_tab();
+}
+
+#[test]
+fn adding_an_emoji_names_it_from_the_filename() {
+    let mut state = state_with_many_guilds(1);
+    let guild_id = Id::new(1);
+    state.open_server_management(guild_id, ServerPanelTab::Emoji);
+    state.apply_guild_emojis(guild_id, Vec::new());
+
+    state.start_emoji_upload();
+    for value in "/tmp/party parrot.gif".chars() {
+        state.insert_emoji_rename_char(value);
+    }
+
+    let command = state.submit_emoji_rename();
+    // The name comes from the filename, with the space replaced: a space is
+    // an ordinary thing in a filename and not a legal emoji name.
+    assert!(matches!(
+        command,
+        Some(AppCommand::CreateEmoji { ref name, .. }) if name == "party_parrot"
+    ));
+}
+
+#[test]
+fn a_filename_with_no_usable_name_is_refused_before_sending() {
+    // Otherwise it costs a request and an upload to be told Discord will not
+    // accept the name.
+    let mut state = state_with_many_guilds(1);
+    let guild_id = Id::new(1);
+    state.open_server_management(guild_id, ServerPanelTab::Emoji);
+    state.apply_guild_emojis(guild_id, Vec::new());
+
+    state.start_emoji_upload();
+    for value in "/tmp/!.png".chars() {
+        state.insert_emoji_rename_char(value);
+    }
+
+    assert_eq!(state.submit_emoji_rename(), None);
+}
+
+#[test]
+fn uploading_is_refused_on_the_tabs_that_have_no_emoji() {
+    let mut state = state_with_many_guilds(1);
+    state.open_server_management(Id::new(1), ServerPanelTab::AuditLog);
+
+    state.start_emoji_upload();
+    assert!(
+        state
+            .server_management_state()
+            .and_then(|p| p.renaming())
+            .is_none()
+    );
 }

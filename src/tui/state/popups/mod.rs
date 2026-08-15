@@ -66,7 +66,7 @@ pub use notification_inbox::{
 };
 use search::SearchPopupState;
 use server_management::ServerManagementState;
-pub use server_management::ServerPanelTab;
+pub use server_management::{EmojiEdit, ServerPanelTab};
 
 #[derive(Debug, Default)]
 pub(super) struct PopupUiState {

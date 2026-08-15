@@ -725,17 +725,23 @@ pub(in crate::tui::ui) fn render_server_management(
     // While renaming, the field is what the popup is for, so it replaces the
     // list rather than sitting under it in a menu that no longer responds.
     let (lines, hint) = match panel.renaming() {
-        Some(input) => (
-            vec![Line::from(Span::raw(format!("Name: {}", input.value())))],
-            "enter to rename, esc to cancel",
-        ),
+        Some((edit, input)) => match edit {
+            crate::tui::state::EmojiEdit::Rename(_) => (
+                vec![Line::from(Span::raw(format!("Name: {}", input.value())))],
+                "enter to rename, esc to cancel",
+            ),
+            crate::tui::state::EmojiEdit::AddImage => (
+                vec![Line::from(Span::raw(format!("Image: {}", input.value())))],
+                "path to a PNG, JPEG, GIF or WebP - enter to add, esc to cancel",
+            ),
+        },
         // The audit log has no row action - history is a record, not something
         // to be edited from the client that reads it - so the hint changes.
         None => (
             lines,
             match tab {
                 ServerPanelTab::Invites => "tab to switch, r to reload, enter to revoke",
-                ServerPanelTab::Emoji => "tab, r to reload, n to rename, enter to delete",
+                ServerPanelTab::Emoji => "tab, r reload, a add, n rename, enter delete",
                 ServerPanelTab::AuditLog => "tab to switch, r to reload",
             },
         ),

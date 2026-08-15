@@ -980,6 +980,8 @@ pub struct ServerPanel<'a> {
     pub empty_label: &'a str,
     pub loading: bool,
     pub error: Option<&'a str>,
+    /// A tab-wide action, when the tab has one. Only emoji do, for adding.
+    pub add_label: Option<&'a str>,
 }
 
 pub fn server_management_view(
@@ -988,6 +990,7 @@ pub fn server_management_view(
     on_row_action: impl Fn(usize, &mut gpui::App) + Clone + 'static,
     on_row_secondary: impl Fn(usize, &mut gpui::App) + Clone + 'static,
     on_reload: impl Fn(&mut gpui::App) + 'static,
+    on_add: impl Fn(&mut gpui::App) + 'static,
     on_close: impl Fn(&mut gpui::App) + 'static,
 ) -> Div {
     let mut tab_row = row()
@@ -1122,6 +1125,11 @@ pub fn server_management_view(
                 .py(px(space::MD))
                 .gap(px(space::SM))
                 .justify_end()
+                .children(
+                    panel_state
+                        .add_label
+                        .map(|label| button("server-add", label, false, on_add)),
+                )
                 .child(button(
                     "server-reload",
                     &t!("action-reload"),

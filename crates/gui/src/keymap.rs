@@ -111,6 +111,18 @@ pub fn apply(workspace: &mut Workspace, action: UiAction, cx: &mut Context<Works
         UiAction::ScrollViewportDown => workspace.scroll_by_pages(0.15),
         UiAction::ScrollViewportUp => workspace.scroll_by_pages(-0.15),
 
+        // ---- tabs ---------------------------------------------------------
+        // Both clients have tabs and the same keys reach them, so a keymap.toml
+        // rebinding applies to whichever client the user is in.
+        UiAction::OpenChannelInNewTab => {
+            if let Some(channel_id) = workspace.nav.channel {
+                workspace.open_channel_in_new_tab(channel_id);
+            }
+        }
+        UiAction::NextChannelTab => workspace.cycle_tab(true),
+        UiAction::PreviousChannelTab => workspace.cycle_tab(false),
+        UiAction::CloseChannelTab => workspace.close_tab(workspace.active_tab),
+
         // ---- panes --------------------------------------------------------
         UiAction::CycleFocusNext => workspace.cycle_focus(true),
         UiAction::CycleFocusPrevious => workspace.cycle_focus(false),

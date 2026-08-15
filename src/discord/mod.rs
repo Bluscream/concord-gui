@@ -32,7 +32,7 @@ mod request_lifecycle;
 mod rest;
 mod rpc;
 pub(in crate::discord) mod state;
-mod upload;
+pub(crate) mod upload;
 mod user_settings;
 mod verification;
 mod voice;
@@ -123,9 +123,10 @@ pub use read::ReadStateInfo;
 pub(crate) use request_lifecycle::GuildMemberSearchSurface;
 pub use rest::{
     AuditLogAction, AuditLogEntryInfo, ForumPostPage, GuildBanInfo, GuildEmojiInfo,
-    GuildInviteInfo, InvitePreview, MAX_BAN_DELETE_MESSAGE_SECONDS, MAX_INVITE_MAX_AGE_SECONDS,
-    MAX_INVITE_MAX_USES, MAX_MESSAGE_STICKERS, ReactionUsersPage, clamp_invite_max_age,
-    clamp_invite_max_uses, friend_request_target, invite_code_from,
+    GuildInviteInfo, InvitePreview, MAX_BAN_DELETE_MESSAGE_SECONDS, MAX_EMOJI_BYTES,
+    MAX_INVITE_MAX_AGE_SECONDS, MAX_INVITE_MAX_USES, MAX_MESSAGE_STICKERS, ReactionUsersPage,
+    clamp_invite_max_age, clamp_invite_max_uses, emoji_name_from_filename, friend_request_target,
+    invite_code_from, is_valid_emoji_name,
 };
 pub use state::{
     ChannelRecipientState, ChannelState, ChannelUnreadState, ChannelVisibilityStats,

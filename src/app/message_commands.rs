@@ -488,6 +488,17 @@ pub(super) async fn revoke_invite(client: DiscordClient, code: String) {
     }
 }
 
+pub(super) async fn create_emoji(
+    client: DiscordClient,
+    guild_id: Id<GuildMarker>,
+    name: String,
+    image: Box<crate::discord::ProfileAvatarUpload>,
+) {
+    if let Err(error) = client.create_emoji(guild_id, &name, &image).await {
+        report_moderation_failure(&client, "adding emoji", &name, &error).await;
+    }
+}
+
 pub(super) async fn rename_emoji(
     client: DiscordClient,
     guild_id: Id<GuildMarker>,

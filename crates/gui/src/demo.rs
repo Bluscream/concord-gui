@@ -448,6 +448,7 @@ fn handle_command(
         // revoke or a rename would be undone by the next load and read as the
         // action having silently failed.
         AppCommand::RevokeInvite { .. }
+        | AppCommand::CreateEmoji { .. }
         | AppCommand::RenameEmoji { .. }
         | AppCommand::DeleteEmoji { .. } => {}
 

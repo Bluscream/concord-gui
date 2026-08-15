@@ -97,14 +97,6 @@ the composer when more than one account could send. Design in AGENTS.md.
 
 Voice works; camera does not. The core has no capture path for it.
 
-### Emoji upload
-
-*1 client (Abaddon)* — abaddon
-
-Renaming and deleting are done in both clients. Uploading is not: it needs the
-image picked, encoded as a data URI and sized against Discord's 256 KB limit,
-which is a different job from the other two.
-
 ## Partial
 
 - **Rich presence / activity** - Both clients show activities and can set one.
@@ -187,3 +179,10 @@ emoji management and the audit log.
   tell which a message would be sent from. Tabs are restored on the first event
   that brings channels rather than at Ready, where every one would be dropped
   as unknown.
+
+- **Emoji upload** - Adding an emoji from an image on disk works in both
+  clients, reusing the avatar encoder rather than a second one. The name comes
+  from the filename with anything Discord rejects replaced by an underscore,
+  since "party parrot.png" is an ordinary filename and an illegal emoji name;
+  a filename that leaves nothing usable is refused before the upload rather
+  than after it. The 256 KB limit is checked locally for the same reason.

@@ -914,6 +914,7 @@ fn handle_server_management_key(state: &mut DashboardState, key: KeyEvent) -> Op
         // somebody else changes something, and nothing tells this client.
         KeyCode::Char('r') => return state.reload_server_management(),
         KeyCode::Char('n') => state.start_emoji_rename(),
+        KeyCode::Char('a') => state.start_emoji_upload(),
         _ => {}
     }
     None

@@ -340,6 +340,15 @@ impl DiscordClient {
         self.rest.guild_emojis(guild_id).await
     }
 
+    pub async fn create_emoji(
+        &self,
+        guild_id: Id<GuildMarker>,
+        name: &str,
+        image: &crate::discord::ProfileAvatarUpload,
+    ) -> Result<()> {
+        self.rest.create_emoji(guild_id, name, image).await
+    }
+
     pub async fn rename_emoji(
         &self,
         guild_id: Id<GuildMarker>,

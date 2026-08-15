@@ -39,6 +39,15 @@ impl ServerPanelTab {
     }
 }
 
+/// What the emoji text field is being used for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EmojiEdit {
+    /// A new name for the emoji at this index.
+    Rename(usize),
+    /// A path to an image to add.
+    AddImage,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::tui) struct ServerManagementState {
     pub(super) guild_id: Id<GuildMarker>,
@@ -51,8 +60,8 @@ pub(in crate::tui) struct ServerManagementState {
     /// rather than looking like an empty list.
     pub(super) loading: bool,
     pub(super) error: Option<String>,
-    /// The emoji being renamed and the name as typed, while renaming.
-    pub(super) renaming: Option<(usize, TextInputState)>,
+    /// The emoji field being filled in, while one is open.
+    pub(super) renaming: Option<(EmojiEdit, TextInputState)>,
 }
 
 impl ServerManagementState {
@@ -81,9 +90,9 @@ impl ServerManagementState {
     }
 
     /// How many rows the open tab has, which is what the selection moves over.
-    /// The name being typed, while renaming an emoji.
-    pub(in crate::tui) fn renaming(&self) -> Option<&TextInputState> {
-        self.renaming.as_ref().map(|(_, input)| input)
+    /// The text being typed, while an emoji field is open.
+    pub(in crate::tui) fn renaming(&self) -> Option<(EmojiEdit, &TextInputState)> {
+        self.renaming.as_ref().map(|(edit, input)| (*edit, input))
     }
 
     pub(in crate::tui) fn row_count(&self) -> usize {
@@ -172,7 +181,16 @@ impl DashboardState {
 
         let mut input = TextInputState::default();
         input.set_value(emoji.name.clone());
-        state.renaming = Some((index, input));
+        state.renaming = Some((EmojiEdit::Rename(index), input));
+    }
+
+    /// Start adding an emoji from an image on disk.
+    pub fn start_emoji_upload(&mut self) {
+        if let Some(state) = self.popups.server_management_mut()
+            && state.tab == ServerPanelTab::Emoji
+        {
+            state.renaming = Some((EmojiEdit::AddImage, TextInputState::default()));
+        }
     }
 
     pub fn cancel_emoji_rename(&mut self) {
@@ -197,12 +215,37 @@ impl DashboardState {
         }
     }
 
-    /// Send the renamed emoji.
+    /// Send whatever the emoji field was for.
     pub fn submit_emoji_rename(&mut self) -> Option<AppCommand> {
         let state = self.popups.server_management_mut()?;
-        let (index, input) = state.renaming.take()?;
-        let name = input.value().trim().to_owned();
+        let (edit, input) = state.renaming.take()?;
+        let text = input.value().trim().to_owned();
         let guild_id = state.guild_id;
+
+        let index = match edit {
+            EmojiEdit::Rename(index) => index,
+            EmojiEdit::AddImage => {
+                if text.is_empty() {
+                    return None;
+                }
+                // The name comes from the filename, which is what people mean
+                // nine times out of ten and can be corrected with a rename.
+                let Some(name) = crate::discord::emoji_name_from_filename(&text) else {
+                    self.show_error_toast(
+                        format!("{text} does not make a usable emoji name"),
+                        std::time::Instant::now(),
+                    );
+                    return None;
+                };
+                return Some(AppCommand::CreateEmoji {
+                    guild_id,
+                    name,
+                    image: Box::new(crate::discord::ProfileAvatarUpload::from_path(text.into())),
+                });
+            }
+        };
+
+        let name = text;
         let emoji = state.emojis.get_mut(index)?;
 
         // An empty name is a cancel rather than a rename to nothing, which

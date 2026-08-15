@@ -198,12 +198,15 @@ pub enum Prompt {
     InviteCode,
     /// A new name for a custom emoji, by its index in the open emoji tab.
     EmojiName(usize),
+    /// A path to an image to add as a custom emoji.
+    EmojiImage,
 }
 
 impl Prompt {
     fn title(self) -> &'static str {
         match self {
             Prompt::EmojiName(_) => "Rename emoji",
+            Prompt::EmojiImage => "Add emoji",
             Prompt::ThreadName => "Rename thread",
             Prompt::ForumPostTitle => "New post",
             Prompt::InviteCode => "Join a server",
@@ -213,6 +216,7 @@ impl Prompt {
     fn placeholder(self) -> &'static str {
         match self {
             Prompt::EmojiName(_) => "Emoji name",
+            Prompt::EmojiImage => "Path to a PNG, JPEG, GIF or WebP",
             Prompt::ThreadName => "Thread name",
             Prompt::ForumPostTitle => "Post title",
             Prompt::InviteCode => "discord.gg/... or an invite code",
@@ -1599,6 +1603,7 @@ impl Workspace {
         match prompt {
             Prompt::ThreadName => self.rename_thread(text),
             Prompt::EmojiName(index) => self.rename_emoji(index, text),
+            Prompt::EmojiImage => self.create_emoji(text),
             Prompt::InviteCode => self.resolve_invite(&text),
             Prompt::ForumPostTitle => {
                 // The body is the composer's content, so a post is written the
@@ -2353,6 +2358,20 @@ impl Workspace {
         });
         self.active_tab = self.tabs.len() - 1;
         self.open_channel(channel_id);
+    }
+
+    /// Step to the next or previous tab, wrapping at each end.
+    pub fn cycle_tab(&mut self, forward: bool) {
+        let count = self.tabs.len();
+        if count < 2 {
+            return;
+        }
+        let next = if forward {
+            (self.active_tab + 1) % count
+        } else {
+            (self.active_tab + count - 1) % count
+        };
+        self.activate_tab(next);
     }
 
     /// Switch to a tab, restoring its draft and scroll position.
@@ -3867,6 +3886,32 @@ impl Workspace {
         let mut text = Composer::default();
         text.set_text(&emoji.name);
         self.prompt = Some((Prompt::EmojiName(index), text));
+    }
+
+    /// Add an emoji from an image on disk.
+    ///
+    /// The name comes from the filename, which is what people mean nine times
+    /// out of ten and can be corrected with the rename control afterwards.
+    fn create_emoji(&mut self, path: String) {
+        let (Some(handle), Some(view)) = (&self.handle, &self.server_management) else {
+            return;
+        };
+        let Some(name) = concord::discord::emoji_name_from_filename(&path) else {
+            self.model.status_line = t!("status-emoji-name-unusable");
+            return;
+        };
+
+        handle.send(AppCommand::CreateEmoji {
+            guild_id: view.guild_id,
+            name,
+            image: Box::new(concord::discord::ProfileAvatarUpload::from_path(
+                path.into(),
+            )),
+        });
+        // Not added to the list here: unlike a rename, this can fail on size
+        // or format, and a row that vanishes on the next reload is worse than
+        // one that appears when it is really there.
+        self.model.status_line = t!("status-emoji-uploading");
     }
 
     /// Apply a renamed emoji.
@@ -6607,6 +6652,7 @@ impl Workspace {
                 ),
             };
 
+            let add_emoji_label = t!("action-add-emoji");
             return Some(overlay::scrim().child(overlay::server_management_view(
                 overlay::ServerPanel {
                     tabs: &tabs,
@@ -6614,6 +6660,10 @@ impl Workspace {
                     empty_label: &empty_label,
                     loading: view.loading,
                     error: view.error.as_deref(),
+                    // Only emoji can be added from here; invites have their
+                    // own button in the channel header, and history cannot be
+                    // added to at all.
+                    add_label: (view.tab == ServerTab::Emoji).then_some(add_emoji_label.as_str()),
                 },
                 {
                     let entity = entity.clone();
@@ -6660,6 +6710,15 @@ impl Workspace {
                     move |cx: &mut gpui::App| {
                         entity.update(cx, |workspace, cx| {
                             workspace.reload_server_tab();
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.prompt = Some((Prompt::EmojiImage, Composer::default()));
                             cx.notify();
                         });
                     }

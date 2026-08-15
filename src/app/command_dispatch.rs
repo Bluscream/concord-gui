@@ -567,6 +567,13 @@ impl CommandDispatcher {
             AppCommand::LoadGuildEmojis { guild_id } => {
                 message_commands::load_guild_emojis(self.client.clone(), guild_id).await;
             }
+            AppCommand::CreateEmoji {
+                guild_id,
+                name,
+                image,
+            } => {
+                message_commands::create_emoji(self.client.clone(), guild_id, name, image).await;
+            }
             AppCommand::RenameEmoji {
                 guild_id,
                 emoji_id,

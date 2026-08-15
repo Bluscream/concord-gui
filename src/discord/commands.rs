@@ -547,6 +547,12 @@ pub enum AppCommand {
     LoadGuildEmojis {
         guild_id: Id<GuildMarker>,
     },
+    /// Add a custom emoji from an image on disk.
+    CreateEmoji {
+        guild_id: Id<GuildMarker>,
+        name: String,
+        image: Box<ProfileAvatarUpload>,
+    },
     RenameEmoji {
         guild_id: Id<GuildMarker>,
         emoji_id: Id<EmojiMarker>,

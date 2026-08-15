@@ -219,3 +219,7 @@ label-emoji-animated = animiert
 label-emoji-restricted = rollenbeschränkt
 
 label-unknown = jemand
+
+status-emoji-name-unusable = Aus diesem Dateinamen ergibt sich kein gültiger Emoji-Name
+status-emoji-uploading = Emoji wird hinzugefügt...
+action-add-emoji = Emoji hinzufügen

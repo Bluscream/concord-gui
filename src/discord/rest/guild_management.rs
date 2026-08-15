@@ -23,6 +23,12 @@ pub const MAX_INVITE_MAX_AGE_SECONDS: u32 = 604_800;
 /// Discord's cap on how many times an invite may be used.
 pub const MAX_INVITE_MAX_USES: u32 = 100;
 
+/// Discord's cap on a custom emoji image, in bytes.
+///
+/// Much smaller than an avatar's, and the usual reason an upload is refused,
+/// so it is checked before the request rather than after.
+pub const MAX_EMOJI_BYTES: u64 = 256 * 1024;
+
 /// An invite to somewhere in this guild.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GuildInviteInfo {
@@ -207,6 +213,42 @@ struct EmojiBody {
     roles: Vec<String>,
 }
 
+/// A usable emoji name from an image filename.
+///
+/// The stem, with anything Discord will not accept replaced by an underscore,
+/// because "party parrot.png" is a perfectly ordinary way to name a file and a
+/// rejected emoji name. Returns `None` when nothing usable is left.
+pub fn emoji_name_from_filename(filename: &str) -> Option<String> {
+    let stem = filename.rsplit('/').next().unwrap_or(filename);
+    let stem = stem.split('.').next().unwrap_or(stem);
+
+    let cleaned: String = stem
+        .chars()
+        .map(|value| {
+            if value.is_ascii_alphanumeric() || value == '_' {
+                value
+            } else {
+                '_'
+            }
+        })
+        .collect();
+
+    let trimmed = cleaned.trim_matches('_').to_owned();
+    is_valid_emoji_name(&trimmed).then_some(trimmed)
+}
+
+/// Whether Discord will accept this as an emoji name.
+///
+/// Letters, numbers and underscores only, and at least two characters -
+/// Discord's own rule, checked here so a bad name costs no request.
+pub fn is_valid_emoji_name(name: &str) -> bool {
+    name.chars().count() >= 2
+        && name.chars().count() <= 32
+        && name
+            .chars()
+            .all(|value| value.is_ascii_alphanumeric() || value == '_')
+}
+
 /// Clamp an invite's lifetime to what Discord accepts.
 ///
 /// Zero is meaningful - it means "never expires" - so it passes through rather
@@ -324,6 +366,51 @@ impl DiscordRest {
             .collect())
     }
 
+    /// Add a custom emoji from an image on disk.
+    ///
+    /// The name is what people will type between colons, so Discord requires
+    /// it to be alphanumeric with underscores; anything else is rejected here
+    /// rather than spending a request to be told so.
+    pub async fn create_emoji(
+        &self,
+        guild_id: Id<GuildMarker>,
+        name: &str,
+        image: &crate::discord::ProfileAvatarUpload,
+    ) -> Result<()> {
+        if !is_valid_emoji_name(name) {
+            return Err(crate::AppError::DiscordRequest(
+                "an emoji name may only contain letters, numbers and underscores".to_owned(),
+            ));
+        }
+
+        let data = crate::discord::upload::read_profile_avatar_image(image)
+            .await
+            .map_err(crate::AppError::DiscordRequest)?;
+        if data.bytes.len() as u64 > MAX_EMOJI_BYTES {
+            return Err(crate::AppError::DiscordRequest(format!(
+                "an emoji image must be under {} KB",
+                MAX_EMOJI_BYTES / 1024
+            )));
+        }
+
+        let uri = format!(
+            "data:{};base64,{}",
+            data.content_type,
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data.bytes)
+        );
+
+        self.send_unit(
+            self.raw_http
+                .post(format!(
+                    "https://discord.com/api/v9/guilds/{}/emojis",
+                    guild_id.get()
+                ))
+                .json(&json!({ "name": name, "image": uri, "roles": [] })),
+            "create emoji",
+        )
+        .await
+    }
+
     pub async fn rename_emoji(
         &self,
         guild_id: Id<GuildMarker>,
@@ -411,6 +498,46 @@ impl DiscordRest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn emoji_names_discord_would_reject_are_refused_here() {
+        assert!(is_valid_emoji_name("ferris"));
+        assert!(is_valid_emoji_name("party_parrot"));
+        assert!(is_valid_emoji_name("a1"));
+
+        // Too short, too long, or containing anything else. Each costs a
+        // request to be told so if it is not caught first.
+        assert!(!is_valid_emoji_name("a"));
+        assert!(!is_valid_emoji_name(""));
+        assert!(!is_valid_emoji_name(&"a".repeat(33)));
+        assert!(!is_valid_emoji_name("party parrot"));
+        assert!(!is_valid_emoji_name("ferris!"));
+        assert!(!is_valid_emoji_name(":ferris:"));
+    }
+
+    #[test]
+    fn an_emoji_name_is_derived_from_the_filename() {
+        assert_eq!(
+            emoji_name_from_filename("ferris.png"),
+            Some("ferris".to_owned())
+        );
+        // A space is an ordinary thing to have in a filename and not a legal
+        // emoji name, so it is replaced rather than refused.
+        assert_eq!(
+            emoji_name_from_filename("party parrot.gif"),
+            Some("party_parrot".to_owned())
+        );
+        assert_eq!(
+            emoji_name_from_filename("/home/blu/Pictures/my-emoji.webp"),
+            Some("my_emoji".to_owned())
+        );
+
+        // Nothing usable left, so the caller has to ask rather than send a
+        // name Discord will reject.
+        assert_eq!(emoji_name_from_filename("!.png"), None);
+        assert_eq!(emoji_name_from_filename("a.png"), None);
+        assert_eq!(emoji_name_from_filename(""), None);
+    }
 
     #[test]
     fn invite_limits_are_clamped_to_what_discord_accepts() {
