@@ -7,7 +7,7 @@ the parts we do not want.
 
 Derived from the TUI's 152 keybinding actions (`src/tui/keybindings/actions.rs`)
 and its 12 builtin slash commands · reply-ping toggle · external editor · sign out · own profile · polls · attachment download ·
-external media playback (`src/discord/builtin_commands.rs`). Pure
+external media playback · remove embeds · thread archive/follow (`src/discord/builtin_commands.rs`). Pure
 input primitives (`Char`, `Ctrl`, `Key`, `ModifiedKey`) are excluded - they are
 not features.
 
@@ -30,12 +30,17 @@ Ordered roughly by how much a daily driver misses them.
 
 | Feature | TUI action | Notes |
 |---|---|---|
-| Create thread | `OpenThread` | Threads are readable, not creatable. |
-| Remove embeds | `RemoveEmbeds`, `RemoveMessageEmbeds` | |
 | Application commands | `RunApplicationCommand` | Server-side slash commands. |
 | Pane show/hide, resize, zoom | `Toggle*Pane`, `Resize*`, `ToggleZoom` | Layout is fixed. |
 | Vim-style navigation | `HalfPageUp/Down`, `JumpTop/Bottom` | |
 | Debug log viewer | `OpenDebugLog` | |
+
+### Not possible against this core
+
+`OpenThread` opens an existing thread; the core exposes no thread *creation*
+command at all. Threads arrive from Discord or from a forum post, so
+"create thread" is not a parity gap - it is outside what this core does.
+Listing it as missing was a misreading of the action's name.
 
 ## Against the official client
 

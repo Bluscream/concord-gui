@@ -1319,6 +1319,7 @@ impl Workspace {
             MessageAction::PlayAttachment(attachment) => {
                 self.play_attachment(index, attachment);
             }
+            MessageAction::RemoveEmbeds => self.remove_embeds(index),
             MessageAction::TogglePin => {
                 let pinned = self
                     .messages
@@ -2107,6 +2108,15 @@ impl Workspace {
         }
     }
 
+    /// Whether the open channel is a thread, which decides if thread controls
+    /// apply at all.
+    fn in_thread(&self) -> bool {
+        self.model
+            .channels
+            .get(self.model.selected_channel)
+            .is_some_and(|channel| channel.kind == ChannelKind::Thread)
+    }
+
     /// A DM or group DM with no call already running can be called.
     fn can_call(&self) -> bool {
         matches!(self.nav.selection, Selection::DirectMessages)
@@ -2215,6 +2225,52 @@ impl Workspace {
             channel_id,
             message_id: row.id,
             answer_ids,
+        });
+    }
+
+    /// Strip embeds from a message.
+    ///
+    /// Useful when a link unfurls into something large or unwanted; the
+    /// message text stays, only the preview goes.
+    fn remove_embeds(&mut self, index: usize) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        let Some(row) = self.messages.get(index) else {
+            return;
+        };
+
+        handle.send(AppCommand::RemoveMessageEmbeds {
+            channel_id,
+            message_id: row.id,
+        });
+    }
+
+    /// Archive or unarchive the open thread.
+    ///
+    /// The core exposes no thread *creation*; threads are created by Discord
+    /// or by a forum post, and this manages ones that already exist.
+    pub fn set_thread_archived(&mut self, archived: bool) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        handle.send(AppCommand::SetThreadArchived {
+            channel_id,
+            archived,
+            label: String::new(),
+        });
+    }
+
+    /// Follow or unfollow the open thread, which controls whether its
+    /// activity reaches the sidebar at all.
+    pub fn set_thread_followed(&mut self, followed: bool) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        handle.send(AppCommand::SetThreadFollowed {
+            channel_id,
+            followed,
+            label: String::new(),
         });
     }
 
@@ -2996,6 +3052,43 @@ impl Workspace {
                             .text_color(rgb(active().text))
                             .child(channel_name.clone()),
                     )
+                    // Thread controls, shown only in a thread: archiving a
+                    // regular channel is not a thing Discord permits.
+                    .when(self.in_thread(), |header| {
+                        header
+                            .child(
+                                gpui::div()
+                                    .id("thread-follow")
+                                    .px(px(space::SM))
+                                    .py(px(space::XS))
+                                    .rounded(px(layout::RADIUS))
+                                    .cursor_pointer()
+                                    .text_size(px(text::XS))
+                                    .text_color(rgb(active().text_muted))
+                                    .hover(|style| style.bg(rgb(active().surface_hover)))
+                                    .child("follow")
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.set_thread_followed(true);
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                gpui::div()
+                                    .id("thread-archive")
+                                    .px(px(space::SM))
+                                    .py(px(space::XS))
+                                    .rounded(px(layout::RADIUS))
+                                    .cursor_pointer()
+                                    .text_size(px(text::XS))
+                                    .text_color(rgb(active().text_muted))
+                                    .hover(|style| style.bg(rgb(active().surface_hover)))
+                                    .child("archive")
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.set_thread_archived(true);
+                                        cx.notify();
+                                    })),
+                            )
+                    })
                     .child(
                         gpui::div()
                             .id("channel-pins")

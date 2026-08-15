@@ -46,6 +46,7 @@ impl MessageAction {
             MessageAction::VotePoll(_) => 13,
             MessageAction::DownloadAttachment(_) => 14,
             MessageAction::PlayAttachment(_) => 15,
+            MessageAction::RemoveEmbeds => 16,
         }
     }
 }
@@ -78,6 +79,8 @@ pub enum MessageAction {
     DownloadAttachment(usize),
     /// Open an attachment in the external media player.
     PlayAttachment(usize),
+    /// Strip embeds from this message.
+    RemoveEmbeds,
     /// Toggle an existing reaction, identified by its index in the row's
     /// reaction list. Carrying the index avoids threading emoji identity
     /// through the callback.
@@ -191,7 +194,13 @@ fn message_row(
                 .right(px(space::MD))
                 .invisible()
                 .group_hover("message", |style| style.visible())
-                .child(action_bar(index, own, message.pinned, on_action)),
+                .child(action_bar(
+                    index,
+                    own,
+                    message.pinned,
+                    message.embed_count > 0,
+                    on_action,
+                )),
         )
 }
 
@@ -199,6 +208,7 @@ fn action_bar(
     index: usize,
     own: bool,
     pinned: bool,
+    has_embeds: bool,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> Div {
     let mut bar = row()
@@ -245,6 +255,12 @@ fn action_bar(
         bar = bar
             .child(button("edit", MessageAction::Edit, false))
             .child(button("delete", MessageAction::Delete, true));
+
+        // Only where there is an embed to strip: Discord rejects the request
+        // otherwise, and an inert button invites a click that fails.
+        if has_embeds {
+            bar = bar.child(button("unembed", MessageAction::RemoveEmbeds, false));
+        }
     }
 
     bar
