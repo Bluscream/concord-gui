@@ -1150,3 +1150,114 @@ pub fn set_poll(
         message.poll = Some(poll);
     }
 }
+
+/// Rename a thread.
+pub fn rename_thread(state: &mut DiscordState, channel_id: Id<marker::ChannelMarker>, name: &str) {
+    let navigation = Arc::make_mut(&mut state.navigation);
+    if let Some(channel) = navigation.channels.get_mut(&channel_id) {
+        channel.name = name.to_string();
+    }
+}
+
+/// Remove a thread, and its messages with it.
+pub fn delete_thread(state: &mut DiscordState, channel_id: Id<marker::ChannelMarker>) {
+    let navigation = Arc::make_mut(&mut state.navigation);
+    navigation.channels.remove(&channel_id);
+
+    // The timeline goes too, or a later reopen of a recycled id would show
+    // messages belonging to a thread that no longer exists.
+    let cache = Arc::make_mut(&mut state.message_cache);
+    cache.timelines.remove(&channel_id);
+}
+
+/// Lock or unlock a thread.
+pub fn set_thread_locked(
+    state: &mut DiscordState,
+    channel_id: Id<marker::ChannelMarker>,
+    locked: bool,
+) {
+    let navigation = Arc::make_mut(&mut state.navigation);
+    if let Some(channel) = navigation.channels.get_mut(&channel_id)
+        && let Some(metadata) = channel.thread_metadata.as_mut()
+    {
+        metadata.locked = locked;
+    }
+}
+
+/// Mute or unmute a thread for the demo user.
+pub fn set_thread_muted(
+    state: &mut DiscordState,
+    channel_id: Id<marker::ChannelMarker>,
+    muted: bool,
+) {
+    let navigation = Arc::make_mut(&mut state.navigation);
+    if let Some(channel) = navigation.channels.get_mut(&channel_id) {
+        channel.current_user_thread_muted = muted;
+    }
+}
+
+/// Pin or unpin a thread in its forum parent.
+///
+/// Only the `PINNED` bit is touched; the rest of the bitfield carries meaning
+/// Discord set and this client does not interpret.
+pub fn set_thread_pinned(
+    state: &mut DiscordState,
+    channel_id: Id<marker::ChannelMarker>,
+    pinned: bool,
+) {
+    const PINNED: u64 = 1 << 1;
+
+    let navigation = Arc::make_mut(&mut state.navigation);
+    if let Some(channel) = navigation.channels.get_mut(&channel_id) {
+        let flags = channel.flags.unwrap_or(0);
+        channel.flags = Some(if pinned {
+            flags | PINNED
+        } else {
+            flags & !PINNED
+        });
+    }
+}
+
+/// Create a forum post: a thread under the forum, plus its opening message.
+pub fn create_forum_post(
+    state: &mut DiscordState,
+    parent: Id<marker::ChannelMarker>,
+    title: &str,
+    content: &str,
+) -> Id<marker::ChannelMarker> {
+    let guild_id = {
+        let navigation = &state.navigation;
+        navigation
+            .channels
+            .get(&parent)
+            .and_then(|channel| channel.guild_id)
+    };
+
+    // The post's channel id is a fresh snowflake so it cannot collide with a
+    // fixture channel and inherit its timeline.
+    let id = channel_id(snowflake_at(0));
+
+    let navigation = Arc::make_mut(&mut state.navigation);
+    // The kind is the core's own string name, not a numeric wire value.
+    let mut post = channel(
+        id.get(),
+        guild_id.map(|guild| guild.get()),
+        Some(parent.get()),
+        title,
+        "thread",
+        0,
+    );
+    post.thread_metadata = Some(crate::discord::ThreadMetadataInfo {
+        archived: false,
+        auto_archive_duration: Some(1440),
+        archive_timestamp: None,
+        locked: false,
+        invitable: None,
+        create_timestamp: None,
+    });
+    navigation.channels.insert(id, post);
+
+    append_message(state, id, guild_id, demo_user_id(), "blu", content);
+
+    id
+}

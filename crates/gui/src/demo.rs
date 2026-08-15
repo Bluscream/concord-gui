@@ -337,6 +337,44 @@ fn handle_command(
             publish_state!();
         }
 
+        AppCommand::EditThread {
+            channel_id, name, ..
+        } => {
+            fixtures::rename_thread(state, channel_id, &name);
+            publish_state!();
+        }
+
+        AppCommand::DeleteThread { channel_id, .. } => {
+            fixtures::delete_thread(state, channel_id);
+            publish_state!();
+        }
+
+        AppCommand::SetThreadLocked {
+            channel_id, locked, ..
+        } => {
+            fixtures::set_thread_locked(state, channel_id, locked);
+            publish_state!();
+        }
+
+        AppCommand::SetThreadMuted {
+            channel_id, muted, ..
+        } => {
+            fixtures::set_thread_muted(state, channel_id, muted);
+            publish_state!();
+        }
+
+        AppCommand::SetThreadPinned {
+            channel_id, pinned, ..
+        } => {
+            fixtures::set_thread_pinned(state, channel_id, pinned);
+            publish_state!();
+        }
+
+        AppCommand::CreateForumPost { post } => {
+            fixtures::create_forum_post(state, post.channel_id, &post.title, &post.content);
+            publish_state!();
+        }
+
         AppCommand::LoadPinnedMessages { channel_id } => {
             let messages = state
                 .messages_for_channel(channel_id)

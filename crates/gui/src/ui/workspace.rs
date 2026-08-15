@@ -9,7 +9,7 @@ use concord::config::{self, AppOptions, CredentialStoreMode, UiStateOptions};
 use concord::discord::{
     ActivityInfo, ActivityKind, AppCommand, AppEvent, ApplicationCommandInfo,
     ApplicationCommandInvocation, AttachmentDownloadId, BuiltinSlashCommandParse,
-    BuiltinSlashCommandSubmit, DownloadAttachmentSource, ForumPostArchiveState,
+    BuiltinSlashCommandSubmit, DownloadAttachmentSource, ForumPostArchiveState, ForumPostCreate,
     GlobalUserProfileUpdate, GuildUserProfileUpdate, Id, MAX_UPLOAD_ATTACHMENT_COUNT,
     MediaPlaybackSource, MediaPlaybackTarget, MessageAttachmentUpload, MessageSearchQuery,
     MuteDuration, PresenceStatus, ReactionEmoji, ReplyReference, StreamCaptureTargetsRequestId,
@@ -261,6 +261,9 @@ pub struct Workspace {
     pub guild_muted: bool,
     /// Recent error-log lines, shown when the debug panel is open.
     pub debug_log: Option<Vec<String>>,
+    /// Thread flags as last seen, preserved when pinning so other flags are
+    /// not cleared.
+    pub thread_flags: u64,
     /// When this client last told the server it was typing.
     pub last_typing: Option<std::time::Instant>,
     /// Presence others see.
@@ -351,6 +354,7 @@ impl Workspace {
             voice_scope_joined: None,
             channel_muted: false,
             guild_muted: false,
+            thread_flags: 0,
             last_typing: None,
             status: PresenceStatus::Online,
             send_as_tts: false,
@@ -655,6 +659,105 @@ impl Workspace {
         let height = self.message_scroll.bounds().size.height;
         self.message_scroll
             .set_offset(gpui::point(offset.x, offset.y + height * pages));
+    }
+
+    /// Lock or unlock the open thread, which stops further replies.
+    pub fn set_thread_locked(&mut self, locked: bool) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        handle.send(AppCommand::SetThreadLocked {
+            channel_id,
+            locked,
+            label: String::new(),
+        });
+    }
+
+    /// Mute the open thread.
+    ///
+    /// Separate from channel mute: a thread mutes independently of the channel
+    /// it lives in, so routing it through SetChannelMuted would silence the
+    /// wrong thing.
+    pub fn set_thread_muted(&mut self, muted: bool) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        handle.send(AppCommand::SetThreadMuted {
+            channel_id,
+            muted,
+            duration: Some(MuteDuration::Permanent),
+            label: String::new(),
+        });
+    }
+
+    /// Pin or unpin the open thread within its parent.
+    pub fn set_thread_pinned(&mut self, pinned: bool) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        // Existing flags are preserved: the command rewrites the field, so
+        // passing zero would clear whatever else Discord had set.
+        let current_flags = self.thread_flags;
+        handle.send(AppCommand::SetThreadPinned {
+            channel_id,
+            pinned,
+            current_flags,
+            label: String::new(),
+        });
+    }
+
+    /// Rename the open thread.
+    pub fn rename_thread(&mut self, name: String) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        handle.send(AppCommand::EditThread {
+            channel_id,
+            name,
+            applied_tags: Vec::new(),
+            // Zero means "unchanged" for both: the command carries the whole
+            // thread config, and inventing values would overwrite the real ones.
+            rate_limit_per_user: 0,
+            auto_archive_duration: 0,
+            label: String::new(),
+        });
+    }
+
+    /// Delete the open thread.
+    pub fn delete_thread(&mut self) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        handle.send(AppCommand::DeleteThread {
+            channel_id,
+            label: String::new(),
+        });
+        // The thread is gone, so stay in its parent rather than on a dead view.
+        self.nav.channel = None;
+        self.messages.clear();
+    }
+
+    /// Create a forum post.
+    ///
+    /// Forum posts are creatable even though plain threads are not - the core
+    /// has CreateForumPost but no thread-creation command.
+    pub fn create_forum_post(&mut self, title: String, content: String) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(forum) = self.forum.as_ref().map(|forum| forum.channel_id) else {
+            return;
+        };
+
+        handle.send(AppCommand::CreateForumPost {
+            post: ForumPostCreate {
+                channel_id: forum,
+                title,
+                content,
+                applied_tags: Vec::new(),
+                attachments: Vec::new(),
+            },
+        });
     }
 
     /// Tell the server this client is typing.
@@ -3743,6 +3846,70 @@ impl Workspace {
                                     .child("none")
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.set_thread_notification_level(8);
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                gpui::div()
+                                    .id("thread-mute")
+                                    .px(px(space::SM))
+                                    .py(px(space::XS))
+                                    .rounded(px(layout::RADIUS))
+                                    .cursor_pointer()
+                                    .text_size(px(scaled(text::XS)))
+                                    .text_color(rgb(active().text_muted))
+                                    .hover(|style| style.bg(rgb(active().surface_hover)))
+                                    .child("mute thread")
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.set_thread_muted(true);
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                gpui::div()
+                                    .id("thread-pin")
+                                    .px(px(space::SM))
+                                    .py(px(space::XS))
+                                    .rounded(px(layout::RADIUS))
+                                    .cursor_pointer()
+                                    .text_size(px(scaled(text::XS)))
+                                    .text_color(rgb(active().text_muted))
+                                    .hover(|style| style.bg(rgb(active().surface_hover)))
+                                    .child("pin thread")
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.set_thread_pinned(true);
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                gpui::div()
+                                    .id("thread-lock")
+                                    .px(px(space::SM))
+                                    .py(px(space::XS))
+                                    .rounded(px(layout::RADIUS))
+                                    .cursor_pointer()
+                                    .text_size(px(scaled(text::XS)))
+                                    .text_color(rgb(active().text_muted))
+                                    .hover(|style| style.bg(rgb(active().surface_hover)))
+                                    .child("lock")
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.set_thread_locked(true);
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                gpui::div()
+                                    .id("thread-delete")
+                                    .px(px(space::SM))
+                                    .py(px(space::XS))
+                                    .rounded(px(layout::RADIUS))
+                                    .cursor_pointer()
+                                    .text_size(px(scaled(text::XS)))
+                                    .text_color(rgb(active().danger))
+                                    .hover(|style| style.bg(rgb(active().surface_hover)))
+                                    .child("delete")
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.delete_thread();
                                         cx.notify();
                                     })),
                             )
