@@ -198,6 +198,14 @@ fn push_dashboard_effect(event: AppEvent, ctx: &mut EffectContext<'_>) {
             ctx.state.apply_guild_bans_failure(guild_id, message);
             return;
         }
+        AppEvent::SoundboardSoundsLoaded { guild_id, sounds } => {
+            ctx.state.apply_soundboard_sounds(guild_id, sounds);
+            return;
+        }
+        AppEvent::SoundboardSoundsLoadFailed { message, .. } => {
+            ctx.state.apply_soundboard_failure(message);
+            return;
+        }
         AppEvent::GuildInvitesLoaded { guild_id, invites } => {
             ctx.state.apply_guild_invites(guild_id, invites);
             return;

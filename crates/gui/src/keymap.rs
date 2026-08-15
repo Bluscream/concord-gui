@@ -164,6 +164,7 @@ pub fn apply(workspace: &mut Workspace, action: UiAction, cx: &mut Context<Works
         UiAction::VoiceDeafen => workspace.toggle_voice_flag(true),
         UiAction::VoiceLeave => workspace.leave_voice(),
         UiAction::ToggleStream => workspace.toggle_stream(),
+        UiAction::OpenSoundboard => workspace.open_soundboard(),
 
         // ---- panels -------------------------------------------------------
         UiAction::OpenNotificationInbox => workspace.open_inbox(),

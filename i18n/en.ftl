@@ -227,3 +227,7 @@ status-emoji-uploading = Adding emoji...
 action-add-emoji = Add emoji
 
 action-forget-guild = Remove from this client
+
+label-soundboard = Soundboard
+status-no-sounds = No sounds
+action-soundboard = Soundboard

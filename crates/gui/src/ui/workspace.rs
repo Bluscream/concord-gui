@@ -441,6 +441,28 @@ fn audit_line(entry: &concord::discord::AuditLogEntryInfo) -> String {
     }
 }
 
+/// The soundboard picker.
+///
+/// Holds both lists at once: the guild's sounds and the defaults every account
+/// has. A guild that has added nothing still gets a usable picker, which is
+/// the reason for fetching both rather than one.
+pub struct SoundboardView {
+    pub guild_sounds: Vec<concord::discord::SoundboardSound>,
+    pub default_sounds: Vec<concord::discord::SoundboardSound>,
+    pub loading: bool,
+    pub error: Option<String>,
+}
+
+impl SoundboardView {
+    /// Every sound the picker shows, the guild's first.
+    ///
+    /// The guild's own come first because they are the ones somebody opened
+    /// the picker to reach; the defaults are the fallback.
+    pub fn sounds(&self) -> impl Iterator<Item = &concord::discord::SoundboardSound> {
+        self.guild_sounds.iter().chain(self.default_sounds.iter())
+    }
+}
+
 /// An image opened full size.
 ///
 /// Carries every image in the message rather than only the one clicked, so
@@ -755,6 +777,8 @@ pub struct Workspace {
     pub bans: Option<BanListView>,
     /// The server-management panel, once opened.
     pub server_management: Option<ServerManagementView>,
+    /// The soundboard picker, once opened.
+    pub soundboard: Option<SoundboardView>,
     /// An image being viewed full size.
     pub viewing_image: Option<ImageViewerView>,
     /// Roles being edited for a member: who, and the set as edited so far.
@@ -893,6 +917,7 @@ impl Workspace {
             risk: None,
             bans: None,
             server_management: None,
+            soundboard: None,
             viewing_image: None,
             editing_roles: None,
             pending_stickers: Vec::new(),
@@ -3835,6 +3860,58 @@ impl Workspace {
         }
     }
 
+    /// Open the soundboard picker for the guild we are in voice in.
+    pub fn open_soundboard(&mut self) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let guild_id = match self.nav.selection {
+            Selection::Guild(guild_id) => Some(guild_id),
+            Selection::DirectMessages => None,
+        };
+
+        self.soundboard = Some(SoundboardView {
+            guild_sounds: Vec::new(),
+            default_sounds: Vec::new(),
+            loading: true,
+            error: None,
+        });
+
+        // Both lists, because a guild that has added no sounds should still
+        // get a usable picker rather than an empty one.
+        if let Some(guild_id) = guild_id {
+            handle.send(AppCommand::LoadSoundboardSounds {
+                guild_id: Some(guild_id),
+            });
+        }
+        handle.send(AppCommand::LoadSoundboardSounds { guild_id: None });
+    }
+
+    /// Play the picked sound into the voice channel we are in.
+    pub fn play_sound(&mut self, index: usize) {
+        let (Some(handle), Some(view)) = (&self.handle, &self.soundboard) else {
+            return;
+        };
+        let Some((channel_id, _)) = self.voice_channel else {
+            return;
+        };
+        let Some(sound) = view.sounds().nth(index) else {
+            return;
+        };
+        // Refused rather than sent: Discord rejects an unavailable sound, and
+        // the picker already says why it is greyed.
+        if !sound.available {
+            return;
+        }
+
+        handle.send(AppCommand::PlaySoundboardSound {
+            channel_id,
+            sound_id: sound.sound_id,
+            source_guild_id: sound.guild_id,
+            label: sound.name.clone(),
+        });
+    }
+
     /// Open the server-management panel on the given tab.
     pub fn open_server_management(&mut self, tab: ServerTab) {
         let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
@@ -4454,6 +4531,19 @@ impl Workspace {
                                 this.toggle_stream();
                                 cx.notify();
                             })),
+                    )
+                    .child(
+                        icon_button(
+                            "card-soundboard",
+                            "\u{266B}",
+                            t!("action-soundboard"),
+                            self.soundboard.is_some(),
+                        )
+                        .flex_1()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.open_soundboard();
+                            cx.notify();
+                        })),
                     )
                     .child(
                         icon_button(
@@ -5546,6 +5636,24 @@ impl Workspace {
 
             // Login cannot continue in this client: solving a captcha needs a
             // browser. Said plainly rather than leaving the attempt hanging.
+            AppEvent::SoundboardSoundsLoaded { guild_id, sounds } => {
+                if let Some(view) = &mut self.soundboard {
+                    view.loading = false;
+                    view.error = None;
+                    // The two lists arrive as separate replies, told apart by
+                    // whether they name a guild.
+                    match guild_id {
+                        Some(_) => view.guild_sounds = sounds.clone(),
+                        None => view.default_sounds = sounds.clone(),
+                    }
+                }
+            }
+            AppEvent::SoundboardSoundsLoadFailed { message, .. } => {
+                if let Some(view) = &mut self.soundboard {
+                    view.loading = false;
+                    view.error = Some(message.clone());
+                }
+            }
             AppEvent::GuildInvitesLoaded { guild_id, invites } => {
                 if let Some(view) = &mut self.server_management
                     && view.guild_id == *guild_id
@@ -6659,6 +6767,41 @@ impl Workspace {
                         )),
                 ),
             );
+        }
+
+        if let Some(view) = &self.soundboard {
+            let rows: Vec<overlay::SoundRow> = view
+                .sounds()
+                .map(|sound| overlay::SoundRow {
+                    label: sound.label().to_owned(),
+                    name: sound.name.clone(),
+                    available: sound.available,
+                })
+                .collect();
+
+            return Some(overlay::scrim().child(overlay::soundboard_view(
+                &rows,
+                view.loading,
+                view.error.as_deref(),
+                {
+                    let entity = entity.clone();
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.play_sound(index);
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.soundboard = None;
+                            cx.notify();
+                        });
+                    }
+                },
+            )));
         }
 
         if let Some(view) = &self.server_management {

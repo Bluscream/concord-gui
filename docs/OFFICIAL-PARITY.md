@@ -27,19 +27,16 @@ audit log.
 Server administration: invites (list, create, revoke), custom emoji (list,
 upload, rename, delete).
 
+Soundboard: both sound lists, playing one into a voice channel, and hearing
+what other people play. Uploading a new guild sound is not done; renaming and
+deleting are wired but not yet reachable from either client.
+
 Account: profile editing including per-guild identity, custom status, rich
 activity, friends and blocking, QR and token login.
 
 ## Missing
 
 Ordered by how often it stops someone doing something.
-
-### Soundboard
-
-Nothing at all. Needs the guild sound list, the default sounds, playing one
-into a voice channel, and hearing others'. Endpoints are
-`/guilds/{id}/soundboard-sounds` and `/soundboard-default-sounds`, plus a voice
-gateway opcode to play.
 
 ### Channel management
 

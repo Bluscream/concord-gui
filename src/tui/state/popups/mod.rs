@@ -39,6 +39,7 @@ mod risk;
 mod roles;
 mod search;
 mod server_management;
+mod soundboard;
 mod stickers;
 mod thread_actions;
 mod thread_edit;
@@ -67,6 +68,7 @@ pub use notification_inbox::{
 use search::SearchPopupState;
 use server_management::ServerManagementState;
 pub use server_management::{EmojiEdit, ServerPanelTab};
+use soundboard::SoundboardState;
 
 #[derive(Debug, Default)]
 pub(super) struct PopupUiState {
@@ -152,6 +154,7 @@ define_modal_popups! {
     RolePicker(RolePickerState),
     BanList(BanListState),
     ServerManagement(ServerManagementState),
+    Soundboard(SoundboardState),
     RiskWarning(RiskWarningState),
 }
 
@@ -266,6 +269,7 @@ pub(in crate::tui) enum SelectablePopupTarget {
     SearchSuggestions,
     Stickers,
     ServerManagement,
+    Soundboard,
     Roles,
     Bans,
 }
@@ -1374,6 +1378,13 @@ impl PopupUiState {
 
     modal_popup_accessors!(ban_list, ban_list_mut, BanList, BanListState, state);
     modal_popup_accessors!(
+        soundboard,
+        soundboard_mut,
+        Soundboard,
+        SoundboardState,
+        state
+    );
+    modal_popup_accessors!(
         server_management,
         server_management_mut,
         ServerManagement,
@@ -1824,6 +1835,7 @@ impl DashboardState {
             }
             ActiveModalPopupKind::RiskWarning => self.close_risk_warning(),
             ActiveModalPopupKind::ServerManagement => self.close_server_management(),
+            ActiveModalPopupKind::Soundboard => self.close_soundboard(),
             ActiveModalPopupKind::Options if self.is_capturing_push_to_talk_shortcut() => {
                 self.cancel_push_to_talk_shortcut_capture();
             }
@@ -2129,6 +2141,9 @@ impl DashboardState {
             ModalPopup::ServerManagement(_) => {
                 ActivePopupPolicy::selectable(kind, SelectablePopupTarget::ServerManagement)
             }
+            ModalPopup::Soundboard(_) => {
+                ActivePopupPolicy::selectable(kind, SelectablePopupTarget::Soundboard)
+            }
             ModalPopup::ForumPostComposer(_) => {
                 ActivePopupPolicy::scrollable(kind, ScrollablePopupTarget::ForumPostComposer)
             }
@@ -2211,6 +2226,10 @@ impl DashboardState {
             SelectablePopupTarget::ServerManagement => {
                 let state = self.popups.server_management()?;
                 (&state.selection, state.row_count())
+            }
+            SelectablePopupTarget::Soundboard => {
+                let state = self.popups.soundboard()?;
+                (&state.selection, state.len())
             }
             SelectablePopupTarget::MessageActions => {
                 let selection = &self.popups.message_action_menu()?.selection;
@@ -2379,6 +2398,7 @@ impl DashboardState {
             }
             SelectablePopupTarget::Bans => self.unban_selected(),
             SelectablePopupTarget::ServerManagement => self.activate_selected_server_row(),
+            SelectablePopupTarget::Soundboard => self.play_selected_sound(),
             SelectablePopupTarget::MessageActions => self.activate_selected_message_action(),
             SelectablePopupTarget::GuildActions => self.activate_selected_guild_action(),
             SelectablePopupTarget::ChannelActions => self.activate_selected_channel_action(),
@@ -2492,6 +2512,12 @@ impl DashboardState {
             SelectablePopupTarget::ServerManagement => {
                 if let Some(state) = self.popups.server_management_mut() {
                     let len = state.row_count();
+                    update(&mut state.selection, len);
+                }
+            }
+            SelectablePopupTarget::Soundboard => {
+                if let Some(state) = self.popups.soundboard_mut() {
+                    let len = state.len();
                     update(&mut state.selection, len);
                 }
             }

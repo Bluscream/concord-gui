@@ -225,3 +225,7 @@ status-emoji-uploading = Emoji wird hinzugefügt...
 action-add-emoji = Emoji hinzufügen
 
 action-forget-guild = Aus diesem Client entfernen
+
+label-soundboard = Soundboard
+status-no-sounds = Keine Sounds
+action-soundboard = Soundboard

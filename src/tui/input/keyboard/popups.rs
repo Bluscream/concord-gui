@@ -229,6 +229,9 @@ fn dispatch_popup_key(
         ActiveModalPopupKind::RolePicker => {
             route_fallback_key(state, key, stage, handle_role_picker_key)
         }
+        ActiveModalPopupKind::Soundboard => {
+            route_fallback_key(state, key, stage, handle_soundboard_key)
+        }
         ActiveModalPopupKind::BanList => route_fallback_key(state, key, stage, handle_ban_list_key),
         ActiveModalPopupKind::ForumPostComposer => route_popup_key(
             state,
@@ -915,6 +918,29 @@ fn handle_server_management_key(state: &mut DashboardState, key: KeyEvent) -> Op
         KeyCode::Char('r') => return state.reload_server_management(),
         KeyCode::Char('n') => state.start_emoji_rename(),
         KeyCode::Char('a') => state.start_emoji_upload(),
+        _ => {}
+    }
+    None
+}
+
+/// The soundboard: enter plays the highlighted sound, esc closes.
+fn handle_soundboard_key(state: &mut DashboardState, key: KeyEvent) -> Option<AppCommand> {
+    if let Some(action) = state
+        .key_bindings()
+        .selection_action(key, SelectionKeySet::Navigation)
+    {
+        match action {
+            SelectionAction::Next => state.move_soundboard_selection_down(),
+            SelectionAction::Previous => state.move_soundboard_selection_up(),
+        }
+        return None;
+    }
+
+    match key.code {
+        // Left open rather than closed on play: a soundboard is used several
+        // times in a row far more often than once.
+        KeyCode::Enter => return state.play_selected_sound(),
+        KeyCode::Esc => state.close_soundboard(),
         _ => {}
     }
     None

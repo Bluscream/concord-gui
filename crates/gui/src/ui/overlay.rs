@@ -1219,3 +1219,107 @@ pub fn image_viewer_view(
                 ),
         )
 }
+
+/// One sound in the picker.
+pub struct SoundRow {
+    pub label: String,
+    pub name: String,
+    /// Unavailable sounds are shown greyed with the reason rather than hidden,
+    /// so a guild that lost its boosts does not look like it lost its sounds.
+    pub available: bool,
+}
+
+/// The soundboard.
+pub fn soundboard_view(
+    sounds: &[SoundRow],
+    loading: bool,
+    error: Option<&str>,
+    on_play: impl Fn(usize, &mut gpui::App) + Clone + 'static,
+    on_close: impl Fn(&mut gpui::App) + 'static,
+) -> Div {
+    let mut grid = row()
+        .id("soundboard-grid")
+        .w_full()
+        .px(px(space::LG))
+        .py(px(space::SM))
+        .gap(px(space::XS))
+        .flex_wrap()
+        .max_h(px(320.))
+        .overflow_y_scroll();
+
+    let notice = if loading {
+        Some(t!("status-loading"))
+    } else if let Some(error) = error {
+        Some(error.to_owned())
+    } else if sounds.is_empty() {
+        Some(t!("status-no-sounds"))
+    } else {
+        None
+    };
+
+    if let Some(notice) = notice {
+        grid = grid.child(
+            gpui::div()
+                .px(px(space::SM))
+                .py(px(space::MD))
+                .text_size(px(scaled(text::SM)))
+                .text_color(rgb(if error.is_some() {
+                    active().danger
+                } else {
+                    active().text_subtle
+                }))
+                .child(notice),
+        );
+    }
+
+    for (index, sound) in sounds.iter().enumerate() {
+        let play = on_play.clone();
+        grid = grid.child(
+            column()
+                .id(("sound", index))
+                .w(px(84.))
+                .h(px(72.))
+                .items_center()
+                .justify_center()
+                .gap(px(space::XS))
+                .rounded(px(layout::RADIUS))
+                .bg(rgb(active().surface))
+                .when(sound.available, |button| {
+                    button
+                        .cursor_pointer()
+                        .hover(|style| style.bg(rgb(active().surface_hover)))
+                        .on_click(move |_event, _window, cx| play(index, cx))
+                })
+                .child(
+                    gpui::div()
+                        .text_size(px(scaled(text::LG)))
+                        .text_color(rgb(if sound.available {
+                            active().text
+                        } else {
+                            active().text_subtle
+                        }))
+                        .child(sound.label.clone()),
+                )
+                .child(
+                    gpui::div()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().text_subtle))
+                        .child(sound.name.clone()),
+                ),
+        );
+    }
+
+    panel(&t!("label-soundboard"), 420.).child(grid).child(
+        row()
+            .w_full()
+            .px(px(space::LG))
+            .py(px(space::MD))
+            .justify_end()
+            .child(button(
+                "soundboard-close",
+                &t!("action-close"),
+                true,
+                on_close,
+            )),
+    )
+}

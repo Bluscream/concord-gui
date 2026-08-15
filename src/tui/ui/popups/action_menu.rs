@@ -758,6 +758,58 @@ pub(in crate::tui::ui) fn render_server_management(
     );
 }
 
+/// The soundboard.
+pub(in crate::tui::ui) fn render_soundboard(frame: &mut Frame, area: Rect, state: &DashboardState) {
+    if !state.is_active_modal_popup(ActiveModalPopupKind::Soundboard) {
+        return;
+    }
+    let Some(board) = state.soundboard_state() else {
+        return;
+    };
+
+    let selected = state.selected_sound_index().unwrap_or(0);
+    let lines = if let Some(error) = board.error() {
+        vec![Line::from(Span::styled(
+            error.to_owned(),
+            theme::current().style(theme::HighlightGroup::Error),
+        ))]
+    } else if board.is_loading() {
+        vec![Line::from(Span::styled(
+            "Loading sounds...".to_owned(),
+            theme::current().style(theme::HighlightGroup::Loading),
+        ))]
+    } else if board.len() == 0 {
+        vec![Line::from(Span::styled(
+            "No sounds".to_owned(),
+            theme::current().style(theme::HighlightGroup::Hint),
+        ))]
+    } else {
+        let rows = indexed_action_menu_rows(board.sounds().map(|sound| {
+            let mut label = match &sound.emoji_name {
+                Some(emoji) => format!("{emoji} {}", sound.name),
+                None => sound.name.clone(),
+            };
+            // Shown and refused rather than hidden, so a guild that lost its
+            // boosts does not look like it lost its sounds.
+            if !sound.available {
+                label.push_str(" - unavailable");
+            }
+            label
+        }));
+        action_menu_lines(&rows, selected)
+    };
+
+    render_action_menu(
+        frame,
+        area,
+        "Soundboard (enter to play)".to_owned(),
+        lines,
+        state
+            .popup_list_scroll(SelectablePopupTarget::Soundboard)
+            .expect("the soundboard has selection state"),
+    );
+}
+
 pub(in crate::tui::ui) fn render_ban_list(frame: &mut Frame, area: Rect, state: &DashboardState) {
     if !state.is_active_modal_popup(ActiveModalPopupKind::BanList) {
         return;

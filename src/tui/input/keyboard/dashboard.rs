@@ -171,6 +171,12 @@ pub(super) fn execute_ui_action(
         UiAction::VoiceDeafen => state.toggle_voice_deafen(),
         UiAction::VoiceMute => state.toggle_voice_mute(),
         UiAction::ToggleStream => return state.toggle_current_voice_stream_command(),
+        UiAction::OpenSoundboard => {
+            // Two fetches, so the caller queues them rather than returning one.
+            for command in state.open_soundboard() {
+                state.enqueue_pending_command(command);
+            }
+        }
         UiAction::VoiceLeave => return state.leave_current_voice_channel_command(),
         _ => {}
     }
