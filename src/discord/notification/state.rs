@@ -296,6 +296,13 @@ impl DiscordState {
     }
 
     pub fn guild_unread(&self, guild_id: Id<GuildMarker>) -> ChannelUnreadState {
+        // A server you are no longer in should not be nagging you. The read
+        // states stay - they are what remembers where you got to, and rule 7
+        // keeps them until the guild is forgotten - but they stop producing
+        // badges the moment membership ends.
+        if self.is_departed_guild(guild_id) {
+            return ChannelUnreadState::Seen;
+        }
         aggregate_unread_states(
             self.viewable_channels_for_guild(Some(guild_id))
                 .into_iter()

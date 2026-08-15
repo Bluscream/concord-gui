@@ -368,6 +368,7 @@ impl DiscordState {
                     .insert(*guild_id, emojis.clone());
             }
             AppEvent::GuildDelete { guild_id } => self.apply_guild_delete(guild_id),
+            AppEvent::GuildForgotten { guild_id } => self.forget_guild(guild_id),
             AppEvent::GuildUnavailable { .. } => {}
             AppEvent::SelectedGuildChanged { guild_id } => {
                 self.record_selected_member_guild(*guild_id);
@@ -1255,6 +1256,9 @@ impl DiscordState {
         };
 
         self.remove_voice_states_for_guild(*guild_id);
+        // Rejoining clears the departed mark, so a guild that was left and
+        // rejoined stops reading as read-only.
+        self.navigation_mut().departed_guilds.remove(guild_id);
         self.navigation_mut().guilds.insert(
             *guild_id,
             GuildState {
@@ -1317,7 +1321,45 @@ impl DiscordState {
             .insert(*guild_id, stickers.clone());
     }
 
+    /// Note that this account is no longer a member, keeping the guild.
+    ///
+    /// Rule 7: losing access is not the same as removing data. Leaving, being
+    /// kicked and being banned all arrive as the same GuildDelete, and all
+    /// three leave a conversation the user may still want to read. The guild
+    /// stays browsable from cache and turns non-interactive; `forget_guild` is
+    /// the explicit purge.
     fn apply_guild_delete(&mut self, guild_id: &Id<GuildMarker>) {
+        self.navigation_mut().departed_guilds.insert(*guild_id);
+        // The member list goes, because it is a live roster this account can
+        // no longer see. Channels, messages and roles stay: they are what
+        // makes the guild readable, and roles are what renders the names.
+        self.guild_details_mut().members.remove(guild_id);
+        self.guild_details_mut().current_member_ids.remove(guild_id);
+        self.guild_details_mut().member_lists.remove(guild_id);
+        self.presence_mut()
+            .guild_user_presences
+            .retain(|(presence_guild_id, _), _| presence_guild_id != guild_id);
+        self.presence_mut()
+            .guild_user_activities
+            .retain(|(presence_guild_id, _), _| presence_guild_id != guild_id);
+        self.remove_voice_states_for_guild(*guild_id);
+    }
+
+    /// Whether this account has left, been kicked from or been banned from a
+    /// guild whose conversation is still cached.
+    ///
+    /// All three arrive as the same GuildDelete, so this cannot say which -
+    /// only that the guild is readable and no longer one you are in.
+    pub fn is_departed_guild(&self, guild_id: Id<GuildMarker>) -> bool {
+        self.navigation.departed_guilds.contains(&guild_id)
+    }
+
+    /// Really remove a guild and everything cached for it.
+    ///
+    /// Only ever from an explicit "Remove" - never from a GuildDelete, which
+    /// is the point of rule 7.
+    pub(crate) fn forget_guild(&mut self, guild_id: &Id<GuildMarker>) {
+        self.navigation_mut().departed_guilds.remove(guild_id);
         self.navigation_mut().guilds.remove(guild_id);
         self.remove_channels_matching(|channel| channel.guild_id == Some(*guild_id));
         self.guild_details_mut().members.remove(guild_id);

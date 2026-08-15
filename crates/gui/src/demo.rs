@@ -921,6 +921,10 @@ fn handle_command(
             publish_event!(AppEvent::InboxRecentMentionDeleted { message_id });
         }
 
+        // Purely local, so the fixture can answer it honestly.
+        AppCommand::ForgetGuild { guild_id, .. } => {
+            publish_event!(AppEvent::GuildForgotten { guild_id });
+        }
         AppCommand::LeaveGuild { guild_id, .. } => {
             // Removed from the fixture, which is what leaving looks like -
             // and a reminder that rule 7 will change this to "inert but

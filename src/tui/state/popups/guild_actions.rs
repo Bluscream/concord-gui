@@ -114,6 +114,15 @@ impl DashboardState {
                     (!self.discord.cache.can_view_audit_log(state.id))
                         .then(|| "you do not have permission".to_owned()),
                 ),
+                // Only for a guild this account has already left: for one you
+                // are still in, leaving is the action, and offering both would
+                // invite removing the history of a server you are still in.
+                GuildActionItem::new(
+                    GuildActionKind::ForgetServer,
+                    "Remove from this client",
+                    (!self.discord.cache.is_departed_guild(state.id))
+                        .then(|| "you are still in this server".to_owned()),
+                ),
                 GuildActionItem::new(
                     GuildActionKind::LeaveServer,
                     "Leave server",
@@ -240,6 +249,16 @@ impl DashboardState {
                                 _ => ServerPanelTab::AuditLog,
                             },
                         )
+                    }
+                    GuildActionKind::ForgetServer => {
+                        let guild_id = self.selected_guild_id()?;
+                        let label = self
+                            .discord
+                            .guild(guild_id)
+                            .map(|guild| guild.name.clone())
+                            .unwrap_or_else(|| format!("server-{}", guild_id.get()));
+                        self.close_guild_action_menu();
+                        Some(AppCommand::ForgetGuild { guild_id, label })
                     }
                     GuildActionKind::LeaveServer => {
                         self.close_guild_action_menu();

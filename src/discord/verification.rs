@@ -960,3 +960,129 @@ mod send_block_tests {
         assert_eq!(state.send_block_reason(Id::new(999_999)), None);
     }
 }
+
+#[cfg(test)]
+mod departed_guild_tests {
+    use super::*;
+    use crate::discord::ids::marker::ChannelMarker;
+    use crate::discord::test_builders::{GuildCreateFixture, guild_create_event};
+    use crate::discord::{AppEvent, ChannelInfo};
+
+    fn state_with_guild() -> (DiscordState, Id<GuildMarker>, Id<ChannelMarker>) {
+        let guild_id = Id::new(1);
+        let channel_id = Id::new(2);
+        let mut channel = ChannelInfo::test(channel_id, "general");
+        channel.guild_id = Some(guild_id);
+
+        let mut state = DiscordState::default();
+        state.apply_event(&guild_create_event(GuildCreateFixture {
+            channels: vec![channel],
+            ..GuildCreateFixture::new(guild_id)
+        }));
+        (state, guild_id, channel_id)
+    }
+
+    #[test]
+    fn leaving_keeps_the_conversation_and_marks_it_read_only() {
+        // Rule 7: leaving, being kicked and being banned all arrive as the
+        // same GuildDelete, and all three leave something worth reading.
+        let (mut state, guild_id, channel_id) = state_with_guild();
+        state.apply_event(&AppEvent::GuildDelete { guild_id });
+
+        assert!(state.is_departed_guild(guild_id));
+        assert!(
+            state.channel(channel_id).is_some(),
+            "the channel must survive so the conversation can still be read"
+        );
+
+        let reason = state
+            .send_block_reason(channel_id)
+            .expect("a departed guild is read-only");
+        assert!(
+            reason.contains("no longer in this server"),
+            "got {reason:?}"
+        );
+    }
+
+    #[test]
+    fn rejoining_makes_it_writable_again() {
+        let (mut state, guild_id, channel_id) = state_with_guild();
+        state.apply_event(&AppEvent::GuildDelete { guild_id });
+
+        let mut channel = ChannelInfo::test(channel_id, "general");
+        channel.guild_id = Some(guild_id);
+        state.apply_event(&guild_create_event(GuildCreateFixture {
+            channels: vec![channel],
+            ..GuildCreateFixture::new(guild_id)
+        }));
+
+        assert!(!state.is_departed_guild(guild_id));
+        assert_eq!(state.send_block_reason(channel_id), None);
+    }
+
+    #[test]
+    fn a_departed_guild_stops_producing_badges() {
+        // The read states stay - they remember where the reader got to - but a
+        // server you are no longer in should not be nagging you about it.
+        let guild_id = Id::new(1);
+        let channel_id = Id::new(2);
+        let mut channel = ChannelInfo::test(channel_id, "general");
+        channel.guild_id = Some(guild_id);
+        channel.last_message_id = Some(Id::new(300));
+
+        let mut state = DiscordState::default();
+        state.apply_event(&guild_create_event(GuildCreateFixture {
+            channels: vec![channel],
+            ..GuildCreateFixture::new(guild_id)
+        }));
+        state.apply_event(&AppEvent::ReadStateInit {
+            entries: vec![crate::discord::ReadStateInfo {
+                read_state_type: 0,
+                channel_id,
+                last_acked_message_id: Some(Id::new(100)),
+                mention_count: 4,
+                badge_count: 4,
+                last_pin_timestamp: None,
+                flags: 0,
+                last_viewed: None,
+            }],
+        });
+
+        assert_ne!(
+            state.guild_unread(guild_id),
+            crate::discord::ChannelUnreadState::Seen,
+            "the fixture should start unread, or this proves nothing"
+        );
+
+        state.apply_event(&AppEvent::GuildDelete { guild_id });
+        assert_eq!(
+            state.guild_unread(guild_id),
+            crate::discord::ChannelUnreadState::Seen
+        );
+    }
+
+    #[test]
+    fn forgetting_is_what_actually_removes_it() {
+        // The explicit "Remove", and the only thing that drops the cache.
+        let (mut state, guild_id, channel_id) = state_with_guild();
+        state.apply_event(&AppEvent::GuildDelete { guild_id });
+        state.apply_event(&AppEvent::GuildForgotten { guild_id });
+
+        assert!(!state.is_departed_guild(guild_id));
+        assert!(
+            state.channel(channel_id).is_none(),
+            "forgetting must actually drop the cached conversation"
+        );
+    }
+
+    #[test]
+    fn a_departed_guild_is_read_only_even_where_permissions_would_allow_it() {
+        // The roles are still cached from when this account was a member, so
+        // a permission check alone would answer as though it still were.
+        let (mut state, guild_id, channel_id) = state_with_guild();
+        assert_eq!(state.send_block_reason(channel_id), None);
+
+        state.apply_event(&AppEvent::GuildDelete { guild_id });
+        assert!(state.send_block_reason(channel_id).is_some());
+    }
+}

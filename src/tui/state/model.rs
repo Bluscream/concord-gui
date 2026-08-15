@@ -445,6 +445,8 @@ pub enum GuildActionKind {
     LeaveServer,
     JoinServer,
     ViewBans,
+    /// Drop a departed guild's cached conversation.
+    ForgetServer,
     ViewInvites,
     ViewEmoji,
     ViewAuditLog,

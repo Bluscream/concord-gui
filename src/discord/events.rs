@@ -685,6 +685,10 @@ pub enum AppEvent {
         guild_id: Id<GuildMarker>,
         message: String,
     },
+    /// A departed guild's cache was dropped at the user's request.
+    GuildForgotten {
+        guild_id: Id<GuildMarker>,
+    },
     GuildInvitesLoaded {
         guild_id: Id<GuildMarker>,
         invites: Vec<crate::discord::GuildInviteInfo>,
@@ -999,6 +1003,7 @@ define_app_event_kinds! {
     CaptchaRequired: AppEvent::CaptchaRequired { .. },
     GuildBansLoaded: AppEvent::GuildBansLoaded { .. },
     GuildBansLoadFailed: AppEvent::GuildBansLoadFailed { .. },
+    GuildForgotten: AppEvent::GuildForgotten { .. },
     GuildInvitesLoaded: AppEvent::GuildInvitesLoaded { .. },
     GuildInvitesLoadFailed: AppEvent::GuildInvitesLoadFailed { .. },
     GuildEmojisLoaded: AppEvent::GuildEmojisLoaded { .. },
@@ -1940,7 +1945,10 @@ impl AppEventMetadata {
 impl AppEventKind {
     const fn metadata(self) -> AppEventMetadata {
         match self {
-            AppEventKind::GuildCreate
+            // Forgetting drops cached state, so the snapshot must absorb it
+            // exactly like a delete does.
+            AppEventKind::GuildForgotten
+            | AppEventKind::GuildCreate
             | AppEventKind::GuildUpdate
             | AppEventKind::GuildOnboardingUpdate
             | AppEventKind::ThreadListSync

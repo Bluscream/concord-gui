@@ -99,8 +99,17 @@ fn guild_outage_preserves_cache_and_membership_removal_clears_it() {
     assert!(state.guild(guild_id).is_some());
     assert_eq!(state.custom_emojis_for_guild(guild_id).len(), 1);
 
+    // Rule 7: a delete marks the guild departed and keeps the conversation.
+    // Only an explicit forget removes it.
     state.apply_event(&AppEvent::GuildDelete { guild_id });
 
+    assert!(state.is_departed_guild(guild_id));
+    assert!(state.guild(guild_id).is_some());
+    assert_eq!(state.custom_emojis_for_guild(guild_id).len(), 1);
+
+    state.apply_event(&AppEvent::GuildForgotten { guild_id });
+
+    assert!(!state.is_departed_guild(guild_id));
     assert!(state.guild(guild_id).is_none());
     assert!(state.custom_emojis_for_guild(guild_id).is_empty());
 }
@@ -230,8 +239,12 @@ fn fresh_ready_reconciles_guild_channel_and_private_channel_snapshots() {
         },
     });
 
-    assert!(state.guild(stale_guild).is_none());
-    assert!(state.channel(stale_guild_channel).is_none());
+    // A guild missing from a fresh READY is one this account is no longer in,
+    // which is the same situation as a GuildDelete: rule 7 keeps it readable
+    // and marks it departed rather than dropping the conversation.
+    assert!(state.is_departed_guild(stale_guild));
+    assert!(state.guild(stale_guild).is_some());
+    assert!(state.channel(stale_guild_channel).is_some());
     assert!(state.channel(stale_current_channel).is_none());
     assert!(state.channel(ready_channel).is_some());
     assert_eq!(
@@ -249,8 +262,11 @@ fn fresh_ready_reconciles_guild_channel_and_private_channel_snapshots() {
             .any(|member| member.user_id == stale_member),
         "stale entities may remain available to cached message rows"
     );
+    // The read state survives with the channel: it is what remembers where the
+    // reader got to, and rule 7 keeps it until the guild is forgotten. It stops
+    // producing badges, which guild_unread handles.
     assert!(
-        !state
+        state
             .notifications
             .read_states
             .contains_key(&stale_guild_channel)

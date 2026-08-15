@@ -530,6 +530,14 @@ pub enum AppCommand {
     LoadGuildBans {
         guild_id: Id<GuildMarker>,
     },
+    /// Really remove a departed guild's cached conversation.
+    ///
+    /// Distinct from leaving, which only stops membership: rule 7 keeps the
+    /// data until the user says otherwise, and this is them saying so.
+    ForgetGuild {
+        guild_id: Id<GuildMarker>,
+        label: String,
+    },
     LoadGuildInvites {
         guild_id: Id<GuildMarker>,
     },

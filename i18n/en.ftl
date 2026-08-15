@@ -225,3 +225,5 @@ label-unknown = someone
 status-emoji-name-unusable = That filename does not make a usable emoji name
 status-emoji-uploading = Adding emoji...
 action-add-emoji = Add emoji
+
+action-forget-guild = Remove from this client

@@ -30,6 +30,14 @@ pub(in crate::discord) struct NavigationIndex {
     pub(in crate::discord) custom_emojis: BTreeMap<Id<GuildMarker>, Vec<CustomEmojiInfo>>,
     pub(in crate::discord) guild_stickers:
         BTreeMap<Id<GuildMarker>, Vec<crate::discord::StickerInfo>>,
+    /// Guilds this account is no longer a member of, but whose conversation
+    /// is still cached.
+    ///
+    /// Rule 7: leaving, being kicked and being banned all arrive as the same
+    /// GuildDelete, and all three leave something the user may still want to
+    /// read. A departed guild stays browsable and turns non-interactive until
+    /// it is rejoined or explicitly removed.
+    pub(in crate::discord) departed_guilds: std::collections::BTreeSet<Id<GuildMarker>>,
     /// User's `guild_folders` setting in display order. Empty until READY
     /// delivers it. The dashboard falls back to a flat guild list.
     pub(in crate::discord) guild_folders: Vec<GuildFolder>,

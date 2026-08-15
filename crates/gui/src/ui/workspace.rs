@@ -1430,6 +1430,25 @@ impl Workspace {
         });
     }
 
+    /// Drop a departed guild's cached conversation.
+    ///
+    /// No warning: this removes only local data, and rule 6's warnings are
+    /// about actions Discord watches. Nothing is sent.
+    pub fn forget_guild(&mut self) {
+        let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
+            return;
+        };
+        let label = self
+            .model
+            .guilds
+            .iter()
+            .find(|guild| guild.id == Some(guild_id))
+            .map(|guild| guild.name.clone())
+            .unwrap_or_else(|| guild_id.get().to_string());
+
+        handle.send(AppCommand::ForgetGuild { guild_id, label });
+    }
+
     /// Leave the open guild.
     pub fn leave_guild(&mut self) {
         if !self.confirm_risk(RiskAction::LeaveGuild) {
@@ -6153,6 +6172,31 @@ impl Workspace {
                                     .on_click(cx.listener(
                                         |this, _event, _window, cx| {
                                             this.open_server_management(this.first_server_tab());
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                            },
+                        )
+                        // Only for a guild already left: for one you are still
+                        // in, leaving is the action, and offering both would
+                        // invite dropping the history of a server you are in.
+                        .when(
+                            self.last_state.as_ref().is_some_and(|state| {
+                                matches!(self.nav.selection, Selection::Guild(guild_id)
+                                    if state.is_departed_guild(guild_id))
+                            }),
+                            |header| {
+                                header.child(
+                                    icon_button(
+                                        "guild-forget",
+                                        "\u{2716}",
+                                        t!("action-forget-guild"),
+                                        false,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _event, _window, cx| {
+                                            this.forget_guild();
                                             cx.notify();
                                         },
                                     )),

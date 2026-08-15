@@ -234,6 +234,15 @@ impl DiscordState {
     /// say so rather than look ready.
     pub fn send_block_reason(&self, channel_id: Id<ChannelMarker>) -> Option<String> {
         let channel = self.channel(channel_id)?;
+        // Checked before permissions, because a departed guild's roles are
+        // still cached and would otherwise answer as though the account were
+        // still a member.
+        if channel
+            .guild_id
+            .is_some_and(|guild_id| self.is_departed_guild(guild_id))
+        {
+            return Some("you are no longer in this server - it is kept here to read".to_owned());
+        }
         // The optimistic reason, not the strict one: a permission that cannot
         // be checked yet because roles are still loading is a gap, not a
         // refusal, and greying the composer out while a guild loads would be

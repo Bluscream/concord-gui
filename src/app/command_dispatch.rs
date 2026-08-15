@@ -543,6 +543,15 @@ impl CommandDispatcher {
             AppCommand::LoadGuildBans { guild_id } => {
                 message_commands::load_guild_bans(self.client.clone(), guild_id).await;
             }
+            // Purely local: nothing is asked of Discord, since the account
+            // already is not a member. The event is what makes both clients
+            // drop it at the same moment.
+            AppCommand::ForgetGuild { guild_id, label } => {
+                crate::logging::debug("guild", format!("forgetting cached guild {label}"));
+                self.client
+                    .publish_event(crate::discord::AppEvent::GuildForgotten { guild_id })
+                    .await;
+            }
             AppCommand::LoadGuildInvites { guild_id } => {
                 message_commands::load_guild_invites(self.client.clone(), guild_id).await;
             }
