@@ -460,6 +460,92 @@ load_guild_panel!(
 );
 
 /// Fetch a sound list. `None` asks for the default sounds.
+pub(super) async fn create_guild_channel(
+    client: DiscordClient,
+    guild_id: Id<GuildMarker>,
+    name: String,
+    kind: crate::discord::NewChannelKind,
+    parent_id: Option<Id<ChannelMarker>>,
+) {
+    if let Err(error) = client
+        .create_guild_channel(guild_id, &name, kind, parent_id)
+        .await
+    {
+        report_moderation_failure(&client, "creating channel", &name, &error).await;
+    }
+}
+
+pub(super) async fn modify_channel(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    edit: Box<crate::discord::ChannelEdit>,
+    label: String,
+) {
+    if let Err(error) = client.modify_channel(channel_id, &edit).await {
+        report_moderation_failure(&client, "editing channel", &label, &error).await;
+    }
+}
+
+pub(super) async fn delete_channel(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    label: String,
+) {
+    if let Err(error) = client.delete_channel(channel_id).await {
+        report_moderation_failure(&client, "deleting channel", &label, &error).await;
+    }
+}
+
+pub(super) async fn reorder_channels(
+    client: DiscordClient,
+    guild_id: Id<GuildMarker>,
+    positions: Vec<(Id<ChannelMarker>, u32)>,
+) {
+    if let Err(error) = client.reorder_channels(guild_id, &positions).await {
+        report_moderation_failure(&client, "reordering", "channels", &error).await;
+    }
+}
+
+pub(super) async fn set_channel_overwrite(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    target: crate::discord::OverwriteTarget,
+    allow: u64,
+    deny: u64,
+    label: String,
+) {
+    if let Err(error) = client
+        .set_channel_overwrite(channel_id, target, allow, deny)
+        .await
+    {
+        report_moderation_failure(&client, "setting permissions for", &label, &error).await;
+    }
+}
+
+pub(super) async fn delete_channel_overwrite(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    target: crate::discord::OverwriteTarget,
+    label: String,
+) {
+    if let Err(error) = client.delete_channel_overwrite(channel_id, target).await {
+        report_moderation_failure(&client, "clearing permissions for", &label, &error).await;
+    }
+}
+
+pub(super) async fn set_voice_channel_status(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    status: Option<String>,
+) {
+    if let Err(error) = client
+        .set_voice_channel_status(channel_id, status.as_deref())
+        .await
+    {
+        report_moderation_failure(&client, "setting", "the channel status", &error).await;
+    }
+}
+
 pub(super) async fn load_soundboard_sounds(
     client: DiscordClient,
     guild_id: Option<Id<GuildMarker>>,

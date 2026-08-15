@@ -480,6 +480,16 @@ fn handle_command(
         | AppCommand::RenameSoundboardSound { .. }
         | AppCommand::DeleteSoundboardSound { .. } => {}
 
+        // The fixture's channel tree is canned, so a create or delete would be
+        // undone by the next reproject and read as the action having failed.
+        AppCommand::CreateGuildChannel { .. }
+        | AppCommand::ModifyChannel { .. }
+        | AppCommand::DeleteChannel { .. }
+        | AppCommand::ReorderChannels { .. }
+        | AppCommand::SetChannelOverwrite { .. }
+        | AppCommand::DeleteChannelOverwrite { .. }
+        | AppCommand::SetVoiceChannelStatus { .. } => {}
+
         AppCommand::RevokeInvite { .. }
         | AppCommand::CreateEmoji { .. }
         | AppCommand::RenameEmoji { .. }

@@ -310,6 +310,69 @@ impl DiscordClient {
         self.rest.unban_member(guild_id, user_id).await
     }
 
+    pub async fn create_guild_channel(
+        &self,
+        guild_id: Id<GuildMarker>,
+        name: &str,
+        kind: crate::discord::NewChannelKind,
+        parent_id: Option<Id<crate::discord::ids::marker::ChannelMarker>>,
+    ) -> Result<()> {
+        self.rest
+            .create_guild_channel(guild_id, name, kind, parent_id)
+            .await
+    }
+
+    pub async fn modify_channel(
+        &self,
+        channel_id: Id<crate::discord::ids::marker::ChannelMarker>,
+        edit: &crate::discord::ChannelEdit,
+    ) -> Result<()> {
+        self.rest.modify_channel(channel_id, edit).await
+    }
+
+    pub async fn delete_channel(
+        &self,
+        channel_id: Id<crate::discord::ids::marker::ChannelMarker>,
+    ) -> Result<()> {
+        self.rest.delete_channel(channel_id).await
+    }
+
+    pub async fn reorder_channels(
+        &self,
+        guild_id: Id<GuildMarker>,
+        positions: &[(Id<crate::discord::ids::marker::ChannelMarker>, u32)],
+    ) -> Result<()> {
+        self.rest.reorder_channels(guild_id, positions).await
+    }
+
+    pub async fn set_channel_overwrite(
+        &self,
+        channel_id: Id<crate::discord::ids::marker::ChannelMarker>,
+        target: crate::discord::OverwriteTarget,
+        allow: u64,
+        deny: u64,
+    ) -> Result<()> {
+        self.rest
+            .set_channel_overwrite(channel_id, target, allow, deny)
+            .await
+    }
+
+    pub async fn delete_channel_overwrite(
+        &self,
+        channel_id: Id<crate::discord::ids::marker::ChannelMarker>,
+        target: crate::discord::OverwriteTarget,
+    ) -> Result<()> {
+        self.rest.delete_channel_overwrite(channel_id, target).await
+    }
+
+    pub async fn set_voice_channel_status(
+        &self,
+        channel_id: Id<crate::discord::ids::marker::ChannelMarker>,
+        status: Option<&str>,
+    ) -> Result<()> {
+        self.rest.set_voice_channel_status(channel_id, status).await
+    }
+
     pub async fn default_soundboard_sounds(&self) -> Result<Vec<crate::discord::SoundboardSound>> {
         self.rest.default_soundboard_sounds().await
     }

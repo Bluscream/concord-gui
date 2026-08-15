@@ -18,7 +18,9 @@ use super::application_commands::{
 };
 use super::emoji::custom_emoji_image_url;
 use super::message::MessageInfo;
-use super::{ActivityInfo, PresenceStatus, VoiceScope};
+use super::{
+    ActivityInfo, ChannelEdit, NewChannelKind, OverwriteTarget, PresenceStatus, VoiceScope,
+};
 
 pub const MAX_UPLOAD_ATTACHMENT_COUNT: usize = 10;
 pub const MAX_PROFILE_AVATAR_BYTES: u64 = 10 * 1024 * 1024;
@@ -539,6 +541,41 @@ pub enum AppCommand {
         label: String,
     },
     /// Fetch a sound list. `None` asks for the default sounds.
+    CreateGuildChannel {
+        guild_id: Id<GuildMarker>,
+        name: String,
+        kind: NewChannelKind,
+        parent_id: Option<Id<ChannelMarker>>,
+    },
+    ModifyChannel {
+        channel_id: Id<ChannelMarker>,
+        edit: Box<ChannelEdit>,
+        label: String,
+    },
+    DeleteChannel {
+        channel_id: Id<ChannelMarker>,
+        label: String,
+    },
+    ReorderChannels {
+        guild_id: Id<GuildMarker>,
+        positions: Vec<(Id<ChannelMarker>, u32)>,
+    },
+    SetChannelOverwrite {
+        channel_id: Id<ChannelMarker>,
+        target: OverwriteTarget,
+        allow: u64,
+        deny: u64,
+        label: String,
+    },
+    DeleteChannelOverwrite {
+        channel_id: Id<ChannelMarker>,
+        target: OverwriteTarget,
+        label: String,
+    },
+    SetVoiceChannelStatus {
+        channel_id: Id<ChannelMarker>,
+        status: Option<String>,
+    },
     LoadSoundboardSounds {
         guild_id: Option<Id<GuildMarker>>,
     },

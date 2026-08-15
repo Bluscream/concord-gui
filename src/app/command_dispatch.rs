@@ -552,6 +552,72 @@ impl CommandDispatcher {
                     .publish_event(crate::discord::AppEvent::GuildForgotten { guild_id })
                     .await;
             }
+            AppCommand::CreateGuildChannel {
+                guild_id,
+                name,
+                kind,
+                parent_id,
+            } => {
+                message_commands::create_guild_channel(
+                    self.client.clone(),
+                    guild_id,
+                    name,
+                    kind,
+                    parent_id,
+                )
+                .await;
+            }
+            AppCommand::ModifyChannel {
+                channel_id,
+                edit,
+                label,
+            } => {
+                message_commands::modify_channel(self.client.clone(), channel_id, edit, label)
+                    .await;
+            }
+            AppCommand::DeleteChannel { channel_id, label } => {
+                message_commands::delete_channel(self.client.clone(), channel_id, label).await;
+            }
+            AppCommand::ReorderChannels {
+                guild_id,
+                positions,
+            } => {
+                message_commands::reorder_channels(self.client.clone(), guild_id, positions).await;
+            }
+            AppCommand::SetChannelOverwrite {
+                channel_id,
+                target,
+                allow,
+                deny,
+                label,
+            } => {
+                message_commands::set_channel_overwrite(
+                    self.client.clone(),
+                    channel_id,
+                    target,
+                    allow,
+                    deny,
+                    label,
+                )
+                .await;
+            }
+            AppCommand::DeleteChannelOverwrite {
+                channel_id,
+                target,
+                label,
+            } => {
+                message_commands::delete_channel_overwrite(
+                    self.client.clone(),
+                    channel_id,
+                    target,
+                    label,
+                )
+                .await;
+            }
+            AppCommand::SetVoiceChannelStatus { channel_id, status } => {
+                message_commands::set_voice_channel_status(self.client.clone(), channel_id, status)
+                    .await;
+            }
             AppCommand::LoadSoundboardSounds { guild_id } => {
                 message_commands::load_soundboard_sounds(self.client.clone(), guild_id).await;
             }
