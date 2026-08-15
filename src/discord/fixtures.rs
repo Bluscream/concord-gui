@@ -484,6 +484,37 @@ pub fn demo_state() -> DiscordState {
     ];
     general.push(reacted);
 
+    // A poll, so the vote bars and the reveal-after-voting rule are visible
+    // offline.
+    let mut polled = message(10, 111, Some(10), 1001, "blu", "", 2400);
+    polled.poll = Some(crate::discord::PollInfo {
+        question: "Which toolkit for the rewrite?".to_string(),
+        answers: vec![
+            crate::discord::PollAnswerInfo {
+                answer_id: 1,
+                text: "GPUI".to_string(),
+                vote_count: Some(7),
+                me_voted: false,
+            },
+            crate::discord::PollAnswerInfo {
+                answer_id: 2,
+                text: "Iced".to_string(),
+                vote_count: Some(3),
+                me_voted: false,
+            },
+            crate::discord::PollAnswerInfo {
+                answer_id: 3,
+                text: "Stay in the terminal".to_string(),
+                vote_count: Some(5),
+                me_voted: false,
+            },
+        ],
+        allow_multiselect: false,
+        results_finalized: Some(false),
+        total_votes: Some(15),
+    });
+    general.push(polled);
+
     // Exercises mention resolution end to end.
     general.push(message(
         9,
@@ -1061,5 +1092,61 @@ pub fn set_pinned(
         && let Some(message) = timeline.messages.iter_mut().find(|m| m.id == target)
     {
         message.pinned = pinned;
+    }
+}
+
+/// Record a vote on a poll.
+///
+/// `answer_ids` is the user's full selection, not a delta, so previous votes
+/// are withdrawn by their absence - the same shape the API uses.
+pub fn vote_poll(
+    state: &mut DiscordState,
+    channel_id: Id<marker::ChannelMarker>,
+    target: Id<marker::MessageMarker>,
+    answer_ids: &[u8],
+) {
+    let cache = Arc::make_mut(&mut state.message_cache);
+    let Some(timeline) = cache.timelines.get_mut(&channel_id) else {
+        return;
+    };
+    let Some(message) = timeline.messages.iter_mut().find(|m| m.id == target) else {
+        return;
+    };
+    let Some(poll) = &mut message.poll else {
+        return;
+    };
+
+    for answer in &mut poll.answers {
+        let now_voted = answer_ids.contains(&answer.answer_id);
+        let count = answer.vote_count.unwrap_or(0);
+
+        if now_voted && !answer.me_voted {
+            answer.vote_count = Some(count + 1);
+        } else if !now_voted && answer.me_voted {
+            answer.vote_count = Some(count.saturating_sub(1));
+        }
+        answer.me_voted = now_voted;
+    }
+
+    poll.total_votes = Some(
+        poll.answers
+            .iter()
+            .map(|answer| answer.vote_count.unwrap_or(0))
+            .sum(),
+    );
+}
+
+/// Attach a poll to a message.
+pub fn set_poll(
+    state: &mut DiscordState,
+    channel_id: Id<marker::ChannelMarker>,
+    target: Id<marker::MessageMarker>,
+    poll: crate::discord::PollInfo,
+) {
+    let cache = Arc::make_mut(&mut state.message_cache);
+    if let Some(timeline) = cache.timelines.get_mut(&channel_id)
+        && let Some(message) = timeline.messages.iter_mut().find(|m| m.id == target)
+    {
+        message.poll = Some(poll);
     }
 }

@@ -778,3 +778,106 @@ fn slash_selection_wraps() {
     picker.move_selection(1);
     assert_eq!(picker.selected, 0);
 }
+
+#[test]
+fn polls_project_with_shares_that_sum_sensibly() {
+    let state = demo_state();
+    let rows = project_messages(
+        &state,
+        concord::discord::Id::new(111),
+        state.current_user_id(),
+    );
+
+    let poll = rows
+        .iter()
+        .find_map(|row| row.poll.as_ref())
+        .expect("fixture defines a poll");
+
+    assert!(!poll.answers.is_empty());
+    assert!(!poll.voted, "nobody has voted in the fixture poll");
+
+    let total: f32 = poll.answers.iter().map(|answer| answer.share).sum();
+    assert!(
+        (total - 1.0).abs() < 0.001,
+        "shares should cover the whole poll, got {total}"
+    );
+}
+
+#[test]
+fn an_empty_poll_does_not_divide_by_zero() {
+    use concord::discord::{PollAnswerInfo, PollInfo};
+
+    // A poll with no votes would produce NaN shares and a NaN-width bar.
+    let poll = PollInfo {
+        question: "?".into(),
+        answers: vec![PollAnswerInfo {
+            answer_id: 1,
+            text: "only".into(),
+            vote_count: Some(0),
+            me_voted: false,
+        }],
+        allow_multiselect: false,
+        results_finalized: Some(false),
+        total_votes: Some(0),
+    };
+
+    let mut state = demo_state();
+    let channel = concord::discord::Id::new(111);
+    let id = concord::discord::fixtures::append_message(
+        &mut state,
+        channel,
+        Some(concord::discord::Id::new(10)),
+        concord::discord::fixtures::demo_user_id(),
+        "blu",
+        "",
+    );
+    concord::discord::fixtures::set_poll(&mut state, channel, id, poll);
+
+    let rows = project_messages(&state, channel, state.current_user_id());
+    let projected = rows
+        .last()
+        .and_then(|row| row.poll.as_ref())
+        .expect("the poll just added");
+
+    assert!(projected.answers[0].share.is_finite());
+    assert_eq!(projected.answers[0].share, 0.0);
+}
+
+#[test]
+fn voting_updates_counts_and_withdraws_the_previous_choice() {
+    use concord::discord::fixtures;
+
+    let mut state = demo_state();
+    let channel = concord::discord::Id::new(111);
+    let rows = project_messages(&state, channel, state.current_user_id());
+    let target = rows
+        .iter()
+        .find(|row| row.poll.is_some())
+        .expect("fixture poll")
+        .id;
+
+    fixtures::vote_poll(&mut state, channel, target, &[1]);
+    let after = project_messages(&state, channel, state.current_user_id());
+    let poll = after
+        .iter()
+        .find(|row| row.id == target)
+        .and_then(|row| row.poll.as_ref())
+        .unwrap();
+
+    assert!(poll.voted);
+    assert!(poll.answers[0].mine, "the chosen answer is marked");
+    assert_eq!(poll.answers[0].votes, 8, "the count went up by one");
+
+    // A single-answer poll replaces rather than accumulates.
+    fixtures::vote_poll(&mut state, channel, target, &[2]);
+    let after = project_messages(&state, channel, state.current_user_id());
+    let poll = after
+        .iter()
+        .find(|row| row.id == target)
+        .and_then(|row| row.poll.as_ref())
+        .unwrap();
+
+    assert!(!poll.answers[0].mine, "the first choice was withdrawn");
+    assert_eq!(poll.answers[0].votes, 7, "and its count went back down");
+    assert!(poll.answers[1].mine);
+}

@@ -7,11 +7,12 @@
 
 use concord::config::{self, AppOptions, CredentialStoreMode};
 use concord::discord::{
-    AppCommand, AppEvent, BuiltinSlashCommandParse, BuiltinSlashCommandSubmit,
-    ForumPostArchiveState, GlobalUserProfileUpdate, GuildUserProfileUpdate, Id,
-    MAX_UPLOAD_ATTACHMENT_COUNT, MessageAttachmentUpload, MessageSearchQuery, MuteDuration,
-    ReactionEmoji, ReplyReference, StreamCaptureTargetsRequestId, UserProfileUpdate, VoiceScope,
-    marker, next_message_nonce, parse_builtin_slash_command,
+    AppCommand, AppEvent, AttachmentDownloadId, BuiltinSlashCommandParse,
+    BuiltinSlashCommandSubmit, DownloadAttachmentSource, ForumPostArchiveState,
+    GlobalUserProfileUpdate, GuildUserProfileUpdate, Id, MAX_UPLOAD_ATTACHMENT_COUNT,
+    MessageAttachmentUpload, MessageSearchQuery, MuteDuration, ReactionEmoji, ReplyReference,
+    StreamCaptureTargetsRequestId, UserProfileUpdate, VoiceScope, marker, next_message_nonce,
+    parse_builtin_slash_command,
     password_auth::{MfaMethod, PasswordAuthEvent},
     qr_auth::QrEvent,
 };
@@ -1311,6 +1312,10 @@ impl Workspace {
             MessageAction::ShowReactionUsers(reaction) => {
                 self.show_reaction_users(index, reaction);
             }
+            MessageAction::VotePoll(answer_id) => self.vote_poll(index, answer_id),
+            MessageAction::DownloadAttachment(attachment) => {
+                self.download_attachment(index, attachment);
+            }
             MessageAction::TogglePin => {
                 let pinned = self
                     .messages
@@ -2165,6 +2170,75 @@ impl Workspace {
         let mention = mentions.remove(index);
         handle.send(AppCommand::DeleteInboxMention {
             message_id: mention.message_id,
+        });
+    }
+
+    /// Vote for a poll answer.
+    ///
+    /// Multi-select polls accumulate the choice; single-answer polls replace
+    /// it, matching how Discord treats a second vote.
+    fn vote_poll(&mut self, index: usize, answer_id: u8) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        let Some(row) = self.messages.get(index) else {
+            return;
+        };
+        let Some(poll) = &row.poll else {
+            return;
+        };
+        if poll.finalized {
+            return;
+        }
+
+        let mut answer_ids: Vec<u8> = if poll.multiselect {
+            poll.answers
+                .iter()
+                .filter(|answer| answer.mine)
+                .map(|answer| answer.answer_id)
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // Clicking an answer already voted for withdraws it.
+        if let Some(position) = answer_ids.iter().position(|id| *id == answer_id) {
+            answer_ids.remove(position);
+        } else {
+            answer_ids.push(answer_id);
+        }
+
+        handle.send(AppCommand::VotePoll {
+            channel_id,
+            message_id: row.id,
+            answer_ids,
+        });
+    }
+
+    /// Download an attachment to the user's download directory.
+    fn download_attachment(&mut self, index: usize, attachment: usize) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(row) = self.messages.get(index) else {
+            return;
+        };
+        let Some(file) = row.attachments.get(attachment) else {
+            return;
+        };
+
+        // A demo attachment carries no URL, since nothing was uploaded; there
+        // is nothing to fetch, so this reports rather than failing opaquely.
+        if file.url.is_empty() {
+            self.model.status_line = format!("{} has no source to download", file.filename);
+            return;
+        }
+
+        handle.send(AppCommand::DownloadAttachment {
+            id: AttachmentDownloadId::new(row.id.get()),
+            url: file.url.clone(),
+            filename: file.filename.clone(),
+            source: DownloadAttachmentSource::AttachmentViewer,
         });
     }
 

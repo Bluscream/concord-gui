@@ -6,7 +6,7 @@ the parts we do not want.
 ## Against the concord TUI
 
 Derived from the TUI's 152 keybinding actions (`src/tui/keybindings/actions.rs`)
-and its 12 builtin slash commands · reply-ping toggle · external editor · sign out · own profile (`src/discord/builtin_commands.rs`). Pure
+and its 12 builtin slash commands · reply-ping toggle · external editor · sign out · own profile · polls · attachment download (`src/discord/builtin_commands.rs`). Pure
 input primitives (`Char`, `Ctrl`, `Key`, `ModifiedKey`) are excluded - they are
 not features.
 
@@ -29,8 +29,6 @@ Ordered roughly by how much a daily driver misses them.
 
 | Feature | TUI action | Notes |
 |---|---|---|
-| Polls | `OpenPollVotePicker` | `PollInfo` is already projected but not rendered. |
-| Attachment download / view | `DownloadSelected`, `ViewAttachment` | Chips render; nothing opens or saves. |
 | Media playback | `PlayMedia` | Upstream shells out to mpv. |
 | Create thread | `OpenThread` | Threads are readable, not creatable. |
 | Remove embeds | `RemoveEmbeds`, `RemoveMessageEmbeds` | |

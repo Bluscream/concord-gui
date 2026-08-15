@@ -43,6 +43,8 @@ impl MessageAction {
             MessageAction::CopyLink => 10,
             MessageAction::ShowReactionUsers(_) => 11,
             MessageAction::TogglePin => 12,
+            MessageAction::VotePoll(_) => 13,
+            MessageAction::DownloadAttachment(_) => 14,
         }
     }
 }
@@ -69,6 +71,10 @@ pub enum MessageAction {
     ShowReactionUsers(usize),
     /// Pin or unpin, depending on the row's current state.
     TogglePin,
+    /// Vote for a poll answer by its id.
+    VotePoll(u8),
+    /// Download an attachment by index.
+    DownloadAttachment(usize),
     /// Toggle an existing reaction, identified by its index in the row's
     /// reaction list. Carrying the index avoids threading emoji identity
     /// through the callback.
@@ -397,12 +403,25 @@ fn message_body(
         }
     }
 
-    for attachment in &message.attachments {
-        body = body.child(attachment_chip(
-            &attachment.filename,
-            attachment.size_bytes,
-            attachment.is_image,
-        ));
+    for (position, attachment) in message.attachments.iter().enumerate() {
+        let handler = on_action.clone();
+        body = body.child(
+            attachment_chip(
+                &attachment.filename,
+                attachment.size_bytes,
+                attachment.is_image,
+            )
+            .id(("attachment", index * 16 + position))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(active().surface_active)))
+            .on_click(move |_event, _window, cx| {
+                handler(index, MessageAction::DownloadAttachment(position), cx)
+            }),
+        );
+    }
+
+    if let Some(poll) = &message.poll {
+        body = body.child(poll_view(index, poll, on_action.clone()));
     }
 
     if message.embed_count > 0 {
@@ -585,6 +604,108 @@ fn rich_text(parsed: &markdown::Parsed, reveal_spoilers: bool) -> impl IntoEleme
         .text_size(px(text::BASE))
         .text_color(rgb(active().text))
         .child(StyledText::new(parsed.text.clone()).with_highlights(highlights.collect::<Vec<_>>()))
+}
+
+/// Render a poll with its answers and result bars.
+///
+/// Counts are hidden until the user votes or the poll closes, matching
+/// Discord: showing them earlier lets the leading answer pull votes.
+fn poll_view(
+    index: usize,
+    poll: &crate::model::message::PollRow,
+    on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
+) -> Div {
+    let reveal = poll.voted || poll.finalized;
+
+    let mut panel = column()
+        .w_full()
+        .gap(px(space::XS))
+        .p(px(space::MD))
+        .rounded(px(layout::RADIUS))
+        .bg(rgb(active().surface_hover))
+        .border_1()
+        .border_color(rgb(active().border))
+        .child(
+            gpui::div()
+                .text_size(px(text::BASE))
+                .text_color(rgb(active().text))
+                .child(poll.question.clone()),
+        );
+
+    for answer in &poll.answers {
+        let handler = on_action.clone();
+        let answer_id = answer.answer_id;
+
+        panel = panel.child(
+            gpui::div()
+                .id(("poll-answer", index * 16 + answer_id as usize))
+                .relative()
+                .w_full()
+                .px(px(space::SM))
+                .py(px(space::XS))
+                .rounded(px(layout::RADIUS))
+                .bg(rgb(active().surface))
+                .border_1()
+                .border_color(rgb(if answer.mine {
+                    active().accent
+                } else {
+                    active().border
+                }))
+                .when(!poll.finalized, |d| {
+                    d.cursor_pointer()
+                        .hover(|style| style.bg(rgb(active().surface_active)))
+                        .on_click(move |_event, _window, cx| {
+                            handler(index, MessageAction::VotePoll(answer_id), cx)
+                        })
+                })
+                // The result bar sits behind the label rather than beside it,
+                // so answer text stays full width and readable.
+                .when(reveal, |d| {
+                    d.child(
+                        gpui::div()
+                            .absolute()
+                            .left_0()
+                            .top_0()
+                            .bottom_0()
+                            .w(gpui::relative(answer.share))
+                            .bg(rgb(active().surface_active)),
+                    )
+                })
+                .child(
+                    row()
+                        .w_full()
+                        .gap(px(space::SM))
+                        .child(
+                            gpui::div()
+                                .flex_1()
+                                .text_size(px(text::SM))
+                                .text_color(rgb(active().text))
+                                .child(answer.text.clone()),
+                        )
+                        .when(reveal, |d| {
+                            d.child(
+                                gpui::div()
+                                    .text_size(px(text::XS))
+                                    .text_color(rgb(active().text_subtle))
+                                    .child(answer.votes.to_string()),
+                            )
+                        }),
+                ),
+        );
+    }
+
+    panel.child(
+        gpui::div()
+            .text_size(px(text::XS))
+            .text_color(rgb(active().text_subtle))
+            .child(if poll.finalized {
+                format!("Final · {} votes", poll.total_votes)
+            } else if poll.multiselect {
+                format!("{} votes · pick as many as you like", poll.total_votes)
+            } else {
+                format!("{} votes", poll.total_votes)
+            }),
+    )
 }
 
 fn reply_context(

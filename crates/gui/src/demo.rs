@@ -371,6 +371,15 @@ fn handle_command(
             });
         }
 
+        AppCommand::VotePoll {
+            channel_id,
+            message_id,
+            answer_ids,
+        } => {
+            fixtures::vote_poll(state, channel_id, message_id, &answer_ids);
+            publish_state!();
+        }
+
         AppCommand::LoadUserProfile { user_id, guild_id } => {
             fixtures::add_profile(state, user_id, guild_id);
             publish_state!();

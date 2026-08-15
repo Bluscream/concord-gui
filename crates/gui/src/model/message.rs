@@ -27,11 +27,73 @@ pub fn snowflake_time(id: u64) -> DateTime<Utc> {
         .unwrap_or_else(Utc::now)
 }
 
+/// A poll, flattened for rendering.
+pub struct PollRow {
+    pub question: String,
+    pub answers: Vec<PollAnswerRow>,
+    pub multiselect: bool,
+    /// True once voting has closed and results are final.
+    pub finalized: bool,
+    pub total_votes: u64,
+    /// Whether this user has voted, which decides whether counts are shown.
+    pub voted: bool,
+}
+
+pub struct PollAnswerRow {
+    pub answer_id: u8,
+    pub text: String,
+    pub votes: u64,
+    pub mine: bool,
+    /// Share of the total, 0.0 to 1.0, for the result bar.
+    pub share: f32,
+}
+
+fn project_poll(poll: &concord::discord::PollInfo) -> PollRow {
+    let total = poll.total_votes.unwrap_or_else(|| {
+        poll.answers
+            .iter()
+            .map(|answer| answer.vote_count.unwrap_or(0))
+            .sum()
+    });
+
+    let voted = poll.answers.iter().any(|answer| answer.me_voted);
+
+    PollRow {
+        question: poll.question.clone(),
+        multiselect: poll.allow_multiselect,
+        finalized: poll.results_finalized.unwrap_or(false),
+        total_votes: total,
+        voted,
+        answers: poll
+            .answers
+            .iter()
+            .map(|answer| {
+                let votes = answer.vote_count.unwrap_or(0);
+                PollAnswerRow {
+                    answer_id: answer.answer_id,
+                    text: answer.text.clone(),
+                    votes,
+                    mine: answer.me_voted,
+                    // Guard against a zero total: an empty poll would divide
+                    // by zero and render a NaN-width bar.
+                    share: if total == 0 {
+                        0.0
+                    } else {
+                        votes as f32 / total as f32
+                    },
+                }
+            })
+            .collect(),
+    }
+}
+
 /// One attachment, flattened for rendering.
 pub struct AttachmentRow {
     pub filename: String,
     pub size_bytes: u64,
     pub is_image: bool,
+    /// CDN source. Empty for demo attachments, which were never uploaded.
+    pub url: String,
 }
 
 /// A single rendered message row.
@@ -60,6 +122,8 @@ pub struct MessageRow {
     /// `(emoji, count, me_reacted)`.
     pub reactions: Vec<(String, u64, bool)>,
     pub embed_count: usize,
+    /// Poll attached to this message, if any.
+    pub poll: Option<PollRow>,
     /// Set once the user clicks a hidden spoiler in this message.
     pub spoiler_revealed: bool,
     /// Whether the authenticated user wrote this message, which gates the
@@ -149,6 +213,7 @@ pub fn project_messages(
                         .content_type
                         .as_deref()
                         .is_some_and(|kind| kind.starts_with("image/")),
+                    url: attachment.url.clone(),
                 })
                 .collect(),
             reactions: message
@@ -157,6 +222,7 @@ pub fn project_messages(
                 .map(|reaction| (reaction_glyph(&reaction.emoji), reaction.count, reaction.me))
                 .collect(),
             embed_count: message.embeds.len(),
+            poll: message.poll.as_ref().map(project_poll),
             spoiler_revealed: false,
             own: current_user == Some(message.author_id),
         });
