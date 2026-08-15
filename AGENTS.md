@@ -121,6 +121,60 @@ uses API v9 throughout, and deliberately avoids endpoints the web client does
 not itself use. New requests should follow that principle — if the official
 web client would not send it, think hard before we do.
 
+### 7. Losing access is not the same as removing data
+
+The cache must distinguish **losing access** to a guild or group - leaving,
+being kicked, being banned, a group DM you were removed from - from the user
+**removing it** from the client.
+
+While any data for it remains cached - messages, channel names, member
+metadata - the guild or group stays in the list and stays browsable. What
+changes is that it becomes inert:
+
+- The message log, channel list and member list read normally from cache.
+- Everything that writes is off: the composer is read-only, no editing
+  channels or guild settings, no reactions, no invites, no moderation.
+- The entry says plainly why it is inert - left, kicked, banned - rather than
+  looking like a broken channel.
+- A **Remove** item in its context menu discards the cached data and takes it
+  out of the list. That is the only thing that removes it.
+- Rejoining, by invite or otherwise, restores it to normal without the user
+  losing the history they still had.
+
+The reasoning is that a chat log is the user's, not the server's. Being
+kicked from somewhere should not silently delete a conversation you were part
+of, and the client should never destroy data as a side effect of someone
+else's action. Deleting is a decision, so it needs a deliberate act.
+
+This has consequences worth planning for rather than discovering: cached
+guilds need a flag for why they are inert, the gateway must not treat a
+GUILD_DELETE as "drop everything", and read-only needs to be a first-class
+state in both front ends rather than a permission check that happens to fail.
+
+### 8. Lurkable guilds - partially confirmed, worth research
+
+There is a real mechanism here, though not quite the one it is often
+described as. What the references confirm:
+
+- **Widget endpoints are unauthenticated.** `reflectcord` exempts
+  `/guilds/{id}/widget.(json|png)` from auth entirely. But widget.json carries
+  channel names and an online count - *not* messages.
+- **"Lurking" is a genuine protocol concept.** The `dm` client sends
+  `{"lurking": false}` when leaving a guild, so a membership can be a lurk
+  rather than a full join. discordgo notes that "only textual channels that
+  are visible to everyone in a **lurkable guild**" appear in some payloads,
+  and Spacebar's server carries a "TODO: Lurker mode".
+
+So discoverable and community guilds do support being read without a normal
+join - that is how the official client previews servers in discovery. What is
+**not** established is the stronger claim that such guilds answer chat
+requests from someone with no relationship to them at all; the evidence
+points at a lurk state being established first.
+
+Worth confirming against a real account before relying on it. If it holds, it
+pairs well with rule 7: a public guild you left could stay genuinely live
+rather than only browsable from cache.
+
 ## Planned: merged multi-account
 
 The largest feature on the roadmap, described here because the design is
