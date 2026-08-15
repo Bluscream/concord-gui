@@ -1313,6 +1313,8 @@ impl DashboardState {
             preview_author: preview.map(|preview| preview.author.clone()),
             preview_author_color: None,
             preview_content: preview.map(|preview| preview.content.clone()),
+            preview_loading: false,
+            preview_image: None,
             applied_tags: Vec::new(),
             preview_reactions: Vec::new(),
             comment_count: summary

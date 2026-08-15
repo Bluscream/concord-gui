@@ -3,6 +3,18 @@ use super::*;
 use crate::tui::ui::emoji_overlay::{EmojiSlot, overlay_emoji_slots};
 use crate::tui::ui::loading_indicator::AsciiLoadingIndicator;
 
+const FORUM_POST_IMAGE_GAP: usize = 2;
+const FORUM_POST_IMAGE_MAX_WIDTH: usize = 20;
+const FORUM_POST_IMAGE_MIN_WIDTH: usize = 10;
+const FORUM_POST_IMAGE_MIN_TEXT_WIDTH: usize = 24;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::tui) struct ForumPostImageSlot {
+    pub(in crate::tui) column: u16,
+    pub(in crate::tui) width: u16,
+    pub(in crate::tui) height: u16,
+}
+
 #[cfg(test)]
 pub(super) fn forum_post_viewport_lines(
     posts: &[ChannelThreadItem],
@@ -10,7 +22,9 @@ pub(super) fn forum_post_viewport_lines(
     width: usize,
     is_loading: bool,
 ) -> Vec<Line<'static>> {
-    forum_post_viewport_lines_with_custom_emoji_images(posts, selected, width, is_loading, 0, true)
+    forum_post_viewport_lines_with_custom_emoji_images(
+        posts, selected, width, is_loading, 0, true, true,
+    )
 }
 
 pub(super) fn forum_post_viewport_lines_with_custom_emoji_images(
@@ -20,6 +34,7 @@ pub(super) fn forum_post_viewport_lines_with_custom_emoji_images(
     is_loading: bool,
     animation_frame: usize,
     show_custom_emoji: bool,
+    show_images: bool,
 ) -> Vec<Line<'static>> {
     let width = width.max(1);
     if posts.is_empty() {
@@ -45,11 +60,13 @@ pub(super) fn forum_post_viewport_lines_with_custom_emoji_images(
         if let Some(label) = post.section_label.as_deref() {
             lines.push(forum_post_section_header_line(label, width));
         }
-        lines.extend(forum_post_card_lines(
+        lines.extend(forum_post_card_lines_with_layout(
             post,
             selected == Some(index),
             width,
             show_custom_emoji,
+            show_images,
+            true,
         ));
     }
     lines
@@ -65,9 +82,21 @@ pub(in crate::tui) fn forum_post_card_lines(
     width: usize,
     show_custom_emoji: bool,
 ) -> Vec<Line<'static>> {
+    forum_post_card_lines_with_layout(post, selected, width, show_custom_emoji, false, false)
+}
+
+fn forum_post_card_lines_with_layout(
+    post: &ChannelThreadItem,
+    selected: bool,
+    width: usize,
+    show_custom_emoji: bool,
+    show_images: bool,
+    separate_title_and_body: bool,
+) -> Vec<Line<'static>> {
     let marker = if selected { "› " } else { "  " };
     let card_width = width.saturating_sub(marker.width()).max(4);
     let inner_width = card_width.saturating_sub(4).max(1);
+    let text_width = forum_post_text_width(post, inner_width, width, show_images);
     let border_style = forum_post_accent_style(selected);
     let border = theme::current().border_set(theme::BorderSurface::Forum);
 
@@ -93,29 +122,37 @@ pub(in crate::tui) fn forum_post_card_lines(
         ]),
         forum_post_inner_line(
             "  ",
-            forum_post_title_spans(post, inner_width),
-            inner_width,
-            selected,
-        ),
-        forum_post_inner_line(
-            "  ",
-            forum_post_preview_spans(post, inner_width),
+            forum_post_title_spans(post, text_width),
             inner_width,
             selected,
         ),
     ];
-    // Untagged posts drop the tags row entirely (shrinking `card_height` by one).
-    if !post.applied_tags.is_empty() {
+    if separate_title_and_body {
         lines.push(forum_post_inner_line(
             "  ",
-            forum_post_tag_spans(post, inner_width),
+            Vec::new(),
             inner_width,
             selected,
         ));
     }
     lines.push(forum_post_inner_line(
         "  ",
-        forum_post_metadata_spans(post, inner_width, show_custom_emoji),
+        forum_post_preview_spans(post, text_width),
+        inner_width,
+        selected,
+    ));
+    // Untagged posts drop the tags row entirely (shrinking `card_height` by one).
+    if !post.applied_tags.is_empty() {
+        lines.push(forum_post_inner_line(
+            "  ",
+            forum_post_tag_spans(post, text_width),
+            inner_width,
+            selected,
+        ));
+    }
+    lines.push(forum_post_inner_line(
+        "  ",
+        forum_post_metadata_spans(post, text_width, show_custom_emoji),
         inner_width,
         selected,
     ));
@@ -201,6 +238,29 @@ fn forum_post_tag_text(tag: &AppliedForumTag) -> String {
 
 fn forum_post_preview_spans(post: &ChannelThreadItem, inner_width: usize) -> Vec<Span<'static>> {
     let preview_style = Style::default();
+    if post.preview_loading {
+        let loading_style = theme::current().style(theme::HighlightGroup::Loading);
+        let Some(author) = post.preview_author.as_deref() else {
+            return vec![Span::styled(
+                truncate_display_width("Loading preview...", inner_width),
+                loading_style,
+            )];
+        };
+        let author_width = (inner_width / 3).max(1);
+        let author = truncate_display_width(author, author_width);
+        let content_width = inner_width
+            .saturating_sub(author.width())
+            .saturating_sub(2)
+            .max(1);
+        return vec![
+            Span::styled(author, message_author_style(post.preview_author_color)),
+            Span::styled(": ", preview_style),
+            Span::styled(
+                truncate_display_width("Loading preview...", content_width),
+                loading_style,
+            ),
+        ];
+    }
     let Some(author) = post.preview_author.as_deref() else {
         return vec![Span::styled(
             "Preview unavailable",
@@ -228,6 +288,70 @@ fn forum_post_preview_spans(post: &ChannelThreadItem, inner_width: usize) -> Vec
             preview_style,
         ),
     ]
+}
+
+/// Returns the right-side thumbnail slot shared by text layout and image
+/// placement. Narrow cards keep all width for text rather than forcing a tiny
+/// body column beside an unreadable image.
+pub(in crate::tui) fn forum_post_image_slot(
+    post: &ChannelThreadItem,
+    width: usize,
+    show_images: bool,
+) -> Option<ForumPostImageSlot> {
+    if !show_images || post.preview_image.is_none() {
+        return None;
+    }
+    let inner_width = forum_post_inner_width_for_reactions(width);
+    let available = inner_width
+        .saturating_sub(FORUM_POST_IMAGE_MIN_TEXT_WIDTH)
+        .saturating_sub(FORUM_POST_IMAGE_GAP);
+    let preview_width = available.min(FORUM_POST_IMAGE_MAX_WIDTH);
+    if preview_width < FORUM_POST_IMAGE_MIN_WIDTH {
+        return None;
+    }
+    let column = 4usize
+        .saturating_add(inner_width)
+        .saturating_sub(preview_width);
+    Some(ForumPostImageSlot {
+        column: u16::try_from(column).unwrap_or(u16::MAX),
+        width: u16::try_from(preview_width).unwrap_or(u16::MAX),
+        height: u16::try_from(post.card_height().saturating_sub(2)).unwrap_or(u16::MAX),
+    })
+}
+
+pub(in crate::tui) fn forum_post_image_preview_area(
+    list: Rect,
+    row: isize,
+    column: u16,
+    width: u16,
+    height: u16,
+) -> Option<Rect> {
+    let row = u16::try_from(row).ok()?;
+    if row >= list.height || column >= list.width || width == 0 || height == 0 {
+        return None;
+    }
+    Some(Rect {
+        x: list.x.saturating_add(column),
+        y: list.y.saturating_add(row),
+        width: width.min(list.width.saturating_sub(column)),
+        height: height.min(list.height.saturating_sub(row)),
+    })
+}
+
+fn forum_post_text_width(
+    post: &ChannelThreadItem,
+    inner_width: usize,
+    width: usize,
+    show_images: bool,
+) -> usize {
+    forum_post_image_slot(post, width, show_images)
+        .map(|slot| {
+            inner_width
+                .saturating_sub(usize::from(slot.width))
+                .saturating_sub(FORUM_POST_IMAGE_GAP)
+                .max(1)
+        })
+        .unwrap_or(inner_width)
 }
 
 fn forum_post_metadata_spans(
@@ -449,6 +573,7 @@ pub(super) fn render_forum_post_reaction_emojis(
     width: usize,
     emoji_images: &[EmojiImage<'_>],
     occlusion_areas: &[Rect],
+    show_images: bool,
 ) {
     let list_left = list.x as isize;
     let content_start = 4isize;
@@ -456,7 +581,7 @@ pub(super) fn render_forum_post_reaction_emojis(
 
     let mut slots = Vec::new();
     for (row, reaction_start_col, layout) in
-        forum_post_reaction_render_layouts(posts, width, usize::from(list.height))
+        forum_post_reaction_render_layouts(posts, width, usize::from(list.height), show_images)
     {
         for slot in layout.slots.into_iter().filter(|slot| slot.line == 0) {
             let slot_col = reaction_start_col.saturating_add(slot.col as usize);
@@ -532,10 +657,11 @@ pub(super) fn render_forum_post_tag_emojis(
     width: usize,
     emoji_images: &[EmojiImage<'_>],
     occlusion_areas: &[Rect],
+    show_images: bool,
 ) {
     let list_left = list.x as isize;
     let content_start = 4isize;
-    let inner_width = forum_post_inner_width_for_reactions(width);
+    let full_inner_width = forum_post_inner_width_for_reactions(width);
     let list_height = usize::from(list.height);
 
     let mut slots = Vec::new();
@@ -548,6 +674,7 @@ pub(super) fn render_forum_post_tag_emojis(
             rendered_row = rendered_row.saturating_add(post.card_height());
             continue;
         }
+        let inner_width = forum_post_text_width(post, full_inner_width, width, show_images);
         let row = rendered_row.saturating_add(post.card_height().saturating_sub(3));
         if row >= list_height {
             break;
@@ -614,8 +741,9 @@ fn forum_post_reaction_render_layouts(
     posts: &[ChannelThreadItem],
     width: usize,
     list_height: usize,
+    show_images: bool,
 ) -> Vec<(usize, usize, ReactionLayout)> {
-    let inner_width = forum_post_inner_width_for_reactions(width);
+    let full_inner_width = forum_post_inner_width_for_reactions(width);
     let mut rendered_row = 0usize;
     let mut layouts = Vec::new();
     for post in posts {
@@ -628,6 +756,7 @@ fn forum_post_reaction_render_layouts(
         if row >= list_height {
             break;
         }
+        let inner_width = forum_post_text_width(post, full_inner_width, width, show_images);
         if let Some((reaction_start_col, layout)) = forum_post_reaction_layout(post, inner_width) {
             layouts.push((row, reaction_start_col, layout));
         }

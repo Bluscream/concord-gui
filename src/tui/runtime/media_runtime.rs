@@ -300,6 +300,20 @@ impl DashboardMediaRuntime {
                 );
                 continue;
             }
+            if target.forum_post {
+                let Some(mut preview_area) = ui::forum::forum_post_image_preview_area(
+                    list,
+                    target.preview_y_offset_rows as isize,
+                    target.preview_x_offset_columns,
+                    target.preview_width,
+                    target.preview_height,
+                ) else {
+                    continue;
+                };
+                preview_area.height = preview_area.height.min(target.visible_preview_height);
+                placements.insert_preview(target.key(), preview_area);
+                continue;
+            }
             let Some(row_plan) = plan.row(target.message_index) else {
                 continue;
             };
@@ -428,6 +442,20 @@ fn clip_image_preview_targets_for_occlusions(
     for target in targets {
         if target.viewer {
             clipped.push(target);
+            continue;
+        }
+
+        if target.forum_post {
+            let Some(area) = ui::forum::forum_post_image_preview_area(
+                list,
+                target.preview_y_offset_rows as isize,
+                target.preview_x_offset_columns,
+                target.preview_width,
+                target.preview_height,
+            ) else {
+                continue;
+            };
+            clipped.extend(visible_image_target_slices(target, area, occlusion_areas));
             continue;
         }
 
@@ -866,6 +894,7 @@ mod tests {
     fn image_preview_target() -> ImagePreviewTarget {
         ImagePreviewTarget {
             viewer: false,
+            forum_post: false,
             message_index: 0,
             preview_index: 0,
             preview_x_offset_columns: 0,

@@ -106,6 +106,7 @@ pub(in crate::tui::ui) fn render_messages(
                 is_loading,
                 state.animation_frame(),
                 state.show_custom_emoji(),
+                state.show_images(),
             ))
             .style(theme::current().style(theme::HighlightGroup::Normal)),
             message_areas.list,
@@ -118,6 +119,7 @@ pub(in crate::tui::ui) fn render_messages(
                 forum_card_width,
                 media.emoji_images,
                 media_occlusion_areas,
+                state.show_images(),
             );
             forum::render_forum_post_tag_emojis(
                 frame,
@@ -126,7 +128,30 @@ pub(in crate::tui::ui) fn render_messages(
                 forum_card_width,
                 media.emoji_images,
                 media_occlusion_areas,
+                state.show_images(),
             );
+        }
+        for image_preview in media
+            .image_previews
+            .into_iter()
+            .filter(|preview| preview.forum_post)
+        {
+            let Some(mut preview_area) = forum::forum_post_image_preview_area(
+                message_areas.list,
+                image_preview.preview_y_offset_rows as isize,
+                image_preview.preview_x_offset_columns,
+                image_preview.preview_width,
+                image_preview.preview_height,
+            ) else {
+                continue;
+            };
+            preview_area.height = preview_area
+                .height
+                .min(image_preview.visible_preview_height);
+            if intersects_any(preview_area, media_occlusion_areas) {
+                continue;
+            }
+            render_image_preview(frame, preview_area, image_preview.state);
         }
         render_vertical_scrollbar(
             frame,
@@ -227,6 +252,9 @@ pub(in crate::tui::ui) fn render_messages(
         avatar_offset,
     );
     for image_preview in media.image_previews.into_iter() {
+        if image_preview.forum_post {
+            continue;
+        }
         let Some(row_plan) = render_plan.row(image_preview.message_index) else {
             continue;
         };

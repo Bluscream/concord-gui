@@ -34,6 +34,7 @@ use super::*;
 fn layout(list_height: usize) -> ImagePreviewLayout {
     ImagePreviewLayout {
         list_height,
+        list_width: 200,
         content_width: 200,
         preview_width: 16,
         max_preview_height: 3,
@@ -1126,6 +1127,21 @@ fn image_preview_protocol_spec_ignores_screen_placement() {
 }
 
 #[test]
+fn forum_image_preview_cache_key_ignores_the_card_screen_row() {
+    let target = ImagePreviewTarget {
+        forum_post: true,
+        preview_y_offset_rows: 2,
+        ..image_preview_target(1)
+    };
+    let moved = ImagePreviewTarget {
+        preview_y_offset_rows: 9,
+        ..target.clone()
+    };
+
+    assert_eq!(target.key(), moved.key());
+}
+
+#[test]
 fn image_preview_cache_keeps_duplicate_urls_as_separate_preview_instances() {
     let mut cache = ImagePreviewCache::new(None);
     let first = image_preview_target(1);
@@ -2076,6 +2092,70 @@ fn emoji_image_targets_include_visible_forum_preview_custom_reactions() {
 }
 
 #[test]
+fn image_preview_targets_place_forum_attachments_in_the_card_right_column() {
+    let guild_id = Id::new(1);
+    let forum_id = Id::new(20);
+    let thread_id = Id::new(30);
+    let mut state = DashboardState::new();
+    state.push_event(guild_create_event(GuildCreateFixture {
+        channels: vec![
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                name: "forum".to_owned(),
+                ..ChannelInfo::test(forum_id, "GuildForum")
+            },
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                parent_id: Some(forum_id),
+                last_message_id: Some(Id::new(300)),
+                name: "welcome".to_owned(),
+                message_count: Some(1),
+                total_message_sent: Some(1),
+                thread_metadata: Some(crate::discord::ThreadMetadataInfo::test(false, false)),
+                flags: Some(0),
+                ..ChannelInfo::test(thread_id, "GuildPublicThread")
+            },
+        ],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+    state.confirm_selected_guild();
+    state.confirm_selected_channel();
+    state.push_event(AppEvent::ForumPostDataLoaded {
+        channel_id: forum_id,
+        requested_thread_ids: vec![thread_id],
+        posts: vec![ForumPostDataInfo {
+            thread_id,
+            owner: None,
+            first_message: Some(MessageInfo {
+                guild_id: Some(guild_id),
+                channel_id: thread_id,
+                message_id: Id::new(thread_id.get()),
+                author_id: Id::new(99),
+                author: "neo".to_owned(),
+                content: Some("first post".to_owned()),
+                attachments: vec![image_attachment(7)],
+                ..MessageInfo::default()
+            }),
+            extra_fields: std::collections::BTreeMap::new(),
+        }],
+    });
+    let mut preview_layout = layout(30);
+    preview_layout.list_width = 100;
+
+    let targets = visible_image_preview_targets(&state, preview_layout);
+
+    assert_eq!(targets.len(), 1);
+    let target = &targets[0];
+    assert!(target.forum_post);
+    assert_eq!(target.message_id, Id::new(thread_id.get()));
+    assert_eq!(target.preview_y_offset_rows, 2);
+    assert!(target.preview_x_offset_columns >= 80);
+    assert!(target.preview_width <= 20);
+    assert!(target.preview_height <= 4);
+    assert_eq!(target.filename, "image-7.png");
+}
+
+#[test]
 fn emoji_image_targets_include_visible_forum_post_custom_tag_emoji() {
     let guild_id = Id::new(1);
     let forum_id = Id::new(20);
@@ -2325,6 +2405,7 @@ fn push_attachment_message(state: &mut DashboardState, attachment: AttachmentInf
 fn image_preview_target(id: u64) -> ImagePreviewTarget {
     ImagePreviewTarget {
         viewer: false,
+        forum_post: false,
         message_index: 0,
         preview_index: 0,
         preview_x_offset_columns: 0,

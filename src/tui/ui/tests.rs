@@ -77,9 +77,9 @@ use crate::{
         state::{
             AppliedForumTag, AttachmentDownloadProgressView, AttachmentViewerZoom,
             ChannelSwitcherItem, ChannelThreadItem, ComposerLock, DashboardState,
-            DisplayOptionItem, EmojiPickerEntry, EmojiReactionItem, FocusPane, MentionPickerEntry,
-            MentionPickerTarget, MessageActionItem, MessageActionKind, PollVotePickerItem,
-            SelectablePopupTarget, presence_style,
+            DisplayOptionItem, EmojiPickerEntry, EmojiReactionItem, FocusPane,
+            ForumPostImagePreview, MentionPickerEntry, MentionPickerTarget, MessageActionItem,
+            MessageActionKind, PollVotePickerItem, SelectablePopupTarget, presence_style,
         },
         text::{TextHighlightKind, truncate_display_width_from},
         ui::{MouseTarget, mouse_target_at},

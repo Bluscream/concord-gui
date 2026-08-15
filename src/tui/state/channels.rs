@@ -12,7 +12,9 @@ use crate::discord::{
     TypingUserState, VoiceParticipantState, custom_emoji_image_url,
 };
 
-use super::{ActiveGuildScope, DashboardState, MessagePaneSource, ThreadReturnTarget};
+use super::{
+    ActiveGuildScope, DashboardState, ForumPostImagePreview, MessagePaneSource, ThreadReturnTarget,
+};
 use super::{
     channel_tree,
     model::{
@@ -399,17 +401,23 @@ impl DashboardState {
         } else {
             messages.into_iter().next()
         };
-        let deleted_starter_creator = (is_forum_post && preview.is_none())
+        // Thread metadata, including its owner, arrives before `/post-data`.
+        // Do not treat that early owner record as proof that the starter was
+        // deleted. Only the completed post-data response can establish that.
+        let preview_loading = is_forum_post
+            && preview.is_none()
+            && !self.discord.cache.thread_post_data_loaded(channel.id);
+        let starter_creator = (is_forum_post && preview.is_none())
             .then(|| self.discord.cache.thread_creator(channel.id))
             .flatten();
-        let deleted_starter_author_id = deleted_starter_creator.map(|creator| creator.user_id);
-        let deleted_starter_author = deleted_starter_creator.map(|creator| {
+        let starter_author_id = starter_creator.map(|creator| creator.user_id);
+        let starter_author = starter_creator.map(|creator| {
             self.discord
                 .cache
                 .user_display_name_for_channel(channel.id, creator.user_id)
                 .unwrap_or_else(|| format!("user-{}", creator.user_id.get()))
         });
-        let deleted_starter_author_color = deleted_starter_creator.and_then(|creator| {
+        let starter_author_color = starter_creator.and_then(|creator| {
             creator.guild_id.or(channel.guild_id).and_then(|guild_id| {
                 self.discord
                     .cache
@@ -425,13 +433,13 @@ impl DashboardState {
             pinned: channel.thread_pinned().unwrap_or(false),
             preview_author_id: preview
                 .map(|message| message.author_id)
-                .or(deleted_starter_author_id),
+                .or(starter_author_id),
             preview_author: preview
                 .map(|message| message.author.clone())
-                .or(deleted_starter_author),
+                .or(starter_author),
             preview_author_color: preview
                 .and_then(|message| self.message_author_role_color(message))
-                .or(deleted_starter_author_color),
+                .or(starter_author_color),
             preview_content: preview
                 .map(|message| {
                     if is_forum_post && message.content.is_none() && message.attachments.is_empty()
@@ -442,8 +450,23 @@ impl DashboardState {
                     }
                 })
                 .or_else(|| {
-                    deleted_starter_author_id.map(|_| "original message deleted".to_owned())
+                    if preview_loading {
+                        None
+                    } else {
+                        starter_author_id.map(|_| "original message deleted".to_owned())
+                    }
                 }),
+            preview_loading,
+            preview_image: preview.and_then(|message| {
+                message
+                    .attachments_in_display_order()
+                    .find(|attachment| attachment.inline_preview_url().is_some())
+                    .cloned()
+                    .map(|attachment| ForumPostImagePreview {
+                        message_id: message.id,
+                        attachment,
+                    })
+            }),
             applied_tags,
             preview_reactions: preview
                 .map(|message| message.reactions.clone())

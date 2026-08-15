@@ -335,6 +335,56 @@ fn post_data_hydrates_active_cards_without_changing_joined_sidebar_state() {
 }
 
 #[test]
+fn forum_starter_preview_distinguishes_loading_from_deleted() {
+    let guild_id = Id::new(1);
+    let forum_id = Id::new(20);
+    let thread_id = Id::new(100);
+    let owner_id = Id::new(50);
+    let mut thread = active_thread(guild_id, forum_id, thread_id, "post");
+    thread.owner_id = Some(owner_id);
+    let mut state = DashboardState::new();
+    state.push_event(crate::discord::test_builders::guild_create_event(
+        GuildCreateFixture {
+            channels: vec![forum_channel(guild_id, forum_id), thread],
+            ..GuildCreateFixture::new(guild_id)
+        },
+    ));
+    state.confirm_selected_guild();
+    state.activate_channel(forum_id);
+
+    let loading = state
+        .selected_forum_post_items()
+        .into_iter()
+        .find(|post| post.channel_id == thread_id)
+        .expect("forum post should be visible while its starter loads");
+    assert!(loading.preview_loading);
+    assert_eq!(loading.preview_author.as_deref(), Some("user-50"));
+    assert_eq!(loading.preview_content, None);
+
+    state.push_event(AppEvent::ForumPostDataLoaded {
+        channel_id: forum_id,
+        requested_thread_ids: vec![thread_id],
+        posts: vec![ForumPostDataInfo {
+            thread_id,
+            owner: None,
+            first_message: None,
+            extra_fields: BTreeMap::new(),
+        }],
+    });
+
+    let deleted = state
+        .selected_forum_post_items()
+        .into_iter()
+        .find(|post| post.channel_id == thread_id)
+        .expect("forum post should remain visible after post data loads");
+    assert!(!deleted.preview_loading);
+    assert_eq!(
+        deleted.preview_content.as_deref(),
+        Some("original message deleted")
+    );
+}
+
+#[test]
 fn forum_body_appends_archived_posts_without_adding_sidebar_rows() {
     let guild_id = Id::new(1);
     let forum_id = Id::new(20);

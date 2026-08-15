@@ -15,6 +15,7 @@ pub(super) const MAX_REACTION_USERS_VISIBLE_LINES: usize = 14;
 
 pub struct ImagePreview<'a> {
     pub viewer: bool,
+    pub forum_post: bool,
     pub message_index: usize,
     pub preview_x_offset_columns: u16,
     pub preview_y_offset_rows: usize,
@@ -39,6 +40,7 @@ pub struct EmojiImage<'a> {
 #[derive(Clone, Copy)]
 pub struct ImagePreviewLayout {
     pub list_height: usize,
+    pub list_width: u16,
     pub content_width: usize,
     pub preview_width: u16,
     pub max_preview_height: u16,

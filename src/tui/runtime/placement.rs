@@ -122,6 +122,7 @@ mod tests {
     fn preview_target(message_id: u64, y_offset: usize) -> ImagePreviewTarget {
         ImagePreviewTarget {
             viewer: false,
+            forum_post: false,
             message_index: 0,
             preview_index: 0,
             preview_x_offset_columns: 0,

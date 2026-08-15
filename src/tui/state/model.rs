@@ -3,9 +3,9 @@ use crate::discord::ids::{
     marker::{ChannelMarker, GuildMarker, MessageMarker, UserMarker},
 };
 use crate::discord::{
-    AttachmentDownloadId, AttachmentMediaType, ChannelState, ChannelUnreadState, DiscordAction,
-    GuildFolder, GuildState, MuteDuration, PresenceStatus, ReactionEmoji, ReactionInfo,
-    VoiceParticipantState,
+    AttachmentDownloadId, AttachmentInfo, AttachmentMediaType, ChannelState, ChannelUnreadState,
+    DiscordAction, GuildFolder, GuildState, MuteDuration, PresenceStatus, ReactionEmoji,
+    ReactionInfo, VoiceParticipantState,
 };
 use ratatui_image::protocol::Protocol;
 
@@ -507,7 +507,7 @@ pub enum MemberActionKind {
 
 pub type MemberActionItem = ActionItem<MemberActionKind>;
 
-const FORUM_POST_CARD_HEIGHT: usize = 6;
+const FORUM_POST_CARD_HEIGHT: usize = 7;
 
 /// A forum tag applied to a post, resolved into display-ready form. At most one
 /// emoji field is set: a unicode character, or a custom emoji's CDN image url.
@@ -530,6 +530,15 @@ impl AppliedForumTag {
     }
 }
 
+/// The first image attachment shown in a forum card. Keeping the source
+/// attachment here lets the shared media runtime choose its normal proxy and
+/// quality settings instead of adding a second image-loading path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForumPostImagePreview {
+    pub message_id: Id<MessageMarker>,
+    pub attachment: AttachmentInfo,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChannelThreadItem {
     pub channel_id: Id<ChannelMarker>,
@@ -542,6 +551,8 @@ pub struct ChannelThreadItem {
     pub preview_author: Option<String>,
     pub preview_author_color: Option<u32>,
     pub preview_content: Option<String>,
+    pub preview_loading: bool,
+    pub preview_image: Option<ForumPostImagePreview>,
     pub applied_tags: Vec<AppliedForumTag>,
     pub preview_reactions: Vec<ReactionInfo>,
     pub comment_count: Option<u64>,
@@ -576,6 +587,8 @@ impl ChannelThreadItem {
             preview_author: None,
             preview_author_color: None,
             preview_content: None,
+            preview_loading: false,
+            preview_image: None,
             applied_tags: Vec::new(),
             preview_reactions: Vec::new(),
             comment_count: None,

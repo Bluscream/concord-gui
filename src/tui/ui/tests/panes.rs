@@ -1164,38 +1164,39 @@ fn forum_post_lines_render_title_author_and_preview() {
     });
     let texts = line_texts_from_ratatui(&lines);
 
-    assert_eq!(texts.len(), 7);
+    assert_eq!(texts.len(), 8);
     assert_eq!(texts[0].trim_end(), "Active posts");
     assert!(texts[1].starts_with("› ┏"));
     assert!(texts[2].starts_with("  ┃ "));
     assert!(texts.iter().all(|text| text.width() == 80));
     assert!(texts[2].contains("A useful Rust crate"));
     assert!(texts[2].contains("PINNED"));
-    assert!(texts[3].contains("neo: This crate solves"));
-    assert!(texts[4].contains("# question"));
-    assert!(texts[4].contains("# rust"));
-    assert!(texts[5].contains("4 comments"));
-    assert!(texts[5].contains("3 new messages"));
-    assert!(texts[5].contains("[👍 2]"));
-    assert!(texts[5].contains("locked"));
-    assert!(texts[6].starts_with("  ┗"));
+    assert_eq!(lines[3].spans.len(), 4);
+    assert!(texts[4].contains("neo: This crate solves"));
+    assert!(texts[5].contains("# question"));
+    assert!(texts[5].contains("# rust"));
+    assert!(texts[6].contains("4 comments"));
+    assert!(texts[6].contains("3 new messages"));
+    assert!(texts[6].contains("[👍 2]"));
+    assert!(texts[6].contains("locked"));
+    assert!(texts[7].starts_with("  ┗"));
     assert_eq!(lines[2].spans[2].style.fg, None);
     assert_eq!(lines[2].spans[3].style.fg, Some(Color::Yellow));
     assert_eq!(
-        lines[3].spans[2].style.fg,
+        lines[4].spans[2].style.fg,
         Some(Color::Rgb(0x33, 0x66, 0xCC))
     );
-    assert_eq!(lines[3].spans[4].style.fg, None);
-    assert_eq!(lines[5].spans[2].style.fg, None);
+    assert_eq!(lines[4].spans[4].style.fg, None);
+    assert_eq!(lines[6].spans[2].style.fg, None);
     assert_eq!(
-        lines[5].spans[4].style.fg,
+        lines[6].spans[4].style.fg,
         theme::current()
             .style(theme::HighlightGroup::UnreadNotice)
             .fg
     );
-    assert_eq!(lines[5].spans[6].style.fg, Some(Color::Yellow));
-    assert_eq!(lines[5].spans[8].style.fg, None);
-    assert!(lines[5].spans[8].style.add_modifier.contains(Modifier::DIM));
+    assert_eq!(lines[6].spans[6].style.fg, Some(Color::Yellow));
+    assert_eq!(lines[6].spans[8].style.fg, None);
+    assert!(lines[6].spans[8].style.add_modifier.contains(Modifier::DIM));
     assert_eq!(
         lines[1].spans[0].style.fg,
         theme::current()
@@ -1219,6 +1220,55 @@ fn forum_post_lines_render_title_author_and_preview() {
         span.style.bg.is_none()
             || span.style.bg == Some(theme::current().background(theme::HighlightGroup::Normal))
     }));
+}
+
+#[test]
+fn forum_post_lines_show_loading_until_starter_data_arrives() {
+    let post = ChannelThreadItem {
+        label: "Loading post".to_owned(),
+        preview_author: Some("neo".to_owned()),
+        preview_loading: true,
+        ..ChannelThreadItem::test(Id::new(30))
+    };
+
+    let texts = line_texts_from_ratatui(&forum_post_viewport_lines(&[post], None, 80, false));
+
+    assert!(texts[3].contains("neo: Loading preview..."));
+    assert!(
+        texts
+            .iter()
+            .all(|line| !line.contains("original message deleted"))
+    );
+}
+
+#[test]
+fn forum_post_lines_reserve_a_right_column_for_image_attachments() {
+    let post = ChannelThreadItem {
+        label: "x".repeat(100),
+        preview_author: Some("neo".to_owned()),
+        preview_content: Some("y".repeat(100)),
+        preview_image: Some(ForumPostImagePreview {
+            message_id: Id::new(30),
+            attachment: AttachmentInfo {
+                content_type: Some("image/png".to_owned()),
+                width: Some(640),
+                height: Some(480),
+                ..AttachmentInfo::test(Id::new(1), "image.png")
+            },
+        }),
+        ..ChannelThreadItem::test(Id::new(30))
+    };
+    let slot = crate::tui::ui::forum::forum_post_image_slot(&post, 80, true)
+        .expect("wide forum card should reserve an image slot");
+
+    let lines = forum_post_viewport_lines(&[post], None, 80, false);
+
+    let text_width = usize::from(slot.column).saturating_sub(6);
+    assert_eq!(lines[1].spans[2].content.width(), text_width);
+    assert_eq!(
+        lines[3].spans[4].content.width(),
+        text_width - "neo: ".width()
+    );
 }
 
 #[test]
@@ -1246,14 +1296,14 @@ fn forum_post_tag_line_renders_unicode_emoji_and_reserves_custom_image_slot() {
     let lines = forum_post_viewport_lines(std::slice::from_ref(&post), Some(0), 80, false);
     let texts = line_texts_from_ratatui(&lines);
 
-    let tag_text = &texts[3];
+    let tag_text = &texts[4];
     assert!(tag_text.contains("🔥 fire"));
     assert!(tag_text.contains("bug"));
 
     let rows = forum_post_tag_rows_for_test(&[post], 80, 20);
     assert_eq!(rows.len(), 1);
     let (row, cols) = &rows[0];
-    assert_eq!(*row, 3);
+    assert_eq!(*row, 4);
     assert_eq!(cols.len(), 1);
     // `# 🔥 fire`(9) + ` · `(3) + `# `(2) = column 14 within the card content.
     assert_eq!(cols[0], 14);
@@ -1282,8 +1332,8 @@ fn forum_post_lines_can_reserve_scrollbar_column() {
     assert!(texts[0].starts_with("› ╭"));
     assert!(texts[0].ends_with("╮"));
     assert!(texts[1].ends_with("│"));
-    // The untagged post has no tags row, so the card is five rows.
-    assert!(texts[4].ends_with("╯"));
+    // The untagged post has no tags row, so the card is six rows.
+    assert!(texts[5].ends_with("╯"));
     assert!(texts.iter().all(|text| text.width() == 79));
 }
 

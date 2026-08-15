@@ -507,7 +507,14 @@ impl ImagePreviewTarget {
             viewer: self.viewer,
             message_id: self.message_id,
             preview_index: self.preview_index,
-            preview_y_offset_rows: self.preview_y_offset_rows,
+            // A forum target stores its absolute card row here for rendering.
+            // Screen position must not split the decoded-image cache when the
+            // same card moves because another post was inserted or removed.
+            preview_y_offset_rows: if self.forum_post {
+                0
+            } else {
+                self.preview_y_offset_rows
+            },
             visible_preview_height: self.visible_preview_height,
             top_clip_rows: self.top_clip_rows,
             url: self.url.clone(),
@@ -528,6 +535,7 @@ impl ImagePreviewTarget {
     fn render<'a>(&self, state: ImagePreviewState<'a>) -> ImagePreview<'a> {
         ImagePreview {
             viewer: self.viewer,
+            forum_post: self.forum_post,
             message_index: self.message_index,
             preview_x_offset_columns: self.preview_x_offset_columns,
             preview_y_offset_rows: self.preview_y_offset_rows,

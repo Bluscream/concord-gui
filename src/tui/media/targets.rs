@@ -14,7 +14,7 @@ use super::super::{
     state::{
         ActiveModalPopupKind, DashboardState, MAX_MENTION_PICKER_VISIBLE, SelectablePopupTarget,
     },
-    ui::ImagePreviewLayout,
+    ui::{ImagePreviewLayout, forum},
 };
 
 /// Wide-enough wrap width for the prefetch walk. URL emission is
@@ -53,6 +53,7 @@ enum YoutubeThumbnailSize {
 #[derive(Clone)]
 pub(in crate::tui) struct ImagePreviewTarget {
     pub(in crate::tui) viewer: bool,
+    pub(in crate::tui) forum_post: bool,
     pub(in crate::tui) message_index: usize,
     pub(in crate::tui) preview_index: usize,
     pub(in crate::tui) preview_x_offset_columns: u16,
@@ -157,6 +158,7 @@ pub(in crate::tui) fn visible_image_preview_targets_from_plan(
         }
         return vec![ImagePreviewTarget {
             viewer: true,
+            forum_post: false,
             message_index: 0,
             preview_index,
             preview_x_offset_columns: 0,
@@ -175,6 +177,10 @@ pub(in crate::tui) fn visible_image_preview_targets_from_plan(
 
     if !state.show_images() {
         return Vec::new();
+    }
+
+    if state.message_pane_uses_forum_posts() {
+        return visible_forum_post_image_preview_targets(state, layout);
     }
 
     let mut targets = Vec::new();
@@ -201,6 +207,7 @@ pub(in crate::tui) fn visible_image_preview_targets_from_plan(
             if cell.width > 0 && cell.height > 0 && visible_top < visible_bottom {
                 targets.push(ImagePreviewTarget {
                     viewer: false,
+                    forum_post: false,
                     message_index,
                     preview_index: cell.preview_index,
                     preview_x_offset_columns: cell.x_offset_columns,
@@ -218,6 +225,86 @@ pub(in crate::tui) fn visible_image_preview_targets_from_plan(
                 });
             }
         }
+    }
+
+    targets
+}
+
+fn visible_forum_post_image_preview_targets(
+    state: &DashboardState,
+    layout: ImagePreviewLayout,
+) -> Vec<ImagePreviewTarget> {
+    let posts = state.visible_thread_card_items();
+    let total_rows = state.message_total_rendered_rows(layout.content_width, 0, 0);
+    let scrollbar_visible = layout.list_height > 0 && total_rows > layout.list_height.max(1);
+    let card_width = usize::from(layout.list_width)
+        .saturating_sub(usize::from(scrollbar_visible))
+        .max(4);
+    let quality = state.image_preview_quality();
+    let mut rendered_row = 0usize;
+    let mut targets = Vec::new();
+
+    for (post_index, post) in posts.iter().enumerate() {
+        if post.section_label.is_some() {
+            rendered_row = rendered_row.saturating_add(1);
+        }
+        if rendered_row >= layout.list_height {
+            break;
+        }
+
+        let Some(image) = post.preview_image.as_ref() else {
+            rendered_row = rendered_row.saturating_add(post.card_height());
+            continue;
+        };
+        let Some(slot) = forum::forum_post_image_slot(post, card_width, true) else {
+            rendered_row = rendered_row.saturating_add(post.card_height());
+            continue;
+        };
+        let Some(preview) = image.attachment.inline_preview_info() else {
+            rendered_row = rendered_row.saturating_add(post.card_height());
+            continue;
+        };
+        let (preview_width, preview_height) = image_preview_size_for_dimensions(
+            slot.width,
+            slot.height,
+            preview.width,
+            preview.height,
+            false,
+            layout.font_size,
+        );
+        if preview_width == 0 || preview_height == 0 {
+            rendered_row = rendered_row.saturating_add(post.card_height());
+            continue;
+        }
+
+        let preview_top = rendered_row
+            .saturating_add(1)
+            .saturating_add(usize::from(slot.height.saturating_sub(preview_height) / 2));
+        let preview_bottom = preview_top.saturating_add(usize::from(preview_height));
+        let visible_bottom = preview_bottom.min(layout.list_height);
+        if preview_top < visible_bottom {
+            targets.push(ImagePreviewTarget {
+                viewer: false,
+                forum_post: true,
+                message_index: post_index,
+                preview_index: 0,
+                preview_x_offset_columns: slot
+                    .column
+                    .saturating_add(slot.width.saturating_sub(preview_width)),
+                preview_y_offset_rows: preview_top,
+                preview_width,
+                preview_height,
+                visible_preview_height: u16::try_from(visible_bottom - preview_top)
+                    .unwrap_or(u16::MAX),
+                top_clip_rows: 0,
+                accent_color: None,
+                show_play_marker: false,
+                message_id: image.message_id,
+                url: preview_request_url(preview, preview_width, preview_height, quality),
+                filename: preview.filename.to_owned(),
+            });
+        }
+        rendered_row = rendered_row.saturating_add(post.card_height());
     }
 
     targets

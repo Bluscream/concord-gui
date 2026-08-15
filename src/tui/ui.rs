@@ -255,6 +255,7 @@ pub fn image_preview_layout(area: Rect, state: &DashboardState) -> ImagePreviewL
     let avatar_offset = avatar_gutter_width(state.show_avatars());
     ImagePreviewLayout {
         list_height: list.height as usize,
+        list_width: list.width,
         content_width: message_content_width(list, avatar_offset),
         preview_width: inline_image_preview_width(list, avatar_offset),
         max_preview_height: inline_image_preview_height(list, true),
