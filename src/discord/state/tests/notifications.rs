@@ -266,6 +266,7 @@ fn thread_notification_settings_walk_the_full_channel_ancestry() {
             flags: None,
             muted: Some(false),
             mute_end_time: None,
+            selected_time_window: None,
             member: None,
             presence: None,
             extra_fields: BTreeMap::new(),
@@ -427,6 +428,7 @@ fn thread_notification_policy_uses_membership_activity_permissions_mute_and_leve
                 flags: case.flags,
                 muted: Some(case.muted),
                 mute_end_time: None,
+                selected_time_window: None,
                 member: None,
                 presence: None,
                 extra_fields: BTreeMap::new(),
@@ -959,6 +961,40 @@ fn versioned_notification_settings_merge_partial_and_clear_full_empty_snapshots(
     assert!(state.notifications.notification_settings.is_empty());
     assert!(state.notifications.private_notification_settings.is_none());
     assert_eq!(state.notifications.user_guild_settings_version, Some(8));
+}
+
+#[test]
+fn mute_duration_metadata_round_trips_through_notification_state() {
+    let guild_id = Id::new(1);
+    let channel_id = Id::new(2);
+    let mut settings = notification_settings(guild_id, NotificationLevel::OnlyMentions);
+    settings.muted = true;
+    settings.mute_end_time = Some("2099-01-01T00:00:00.000Z".to_owned());
+    settings.selected_time_window = Some(3600);
+    settings
+        .channel_overrides
+        .push(ChannelNotificationOverrideInfo {
+            muted: true,
+            mute_end_time: Some("2099-01-02T00:00:00.000Z".to_owned()),
+            selected_time_window: Some(900),
+            ..ChannelNotificationOverrideInfo::test(channel_id)
+        });
+
+    let mut state = DiscordState::default();
+    state.apply_event(&user_guild_settings_init(vec![settings]));
+
+    let cached = state.guild_notification_settings_info(Some(guild_id));
+    assert_eq!(
+        cached.mute_end_time.as_deref(),
+        Some("2099-01-01T00:00:00.000Z")
+    );
+    assert_eq!(cached.selected_time_window, Some(3600));
+    assert_eq!(cached.channel_overrides.len(), 1);
+    assert_eq!(
+        cached.channel_overrides[0].mute_end_time.as_deref(),
+        Some("2099-01-02T00:00:00.000Z")
+    );
+    assert_eq!(cached.channel_overrides[0].selected_time_window, Some(900));
 }
 
 #[test]

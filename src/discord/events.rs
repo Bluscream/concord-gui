@@ -815,6 +815,7 @@ pub enum AppEvent {
         channel_id: Id<ChannelMarker>,
         muted: bool,
         mute_end_time: Option<String>,
+        selected_time_window: Option<i64>,
     },
 }
 

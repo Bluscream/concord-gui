@@ -1054,8 +1054,14 @@ impl DiscordState {
                 channel_id,
                 muted,
                 mute_end_time,
+                selected_time_window,
             } => {
-                self.set_thread_mute(*channel_id, *muted, mute_end_time.clone());
+                self.set_thread_mute(
+                    *channel_id,
+                    *muted,
+                    mute_end_time.clone(),
+                    *selected_time_window,
+                );
             }
             AppEvent::GatewayDispatchReceived { .. }
             | AppEvent::GatewayError { .. }

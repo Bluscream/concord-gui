@@ -169,6 +169,13 @@ fn parse_thread_member_mute_end_time(value: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn parse_thread_member_selected_time_window(value: &Value) -> Option<i64> {
+    value
+        .get("mute_config")
+        .and_then(|config| config.get("selected_time_window"))
+        .and_then(Value::as_i64)
+}
+
 fn parse_thread_metadata(value: &Value) -> Option<ThreadMetadataInfo> {
     Some(ThreadMetadataInfo {
         archived: value.get("archived")?.as_bool()?,
@@ -515,6 +522,7 @@ pub(crate) fn parse_thread_member_info(
         flags: value.get("flags").and_then(Value::as_u64),
         muted: value.get("muted").and_then(Value::as_bool),
         mute_end_time: parse_thread_member_mute_end_time(value),
+        selected_time_window: parse_thread_member_selected_time_window(value),
         member,
         presence,
         extra_fields: extra_fields(

@@ -127,7 +127,7 @@ const GATEWAY_URL: &str = "wss://gateway.discord.gg/?v=9&encoding=json&compress=
 /// session is a bot and silently drops friend presence streaming.
 ///
 /// Bits enabled (sum 253):
-///   0  LAZY_USER_NOTIFICATIONS
+///   0  LAZY_USER_NOTES
 ///   2  VERSIONED_READ_STATES
 ///   3  VERSIONED_USER_GUILD_SETTINGS
 ///   4  DEDUPE_USER_OBJECTS

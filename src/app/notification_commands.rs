@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
 
 use crate::discord::ids::{
     Id,
@@ -16,6 +16,9 @@ use crate::{
 
 use super::command_loop::publish_app_error;
 
+type GuildMuteUpdate = (bool, Option<DateTime<Utc>>, Option<i64>);
+type ChannelMuteUpdate = (Id<ChannelMarker>, bool, Option<DateTime<Utc>>, Option<i64>);
+
 pub(super) async fn set_guild_muted(
     client: DiscordClient,
     guild_id: Id<GuildMarker>,
@@ -29,8 +32,13 @@ pub(super) async fn set_guild_muted(
         .await
     {
         Ok(()) => {
-            publish_settings_update(&client, Some(guild_id), Some((muted, mute_end_time)), None)
-                .await;
+            publish_settings_update(
+                &client,
+                Some(guild_id),
+                Some((muted, mute_end_time, selected_time_window)),
+                None,
+            )
+            .await;
         }
         Err(error) => publish_app_error(&client, "set guild mute failed", &error).await,
     }
@@ -60,7 +68,7 @@ pub(super) async fn set_channel_muted(
                 &client,
                 guild_id,
                 None,
-                Some((channel_id, muted, mute_end_time)),
+                Some((channel_id, muted, mute_end_time, selected_time_window)),
             )
             .await;
         }
@@ -87,6 +95,7 @@ pub(super) async fn set_thread_muted(
                     muted,
                     mute_end_time: mute_end_time
                         .map(|end_time| end_time.to_rfc3339_opts(SecondsFormat::Millis, true)),
+                    selected_time_window,
                 })
                 .await;
         }
@@ -139,8 +148,8 @@ pub(super) async fn set_thread_followed(
 async fn publish_settings_update(
     client: &DiscordClient,
     guild_id: Option<Id<GuildMarker>>,
-    guild_update: Option<(bool, Option<chrono::DateTime<Utc>>)>,
-    channel_override: Option<(Id<ChannelMarker>, bool, Option<chrono::DateTime<Utc>>)>,
+    guild_update: Option<GuildMuteUpdate>,
+    channel_override: Option<ChannelMuteUpdate>,
 ) {
     client
         .publish_event(AppEvent::UserGuildSettingsUpdate {
@@ -160,7 +169,7 @@ async fn publish_settings_update(
 fn mute_end_time_from_duration(
     duration: Option<MuteDuration>,
     muted: bool,
-) -> Option<chrono::DateTime<Utc>> {
+) -> Option<DateTime<Utc>> {
     if !muted {
         return None;
     }
@@ -182,19 +191,20 @@ fn selected_time_window_from_duration(duration: Option<MuteDuration>, muted: boo
 fn guild_notification_settings_update(
     client: &DiscordClient,
     guild_id: Option<Id<GuildMarker>>,
-    guild_update: Option<(bool, Option<chrono::DateTime<Utc>>)>,
-    channel_override: Option<(Id<ChannelMarker>, bool, Option<chrono::DateTime<Utc>>)>,
+    guild_update: Option<GuildMuteUpdate>,
+    channel_override: Option<ChannelMuteUpdate>,
 ) -> GuildNotificationSettingsInfo {
     let snapshot = client.current_discord_snapshot();
     let mut settings = snapshot
         .to_state()
         .guild_notification_settings_info(guild_id);
-    if let Some((muted, mute_end_time)) = guild_update {
+    if let Some((muted, mute_end_time, selected_time_window)) = guild_update {
         settings.muted = muted;
         settings.mute_end_time =
             mute_end_time.map(|value| value.to_rfc3339_opts(SecondsFormat::Millis, true));
+        settings.selected_time_window = selected_time_window;
     }
-    if let Some((channel_id, muted, mute_end_time)) = channel_override {
+    if let Some((channel_id, muted, mute_end_time, selected_time_window)) = channel_override {
         if let Some(override_info) = settings
             .channel_overrides
             .iter_mut()
@@ -203,6 +213,7 @@ fn guild_notification_settings_update(
             override_info.muted = muted;
             override_info.mute_end_time =
                 mute_end_time.map(|value| value.to_rfc3339_opts(SecondsFormat::Millis, true));
+            override_info.selected_time_window = selected_time_window;
         } else {
             settings
                 .channel_overrides
@@ -212,6 +223,7 @@ fn guild_notification_settings_update(
                     muted,
                     mute_end_time: mute_end_time
                         .map(|value| value.to_rfc3339_opts(SecondsFormat::Millis, true)),
+                    selected_time_window,
                     collapsed: false,
                     flags: 0,
                 });
@@ -249,5 +261,30 @@ mod tests {
                 "{label}"
             );
         }
+    }
+
+    #[test]
+    fn optimistic_mute_updates_keep_selected_time_windows() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = DiscordClient::new("test-token".to_owned()).expect("test token is valid");
+        let guild_id = Id::new(1);
+        let channel_id = Id::new(2);
+
+        let settings = guild_notification_settings_update(
+            &client,
+            Some(guild_id),
+            Some((true, None, Some(-1))),
+            Some((channel_id, true, None, Some(900))),
+        );
+
+        assert!(settings.muted);
+        assert_eq!(settings.selected_time_window, Some(-1));
+        assert_eq!(settings.channel_overrides.len(), 1);
+        assert_eq!(settings.channel_overrides[0].channel_id, channel_id);
+        assert!(settings.channel_overrides[0].muted);
+        assert_eq!(
+            settings.channel_overrides[0].selected_time_window,
+            Some(900)
+        );
     }
 }

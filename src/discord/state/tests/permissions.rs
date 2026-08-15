@@ -881,6 +881,7 @@ fn threads_inherit_parent_permissions_but_require_thread_send_permission() {
                     flags: None,
                     muted: Some(false),
                     mute_end_time: None,
+                    selected_time_window: None,
                     member: None,
                     presence: None,
                     extra_fields: BTreeMap::new(),

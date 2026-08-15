@@ -11,6 +11,7 @@ fn current_user_thread_member(thread_id: Id<ChannelMarker>, muted: bool) -> Thre
         flags: Some(2),
         muted: Some(muted),
         mute_end_time: None,
+        selected_time_window: None,
         member: None,
         presence: None,
         extra_fields: BTreeMap::new(),

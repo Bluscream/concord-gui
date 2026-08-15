@@ -1695,7 +1695,10 @@ fn thread_gateway_events_keep_active_metadata_and_membership_separate() {
         "user_id": "99",
         "flags": 4,
         "muted": true,
-        "mute_config": { "end_time": "2099-01-01T00:00:00.000Z" }
+        "mute_config": {
+            "end_time": "2099-01-01T00:00:00.000Z",
+            "selected_time_window": 3600
+        }
     });
     for (payload, expected_member) in [(joined, true), (thread_payload(11, "not joined"), false)] {
         let events =
@@ -1709,6 +1712,11 @@ fn thread_gateway_events_keep_active_metadata_and_membership_separate() {
             assert_eq!(member.thread_id, Some(thread.channel.channel_id));
             assert_eq!(member.flags, Some(4));
             assert_eq!(member.muted, Some(true));
+            assert_eq!(
+                member.mute_end_time.as_deref(),
+                Some("2099-01-01T00:00:00.000Z")
+            );
+            assert_eq!(member.selected_time_window, Some(3600));
         }
     }
 }
@@ -3441,11 +3449,9 @@ fn thread_payload(id: u64, name: &str) -> serde_json::Value {
 }
 
 #[test]
-fn parse_guild_create_reads_name_from_lazy_properties_object() {
-    // With user-account capabilities containing LAZY_USER_NOTIFICATIONS,
-    // Discord nests guild metadata under `properties` instead of placing
-    // `name` / `owner_id` at the root. Concord must look in both places
-    // or every guild renders as "unknown".
+fn parse_guild_create_reads_name_from_properties_object() {
+    // CLIENT_STATE_V2 nests guild metadata under `properties`. Concord looks
+    // in both places so it can consume either documented gateway shape.
     let event = parse_guild_create(&json!({
         "id": "100",
         "member_count": 7,
@@ -4070,7 +4076,11 @@ fn notification_settings_are_preserved_from_ready_and_updates() {
                     "entries": [{
                         "guild_id": "10",
                         "message_notifications": 1,
-                        "muted": false,
+                        "muted": true,
+                        "mute_config": {
+                            "end_time": "2099-02-01T00:00:00.000Z",
+                            "selected_time_window": 3600
+                        },
                         "flags": 16384,
                         "hide_muted_channels": true,
                         "mobile_push": false,
@@ -4085,7 +4095,10 @@ fn notification_settings_are_preserved_from_ready_and_updates() {
                             "muted": true,
                             "collapsed": true,
                             "flags": 5120,
-                            "mute_config": { "end_time": "2099-01-01T00:00:00.000Z" }
+                            "mute_config": {
+                                "end_time": "2099-01-01T00:00:00.000Z",
+                                "selected_time_window": 900
+                            }
                         }]
                     }]
                 }
@@ -4104,6 +4117,12 @@ fn notification_settings_are_preserved_from_ready_and_updates() {
     assert_eq!(settings.len(), 1);
     let notification_settings = &settings[0].notification_settings;
     assert_eq!(notification_settings.guild_id, Some(Id::new(10)));
+    assert!(notification_settings.muted);
+    assert_eq!(
+        notification_settings.mute_end_time.as_deref(),
+        Some("2099-02-01T00:00:00.000Z")
+    );
+    assert_eq!(notification_settings.selected_time_window, Some(3600));
     assert_eq!(
         notification_settings.message_notifications,
         Some(NotificationLevel::OnlyMentions)
@@ -4126,6 +4145,16 @@ fn notification_settings_are_preserved_from_ready_and_updates() {
         Some(NotificationLevel::AllMessages)
     );
     assert!(notification_settings.channel_overrides[0].muted);
+    assert_eq!(
+        notification_settings.channel_overrides[0]
+            .mute_end_time
+            .as_deref(),
+        Some("2099-01-01T00:00:00.000Z")
+    );
+    assert_eq!(
+        notification_settings.channel_overrides[0].selected_time_window,
+        Some(900)
+    );
     assert!(notification_settings.channel_overrides[0].collapsed);
     assert_eq!(notification_settings.channel_overrides[0].flags, 5120);
     assert!(events.iter().any(|event| matches!(
@@ -4155,7 +4184,10 @@ fn user_guild_settings_update_emits_single_update_event() {
                 "guild_id": "10",
                 "message_notifications": 2,
                 "muted": true,
-                "mute_config": { "end_time": "2099-01-01T00:00:00.000Z" },
+                "mute_config": {
+                    "end_time": "2099-01-01T00:00:00.000Z",
+                    "selected_time_window": 3600
+                },
                 "channel_overrides": [],
                 "version": 11
             }
@@ -4172,6 +4204,11 @@ fn user_guild_settings_update_emits_single_update_event() {
                 Some(NotificationLevel::NoMessages)
             );
             assert!(notification_settings.muted);
+            assert_eq!(
+                notification_settings.mute_end_time.as_deref(),
+                Some("2099-01-01T00:00:00.000Z")
+            );
+            assert_eq!(notification_settings.selected_time_window, Some(3600));
             assert_eq!(notification_settings.version, 11);
         }
         other => panic!("expected one UserGuildSettingsUpdate, got {other:?}"),
@@ -4291,7 +4328,10 @@ fn ready_payload_parses_private_channel_notification_settings() {
                             "20": {
                                 "message_notifications": 2,
                                 "muted": true,
-                                "mute_config": null
+                                "mute_config": {
+                                    "end_time": null,
+                                    "selected_time_window": -1
+                                }
                             }
                         }
                     }]
@@ -4325,4 +4365,8 @@ fn ready_payload_parses_private_channel_notification_settings() {
         Some(NotificationLevel::NoMessages)
     );
     assert!(notification_settings.channel_overrides[0].muted);
+    assert_eq!(
+        notification_settings.channel_overrides[0].selected_time_window,
+        Some(-1)
+    );
 }

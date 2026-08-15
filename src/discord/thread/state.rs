@@ -28,6 +28,7 @@ pub(in crate::discord) struct CurrentUserThreadState {
     pub(in crate::discord) flags: Option<u64>,
     pub(in crate::discord) muted: bool,
     pub(in crate::discord) mute_end_time: Option<String>,
+    pub(in crate::discord) selected_time_window: Option<i64>,
     pub(in crate::discord) extra_fields: BTreeMap<String, Value>,
 }
 
@@ -273,6 +274,13 @@ impl ThreadCache {
                     .clone()
                     .or_else(|| existing.and_then(|state| state.mute_end_time.clone()))
             },
+            selected_time_window: if member.muted == Some(false) {
+                None
+            } else {
+                member
+                    .selected_time_window
+                    .or_else(|| existing.and_then(|state| state.selected_time_window))
+            },
             extra_fields: existing
                 .map(|state| state.extra_fields.clone())
                 .unwrap_or_default()
@@ -482,6 +490,12 @@ impl DiscordState {
             .and_then(|member| member.mute_end_time.as_deref())
     }
 
+    pub fn thread_mute_selected_time_window(&self, thread_id: Id<ChannelMarker>) -> Option<i64> {
+        self.threads
+            .current_user_member(thread_id)
+            .and_then(|member| member.selected_time_window)
+    }
+
     pub fn thread_post_data_loaded(&self, thread_id: Id<ChannelMarker>) -> bool {
         self.threads.post_data_loaded(thread_id)
     }
@@ -683,12 +697,14 @@ impl DiscordState {
         thread_id: Id<ChannelMarker>,
         muted: bool,
         mute_end_time: Option<String>,
+        selected_time_window: Option<i64>,
     ) {
         let Some(member) = self.threads_mut().current_user_member_mut(thread_id) else {
             return;
         };
         member.muted = muted;
         member.mute_end_time = if muted { mute_end_time } else { None };
+        member.selected_time_window = if muted { selected_time_window } else { None };
     }
 
     pub(in crate::discord) fn replace_thread_participants(

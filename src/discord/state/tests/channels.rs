@@ -68,8 +68,9 @@ fn active_and_joined_thread_state_are_independent() {
         user_id: Some(Id::new(99)),
         join_timestamp: None,
         flags: Some(4),
-        muted: Some(false),
-        mute_end_time: None,
+        muted: Some(true),
+        mute_end_time: Some("2099-01-01T00:00:00.000Z".to_owned()),
+        selected_time_window: Some(3600),
         member: None,
         presence: None,
         extra_fields: BTreeMap::new(),
@@ -94,6 +95,15 @@ fn active_and_joined_thread_state_are_independent() {
         vec![joined_id, unjoined_id]
     );
     assert!(state.thread_is_joined(joined_id));
+    assert!(state.thread_is_muted(joined_id));
+    assert_eq!(
+        state.thread_mute_end_time(joined_id),
+        Some("2099-01-01T00:00:00.000Z")
+    );
+    assert_eq!(
+        state.thread_mute_selected_time_window(joined_id),
+        Some(3600)
+    );
     assert!(!state.thread_is_joined(unjoined_id));
     assert!(state.thread_is_sidebar_active(joined_id));
     assert!(!state.thread_is_sidebar_active(unjoined_id));
@@ -125,6 +135,43 @@ fn active_and_joined_thread_state_are_independent() {
     );
     assert!(!state.thread_is_joined(joined_id));
     assert!(!state.thread_is_sidebar_active(joined_id));
+}
+
+#[test]
+fn thread_mute_update_caches_duration_metadata() {
+    let guild_id = Id::new(1);
+    let forum_id = Id::new(2);
+    let thread_id = Id::new(10);
+    let mut state = DiscordState::default();
+    state.apply_event(&guild_create_event(GuildCreateFixture {
+        channels: vec![
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                name: "forum".to_owned(),
+                ..channel_info(forum_id, "forum", Vec::new())
+            },
+            test_thread(guild_id, forum_id, thread_id, "joined"),
+        ],
+        current_user_thread_members: vec![ThreadMemberInfo::joined_snapshot(thread_id)],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+
+    state.apply_event(&AppEvent::ThreadMuteUpdate {
+        channel_id: thread_id,
+        muted: true,
+        mute_end_time: Some("2099-01-01T00:00:00.000Z".to_owned()),
+        selected_time_window: Some(3600),
+    });
+
+    assert!(state.thread_is_muted(thread_id));
+    assert_eq!(
+        state.thread_mute_end_time(thread_id),
+        Some("2099-01-01T00:00:00.000Z")
+    );
+    assert_eq!(
+        state.thread_mute_selected_time_window(thread_id),
+        Some(3600)
+    );
 }
 
 #[test]
@@ -180,6 +227,7 @@ fn participant_snapshot_populates_members_without_joining_the_thread() {
                 flags: None,
                 muted: None,
                 mute_end_time: None,
+                selected_time_window: None,
                 member: Some(MemberInfo::test(participant_id, "alice")),
                 presence: None,
                 extra_fields: BTreeMap::new(),
@@ -337,6 +385,7 @@ fn archived_response_keeps_membership_without_promoting_sidebar_state() {
                 flags: Some(4),
                 muted: Some(true),
                 mute_end_time: None,
+                selected_time_window: None,
                 member: Some(MemberInfo::test(current_user_id, "current user")),
                 presence: None,
                 extra_fields: BTreeMap::from([(

@@ -22,10 +22,9 @@ use super::{
 
 pub(super) fn parse_guild_create(data: &Value) -> Option<AppEvent> {
     let guild_id = parse_id::<GuildMarker>(data.get("id")?)?;
-    // With user-account `capabilities` containing LAZY_USER_NOTIFICATIONS
-    // (bit 0), Discord nests the guild's name / icon / owner_id under a
-    // `properties` sub-object instead of placing them at the root. Fall back
-    // to that location so guilds don't all render as "unknown".
+    // With the CLIENT_STATE_V2 capability, Discord nests guild fields such as
+    // name and owner_id under `properties`. Fall back to that location so
+    // guilds do not render as "unknown".
     let name = guild_field(data, "name")
         .and_then(Value::as_str)
         .unwrap_or("unknown")
@@ -300,9 +299,8 @@ pub(super) fn parse_guild_role_delete(data: &Value) -> Option<AppEvent> {
 
 pub(super) fn parse_guild_update(data: &Value) -> Option<AppEvent> {
     let guild_id = parse_id::<GuildMarker>(data.get("id")?)?;
-    // Same lazy-mode caveat as `parse_guild_create`: with capabilities such
-    // as LAZY_USER_NOTIFICATIONS enabled, name/owner_id can ride inside a
-    // `properties` sub-object instead of at the root.
+    // Same CLIENT_STATE_V2 caveat as `parse_guild_create`: name and owner_id
+    // can be nested under `properties` instead of appearing at the root.
     let name = guild_field(data, "name")
         .and_then(Value::as_str)
         .unwrap_or("unknown")
@@ -389,6 +387,7 @@ fn parse_user_guild_notification_settings(value: &Value) -> Option<GuildNotifica
         message_notifications: parse_notification_level(value.get("message_notifications")),
         muted: value.get("muted").and_then(Value::as_bool).unwrap_or(false),
         mute_end_time: parse_mute_end_time(value),
+        selected_time_window: parse_selected_time_window(value),
         suppress_everyone: value
             .get("suppress_everyone")
             .and_then(Value::as_bool)
@@ -454,6 +453,7 @@ fn parse_channel_notification_override(value: &Value) -> Option<ChannelNotificat
         message_notifications: parse_notification_level(value.get("message_notifications")),
         muted: value.get("muted").and_then(Value::as_bool).unwrap_or(false),
         mute_end_time: parse_mute_end_time(value),
+        selected_time_window: parse_selected_time_window(value),
         collapsed: value
             .get("collapsed")
             .and_then(Value::as_bool)
@@ -471,6 +471,7 @@ fn parse_channel_notification_override_with_key(
         message_notifications: parse_notification_level(value.get("message_notifications")),
         muted: value.get("muted").and_then(Value::as_bool).unwrap_or(false),
         mute_end_time: parse_mute_end_time(value),
+        selected_time_window: parse_selected_time_window(value),
         collapsed: value
             .get("collapsed")
             .and_then(Value::as_bool)
@@ -492,6 +493,13 @@ fn parse_mute_end_time(value: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
+}
+
+fn parse_selected_time_window(value: &Value) -> Option<i64> {
+    value
+        .get("mute_config")
+        .and_then(|config| config.get("selected_time_window"))
+        .and_then(Value::as_i64)
 }
 
 fn guild_field<'a>(data: &'a Value, key: &str) -> Option<&'a Value> {

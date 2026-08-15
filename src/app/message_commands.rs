@@ -80,6 +80,7 @@ pub(super) async fn create_forum_post(client: DiscordClient, post: ForumPostCrea
                     flags: None,
                     muted: None,
                     mute_end_time: None,
+                    selected_time_window: None,
                     member: None,
                     presence: None,
                     extra_fields: BTreeMap::new(),

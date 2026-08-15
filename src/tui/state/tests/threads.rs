@@ -58,6 +58,7 @@ fn current_user_thread_member(
         flags: Some(0),
         muted: Some(false),
         mute_end_time: None,
+        selected_time_window: None,
         member: None,
         presence: None,
         extra_fields: BTreeMap::new(),
