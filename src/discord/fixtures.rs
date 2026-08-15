@@ -17,6 +17,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::discord::{
@@ -32,12 +33,26 @@ pub const FIXTURE_TOKEN: &str = "test";
 
 /// Build a snowflake for `seconds_ago`, so fixture messages carry plausible
 /// timestamps rather than 2015 dates.
+/// The instant every fixture timestamp is measured back from.
+///
+/// Pinned once rather than read per message. Reading the clock per call made
+/// "seconds ago" mean something slightly different each time: a backlog page
+/// built a few milliseconds after the message it is supposed to precede came
+/// out fractionally newer, and the ordering the whole scrollback depends on
+/// flipped at that boundary. It surfaced as a test that failed once in a full
+/// run and passed every time it was run alone.
+fn fixture_now_ms() -> u64 {
+    static NOW_MS: OnceLock<u64> = OnceLock::new();
+    *NOW_MS.get_or_init(|| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis() as u64)
+            .unwrap_or(DISCORD_EPOCH_MS)
+    })
+}
+
 fn snowflake_at(seconds_ago: u64) -> u64 {
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis() as u64)
-        .unwrap_or(DISCORD_EPOCH_MS);
-    let target = now_ms.saturating_sub(seconds_ago * 1000);
+    let target = fixture_now_ms().saturating_sub(seconds_ago * 1000);
     (target.saturating_sub(DISCORD_EPOCH_MS)) << 22
 }
 

@@ -3,9 +3,9 @@ use crate::discord::ids::{
     marker::{GuildMarker, UserMarker},
 };
 use crate::discord::{
-    ActivityInfo, ActivityKind, AppCommand, GlobalUserProfileUpdate, GuildUserProfileUpdate,
-    MessageAttachmentUpload, PresenceStatus, ProfileAvatarUpload, UserProfileInfo,
-    UserProfileUpdate,
+    ActivityInfo, ActivityKind, AppCommand, FriendStatus, GlobalUserProfileUpdate,
+    GuildUserProfileUpdate, MessageAttachmentUpload, PresenceStatus, ProfileAvatarUpload,
+    UserProfileInfo, UserProfileUpdate,
 };
 use crate::tui::keybindings::{KeyChord, SelectionAction};
 use crate::tui::text_input::TextEditAction;
@@ -94,6 +94,51 @@ impl DashboardState {
             "Show profile",
             ActionAvailability::Enabled,
         )];
+
+        // Friendship is not a guild thing, so these come before the guild
+        // gate below and are offered wherever a member menu opens - including
+        // in a DM, which is where most of them are wanted.
+        if Some(menu.user_id) != self.discord.current_user_id {
+            match self.discord.cache.friend_status(menu.user_id) {
+                FriendStatus::None => items.push(MemberActionItem::new(
+                    MemberActionKind::AddFriend,
+                    "Send friend request",
+                    ActionAvailability::Enabled,
+                )),
+                FriendStatus::IncomingRequest => items.push(MemberActionItem::new(
+                    MemberActionKind::AddFriend,
+                    "Accept friend request",
+                    ActionAvailability::Enabled,
+                )),
+                FriendStatus::OutgoingRequest => items.push(MemberActionItem::new(
+                    MemberActionKind::RemoveFriend,
+                    "Cancel friend request",
+                    ActionAvailability::Enabled,
+                )),
+                FriendStatus::Friend => items.push(MemberActionItem::new(
+                    MemberActionKind::RemoveFriend,
+                    "Remove friend",
+                    ActionAvailability::Enabled,
+                )),
+                FriendStatus::Blocked => {}
+            }
+
+            items.push(
+                if self.discord.cache.friend_status(menu.user_id) == FriendStatus::Blocked {
+                    MemberActionItem::new(
+                        MemberActionKind::Unblock,
+                        "Unblock",
+                        ActionAvailability::Enabled,
+                    )
+                } else {
+                    MemberActionItem::new(
+                        MemberActionKind::Block,
+                        "Block",
+                        ActionAvailability::Enabled,
+                    )
+                },
+            );
+        }
 
         // Moderation only applies inside a guild, and only to someone the
         // current user both has the permission for and outranks. Discord
@@ -193,6 +238,32 @@ impl DashboardState {
                 self.close_member_action_menu();
                 self.open_role_picker(guild_id, action.user_id);
                 None
+            }
+            MemberActionKind::AddFriend
+            | MemberActionKind::RemoveFriend
+            | MemberActionKind::Block
+            | MemberActionKind::Unblock => {
+                let user_id = action.user_id;
+                let label = self
+                    .discord
+                    .cache
+                    .relationship_display_name(user_id)
+                    .or_else(|| {
+                        action.guild_id.and_then(|guild_id| {
+                            self.discord.cache.member_display_name(guild_id, user_id)
+                        })
+                    })
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| user_id.get().to_string());
+                self.close_member_action_menu();
+
+                Some(match item.kind {
+                    MemberActionKind::AddFriend => AppCommand::AddFriend { user_id, label },
+                    MemberActionKind::Block => AppCommand::BlockUser { user_id, label },
+                    // Unfriending, cancelling, declining and unblocking are
+                    // one endpoint; the menu label already said which.
+                    _ => AppCommand::RemoveRelationship { user_id, label },
+                })
             }
             MemberActionKind::Kick
             | MemberActionKind::Ban

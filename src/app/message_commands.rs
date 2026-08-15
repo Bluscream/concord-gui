@@ -6,6 +6,7 @@ use crate::{
         AppEvent, ApplicationCommandAutocompleteInvocation, ApplicationCommandInvocation,
         AttachmentUpdate, ForumPostCreate, MessageAttachmentUpload, MessageInfo,
         MessageUpdateDispatchInfo, MessageUpdateEventFields, ReactionEmoji, ReplyReference,
+        friend_request_target,
         ids::{
             Id,
             marker::{
@@ -397,6 +398,48 @@ pub(super) async fn unban_member(
 ) {
     if let Err(error) = client.unban_member(guild_id, user_id).await {
         report_moderation_failure(&client, "unban", &label, &error).await;
+    }
+}
+
+/// Ask to be someone's friend.
+///
+/// A name that cannot be parsed is refused here rather than sent: a rejected
+/// request costs a round trip and counts towards exactly the anti-spam
+/// heuristics this client tries not to trip.
+pub(super) async fn send_friend_request(client: DiscordClient, target: String) {
+    let Some((username, discriminator)) = friend_request_target(&target) else {
+        client
+            .publish_event(AppEvent::GatewayError {
+                message: format!("{target} is not a username"),
+            })
+            .await;
+        return;
+    };
+
+    if let Err(error) = client.send_friend_request(&username, discriminator).await {
+        report_moderation_failure(&client, "friend request to", &target, &error).await;
+    }
+}
+
+pub(super) async fn add_friend(client: DiscordClient, user_id: Id<UserMarker>, label: String) {
+    if let Err(error) = client.add_friend(user_id).await {
+        report_moderation_failure(&client, "friending", &label, &error).await;
+    }
+}
+
+pub(super) async fn block_user(client: DiscordClient, user_id: Id<UserMarker>, label: String) {
+    if let Err(error) = client.block_user(user_id).await {
+        report_moderation_failure(&client, "blocking", &label, &error).await;
+    }
+}
+
+pub(super) async fn remove_relationship(
+    client: DiscordClient,
+    user_id: Id<UserMarker>,
+    label: String,
+) {
+    if let Err(error) = client.remove_relationship(user_id).await {
+        report_moderation_failure(&client, "removing", &label, &error).await;
     }
 }
 

@@ -535,6 +535,27 @@ pub enum AppCommand {
         user_id: Id<UserMarker>,
         label: String,
     },
+    /// Ask to be someone's friend, by username.
+    SendFriendRequest {
+        /// As typed. Parsed by `friend_request_target`, so both clients accept
+        /// the same forms and neither has to know about discriminators.
+        target: String,
+    },
+    /// Accept an incoming request, or befriend a known user.
+    AddFriend {
+        user_id: Id<UserMarker>,
+        label: String,
+    },
+    BlockUser {
+        user_id: Id<UserMarker>,
+        label: String,
+    },
+    /// Unfriend, cancel, decline or unblock - Discord models all four the
+    /// same way. `label` names which one the user asked for.
+    RemoveRelationship {
+        user_id: Id<UserMarker>,
+        label: String,
+    },
     /// Replace a member's roles with this set.
     SetMemberRoles {
         guild_id: Id<GuildMarker>,

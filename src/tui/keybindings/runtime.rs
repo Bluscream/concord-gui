@@ -955,6 +955,10 @@ impl KeyBindings {
             MemberActionKind::Kick => 'k',
             MemberActionKind::Ban => 'b',
             MemberActionKind::ManageRoles => 'r',
+            MemberActionKind::AddFriend => 'f',
+            MemberActionKind::RemoveFriend => 'F',
+            MemberActionKind::Block => 'x',
+            MemberActionKind::Unblock => 'X',
         })]
     }
 

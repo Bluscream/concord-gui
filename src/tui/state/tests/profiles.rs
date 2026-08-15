@@ -3,10 +3,13 @@ use crate::discord::test_builders::{
     UserProfileLoadFailedFixture, guild_create_event, user_profile_load_failed_event,
 };
 use crate::discord::{
-    ActivityInfo, AppCommand, GlobalUserProfileUpdate, GuildUserProfileUpdate,
-    MessageAttachmentUpload, ProfileAvatarUpload, UserProfileUpdate,
+    ActivityInfo, AppCommand, AppEvent, FriendStatus, GlobalUserProfileUpdate,
+    GuildUserProfileUpdate, MessageAttachmentUpload, ProfileAvatarUpload, RelationshipInfo,
+    UserProfileUpdate,
 };
+use crate::tui::state::MemberActionKind;
 use crate::tui::state::UserProfileSettingsField;
+use crate::tui::state::popups::{MemberActionMenuState, ModalPopup};
 use crate::tui::text_input::TextEditAction;
 
 #[test]
@@ -603,4 +606,77 @@ fn profile_reload_failure_after_save_clears_saving_state() {
         state.user_profile_settings_status(),
         Some("Save succeeded, but profile reload failed: reload failed"),
     );
+}
+
+/// A dashboard where the current user stands this way with user 42.
+fn state_with_relationship(status: FriendStatus) -> DashboardState {
+    let mut state = DashboardState::new();
+    state.push_event(AppEvent::RelationshipsLoaded {
+        relationships: vec![RelationshipInfo {
+            user_id: Id::new(42),
+            status,
+            nickname: None,
+            display_name: Some("someone".to_owned()),
+            username: Some("someone".to_owned()),
+        }],
+    });
+    state
+        .popups
+        .set_modal(ModalPopup::MemberActionMenu(MemberActionMenuState {
+            user_id: Id::new(42),
+            guild_id: None,
+            selection: Default::default(),
+        }));
+    state
+}
+
+#[test]
+fn friend_actions_reflect_how_things_already_stand() {
+    // "Add friend" and "accept request" are the same call, so offering both
+    // would be a choice with no difference; only one is ever shown, named for
+    // what it actually does from here.
+    let cases = [
+        (FriendStatus::None, MemberActionKind::AddFriend),
+        (FriendStatus::IncomingRequest, MemberActionKind::AddFriend),
+        (
+            FriendStatus::OutgoingRequest,
+            MemberActionKind::RemoveFriend,
+        ),
+        (FriendStatus::Friend, MemberActionKind::RemoveFriend),
+    ];
+
+    for (status, expected) in cases {
+        let state = state_with_relationship(status);
+        let kinds: Vec<_> = state
+            .selected_member_action_items()
+            .into_iter()
+            .map(|item| item.kind)
+            .collect();
+
+        assert!(
+            kinds.contains(&expected),
+            "{status:?} should offer {expected:?}"
+        );
+        // Blocking is offered alongside, and unblocking only replaces it.
+        assert!(kinds.contains(&MemberActionKind::Block));
+        assert!(!kinds.contains(&MemberActionKind::Unblock));
+    }
+}
+
+#[test]
+fn a_blocked_user_is_offered_only_unblocking() {
+    // Not "remove friend" as well: they are not one, and the endpoint behind
+    // both is the same, so two entries would do the same thing under
+    // different names.
+    let state = state_with_relationship(FriendStatus::Blocked);
+    let kinds: Vec<_> = state
+        .selected_member_action_items()
+        .into_iter()
+        .map(|item| item.kind)
+        .collect();
+
+    assert!(kinds.contains(&MemberActionKind::Unblock));
+    assert!(!kinds.contains(&MemberActionKind::Block));
+    assert!(!kinds.contains(&MemberActionKind::AddFriend));
+    assert!(!kinds.contains(&MemberActionKind::RemoveFriend));
 }

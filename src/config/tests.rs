@@ -730,6 +730,7 @@ fn options_save_and_load_round_trip() {
             suppress_join_guild: true,
             suppress_leave_guild: false,
             suppress_profile_edit: false,
+            suppress_friend_action: false,
         },
     };
 

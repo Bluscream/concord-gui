@@ -4,6 +4,7 @@ pub mod discord;
 pub mod error;
 pub mod i18n;
 pub mod logging;
+pub mod risk;
 mod support;
 
 /// Notification and voice sounds, shared by both front ends.

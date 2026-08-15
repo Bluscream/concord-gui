@@ -46,7 +46,7 @@ third-party Discord clients actually expect.
 | Reactions | 14 | done |
 | Moderation (kick/ban) | 14 | done |
 | Voice / calls | 14 | done |
-| Friends list | 13 | partial |
+| Friends list | 13 | yes |
 | Markdown parsing | 12 | done |
 | Pins | 11 | done |
 | Forums | 9 | done |
@@ -138,7 +138,16 @@ Upload, rename and delete guild emoji.
   popup without the noise is common.
 - **Screenshare** — Compile-verified only - blocked by a zbus/tokio incompatibility reaching us through GPUI's own dependencies.
 - **Image viewer** — Images render inline. There is no full-size viewer with zoom.
-- **Friends list** — Relationships are parsed and cached; neither client offers management.
+- **Friends list** - Both clients can now send, accept, cancel and decline
+  requests, unfriend, block and unblock. The four outcomes of "remove" are one
+  endpoint at Discord, so each is named for what it does rather than sharing a
+  generic label. Requests by name go through `/friend`; the name is parsed in
+  the core, and a name that cannot be parsed is refused before a request is
+  spent on it. Every friend action is behind the rule 6 warning, since
+  managing the friends list is one of the things Discord's anti-spam checks
+  watch. One deliberate deviation from every surveyed client: they all send a
+  discriminator unconditionally because they predate pomelo, and this sends
+  one only when the typed name has a `#`.
 - **Browser impersonation** — The core sends web-client super-properties, but this has never been audited end to end. Abaddon documents the standard to match.
 - **Cross-platform** — Linux is exercised. Windows and macOS are unverified - GPUI supports both, but neither has been built or run here.
 

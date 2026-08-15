@@ -1,5 +1,6 @@
 use super::*;
 use crate::discord::VoiceScope;
+use crate::tui::state::MemberActionKind;
 use std::collections::BTreeMap;
 
 #[test]
@@ -1491,13 +1492,39 @@ fn leader_a_opens_member_actions_from_member_pane() {
     // learn than one whose entries explain themselves.
     let moderation: Vec<_> = actions
         .iter()
-        .filter(|action| action.label != "Show profile")
+        .filter(|action| {
+            matches!(
+                action.kind,
+                MemberActionKind::Kick
+                    | MemberActionKind::Ban
+                    | MemberActionKind::Timeout
+                    | MemberActionKind::ClearTimeout
+                    | MemberActionKind::ManageRoles
+            )
+        })
         .collect();
     assert!(!moderation.is_empty(), "moderation must be offered");
     assert!(
         moderation.iter().all(|action| !action.is_enabled()),
         "no permissions in this fixture, so none may be enabled"
     );
+
+    // Friendship needs no permission and is not a guild thing, so those
+    // entries stay enabled where the moderation ones are refused.
+    let friendship: Vec<_> = actions
+        .iter()
+        .filter(|action| {
+            matches!(
+                action.kind,
+                MemberActionKind::AddFriend
+                    | MemberActionKind::RemoveFriend
+                    | MemberActionKind::Block
+                    | MemberActionKind::Unblock
+            )
+        })
+        .collect();
+    assert!(!friendship.is_empty(), "friendship must be offered");
+    assert!(friendship.iter().all(|action| action.is_enabled()));
 }
 
 #[test]

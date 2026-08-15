@@ -262,6 +262,9 @@ pub struct WarningOptions {
     pub suppress_leave_guild: bool,
     /// Editing your profile while connected through a third-party client.
     pub suppress_profile_edit: bool,
+    /// Managing the friends list, which Abaddon's README names as one of the
+    /// actions that most often trips Discord's anti-spam checks.
+    pub suppress_friend_action: bool,
 }
 
 /// Validated Highlight Group and UI definitions from `theme.toml`.

@@ -1498,6 +1498,33 @@ impl DiscordState {
         }
     }
 
+    /// How the current user stands with someone.
+    ///
+    /// Public because both front ends need it to decide which friend action to
+    /// offer: "add friend" and "accept request" are the same call, and only
+    /// this tells them apart.
+    pub fn friend_status(&self, user_id: Id<UserMarker>) -> FriendStatus {
+        self.profiles
+            .relationships
+            .get(&user_id)
+            .map(|relationship| relationship.status)
+            .unwrap_or(FriendStatus::None)
+    }
+
+    /// The best name known for someone outside any guild.
+    ///
+    /// Relationship payloads carry a name of their own, which is the only one
+    /// available for a friend who shares no guild - the member caches are
+    /// keyed by guild and would miss them entirely.
+    pub fn relationship_display_name(&self, user_id: Id<UserMarker>) -> Option<&str> {
+        let relationship = self.profiles.relationships.get(&user_id)?;
+        relationship
+            .nickname
+            .as_deref()
+            .or(relationship.display_name.as_deref())
+            .or(relationship.username.as_deref())
+    }
+
     fn apply_relationships_loaded(&mut self, relationships: &[RelationshipInfo]) {
         let previous = std::mem::take(&mut self.profiles_mut().relationships);
         for relationship in relationships {

@@ -192,3 +192,13 @@ activity-custom = Custom
 
 action-set-status = set status
 action-set-activity = set activity
+
+warning-friend-action = Adding, removing and blocking people is one of the things Discord's anti-spam checks watch for on third-party clients. Doing a lot of it at once is what gets accounts flagged; doing it occasionally is normally fine.
+
+label-friendship = Friendship
+action-send-friend-request = Send friend request
+action-accept-friend-request = Accept friend request
+action-cancel-friend-request = Cancel friend request
+action-remove-friend = Remove friend
+action-block = Block
+action-unblock = Unblock

@@ -190,3 +190,13 @@ activity-custom = Benutzerdefiniert
 
 action-set-status = Status setzen
 action-set-activity = Aktivität setzen
+
+warning-friend-action = Freunde hinzuzufügen, zu entfernen oder zu blockieren gehört zu dem, worauf Discords Spam-Prüfungen bei Drittanbieter-Clients achten. Problematisch wird vor allem vieles auf einmal; gelegentlich ist normalerweise unbedenklich.
+
+label-friendship = Freundschaft
+action-send-friend-request = Freundschaftsanfrage senden
+action-accept-friend-request = Freundschaftsanfrage annehmen
+action-cancel-friend-request = Freundschaftsanfrage zurückziehen
+action-remove-friend = Freund entfernen
+action-block = Blockieren
+action-unblock = Blockierung aufheben

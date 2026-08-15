@@ -10,17 +10,18 @@ use concord::discord::{
     ActivityInfo, ActivityKind, AppCommand, AppEvent, ApplicationCommandAutocompleteInvocation,
     ApplicationCommandInfo, ApplicationCommandInvocation, AttachmentDownloadId,
     BuiltinSlashCommandParse, BuiltinSlashCommandSubmit, DownloadAttachmentSource,
-    ForumPostArchiveState, ForumPostCreate, GlobalUserProfileUpdate, GuildUserProfileUpdate, Id,
-    InvitePreview, MAX_MESSAGE_STICKERS, MAX_UPLOAD_ATTACHMENT_COUNT, MediaPlaybackSource,
-    MediaPlaybackTarget, MessageAttachmentUpload, MessageHistoryAfterMode, MessageSearchQuery,
-    MuteDuration, PresenceStatus, ProfileAvatarUpload, ReactionEmoji, ReplyReference,
-    StreamCaptureTargetsRequestId, UserProfileUpdate, VoiceConnectionStatus,
+    ForumPostArchiveState, ForumPostCreate, FriendStatus, GlobalUserProfileUpdate,
+    GuildUserProfileUpdate, Id, InvitePreview, MAX_MESSAGE_STICKERS, MAX_UPLOAD_ATTACHMENT_COUNT,
+    MediaPlaybackSource, MediaPlaybackTarget, MessageAttachmentUpload, MessageHistoryAfterMode,
+    MessageSearchQuery, MuteDuration, PresenceStatus, ProfileAvatarUpload, ReactionEmoji,
+    ReplyReference, StreamCaptureTargetsRequestId, UserProfileUpdate, VoiceConnectionStatus,
     VoiceParticipantPlaybackSettings, VoiceParticipantVolumePercent, VoiceScope,
     VoiceVolumePercent, application_command_content_is_complete, invite_code_from, marker,
     next_message_nonce, parse_builtin_slash_command,
     password_auth::{MfaMethod, PasswordAuthEvent},
     qr_auth::QrEvent,
 };
+use concord::risk::RiskKind;
 use concord::t;
 use concord::token_store;
 use gpui::{
@@ -356,32 +357,33 @@ pub enum RiskAction {
     /// Changing your profile while connected through a third-party client.
     /// Carries the change, since it has to survive the confirmation.
     ProfileEdit(Id<marker::GuildMarker>, String),
+    /// Adding, removing or blocking someone. Carries the command, which is
+    /// already built by the time the warning goes up.
+    FriendAction(Box<AppCommand>),
 }
 
 impl RiskAction {
-    fn body(&self) -> String {
+    /// The shared kind, which owns the wording and the opt-out. Only the
+    /// payload each action has to carry through the confirmation lives here.
+    fn kind(&self) -> RiskKind {
         match self {
-            Self::JoinGuild => t!("warning-join-guild"),
-            Self::LeaveGuild => t!("warning-leave-guild"),
-            Self::ProfileEdit(..) => t!("warning-profile-edit"),
+            Self::JoinGuild => RiskKind::JoinGuild,
+            Self::LeaveGuild => RiskKind::LeaveGuild,
+            Self::ProfileEdit(..) => RiskKind::ProfileEdit,
+            Self::FriendAction(..) => RiskKind::FriendAction,
         }
     }
 
-    /// Whether the user has already asked not to be warned about this.
+    fn body(&self) -> String {
+        self.kind().explanation()
+    }
+
     fn suppressed(&self, options: &AppOptions) -> bool {
-        match self {
-            Self::JoinGuild => options.warnings.suppress_join_guild,
-            Self::LeaveGuild => options.warnings.suppress_leave_guild,
-            Self::ProfileEdit(..) => options.warnings.suppress_profile_edit,
-        }
+        self.kind().suppressed(options)
     }
 
     fn suppress(&self, options: &mut AppOptions) {
-        match self {
-            Self::JoinGuild => options.warnings.suppress_join_guild = true,
-            Self::LeaveGuild => options.warnings.suppress_leave_guild = true,
-            Self::ProfileEdit(..) => options.warnings.suppress_profile_edit = true,
-        }
+        self.kind().suppress(options);
     }
 }
 
@@ -969,6 +971,16 @@ impl Workspace {
                 }
                 true
             }
+            BuiltinSlashCommandParse::Ready(BuiltinSlashCommandSubmit::FriendRequest {
+                target,
+            }) => {
+                if concord::discord::friend_request_target(&target).is_none() {
+                    self.model.status_line = format!("{target} is not a username");
+                } else {
+                    self.friend_action(AppCommand::SendFriendRequest { target });
+                }
+                true
+            }
             BuiltinSlashCommandParse::Ready(BuiltinSlashCommandSubmit::Unsupported { message }) => {
                 // Reported rather than silently swallowed: a command that
                 // looks accepted but does nothing is worse than a refusal.
@@ -1180,6 +1192,20 @@ impl Workspace {
 
         self.last_typing = Some(now);
         handle.send(AppCommand::TriggerTyping { channel_id });
+    }
+
+    /// Add, remove or block someone.
+    ///
+    /// Every friend action goes through here so the warning is asked once, in
+    /// one place: managing the friends list is on the short list of things
+    /// that get third-party clients flagged.
+    pub fn friend_action(&mut self, command: AppCommand) {
+        if !self.confirm_risk(RiskAction::FriendAction(Box::new(command.clone()))) {
+            return;
+        }
+        if let Some(handle) = &self.handle {
+            handle.send(command);
+        }
     }
 
     /// Set the presence others see.
@@ -1608,6 +1634,11 @@ impl Workspace {
             RiskAction::LeaveGuild => self.leave_guild_confirmed(),
             RiskAction::ProfileEdit(guild_id, nickname) => {
                 self.set_nickname_confirmed(guild_id, nickname)
+            }
+            RiskAction::FriendAction(command) => {
+                if let Some(handle) = &self.handle {
+                    handle.send(*command);
+                }
             }
         }
     }
@@ -3433,6 +3464,117 @@ impl Workspace {
         Some(panel)
     }
 
+    /// Friend controls for the profile on screen.
+    ///
+    /// Separate from moderation because friendship is not a guild thing: these
+    /// appear wherever a profile does, including in a DM, which is where most
+    /// of them are wanted. What is offered depends on how things already
+    /// stand - "add friend" and "accept request" are the same call, and
+    /// showing both would be a choice with no difference.
+    fn friend_controls(
+        &self,
+        user_id: Id<marker::UserMarker>,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Div> {
+        if Some(user_id) == self.current_user {
+            return None;
+        }
+        let status = self.last_state.as_ref()?.friend_status(user_id);
+        let label = self.friend_label(user_id);
+
+        let mut entries: Vec<(&'static str, String, AppCommand)> = Vec::new();
+        match status {
+            FriendStatus::None => entries.push((
+                "friend-add",
+                t!("action-send-friend-request"),
+                AppCommand::AddFriend {
+                    user_id,
+                    label: label.clone(),
+                },
+            )),
+            FriendStatus::IncomingRequest => entries.push((
+                "friend-accept",
+                t!("action-accept-friend-request"),
+                AppCommand::AddFriend {
+                    user_id,
+                    label: label.clone(),
+                },
+            )),
+            FriendStatus::OutgoingRequest => entries.push((
+                "friend-cancel",
+                t!("action-cancel-friend-request"),
+                AppCommand::RemoveRelationship {
+                    user_id,
+                    label: label.clone(),
+                },
+            )),
+            FriendStatus::Friend => entries.push((
+                "friend-remove",
+                t!("action-remove-friend"),
+                AppCommand::RemoveRelationship {
+                    user_id,
+                    label: label.clone(),
+                },
+            )),
+            FriendStatus::Blocked => {}
+        }
+
+        entries.push(if status == FriendStatus::Blocked {
+            (
+                "friend-unblock",
+                t!("action-unblock"),
+                AppCommand::RemoveRelationship {
+                    user_id,
+                    label: label.clone(),
+                },
+            )
+        } else {
+            (
+                "friend-block",
+                t!("action-block"),
+                AppCommand::BlockUser { user_id, label },
+            )
+        });
+
+        let mut panel = column()
+            .w_full()
+            .p(px(space::MD))
+            .gap(px(space::XS))
+            .border_t_1()
+            .border_color(rgb(active().border))
+            .child(section_label(t!("label-friendship")));
+
+        for (id, label, command) in entries {
+            panel = panel.child(
+                gpui::div()
+                    .id(id)
+                    .px(px(space::SM))
+                    .py(px(space::XS))
+                    .rounded(px(layout::RADIUS))
+                    .text_size(px(scaled(text::SM)))
+                    .text_color(rgb(active().text))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgb(active().surface_hover)))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.friend_action(command.clone());
+                        cx.notify();
+                    }))
+                    .child(label),
+            );
+        }
+
+        Some(panel)
+    }
+
+    /// The best name known for someone, for use in a status line.
+    fn friend_label(&self, user_id: Id<marker::UserMarker>) -> String {
+        self.last_state
+            .as_ref()
+            .and_then(|state| state.relationship_display_name(user_id))
+            .map(str::to_owned)
+            .unwrap_or_else(|| user_id.get().to_string())
+    }
+
     /// Open the guild's ban list.
     pub fn open_ban_list(&mut self) {
         let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
@@ -3628,10 +3770,12 @@ impl Workspace {
         };
         let user_id = *user_id;
         let moderation = self.moderation_controls(user_id, cx);
+        let friendship = self.friend_controls(user_id, cx);
 
         match view {
             Some(view) => gpui::div()
                 .child(profile_view(view, self.options.display.circular_avatars))
+                .children(friendship)
                 .children(moderation),
             // The fetch is in flight. A skeleton with the id keeps the panel
             // from flashing empty.

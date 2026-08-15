@@ -512,6 +512,13 @@ pub enum MemberActionKind {
     Timeout,
     ClearTimeout,
     ManageRoles,
+    /// Send a request, or accept one already waiting.
+    AddFriend,
+    /// Unfriend, cancel or decline - all one call, named for what it does
+    /// here so nobody has to guess which.
+    RemoveFriend,
+    Block,
+    Unblock,
 }
 
 pub type MemberActionItem = ActionItem<MemberActionKind>;

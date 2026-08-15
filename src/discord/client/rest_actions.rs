@@ -310,6 +310,26 @@ impl DiscordClient {
         self.rest.unban_member(guild_id, user_id).await
     }
 
+    pub async fn send_friend_request(
+        &self,
+        username: &str,
+        discriminator: Option<u16>,
+    ) -> Result<()> {
+        self.rest.send_friend_request(username, discriminator).await
+    }
+
+    pub async fn add_friend(&self, user_id: Id<UserMarker>) -> Result<()> {
+        self.rest.add_friend(user_id).await
+    }
+
+    pub async fn block_user(&self, user_id: Id<UserMarker>) -> Result<()> {
+        self.rest.block_user(user_id).await
+    }
+
+    pub async fn remove_relationship(&self, user_id: Id<UserMarker>) -> Result<()> {
+        self.rest.remove_relationship(user_id).await
+    }
+
     pub async fn set_member_roles(
         &self,
         guild_id: Id<GuildMarker>,

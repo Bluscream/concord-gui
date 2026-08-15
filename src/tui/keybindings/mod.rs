@@ -908,6 +908,10 @@ impl MemberActionKind {
             Self::Timeout => "Timeout",
             Self::ClearTimeout => "ClearTimeout",
             Self::ManageRoles => "ManageRoles",
+            Self::AddFriend => "AddFriend",
+            Self::RemoveFriend => "RemoveFriend",
+            Self::Block => "Block",
+            Self::Unblock => "Unblock",
         }
     }
 }

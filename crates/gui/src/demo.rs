@@ -696,6 +696,14 @@ fn handle_command(
         // timeout state, and the ban list it answers with is canned.
         AppCommand::TimeoutMember { .. } | AppCommand::UnbanMember { .. } => {}
 
+        // Friendship is between two accounts, and the fixture only has one.
+        // Pretending a request was accepted would show a friend who is not
+        // there and cannot be removed.
+        AppCommand::SendFriendRequest { .. }
+        | AppCommand::AddFriend { .. }
+        | AppCommand::BlockUser { .. }
+        | AppCommand::RemoveRelationship { .. } => {}
+
         // ---- mutes and threads ---------------------------------------------
         AppCommand::SetGuildMuted {
             guild_id, muted, ..

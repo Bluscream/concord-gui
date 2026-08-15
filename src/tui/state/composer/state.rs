@@ -20,9 +20,10 @@ use crate::discord::{
     BuiltinSlashCommandParse, BuiltinSlashCommandSubmit, DiscordAction, GlobalUserProfileUpdate,
     GuildParticipationBlock, GuildParticipationRestriction, GuildUserProfileUpdate,
     MAX_UPLOAD_ATTACHMENT_COUNT, MessageAttachmentUpload, MessageSendLimits, UserProfileUpdate,
-    application_command_content_is_complete, application_command_option_scope, next_message_nonce,
-    parse_builtin_slash_command, parsed_application_command_option_names,
-    validate_attachment_sizes, validate_message_content_length, validate_message_payload,
+    application_command_content_is_complete, application_command_option_scope,
+    friend_request_target, next_message_nonce, parse_builtin_slash_command,
+    parsed_application_command_option_names, validate_attachment_sizes,
+    validate_message_content_length, validate_message_payload,
 };
 
 use super::super::MINIMUM_ESTABLISHED_DM_MESSAGES;
@@ -2132,6 +2133,16 @@ impl DashboardState {
                         sticker_ids: Vec::new(),
                     })
                 }
+            }
+            BuiltinSlashCommandParse::Ready(BuiltinSlashCommandSubmit::FriendRequest {
+                target,
+            }) => {
+                // Refused here rather than sent: a rejected request costs a
+                // round trip and counts towards the anti-spam heuristics.
+                if friend_request_target(&target).is_none() {
+                    return BuiltinCommandSubmit::Error(format!("{target} is not a username"));
+                }
+                BuiltinCommandSubmit::Ready(AppCommand::SendFriendRequest { target })
             }
             BuiltinSlashCommandParse::Ready(BuiltinSlashCommandSubmit::Nickname { nickname }) => {
                 let Some(user_id) = self.current_user_id() else {

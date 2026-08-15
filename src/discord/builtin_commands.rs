@@ -9,6 +9,7 @@ pub enum BuiltinSlashCommand {
     Shrug,
     Spoiler,
     Nick,
+    Friend,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -21,9 +22,21 @@ pub struct BuiltinSlashCommandInfo {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BuiltinSlashCommandSubmit {
-    Message { content: String, tts: bool },
-    Nickname { nickname: String },
-    Unsupported { message: String },
+    Message {
+        content: String,
+        tts: bool,
+    },
+    Nickname {
+        nickname: String,
+    },
+    /// A friend request by name, as typed. The name is parsed where it is
+    /// sent, so both clients accept the same forms.
+    FriendRequest {
+        target: String,
+    },
+    Unsupported {
+        message: String,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -87,6 +100,12 @@ const BUILTIN_SLASH_COMMANDS: &[BuiltinSlashCommandInfo] = &[
         name: "nick",
         description: "Change or clear your server nickname",
         replacement: "/nick ",
+    },
+    BuiltinSlashCommandInfo {
+        kind: BuiltinSlashCommand::Friend,
+        name: "friend",
+        description: "Send a friend request by username",
+        replacement: "/friend ",
     },
 ];
 
@@ -160,6 +179,16 @@ pub fn parse_builtin_slash_command(content: &str) -> BuiltinSlashCommandParse {
         BuiltinSlashCommand::Nick => {
             BuiltinSlashCommandParse::Ready(BuiltinSlashCommandSubmit::Nickname {
                 nickname: argument.to_owned(),
+            })
+        }
+        // Unlike /nick, an empty argument means nothing here - there is no
+        // "clear" - so it stays incomplete rather than sending a request to
+        // nobody.
+        BuiltinSlashCommand::Friend => {
+            required_argument(argument).map_or(BuiltinSlashCommandParse::Incomplete, |target| {
+                BuiltinSlashCommandParse::Ready(BuiltinSlashCommandSubmit::FriendRequest {
+                    target: target.trim().to_owned(),
+                })
             })
         }
     }

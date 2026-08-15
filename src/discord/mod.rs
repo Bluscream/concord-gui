@@ -123,7 +123,7 @@ pub use read::ReadStateInfo;
 pub(crate) use request_lifecycle::GuildMemberSearchSurface;
 pub use rest::{
     ForumPostPage, GuildBanInfo, InvitePreview, MAX_BAN_DELETE_MESSAGE_SECONDS,
-    MAX_MESSAGE_STICKERS, ReactionUsersPage, invite_code_from,
+    MAX_MESSAGE_STICKERS, ReactionUsersPage, friend_request_target, invite_code_from,
 };
 pub use state::{
     ChannelRecipientState, ChannelState, ChannelUnreadState, ChannelVisibilityStats,

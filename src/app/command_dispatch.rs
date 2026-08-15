@@ -550,6 +550,18 @@ impl CommandDispatcher {
             } => {
                 message_commands::unban_member(self.client.clone(), guild_id, user_id, label).await;
             }
+            AppCommand::SendFriendRequest { target } => {
+                message_commands::send_friend_request(self.client.clone(), target).await;
+            }
+            AppCommand::AddFriend { user_id, label } => {
+                message_commands::add_friend(self.client.clone(), user_id, label).await;
+            }
+            AppCommand::BlockUser { user_id, label } => {
+                message_commands::block_user(self.client.clone(), user_id, label).await;
+            }
+            AppCommand::RemoveRelationship { user_id, label } => {
+                message_commands::remove_relationship(self.client.clone(), user_id, label).await;
+            }
             AppCommand::SetMemberRoles {
                 guild_id,
                 user_id,
