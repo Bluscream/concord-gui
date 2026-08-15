@@ -134,3 +134,33 @@ hint-light-mode = Switch between Dark and Light mode interface themes
 # Tabs
 action-close-tab = Close tab
 action-open-in-new-tab = Open in a new tab
+
+# Login, message list, switcher and forums
+login-choose-method = Choose how to log in
+login-log-in = Log In
+login-password = Password
+login-identifier = Email, phone, or username
+login-token-hint = Paste a user or bot token directly
+login-qr-hint = Scan with the Discord mobile app
+login-demo-mode = Demo Mode
+login-connect = Connect
+login-two-factor = Two-Factor Authentication
+login-choose-verification = Choose a verification method
+login-authenticator-code = Authenticator Code
+login-verification-code = Verification Code
+login-verify = Verify
+login-sms-hint = Receive a code by text message
+login-no-mfa = No MFA methods available
+label-direct-messages = Direct Messages
+action-load-earlier = Load earlier messages
+action-load-newer = Load newer messages
+action-load-more = Load more
+action-new-post = New post
+status-no-messages = No messages loaded
+status-no-posts = No posts yet
+status-no-archived-posts = No archived posts
+switcher-placeholder = Jump to a channel or conversation
+label-active = Active
+label-archived = Archived
+login-totp-hint = Enter the 6-digit code from your authenticator
+status-connecting-ellipsis = Connecting…

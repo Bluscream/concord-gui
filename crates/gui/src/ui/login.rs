@@ -16,6 +16,8 @@ use concord::discord::{
 use gpui::{Context, Div, prelude::*, px, rgb};
 use tokio::sync::mpsc;
 
+use concord::t;
+
 use crate::theme::{active, layout, scaled, space, text};
 use crate::ui::chrome::{column, row};
 use crate::ui::composer::Composer;
@@ -155,14 +157,16 @@ impl Login {
 
 /// A full-width method button.
 fn method_btn(
-    label: &'static str,
-    subtitle: &str,
+    label: impl Into<gpui::SharedString>,
+    subtitle: impl Into<gpui::SharedString>,
     accent_color: u32,
     action: LoginAction,
     cx: &mut Context<Workspace>,
 ) -> gpui::Stateful<Div> {
+    let label = label.into();
+    let subtitle = subtitle.into();
     row()
-        .id(label)
+        .id(action.element_id())
         .w_full()
         .min_h(px(56.))
         .px(px(space::LG))
@@ -193,13 +197,13 @@ fn method_btn(
                     gpui::div()
                         .text_size(px(scaled(text::BASE)))
                         .text_color(rgb(active().text))
-                        .child(label.to_string()),
+                        .child(label.clone()),
                 )
                 .child(
                     gpui::div()
                         .text_size(px(scaled(text::XS)))
                         .text_color(rgb(active().text_subtle))
-                        .child(subtitle.to_string()),
+                        .child(subtitle.clone()),
                 ),
         )
 }
@@ -255,7 +259,7 @@ fn input_row(label: &str, value: &str, focused: bool, mask: Mask, error: bool) -
             gpui::div()
                 .text_size(px(scaled(text::XS)))
                 .text_color(rgb(active().text_muted))
-                .child(label.to_string()),
+                .child(label.to_owned()),
         )
         .child(
             row()
@@ -307,13 +311,14 @@ fn back_button(cx: &mut Context<Workspace>) -> gpui::Stateful<Div> {
 
 /// Primary action button.
 fn action_btn(
-    label: &'static str,
+    label: impl Into<gpui::SharedString>,
     enabled: bool,
     action: LoginAction,
     cx: &mut Context<Workspace>,
 ) -> gpui::Stateful<Div> {
+    let label = label.into();
     let base = row()
-        .id(label)
+        .id(action.element_id())
         .w_full()
         .h(px(40.))
         .items_center()
@@ -434,7 +439,7 @@ fn picker_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
                     gpui::div()
                         .text_size(px(scaled(text::SM)))
                         .text_color(rgb(active().text_muted))
-                        .child("Choose how to log in"),
+                        .child(t!("login-choose-method")),
                 ),
         )
         // Method buttons
@@ -451,14 +456,14 @@ fn picker_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
                 ))
                 .child(method_btn(
                     "User / Bot Token",
-                    "Paste a user or bot token directly",
+                    t!("login-token-hint"),
                     0x7c6fe0,
                     LoginAction::PickToken,
                     cx,
                 ))
                 .child(method_btn(
                     "QR Code",
-                    "Scan with the Discord mobile app",
+                    t!("login-qr-hint"),
                     active().success,
                     LoginAction::PickQr,
                     cx,
@@ -468,7 +473,7 @@ fn picker_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
                 // would attempt a real login with a literal token and fail.
                 .when(cfg!(feature = "fixtures"), |picker| {
                     picker.child(method_btn(
-                        "Demo Mode",
+                        t!("login-demo-mode"),
                         "Offline fixture data — no account needed",
                         active().warning,
                         LoginAction::PickDemo,
@@ -535,9 +540,9 @@ fn password_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
         )
         .child(action_btn(
             if pw.in_progress {
-                "Connecting…"
+                t!("status-connecting-ellipsis")
             } else {
-                "Log In"
+                t!("login-log-in")
             },
             submittable,
             LoginAction::SubmitPassword,
@@ -583,13 +588,13 @@ fn mfa_select_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
                     gpui::div()
                         .text_size(px(scaled(text::LG)))
                         .text_color(rgb(active().text))
-                        .child("Two-Factor Authentication"),
+                        .child(t!("login-two-factor")),
                 )
                 .child(
                     gpui::div()
                         .text_size(px(scaled(text::SM)))
                         .text_color(rgb(active().text_muted))
-                        .child("Choose a verification method"),
+                        .child(t!("login-choose-verification")),
                 ),
         );
 
@@ -597,11 +602,8 @@ fn mfa_select_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
         let mut methods_col = column().w_full().gap(px(space::SM));
         for method in &challenge.methods {
             let (label, subtitle) = match method {
-                MfaMethod::Totp => (
-                    "Authenticator App (TOTP)",
-                    "Enter the 6-digit code from your authenticator",
-                ),
-                MfaMethod::Sms => ("SMS Code", "Receive a code by text message"),
+                MfaMethod::Totp => ("Authenticator App (TOTP)", t!("login-totp-hint")),
+                MfaMethod::Sms => ("SMS Code", t!("login-sms-hint")),
             };
             methods_col = methods_col.child(method_btn(
                 label,
@@ -616,7 +618,7 @@ fn mfa_select_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
         card.child(
             gpui::div()
                 .text_color(rgb(active().text_muted))
-                .child("No MFA methods available"),
+                .child(t!("login-no-mfa")),
         )
     };
 

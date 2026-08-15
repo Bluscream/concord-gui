@@ -390,6 +390,29 @@ pub(crate) enum LoginAction {
     PickMfaMethod(MfaMethod),
 }
 
+impl LoginAction {
+    /// A stable element id.
+    ///
+    /// Taken from the action rather than the label, which changes with the
+    /// interface language - and an id that changes underneath GPUI loses the
+    /// element's state.
+    pub(crate) fn element_id(self) -> &'static str {
+        match self {
+            Self::PickPassword => "login-pick-password",
+            Self::PickToken => "login-pick-token",
+            Self::PickQr => "login-pick-qr",
+            Self::PickDemo => "login-pick-demo",
+            Self::Back => "login-back",
+            Self::ToggleRemember => "login-toggle-remember",
+            Self::SubmitPassword => "login-submit-password",
+            Self::SubmitToken => "login-submit-token",
+            Self::SubmitMfaCode => "login-submit-mfa",
+            Self::PickMfaMethod(MfaMethod::Totp) => "login-mfa-totp",
+            Self::PickMfaMethod(MfaMethod::Sms) => "login-mfa-sms",
+        }
+    }
+}
+
 pub struct Workspace {
     pub screen: Screen,
     pub model: WorkspaceModel,
@@ -841,9 +864,11 @@ impl Workspace {
                     self.model.status_line = "Nicknames only apply inside a server".to_string();
                     return true;
                 };
-                let Some(user_id) = self.current_user else {
+                // Checked before asking: warning about an action that cannot
+                // happen would be worse than doing nothing quietly.
+                if self.current_user.is_none() {
                     return true;
-                };
+                }
 
                 // Editing a profile from a third-party client is one of the
                 // actions Discord's anti-spam checks watch, so it asks first.

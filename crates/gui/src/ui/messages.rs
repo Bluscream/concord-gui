@@ -152,7 +152,7 @@ pub fn message_list(
                 gpui::div()
                     .text_size(px(scaled(text::SM)))
                     .text_color(rgb(active().text_subtle))
-                    .child("No messages loaded"),
+                    .child(t!("status-no-messages")),
             ),
         );
     }
@@ -173,7 +173,7 @@ pub fn message_list(
                 .text_size(px(scaled(text::XS)))
                 .text_color(rgb(active().accent))
                 .hover(|style| style.bg(rgb(active().surface_hover)))
-                .child("Load earlier messages")
+                .child(t!("action-load-earlier"))
                 .on_click(move |_event, _window, cx| handler(0, MessageAction::LoadOlder, cx)),
         );
     }
@@ -204,7 +204,7 @@ pub fn message_list(
                 .text_size(px(scaled(text::XS)))
                 .text_color(rgb(active().accent))
                 .hover(|style| style.bg(rgb(active().surface_hover)))
-                .child("Load newer messages")
+                .child(t!("action-load-newer"))
                 .on_click(move |_event, _window, cx| handler(0, MessageAction::LoadNewer, cx)),
         );
     }

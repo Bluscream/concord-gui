@@ -9,6 +9,8 @@
 
 use gpui::{Div, prelude::*, px, rgb};
 
+use concord::t;
+
 use crate::theme::{active, layout, scaled, space, text};
 use crate::ui::chrome::{column, row};
 
@@ -113,7 +115,7 @@ pub fn forum_view(
                     .text_size(px(scaled(text::XS)))
                     .bg(rgb(active().accent))
                     .text_color(rgb(active().on_accent))
-                    .child("New post")
+                    .child(t!("action-new-post"))
                     .on_click(move |_event, _window, cx| on_new_post(cx)),
             ),
     );
@@ -140,9 +142,9 @@ pub fn forum_view(
                 .text_size(px(scaled(text::SM)))
                 .text_color(rgb(active().text_subtle))
                 .child(if view.showing_archived {
-                    "No archived posts"
+                    t!("status-no-archived-posts")
                 } else {
-                    "No posts yet"
+                    t!("status-no-posts")
                 }),
         );
     }
@@ -219,7 +221,7 @@ pub fn forum_view(
                 .text_size(px(scaled(text::SM)))
                 .text_color(rgb(active().accent))
                 .hover(|style| style.bg(rgb(active().surface_hover)))
-                .child("Load more")
+                .child(t!("action-load-more"))
                 .on_click(move |_event, _window, cx| on_load_more(cx)),
         );
     }

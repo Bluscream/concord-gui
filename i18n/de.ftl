@@ -132,3 +132,33 @@ hint-light-mode = Zwischen dunklem und hellem Design wechseln
 # Tabs
 action-close-tab = Tab schließen
 action-open-in-new-tab = In neuem Tab öffnen
+
+# Anmeldung, Nachrichtenliste, Schnellwahl und Foren
+login-choose-method = Anmeldeart wählen
+login-log-in = Anmelden
+login-password = Passwort
+login-identifier = E-Mail, Telefon oder Benutzername
+login-token-hint = Benutzer- oder Bot-Token direkt einfügen
+login-qr-hint = Mit der Discord-App scannen
+login-demo-mode = Demo-Modus
+login-connect = Verbinden
+login-two-factor = Zwei-Faktor-Authentifizierung
+login-choose-verification = Bestätigungsmethode wählen
+login-authenticator-code = Authenticator-Code
+login-verification-code = Bestätigungscode
+login-verify = Bestätigen
+login-sms-hint = Code per SMS erhalten
+login-no-mfa = Keine MFA-Methoden verfügbar
+label-direct-messages = Direktnachrichten
+action-load-earlier = Ältere Nachrichten laden
+action-load-newer = Neuere Nachrichten laden
+action-load-more = Mehr laden
+action-new-post = Neuer Beitrag
+status-no-messages = Keine Nachrichten geladen
+status-no-posts = Noch keine Beiträge
+status-no-archived-posts = Keine archivierten Beiträge
+switcher-placeholder = Zu Kanal oder Unterhaltung springen
+label-active = Aktiv
+label-archived = Archiviert
+login-totp-hint = Gib den 6-stelligen Code aus deiner Authenticator-App ein
+status-connecting-ellipsis = Verbinde …

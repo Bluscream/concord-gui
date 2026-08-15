@@ -10,6 +10,8 @@
 use concord::discord::{Id, marker};
 use gpui::{Div, prelude::*, px, rgb};
 
+use concord::t;
+
 use crate::theme::{active, layout, scaled, space, text};
 use crate::ui::chrome::{column, row};
 use crate::ui::workspace::ChannelKind;
@@ -103,7 +105,7 @@ pub fn switcher_view(switcher: &Switcher) -> Div {
             .child(if switcher.query.text().is_empty() {
                 gpui::div()
                     .text_color(rgb(active().text_subtle))
-                    .child("Jump to a channel or conversation")
+                    .child(t!("switcher-placeholder"))
             } else {
                 gpui::div()
                     .text_color(rgb(active().text))
@@ -118,7 +120,7 @@ pub fn switcher_view(switcher: &Switcher) -> Div {
                 .py(px(space::MD))
                 .text_size(px(scaled(text::SM)))
                 .text_color(rgb(active().text_subtle))
-                .child("No matches"),
+                .child(t!("status-no-matches")),
         );
     }
 
