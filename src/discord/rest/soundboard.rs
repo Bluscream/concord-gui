@@ -16,6 +16,9 @@ use crate::discord::ids::{
 
 use super::DiscordRest;
 
+/// Discord's cap on a sound's file size.
+pub const MAX_SOUND_BYTES: usize = 512 * 1024;
+
 /// Discord's limits on a soundboard sound's name.
 pub const MIN_SOUND_NAME_CHARS: usize = 2;
 pub const MAX_SOUND_NAME_CHARS: usize = 32;
@@ -175,6 +178,34 @@ impl DiscordRest {
             "send soundboard sound",
         )
         .await
+    }
+
+    /// Fetch a sound's audio.
+    ///
+    /// Bounded by Discord's own 512 KiB cap, so a CDN answering with something
+    /// enormous cannot make this allocate without bound.
+    pub async fn soundboard_sound_bytes(&self, sound_id: u64) -> Result<Vec<u8>> {
+        let response = self
+            .raw_http
+            .get(format!(
+                "https://cdn.discordapp.com/soundboard-sounds/{sound_id}"
+            ))
+            .send()
+            .await
+            .map_err(|error| {
+                crate::AppError::DiscordRequest(format!("soundboard sound fetch failed: {error}"))
+            })?;
+
+        let bytes = response.bytes().await.map_err(|error| {
+            crate::AppError::DiscordRequest(format!("soundboard sound read failed: {error}"))
+        })?;
+        if bytes.len() > MAX_SOUND_BYTES {
+            return Err(crate::AppError::DiscordRequest(format!(
+                "soundboard sound is too large: {} bytes",
+                bytes.len()
+            )));
+        }
+        Ok(bytes.to_vec())
     }
 
     pub async fn rename_soundboard_sound(

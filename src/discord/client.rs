@@ -237,7 +237,45 @@ impl DiscordClient {
     }
 
     pub async fn publish_event(&self, event: AppEvent) {
+        // Somebody else's soundboard sound arrives as an event saying what was
+        // played, not as audio on the voice stream, so every client fetches and
+        // plays it itself. Done here, at the one funnel every event passes
+        // through, rather than in each front end - otherwise the two would
+        // drift and a sound would play in one client and not the other.
+        if let AppEvent::SoundboardSoundPlayed {
+            sound_id, volume, ..
+        } = &event
+        {
+            self.spawn_soundboard_playback(*sound_id, *volume);
+        }
         self.event_publisher.publish(event).await;
+    }
+
+    fn spawn_soundboard_playback(&self, sound_id: u64, volume: f64) {
+        let rest = self.rest.clone();
+        tokio::spawn(async move {
+            match rest.soundboard_sound_bytes(sound_id).await {
+                Ok(bytes) => {
+                    // Off the async runtime: decoding and playing both block,
+                    // and a five-second clip would hold a worker for its whole
+                    // length.
+                    std::thread::spawn(move || {
+                        if let Err(error) = crate::sound::play_soundboard_sound(&bytes, volume) {
+                            crate::logging::debug(
+                                "voice",
+                                format!("soundboard playback failed: {error}"),
+                            );
+                        }
+                    });
+                }
+                // Logged rather than surfaced: a sound that will not play is a
+                // small annoyance, and a toast per sound would be worse than
+                // silence.
+                Err(error) => {
+                    crate::logging::debug("voice", format!("soundboard fetch failed: {error}"));
+                }
+            }
+        });
     }
 
     pub fn start_gateway(&self, serve_rich_presence: bool) -> JoinHandle<()> {

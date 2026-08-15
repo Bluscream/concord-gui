@@ -610,3 +610,143 @@ mod tests {
         bytes
     }
 }
+
+/// Discord's cap on a soundboard sound, so a hostile CDN response cannot make
+/// this allocate without bound.
+#[cfg(feature = "voice-playback")]
+const MAX_SOUNDBOARD_SOUND_BYTES: usize = 512 * 1024;
+
+/// Play a soundboard sound somebody sent.
+///
+/// Separate from the notification path because the format is: notification
+/// sounds are WAV, and Discord serves soundboard sounds as MP3 or OGG, per its
+/// own CDN reference. `volume` is the sender's, 0 to 1.
+#[cfg(feature = "voice-playback")]
+pub fn play_soundboard_sound(bytes: &[u8], volume: f64) -> std::result::Result<(), String> {
+    let mut audio = decode_compressed_audio(bytes)?;
+
+    // Applied here rather than by the device, so a quiet sound stays quiet
+    // relative to the call rather than being normalised back up.
+    let volume = volume.clamp(0.0, 1.0) as f32;
+    if volume < 1.0 {
+        for sample in &mut audio.samples {
+            *sample *= volume;
+        }
+    }
+    play_notification_audio(audio)
+}
+
+/// Decode MP3 or OGG into interleaved f32.
+///
+/// The container is sniffed by symphonia rather than trusted from a filename,
+/// because the CDN serves both from the same extensionless path.
+#[cfg(feature = "voice-playback")]
+fn decode_compressed_audio(bytes: &[u8]) -> std::result::Result<NotificationAudio, String> {
+    use symphonia::core::audio::SampleBuffer;
+    use symphonia::core::codecs::DecoderOptions;
+    use symphonia::core::formats::FormatOptions;
+    use symphonia::core::io::MediaSourceStream;
+    use symphonia::core::meta::MetadataOptions;
+    use symphonia::core::probe::Hint;
+
+    if bytes.len() > MAX_SOUNDBOARD_SOUND_BYTES {
+        return Err(format!(
+            "soundboard sound is too large: {} bytes",
+            bytes.len()
+        ));
+    }
+    if bytes.is_empty() {
+        return Err("soundboard sound is empty".to_owned());
+    }
+
+    let source = MediaSourceStream::new(
+        Box::new(std::io::Cursor::new(bytes.to_vec())),
+        Default::default(),
+    );
+    let probed = symphonia::default::get_probe()
+        .format(
+            &Hint::new(),
+            source,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .map_err(|error| format!("soundboard sound is not MP3 or OGG: {error}"))?;
+
+    let mut format = probed.format;
+    let track = format
+        .default_track()
+        .ok_or_else(|| "soundboard sound has no audio track".to_owned())?;
+    let track_id = track.id;
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&track.codec_params, &DecoderOptions::default())
+        .map_err(|error| format!("soundboard sound uses an unsupported codec: {error}"))?;
+
+    let mut samples: Vec<f32> = Vec::new();
+    let mut sample_rate = 0;
+    let mut channels = 0;
+
+    // The stream ending is how decoding finishes, not a failure, which is why
+    // this reads the error as the terminator rather than propagating it.
+    while let Ok(packet) = format.next_packet() {
+        if packet.track_id() != track_id {
+            continue;
+        }
+
+        let decoded = match decoder.decode(&packet) {
+            Ok(decoded) => decoded,
+            // A damaged packet mid-clip loses that packet rather than the
+            // whole sound, which for something 5 seconds long is the better
+            // trade.
+            Err(_) => continue,
+        };
+
+        let spec = *decoded.spec();
+        sample_rate = spec.rate;
+        channels = spec.channels.count() as u16;
+
+        let mut buffer = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
+        buffer.copy_interleaved_ref(decoded);
+        samples.extend_from_slice(buffer.samples());
+    }
+
+    if samples.is_empty() {
+        return Err("soundboard sound decoded to nothing".to_owned());
+    }
+
+    Ok(NotificationAudio {
+        sample_rate,
+        channels,
+        samples,
+    })
+}
+
+/// Without playback support there is no device to play to.
+#[cfg(not(feature = "voice-playback"))]
+pub fn play_soundboard_sound(_bytes: &[u8], _volume: f64) -> std::result::Result<(), String> {
+    Err("this build has no audio playback".to_owned())
+}
+
+#[cfg(all(test, feature = "voice-playback"))]
+mod soundboard_tests {
+    use super::*;
+
+    // NOTE: these cover the refusal paths only. Decoding a real sound is
+    // unverified - there is no MP3 or Ogg encoder in the dependency tree to
+    // build one with, and committing a binary blob to test a decoder is worse
+    // than admitting the gap. First real sound fetched will prove it.
+
+    #[test]
+    fn nothing_and_too_much_are_both_refused() {
+        // A hostile or truncated CDN response must not allocate without bound
+        // or decode to silence that sounds like a broken sound.
+        assert!(decode_compressed_audio(&[]).is_err());
+        assert!(decode_compressed_audio(&vec![0u8; MAX_SOUNDBOARD_SOUND_BYTES + 1]).is_err());
+    }
+
+    #[test]
+    fn something_that_is_not_audio_is_refused_rather_than_played() {
+        let error = decode_compressed_audio(b"this is not a sound file at all")
+            .expect_err("plain text is not audio");
+        assert!(error.contains("MP3 or OGG"), "got {error:?}");
+    }
+}
