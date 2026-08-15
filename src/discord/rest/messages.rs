@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::discord::ids::{
     Id,
-    marker::{ChannelMarker, MessageMarker},
+    marker::{ChannelMarker, GuildMarker, MessageMarker},
 };
 use crate::{
     AppError, Result,
@@ -54,6 +54,43 @@ impl DiscordRest {
             slow_mode,
         )
         .await
+    }
+
+    /// Forward a message into another channel.
+    ///
+    /// A forward is a send whose `message_reference` names the original and
+    /// carries type 1. It has no content of its own - Discord renders the
+    /// source - so the usual payload validation does not apply.
+    pub async fn forward_message(
+        &self,
+        target_channel_id: Id<ChannelMarker>,
+        source_channel_id: Id<ChannelMarker>,
+        source_guild_id: Option<Id<GuildMarker>>,
+        message_id: Id<MessageMarker>,
+        nonce: Id<MessageMarker>,
+    ) -> Result<MessageInfo> {
+        let mut reference = json!({
+            // 1 is FORWARD; 0 is the ordinary reply this shares a field with.
+            "type": 1,
+            "message_id": message_id.to_string(),
+            "channel_id": source_channel_id.to_string(),
+        });
+        if let Some(guild_id) = source_guild_id {
+            reference["guild_id"] = json!(guild_id.to_string());
+        }
+
+        let body = json!({
+            "mobile_network_type": "unknown",
+            "content": "",
+            "nonce": nonce.to_string(),
+            "enforce_nonce": true,
+            "tts": false,
+            "flags": 0,
+            "message_reference": reference,
+        });
+
+        self.send_message_body(target_channel_id, body, &[], 0, None)
+            .await
     }
 
     /// Fires a typing indicator without blocking the send it precedes. A

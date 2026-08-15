@@ -68,6 +68,7 @@ impl MessageAction {
             MessageAction::OpenLink(_) => 17,
             MessageAction::OpenThread => 18,
             MessageAction::LoadNewer => 19,
+            MessageAction::Forward => 20,
         }
     }
 }
@@ -86,6 +87,8 @@ pub enum MessageAction {
     LoadOlder,
     /// Fetch the page of messages after the newest one loaded.
     LoadNewer,
+    /// Send this message into another channel.
+    Forward,
     /// Jump to the message this one replies to.
     JumpToReplied,
     /// Copy the message body.
@@ -293,6 +296,7 @@ fn action_bar(
 
     bar = bar
         .child(button("reply", MessageAction::Reply, false))
+        .child(button("forward", MessageAction::Forward, false))
         .child(button("react", MessageAction::React, false))
         .child(button("copy", MessageAction::CopyText, false))
         .child(button("link", MessageAction::CopyLink, false))

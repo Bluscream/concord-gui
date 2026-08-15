@@ -280,6 +280,40 @@ pub(super) async fn leave_guild(client: DiscordClient, guild_id: Id<GuildMarker>
     }
 }
 
+/// Forward a message into another channel.
+pub(super) async fn forward_message(
+    client: DiscordClient,
+    source_channel_id: Id<ChannelMarker>,
+    source_guild_id: Option<Id<GuildMarker>>,
+    message_id: Id<MessageMarker>,
+    target_channel_id: Id<ChannelMarker>,
+    nonce: Id<MessageMarker>,
+) {
+    match client
+        .forward_message(
+            target_channel_id,
+            source_channel_id,
+            source_guild_id,
+            message_id,
+            nonce,
+        )
+        .await
+    {
+        // The forwarded message arrives over the gateway like any other send,
+        // so there is nothing to publish on success.
+        Ok(_) => {}
+        Err(error) => {
+            log_app_error("forward message failed", &error);
+            client
+                .publish_event(AppEvent::MessageSendFailed {
+                    channel_id: target_channel_id,
+                    nonce,
+                })
+                .await;
+        }
+    }
+}
+
 /// Look up an invite so the user can see where it leads before joining.
 pub(super) async fn resolve_invite(client: DiscordClient, code: String) {
     match client.resolve_invite(&code).await {

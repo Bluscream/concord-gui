@@ -499,6 +499,23 @@ impl CommandDispatcher {
             AppCommand::LeaveGuild { guild_id, label } => {
                 message_commands::leave_guild(self.client.clone(), guild_id, label).await;
             }
+            AppCommand::ForwardMessage {
+                source_channel_id,
+                source_guild_id,
+                message_id,
+                target_channel_id,
+                nonce,
+            } => {
+                message_commands::forward_message(
+                    self.client.clone(),
+                    source_channel_id,
+                    source_guild_id,
+                    message_id,
+                    target_channel_id,
+                    nonce,
+                )
+                .await;
+            }
             AppCommand::ResolveInvite { code } => {
                 message_commands::resolve_invite(self.client.clone(), code).await;
             }

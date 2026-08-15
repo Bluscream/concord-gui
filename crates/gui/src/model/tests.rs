@@ -1247,3 +1247,25 @@ fn invite_links_are_parsed_from_what_a_user_would_paste() {
     assert_eq!(invite_code_from("hello there"), None);
     assert_eq!(invite_code_from(""), None);
 }
+
+#[test]
+fn forwarding_targets_the_picked_channel_not_the_current_one() {
+    use crate::ui::workspace::SwitcherPurpose;
+    use concord::discord::Id;
+
+    // The switcher serves two jobs; the purpose is what keeps them apart.
+    // Getting this wrong would navigate away instead of forwarding, or
+    // forward to the channel already open.
+    let purpose = SwitcherPurpose::Forward {
+        message_id: Id::new(42),
+        source_channel_id: Id::new(111),
+    };
+
+    assert_ne!(purpose, SwitcherPurpose::Navigate);
+
+    // Taking the purpose resets it, so the next switcher opens to navigate.
+    let mut held = purpose;
+    let taken = std::mem::take(&mut held);
+    assert_eq!(taken, purpose);
+    assert_eq!(held, SwitcherPurpose::Navigate);
+}

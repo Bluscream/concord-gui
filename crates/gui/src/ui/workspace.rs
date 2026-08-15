@@ -232,6 +232,17 @@ impl ConfirmAction {
     }
 }
 
+/// Why the switcher is open.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SwitcherPurpose {
+    #[default]
+    Navigate,
+    Forward {
+        message_id: Id<marker::MessageMarker>,
+        source_channel_id: Id<marker::ChannelMarker>,
+    },
+}
+
 /// An invite being looked at, before joining.
 pub struct InviteState {
     pub code: String,
@@ -409,6 +420,8 @@ pub struct Workspace {
     /// URLs already requested, so a reprojection does not re-ask on every
     /// snapshot revision.
     requested_previews: std::collections::HashSet<String>,
+    /// What the open switcher will do with its selection.
+    switcher_purpose: SwitcherPurpose,
     /// Invite being previewed, once resolved or while resolving.
     pub invite: Option<InviteState>,
     /// Custom status as last set, shown in the status bar.
@@ -520,6 +533,7 @@ impl Workspace {
             inbox_history_request: 0,
             attachment_previews: std::collections::HashMap::new(),
             requested_previews: std::collections::HashSet::new(),
+            switcher_purpose: SwitcherPurpose::Navigate,
             invite: None,
             custom_status: String::new(),
             editing_status: None,
@@ -2461,6 +2475,7 @@ impl Workspace {
             }
             MessageAction::LoadOlder => self.load_older_messages(),
             MessageAction::LoadNewer => self.load_newer_messages(MessageHistoryAfterMode::GapFill),
+            MessageAction::Forward => self.start_forward(index),
             MessageAction::JumpToReplied => {
                 if let Some(target) = self
                     .messages
@@ -3760,11 +3775,37 @@ impl Workspace {
 
     /// Open the quick switcher, seeded with the full candidate list.
     pub fn open_switcher(&mut self) {
+        self.open_switcher_for(SwitcherPurpose::Navigate);
+    }
+
+    /// Open the switcher to pick a channel for something other than navigating.
+    ///
+    /// Forwarding needs exactly the picker the switcher already is - every
+    /// channel across every guild, fuzzy-ranked - so it reuses it rather than
+    /// growing a second one that would rank differently.
+    fn open_switcher_for(&mut self, purpose: SwitcherPurpose) {
         let mut switcher = Switcher::default();
         if let Some(state) = &self.last_state {
             switcher.rank(projection::switcher_candidates(state));
         }
+        self.switcher_purpose = purpose;
         self.switcher = Some(switcher);
+    }
+
+    /// Begin forwarding a message: pick the destination.
+    fn start_forward(&mut self, index: usize) {
+        let Some(row) = self.messages.get(index) else {
+            return;
+        };
+        let source = (row.id, self.nav.channel);
+        let Some(channel_id) = source.1 else {
+            return;
+        };
+
+        self.open_switcher_for(SwitcherPurpose::Forward {
+            message_id: source.0,
+            source_channel_id: channel_id,
+        });
     }
 
     /// Re-rank after the query changes.
@@ -3789,6 +3830,30 @@ impl Workspace {
         };
 
         self.switcher = None;
+
+        // Forwarding consumes the selection instead of navigating to it: the
+        // point is to send the message elsewhere, not to go there.
+        if let SwitcherPurpose::Forward {
+            message_id,
+            source_channel_id,
+        } = std::mem::take(&mut self.switcher_purpose)
+        {
+            if let Some(handle) = &self.handle {
+                let source_guild_id = match self.nav.selection {
+                    Selection::Guild(guild_id) => Some(guild_id),
+                    Selection::DirectMessages => None,
+                };
+                handle.send(AppCommand::ForwardMessage {
+                    source_channel_id,
+                    source_guild_id,
+                    message_id,
+                    target_channel_id: target.0,
+                    nonce: next_message_nonce(),
+                });
+                self.model.status_line = "Forwarded".to_string();
+            }
+            return;
+        }
 
         // Switching guild first keeps the sidebar and the open channel
         // consistent; opening the channel alone would leave the wrong guild

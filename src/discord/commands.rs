@@ -495,6 +495,14 @@ pub enum AppCommand {
         guild_id: Id<GuildMarker>,
         label: String,
     },
+    /// Forward a message into another channel.
+    ForwardMessage {
+        source_channel_id: Id<ChannelMarker>,
+        source_guild_id: Option<Id<GuildMarker>>,
+        message_id: Id<MessageMarker>,
+        target_channel_id: Id<ChannelMarker>,
+        nonce: Id<MessageMarker>,
+    },
     /// Look up an invite without joining, so it can be shown before accepting.
     ResolveInvite {
         code: String,

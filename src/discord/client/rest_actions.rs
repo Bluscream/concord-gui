@@ -255,6 +255,25 @@ impl DiscordClient {
         self.rest.leave_guild(guild_id).await
     }
 
+    pub async fn forward_message(
+        &self,
+        target_channel_id: Id<ChannelMarker>,
+        source_channel_id: Id<ChannelMarker>,
+        source_guild_id: Option<Id<GuildMarker>>,
+        message_id: Id<MessageMarker>,
+        nonce: Id<MessageMarker>,
+    ) -> Result<crate::discord::MessageInfo> {
+        self.rest
+            .forward_message(
+                target_channel_id,
+                source_channel_id,
+                source_guild_id,
+                message_id,
+                nonce,
+            )
+            .await
+    }
+
     pub async fn resolve_invite(&self, code: &str) -> Result<crate::discord::rest::InvitePreview> {
         self.rest.resolve_invite(code).await
     }

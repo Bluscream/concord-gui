@@ -339,6 +339,33 @@ fn handle_command(
             publish_state!();
         }
 
+        AppCommand::ForwardMessage {
+            source_channel_id,
+            message_id,
+            target_channel_id,
+            ..
+        } => {
+            // Copied into the target channel, which is what a forward looks
+            // like from the reader's side.
+            let forwarded = state
+                .messages_for_channel(source_channel_id)
+                .into_iter()
+                .find(|message| message.id == message_id)
+                .and_then(|message| message.content.clone());
+
+            if let Some(content) = forwarded {
+                fixtures::append_message(
+                    state,
+                    target_channel_id,
+                    None,
+                    fixtures::demo_user_id(),
+                    "blu",
+                    &format!("[forwarded] {content}"),
+                );
+                publish_state!();
+            }
+        }
+
         AppCommand::ResolveInvite { code } => {
             // Answered with a plausible server so the flow can be exercised
             // offline; the code is echoed back so the caller can match it.
