@@ -902,6 +902,10 @@ impl MemberActionKind {
     fn name(self) -> &'static str {
         match self {
             Self::ShowProfile => "ShowProfile",
+            Self::Kick => "Kick",
+            Self::Ban => "Ban",
+            Self::Timeout => "Timeout",
+            Self::ClearTimeout => "ClearTimeout",
         }
     }
 }

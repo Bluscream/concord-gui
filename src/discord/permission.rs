@@ -2,7 +2,10 @@ use std::fmt;
 
 use chrono::Utc;
 
-use crate::discord::ids::{Id, marker::RoleMarker};
+use crate::discord::ids::{
+    Id,
+    marker::{GuildMarker, RoleMarker, UserMarker},
+};
 use crate::discord::{PermissionOverwriteKind, ReactionEmoji};
 
 use crate::discord::state::{ChannelState, DiscordState};
@@ -30,6 +33,11 @@ const PERMISSION_MANAGE_THREADS: u64 = 0x0000_0004_0000_0000;
 const PERMISSION_SEND_MESSAGES_IN_THREADS: u64 = 0x0000_0040_0000_0000;
 const PERMISSION_PIN_MESSAGES: u64 = 0x0008_0000_0000_0000;
 const PERMISSION_BYPASS_SLOWMODE: u64 = 0x0010_0000_0000_0000;
+
+const PERMISSION_KICK_MEMBERS: u64 = 0x0000_0000_0000_0002;
+const PERMISSION_BAN_MEMBERS: u64 = 0x0000_0000_0000_0004;
+const PERMISSION_MANAGE_ROLES: u64 = 0x0000_0000_1000_0000;
+const PERMISSION_MODERATE_MEMBERS: u64 = 0x0000_0400_0000_0000;
 
 const PERMISSIONS_ALL: u64 = u64::MAX;
 
@@ -150,6 +158,107 @@ impl PermissionDecision {
 }
 
 impl DiscordState {
+    /// Guild-wide permissions for the current user, ignoring channel
+    /// overwrites.
+    ///
+    /// Moderation is a guild-level power - kicking someone is not something
+    /// you do "in a channel" - so it resolves from roles alone rather than
+    /// through the channel path.
+    fn guild_wide_permissions(&self, guild_id: Id<GuildMarker>) -> Option<u64> {
+        let my_id = self.session.current_user_id?;
+        let guild = self.navigation.guilds.get(&guild_id)?;
+        if guild.owner_id == Some(my_id) {
+            return Some(PERMISSIONS_ALL);
+        }
+
+        let roles = self.guild_details.roles.get(&guild_id)?;
+        let member_role_ids = self.current_user_role_ids_for_guild(guild_id)?;
+
+        // @everyone carries the guild id as its role id, and is the floor that
+        // every other role adds to.
+        let everyone_role_id: Id<RoleMarker> = Id::new(guild_id.get());
+        let mut permissions = roles.get(&everyone_role_id)?.permissions;
+        for role_id in member_role_ids {
+            if let Some(role) = roles.get(role_id) {
+                permissions |= role.permissions;
+            }
+        }
+
+        if permissions & PERMISSION_ADMINISTRATOR == PERMISSION_ADMINISTRATOR {
+            return Some(PERMISSIONS_ALL);
+        }
+        Some(permissions)
+    }
+
+    fn has_guild_permission(&self, guild_id: Id<GuildMarker>, permission: u64) -> bool {
+        self.guild_wide_permissions(guild_id)
+            .is_some_and(|permissions| permissions & permission == permission)
+    }
+
+    pub fn can_kick_members(&self, guild_id: Id<GuildMarker>) -> bool {
+        self.has_guild_permission(guild_id, PERMISSION_KICK_MEMBERS)
+    }
+
+    pub fn can_ban_members(&self, guild_id: Id<GuildMarker>) -> bool {
+        self.has_guild_permission(guild_id, PERMISSION_BAN_MEMBERS)
+    }
+
+    pub fn can_manage_roles(&self, guild_id: Id<GuildMarker>) -> bool {
+        self.has_guild_permission(guild_id, PERMISSION_MANAGE_ROLES)
+    }
+
+    pub fn can_timeout_members(&self, guild_id: Id<GuildMarker>) -> bool {
+        self.has_guild_permission(guild_id, PERMISSION_MODERATE_MEMBERS)
+    }
+
+    /// Whether the current user outranks a member, which is what actually
+    /// decides if moderation will be accepted.
+    ///
+    /// Discord refuses any action against someone whose highest role is at or
+    /// above your own, and against the owner regardless. Checking here means
+    /// the UI can decline instead of offering an action the server rejects.
+    pub fn outranks_member(&self, guild_id: Id<GuildMarker>, user_id: Id<UserMarker>) -> bool {
+        let Some(my_id) = self.session.current_user_id else {
+            return false;
+        };
+        if my_id == user_id {
+            return false;
+        }
+        let Some(guild) = self.navigation.guilds.get(&guild_id) else {
+            return false;
+        };
+        // The owner outranks everyone, and can never be outranked.
+        if guild.owner_id == Some(user_id) {
+            return false;
+        }
+        if guild.owner_id == Some(my_id) {
+            return true;
+        }
+
+        let highest = |user_id: Id<UserMarker>| -> i64 {
+            let Some(roles) = self.guild_details.roles.get(&guild_id) else {
+                return i64::MIN;
+            };
+            let Some(member) = self
+                .guild_details
+                .members
+                .get(&guild_id)
+                .and_then(|members| members.get(&user_id))
+            else {
+                return i64::MIN;
+            };
+            member
+                .role_ids
+                .iter()
+                .filter_map(|role_id| roles.get(role_id))
+                .map(|role| role.position)
+                .max()
+                .unwrap_or(i64::MIN)
+        };
+
+        highest(my_id) > highest(user_id)
+    }
+
     pub fn can_view_channel(&self, channel: &ChannelState) -> bool {
         self.channel_permission_decision(channel, DiscordPermission::ViewChannel)
             .allows_optimistic_ui()
@@ -647,4 +756,47 @@ fn send_message_permission(channel: &ChannelState) -> u64 {
 fn can_access_channel_messages(channel: &ChannelState, permissions: ChannelPermissions) -> bool {
     permissions.contains(PERMISSION_VIEW_CHANNEL)
         && (!channel.is_voice() || permissions.contains(PERMISSION_CONNECT))
+}
+
+#[cfg(test)]
+mod moderation_tests {
+    use super::*;
+    use crate::discord::fixtures::demo_state;
+
+    #[test]
+    fn moderation_is_refused_without_the_permission() {
+        // The demo account holds no moderation permissions, so every check
+        // must decline rather than defaulting to allowed.
+        let state = demo_state();
+        let guild_id: Id<GuildMarker> = Id::new(10);
+
+        assert!(!state.can_kick_members(guild_id));
+        assert!(!state.can_ban_members(guild_id));
+        assert!(!state.can_manage_roles(guild_id));
+        assert!(!state.can_timeout_members(guild_id));
+    }
+
+    #[test]
+    fn nobody_outranks_themselves_or_the_owner() {
+        let state = demo_state();
+        let guild_id: Id<GuildMarker> = Id::new(10);
+        let me: Id<UserMarker> = Id::new(1001);
+
+        // Acting on yourself is always refused, which is what stops a "kick"
+        // button appearing on your own profile.
+        assert!(!state.outranks_member(guild_id, me));
+    }
+
+    #[test]
+    fn an_unknown_guild_refuses_rather_than_permitting() {
+        // A guild the client has never seen has no roles to resolve. The
+        // dangerous failure is treating "unknown" as "allowed".
+        let state = demo_state();
+        let unknown: Id<GuildMarker> = Id::new(999_999);
+        let user: Id<UserMarker> = Id::new(1002);
+
+        assert!(!state.can_kick_members(unknown));
+        assert!(!state.can_ban_members(unknown));
+        assert!(!state.outranks_member(unknown, user));
+    }
 }

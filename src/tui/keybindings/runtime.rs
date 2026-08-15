@@ -949,6 +949,10 @@ impl KeyBindings {
     fn default_member_action_shortcut(&self, kind: MemberActionKind) -> Vec<KeyChord> {
         vec![char_chord(match kind {
             MemberActionKind::ShowProfile => 'p',
+            MemberActionKind::Timeout => 't',
+            MemberActionKind::ClearTimeout => 'T',
+            MemberActionKind::Kick => 'k',
+            MemberActionKind::Ban => 'b',
         })]
     }
 

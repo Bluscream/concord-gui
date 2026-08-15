@@ -7,7 +7,10 @@ use std::{
 
 use crate::discord::ids::{
     Id,
-    marker::{ChannelMarker, EmojiMarker, ForumTagMarker, GuildMarker, MessageMarker, UserMarker},
+    marker::{
+        ChannelMarker, EmojiMarker, ForumTagMarker, GuildMarker, MessageMarker, RoleMarker,
+        UserMarker,
+    },
 };
 
 use super::application_commands::{
@@ -502,6 +505,38 @@ pub enum AppCommand {
         message_id: Id<MessageMarker>,
         target_channel_id: Id<ChannelMarker>,
         nonce: Id<MessageMarker>,
+    },
+    /// Remove a member from a guild.
+    KickMember {
+        guild_id: Id<GuildMarker>,
+        user_id: Id<UserMarker>,
+        label: String,
+    },
+    /// Ban a member, optionally purging their recent messages.
+    BanMember {
+        guild_id: Id<GuildMarker>,
+        user_id: Id<UserMarker>,
+        delete_message_seconds: u32,
+        label: String,
+    },
+    UnbanMember {
+        guild_id: Id<GuildMarker>,
+        user_id: Id<UserMarker>,
+        label: String,
+    },
+    /// Replace a member's roles with this set.
+    SetMemberRoles {
+        guild_id: Id<GuildMarker>,
+        user_id: Id<UserMarker>,
+        role_ids: Vec<Id<RoleMarker>>,
+        label: String,
+    },
+    /// Time a member out for a number of minutes, or clear it with `None`.
+    TimeoutMember {
+        guild_id: Id<GuildMarker>,
+        user_id: Id<UserMarker>,
+        minutes: Option<u32>,
+        label: String,
     },
     /// Look up an invite without joining, so it can be shown before accepting.
     ResolveInvite {

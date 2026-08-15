@@ -85,11 +85,58 @@ impl DashboardState {
         if self.popups.member_action_menu().is_none() {
             return Vec::new();
         }
-        vec![MemberActionItem::new(
+        let Some(menu) = self.popups.member_action_menu() else {
+            return Vec::new();
+        };
+
+        let mut items = vec![MemberActionItem::new(
             MemberActionKind::ShowProfile,
             "Show profile",
             ActionAvailability::Enabled,
-        )]
+        )];
+
+        // Moderation only applies inside a guild, and only to someone the
+        // current user both has the permission for and outranks. Discord
+        // refuses otherwise, so offering it would mean showing an action that
+        // always fails.
+        let Some(guild_id) = menu.guild_id else {
+            return items;
+        };
+        let user_id = menu.user_id;
+        let outranks = self.discord.cache.outranks_member(guild_id, user_id);
+
+        let availability = |permitted: bool| -> Option<String> {
+            if !permitted {
+                Some("you do not have permission".to_owned())
+            } else if !outranks {
+                Some("their highest role is above yours".to_owned())
+            } else {
+                None
+            }
+        };
+
+        items.push(MemberActionItem::new(
+            MemberActionKind::Timeout,
+            "Time out for 10 minutes",
+            availability(self.discord.cache.can_timeout_members(guild_id)),
+        ));
+        items.push(MemberActionItem::new(
+            MemberActionKind::ClearTimeout,
+            "Clear timeout",
+            availability(self.discord.cache.can_timeout_members(guild_id)),
+        ));
+        items.push(MemberActionItem::new(
+            MemberActionKind::Kick,
+            "Kick from server",
+            availability(self.discord.cache.can_kick_members(guild_id)),
+        ));
+        items.push(MemberActionItem::new(
+            MemberActionKind::Ban,
+            "Ban from server",
+            availability(self.discord.cache.can_ban_members(guild_id)),
+        ));
+
+        items
     }
 
     pub fn selected_member_action_index(&self) -> Option<usize> {
@@ -135,6 +182,47 @@ impl DashboardState {
             MemberActionKind::ShowProfile => {
                 self.close_member_action_menu();
                 self.open_user_profile_popup(action.user_id, action.guild_id)
+            }
+            MemberActionKind::Kick
+            | MemberActionKind::Ban
+            | MemberActionKind::Timeout
+            | MemberActionKind::ClearTimeout => {
+                let guild_id = action.guild_id?;
+                let label = self
+                    .discord
+                    .cache
+                    .member_display_name(guild_id, action.user_id)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| action.user_id.get().to_string());
+                self.close_member_action_menu();
+
+                Some(match item.kind {
+                    MemberActionKind::Kick => AppCommand::KickMember {
+                        guild_id,
+                        user_id: action.user_id,
+                        label,
+                    },
+                    MemberActionKind::Ban => AppCommand::BanMember {
+                        guild_id,
+                        user_id: action.user_id,
+                        // Nothing is deleted by default: purging someone's
+                        // history is a separate decision from removing them.
+                        delete_message_seconds: 0,
+                        label,
+                    },
+                    MemberActionKind::Timeout => AppCommand::TimeoutMember {
+                        guild_id,
+                        user_id: action.user_id,
+                        minutes: Some(10),
+                        label,
+                    },
+                    _ => AppCommand::TimeoutMember {
+                        guild_id,
+                        user_id: action.user_id,
+                        minutes: None,
+                        label,
+                    },
+                })
             }
         }
     }

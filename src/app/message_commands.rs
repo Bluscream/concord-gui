@@ -8,7 +8,9 @@ use crate::{
         MessageUpdateDispatchInfo, MessageUpdateEventFields, ReactionEmoji, ReplyReference,
         ids::{
             Id,
-            marker::{ChannelMarker, ForumTagMarker, GuildMarker, MessageMarker, UserMarker},
+            marker::{
+                ChannelMarker, ForumTagMarker, GuildMarker, MessageMarker, RoleMarker, UserMarker,
+            },
         },
     },
 };
@@ -311,6 +313,86 @@ pub(super) async fn forward_message(
                 })
                 .await;
         }
+    }
+}
+
+/// Report a moderation action that the server refused.
+///
+/// Discord rejects these for reasons the client cannot always predict - role
+/// hierarchy changing underneath, a permission revoked mid-session - so the
+/// failure is surfaced rather than swallowed.
+async fn report_moderation_failure(
+    client: &DiscordClient,
+    action: &str,
+    label: &str,
+    error: &AppError,
+) {
+    log_app_error(&format!("{action} failed"), error);
+    client
+        .publish_event(AppEvent::GatewayError {
+            message: format!("{action} {label} failed: {error}"),
+        })
+        .await;
+}
+
+pub(super) async fn kick_member(
+    client: DiscordClient,
+    guild_id: Id<GuildMarker>,
+    user_id: Id<UserMarker>,
+    label: String,
+) {
+    if let Err(error) = client.kick_member(guild_id, user_id).await {
+        report_moderation_failure(&client, "kick", &label, &error).await;
+    }
+}
+
+pub(super) async fn ban_member(
+    client: DiscordClient,
+    guild_id: Id<GuildMarker>,
+    user_id: Id<UserMarker>,
+    delete_message_seconds: u32,
+    label: String,
+) {
+    if let Err(error) = client
+        .ban_member(guild_id, user_id, delete_message_seconds)
+        .await
+    {
+        report_moderation_failure(&client, "ban", &label, &error).await;
+    }
+}
+
+pub(super) async fn unban_member(
+    client: DiscordClient,
+    guild_id: Id<GuildMarker>,
+    user_id: Id<UserMarker>,
+    label: String,
+) {
+    if let Err(error) = client.unban_member(guild_id, user_id).await {
+        report_moderation_failure(&client, "unban", &label, &error).await;
+    }
+}
+
+pub(super) async fn set_member_roles(
+    client: DiscordClient,
+    guild_id: Id<GuildMarker>,
+    user_id: Id<UserMarker>,
+    role_ids: Vec<Id<RoleMarker>>,
+    label: String,
+) {
+    if let Err(error) = client.set_member_roles(guild_id, user_id, &role_ids).await {
+        report_moderation_failure(&client, "role change for", &label, &error).await;
+    }
+}
+
+pub(super) async fn timeout_member(
+    client: DiscordClient,
+    guild_id: Id<GuildMarker>,
+    user_id: Id<UserMarker>,
+    minutes: Option<u32>,
+    label: String,
+) {
+    if let Err(error) = client.timeout_member(guild_id, user_id, minutes).await {
+        report_moderation_failure(&client, "timeout for", &label, &error).await;
     }
 }
 

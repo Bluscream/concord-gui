@@ -243,6 +243,15 @@ pub enum SwitcherPurpose {
     },
 }
 
+/// A moderation action against a member.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModerationAction {
+    Kick,
+    Ban,
+    Timeout,
+    ClearTimeout,
+}
+
 /// An invite being looked at, before joining.
 pub struct InviteState {
     pub code: String,
@@ -2770,15 +2779,154 @@ impl Workspace {
     }
 
     /// Profile panel for the selected user.
-    fn profile_pane(&self) -> impl IntoElement {
+    /// Moderation controls for the profile on screen.
+    ///
+    /// Offered with their reason when refused rather than hidden: a panel that
+    /// changes shape per member is harder to learn than one whose entries
+    /// explain themselves. Discord rejects these anyway when the permission or
+    /// the role hierarchy is wrong, so the check here only saves a round trip.
+    fn moderation_controls(
+        &self,
+        user_id: Id<marker::UserMarker>,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Div> {
+        let Selection::Guild(guild_id) = self.nav.selection else {
+            return None;
+        };
+        let state = self.last_state.as_ref()?;
+
+        let outranks = state.outranks_member(guild_id, user_id);
+        let reason = |permitted: bool| -> Option<&'static str> {
+            if !permitted {
+                Some("you do not have permission")
+            } else if !outranks {
+                Some("their highest role is above yours")
+            } else {
+                None
+            }
+        };
+
+        let entries = [
+            (
+                "mod-timeout",
+                "Time out 10m",
+                reason(state.can_timeout_members(guild_id)),
+                ModerationAction::Timeout,
+            ),
+            (
+                "mod-untimeout",
+                "Clear timeout",
+                reason(state.can_timeout_members(guild_id)),
+                ModerationAction::ClearTimeout,
+            ),
+            (
+                "mod-kick",
+                "Kick",
+                reason(state.can_kick_members(guild_id)),
+                ModerationAction::Kick,
+            ),
+            (
+                "mod-ban",
+                "Ban",
+                reason(state.can_ban_members(guild_id)),
+                ModerationAction::Ban,
+            ),
+        ];
+
+        let mut panel = column()
+            .w_full()
+            .p(px(space::MD))
+            .gap(px(space::XS))
+            .border_t_1()
+            .border_color(rgb(active().border))
+            .child(section_label("Moderation"));
+
+        for (id, label, refused, action) in entries {
+            panel = panel.child(
+                gpui::div()
+                    .id(id)
+                    .px(px(space::SM))
+                    .py(px(space::XS))
+                    .rounded(px(layout::RADIUS))
+                    .text_size(px(scaled(text::SM)))
+                    .text_color(rgb(if refused.is_some() {
+                        active().text_subtle
+                    } else {
+                        active().danger
+                    }))
+                    .when(refused.is_none(), |entry| {
+                        entry
+                            .cursor_pointer()
+                            .hover(|style| style.bg(rgb(active().surface_hover)))
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.moderate(user_id, action);
+                                cx.notify();
+                            }))
+                    })
+                    .child(match refused {
+                        Some(reason) => format!("{label} - {reason}"),
+                        None => label.to_string(),
+                    }),
+            );
+        }
+
+        Some(panel)
+    }
+
+    /// Carry out a moderation action against a member.
+    fn moderate(&mut self, user_id: Id<marker::UserMarker>, action: ModerationAction) {
+        let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
+            return;
+        };
+
+        let label = self
+            .model
+            .members
+            .iter()
+            .find(|member| member.user_id == Some(user_id))
+            .map(|member| member.name.clone())
+            .unwrap_or_else(|| user_id.get().to_string());
+
+        handle.send(match action {
+            ModerationAction::Kick => AppCommand::KickMember {
+                guild_id,
+                user_id,
+                label,
+            },
+            ModerationAction::Ban => AppCommand::BanMember {
+                guild_id,
+                user_id,
+                // Nothing is purged by default: deleting someone's history is
+                // a separate decision from removing them.
+                delete_message_seconds: 0,
+                label,
+            },
+            ModerationAction::Timeout => AppCommand::TimeoutMember {
+                guild_id,
+                user_id,
+                minutes: Some(10),
+                label,
+            },
+            ModerationAction::ClearTimeout => AppCommand::TimeoutMember {
+                guild_id,
+                user_id,
+                minutes: None,
+                label,
+            },
+        });
+    }
+
+    fn profile_pane(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let Some((user_id, view)) = &self.profile else {
             return gpui::div();
         };
+        let user_id = *user_id;
+        let moderation = self.moderation_controls(user_id, cx);
 
         match view {
-            Some(view) => {
-                gpui::div().child(profile_view(view, self.options.display.circular_avatars))
-            }
+            Some(view) => gpui::div()
+                .child(profile_view(view, self.options.display.circular_avatars))
+                .children(moderation),
             // The fetch is in flight. A skeleton with the id keeps the panel
             // from flashing empty.
             None => gpui::div().child(profile_view(
@@ -6369,7 +6517,7 @@ impl Render for Workspace {
                         // Right column precedence: profile, then search, then
                         // the member list. Only one occupies it at a time so
                         // the message area keeps a readable width.
-                        .when(self.profile.is_some(), |d| d.child(self.profile_pane()))
+                        .when(self.profile.is_some(), |d| d.child(self.profile_pane(cx)))
                         .when(self.profile.is_none() && self.search.is_some(), |d| {
                             d.child(self.search_pane(cx))
                         })

@@ -506,6 +506,10 @@ pub const MUTE_ACTION_DURATIONS: [MuteActionDurationItem; 6] = [
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum MemberActionKind {
     ShowProfile,
+    Kick,
+    Ban,
+    Timeout,
+    ClearTimeout,
 }
 
 pub type MemberActionItem = ActionItem<MemberActionKind>;

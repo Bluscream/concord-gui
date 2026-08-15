@@ -1481,9 +1481,22 @@ fn leader_a_opens_member_actions_from_member_pane() {
 
     assert!(state.is_member_action_menu_active());
     let actions = state.selected_member_action_items();
-    assert_eq!(actions.len(), 1);
     assert_eq!(actions[0].label, "Show profile");
     assert!(actions[0].is_enabled());
+
+    // Moderation is listed but refused: the test fixture grants no permissions,
+    // and Discord rejects these anyway, so they are shown with the reason
+    // rather than hidden - a menu that changes shape per member is harder to
+    // learn than one whose entries explain themselves.
+    let moderation: Vec<_> = actions
+        .iter()
+        .filter(|action| action.label != "Show profile")
+        .collect();
+    assert!(!moderation.is_empty(), "moderation must be offered");
+    assert!(
+        moderation.iter().all(|action| !action.is_enabled()),
+        "no permissions in this fixture, so none may be enabled"
+    );
 }
 
 #[test]

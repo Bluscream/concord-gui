@@ -32,7 +32,9 @@ mod guilds;
 mod invites;
 
 pub use invites::{InvitePreview, invite_code_from};
+pub use moderation::MAX_BAN_DELETE_MESSAGE_SECONDS;
 mod messages;
+mod moderation;
 mod notification_settings;
 mod polls;
 mod presence;

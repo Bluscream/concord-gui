@@ -516,6 +516,65 @@ impl CommandDispatcher {
                 )
                 .await;
             }
+            AppCommand::KickMember {
+                guild_id,
+                user_id,
+                label,
+            } => {
+                message_commands::kick_member(self.client.clone(), guild_id, user_id, label).await;
+            }
+            AppCommand::BanMember {
+                guild_id,
+                user_id,
+                delete_message_seconds,
+                label,
+            } => {
+                message_commands::ban_member(
+                    self.client.clone(),
+                    guild_id,
+                    user_id,
+                    delete_message_seconds,
+                    label,
+                )
+                .await;
+            }
+            AppCommand::UnbanMember {
+                guild_id,
+                user_id,
+                label,
+            } => {
+                message_commands::unban_member(self.client.clone(), guild_id, user_id, label).await;
+            }
+            AppCommand::SetMemberRoles {
+                guild_id,
+                user_id,
+                role_ids,
+                label,
+            } => {
+                message_commands::set_member_roles(
+                    self.client.clone(),
+                    guild_id,
+                    user_id,
+                    role_ids,
+                    label,
+                )
+                .await;
+            }
+            AppCommand::TimeoutMember {
+                guild_id,
+                user_id,
+                minutes,
+                label,
+            } => {
+                message_commands::timeout_member(
+                    self.client.clone(),
+                    guild_id,
+                    user_id,
+                    minutes,
+                    label,
+                )
+                .await;
+            }
             AppCommand::ResolveInvite { code } => {
                 message_commands::resolve_invite(self.client.clone(), code).await;
             }

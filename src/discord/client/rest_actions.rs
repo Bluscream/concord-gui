@@ -274,6 +274,53 @@ impl DiscordClient {
             .await
     }
 
+    pub async fn kick_member(
+        &self,
+        guild_id: Id<GuildMarker>,
+        user_id: Id<UserMarker>,
+    ) -> Result<()> {
+        self.rest.kick_member(guild_id, user_id).await
+    }
+
+    pub async fn ban_member(
+        &self,
+        guild_id: Id<GuildMarker>,
+        user_id: Id<UserMarker>,
+        delete_message_seconds: u32,
+    ) -> Result<()> {
+        self.rest
+            .ban_member(guild_id, user_id, delete_message_seconds)
+            .await
+    }
+
+    pub async fn unban_member(
+        &self,
+        guild_id: Id<GuildMarker>,
+        user_id: Id<UserMarker>,
+    ) -> Result<()> {
+        self.rest.unban_member(guild_id, user_id).await
+    }
+
+    pub async fn set_member_roles(
+        &self,
+        guild_id: Id<GuildMarker>,
+        user_id: Id<UserMarker>,
+        role_ids: &[Id<crate::discord::ids::marker::RoleMarker>],
+    ) -> Result<()> {
+        self.rest
+            .set_member_roles(guild_id, user_id, role_ids)
+            .await
+    }
+
+    pub async fn timeout_member(
+        &self,
+        guild_id: Id<GuildMarker>,
+        user_id: Id<UserMarker>,
+        minutes: Option<u32>,
+    ) -> Result<()> {
+        self.rest.timeout_member(guild_id, user_id, minutes).await
+    }
+
     pub async fn resolve_invite(&self, code: &str) -> Result<crate::discord::rest::InvitePreview> {
         self.rest.resolve_invite(code).await
     }
