@@ -10,9 +10,9 @@ use concord::discord::{
     AppCommand, AppEvent, AttachmentDownloadId, BuiltinSlashCommandParse,
     BuiltinSlashCommandSubmit, DownloadAttachmentSource, ForumPostArchiveState,
     GlobalUserProfileUpdate, GuildUserProfileUpdate, Id, MAX_UPLOAD_ATTACHMENT_COUNT,
-    MessageAttachmentUpload, MessageSearchQuery, MuteDuration, ReactionEmoji, ReplyReference,
-    StreamCaptureTargetsRequestId, UserProfileUpdate, VoiceScope, marker, next_message_nonce,
-    parse_builtin_slash_command,
+    MediaPlaybackSource, MediaPlaybackTarget, MessageAttachmentUpload, MessageSearchQuery,
+    MuteDuration, ReactionEmoji, ReplyReference, StreamCaptureTargetsRequestId, UserProfileUpdate,
+    VoiceScope, marker, next_message_nonce, parse_builtin_slash_command,
     password_auth::{MfaMethod, PasswordAuthEvent},
     qr_auth::QrEvent,
 };
@@ -1316,6 +1316,9 @@ impl Workspace {
             MessageAction::DownloadAttachment(attachment) => {
                 self.download_attachment(index, attachment);
             }
+            MessageAction::PlayAttachment(attachment) => {
+                self.play_attachment(index, attachment);
+            }
             MessageAction::TogglePin => {
                 let pinned = self
                     .messages
@@ -2213,6 +2216,47 @@ impl Workspace {
             message_id: row.id,
             answer_ids,
         });
+    }
+
+    /// Play an attachment in the configured external player.
+    ///
+    /// Upstream shells out to mpv rather than decoding in-process, so this
+    /// opens a separate window. That is stated in the UI rather than dressed
+    /// up as inline playback.
+    fn play_attachment(&mut self, index: usize, attachment: usize) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(file) = self
+            .messages
+            .get(index)
+            .and_then(|row| row.attachments.get(attachment))
+        else {
+            return;
+        };
+
+        if file.url.is_empty() {
+            self.model.status_line = format!("{} has no source to play", file.filename);
+            return;
+        }
+
+        if !self.options.display.media_playback {
+            // Enabled explicitly rather than assumed: playback launches an
+            // external process, which is not something to do unasked.
+            self.model.status_line =
+                "Enable media playback in settings to open this externally".to_string();
+            return;
+        }
+
+        handle.send(AppCommand::PlayMedia {
+            target: MediaPlaybackTarget {
+                url: file.url.clone(),
+                label: file.filename.clone(),
+                source: MediaPlaybackSource::Message,
+            },
+            request_id: None,
+        });
+        self.model.status_line = format!("Opening {} externally…", file.filename);
     }
 
     /// Download an attachment to the user's download directory.

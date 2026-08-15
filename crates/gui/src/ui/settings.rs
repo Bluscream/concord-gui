@@ -17,6 +17,7 @@ pub enum Toggle {
     Hour24,
     ShowAvatars,
     ShowCustomEmoji,
+    MediaPlayback,
     CircularAvatars,
     DesktopNotifications,
     NoiseSuppression,
@@ -31,6 +32,7 @@ impl Toggle {
             Toggle::Hour24 => "24-hour timestamps",
             Toggle::ShowAvatars => "Show avatars",
             Toggle::ShowCustomEmoji => "Show custom emoji",
+            Toggle::MediaPlayback => "External media playback",
             Toggle::CircularAvatars => "Circular avatars",
             Toggle::DesktopNotifications => "Desktop notifications",
             Toggle::NoiseSuppression => "Noise suppression",
@@ -43,6 +45,7 @@ impl Toggle {
             Toggle::LightMode => Some("Switch between Dark and Light mode interface themes"),
             Toggle::ShareRichPresence => Some("Lets others see what you are playing"),
             Toggle::NoiseSuppression => Some("Applied when joining a voice channel"),
+            Toggle::MediaPlayback => Some("Opens video and audio in an external player"),
             _ => None,
         }
     }
@@ -53,6 +56,7 @@ impl Toggle {
             Toggle::Hour24 => 1,
             Toggle::ShowAvatars => 2,
             Toggle::ShowCustomEmoji => 3,
+            Toggle::MediaPlayback => 8,
             Toggle::CircularAvatars => 4,
             Toggle::DesktopNotifications => 5,
             Toggle::NoiseSuppression => 6,

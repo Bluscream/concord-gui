@@ -94,6 +94,8 @@ pub struct AttachmentRow {
     pub is_image: bool,
     /// CDN source. Empty for demo attachments, which were never uploaded.
     pub url: String,
+    /// Whether an external player could open this.
+    pub is_playable: bool,
 }
 
 /// A single rendered message row.
@@ -214,6 +216,11 @@ pub fn project_messages(
                         .as_deref()
                         .is_some_and(|kind| kind.starts_with("image/")),
                     url: attachment.url.clone(),
+                    is_playable: attachment.content_type.as_deref().is_some_and(|kind| {
+                        kind.starts_with("video/")
+                            || kind.starts_with("audio/")
+                            || kind.starts_with("image/")
+                    }),
                 })
                 .collect(),
             reactions: message

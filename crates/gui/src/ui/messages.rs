@@ -45,6 +45,7 @@ impl MessageAction {
             MessageAction::TogglePin => 12,
             MessageAction::VotePoll(_) => 13,
             MessageAction::DownloadAttachment(_) => 14,
+            MessageAction::PlayAttachment(_) => 15,
         }
     }
 }
@@ -75,6 +76,8 @@ pub enum MessageAction {
     VotePoll(u8),
     /// Download an attachment by index.
     DownloadAttachment(usize),
+    /// Open an attachment in the external media player.
+    PlayAttachment(usize),
     /// Toggle an existing reaction, identified by its index in the row's
     /// reaction list. Carrying the index avoids threading emoji identity
     /// through the callback.
@@ -418,6 +421,27 @@ fn message_body(
                 handler(index, MessageAction::DownloadAttachment(position), cx)
             }),
         );
+
+        // Only offered for media: opening a text file in a video player would
+        // simply fail.
+        if attachment.is_playable {
+            let handler = on_action.clone();
+            body = body.child(
+                gpui::div()
+                    .id(("attachment-play", index * 16 + position))
+                    .px(px(space::SM))
+                    .py(px(2.))
+                    .rounded(px(layout::RADIUS))
+                    .cursor_pointer()
+                    .text_size(px(text::XS))
+                    .text_color(rgb(active().accent))
+                    .hover(|style| style.bg(rgb(active().surface_hover)))
+                    .child("open externally")
+                    .on_click(move |_event, _window, cx| {
+                        handler(index, MessageAction::PlayAttachment(position), cx)
+                    }),
+            );
+        }
     }
 
     if let Some(poll) = &message.poll {
