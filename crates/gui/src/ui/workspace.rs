@@ -335,6 +335,44 @@ impl Workspace {
         );
     }
 
+    /// Sign out: drop the session and return to the login screen.
+    ///
+    /// The stored credential is deleted too. A sign-out that left the token on
+    /// disk would silently log back in on the next launch, which is the
+    /// opposite of what the action means.
+    pub fn sign_out(&mut self, cx: &mut Context<Self>) {
+        let _ = token_store::delete_token(self.options.credentials.store);
+
+        // Drop everything session-scoped, so nothing from the old account is
+        // visible behind the login screen.
+        self.handle = None;
+        self.last_state = None;
+        self.messages.clear();
+        self.model = WorkspaceModel::empty();
+        self.nav = Navigation::default();
+        self.current_user = None;
+        self.profile = None;
+        self.inbox = None;
+        self.pins = None;
+        self.search = None;
+        self.switcher = None;
+        self.forum = None;
+        self.voice_channel = None;
+        self.voice_scope_joined = None;
+        self.composer.clear();
+        self.attachments.clear();
+
+        self.screen = Screen::Login(Login::default());
+        cx.notify();
+    }
+
+    /// Open the authenticated user's own profile.
+    pub fn open_own_profile(&mut self) {
+        if let Some(user_id) = self.current_user {
+            self.open_profile(user_id);
+        }
+    }
+
     /// Hand the draft to an external editor and take back what it returns.
     ///
     /// The editor blocks until it exits, so it runs on the shared runtime
@@ -3213,6 +3251,16 @@ impl Render for Workspace {
                             this.mark_all_read();
                         } else if key == "o" && event.keystroke.modifiers.control {
                             this.attach_files(cx);
+                        } else if key == "q"
+                            && event.keystroke.modifiers.control
+                            && event.keystroke.modifiers.shift
+                        {
+                            this.sign_out(cx);
+                        } else if key == "p"
+                            && event.keystroke.modifiers.control
+                            && event.keystroke.modifiers.shift
+                        {
+                            this.open_own_profile();
                         } else if key == "e"
                             && event.keystroke.modifiers.control
                             && event.keystroke.modifiers.shift
