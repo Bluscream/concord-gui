@@ -31,7 +31,7 @@ use crate::model::projection::{self, Navigation, Selection};
 use crate::notify;
 use crate::session::{SessionHandle, Update};
 
-use crate::theme::{self, Presence, active, layout, space, text};
+use crate::theme::{self, Presence, active, layout, scaled, space, text};
 use crate::ui::chrome::{
     avatar, avatar_with_url, column, header, hint, panel_sunken, presence_dot, row, section_label,
     sidebar_row, voice_participant_row,
@@ -261,6 +261,8 @@ pub struct Workspace {
     pub guild_muted: bool,
     /// Recent error-log lines, shown when the debug panel is open.
     pub debug_log: Option<Vec<String>>,
+    /// Whether sends go out as text-to-speech.
+    pub send_as_tts: bool,
     /// A destructive action awaiting confirmation.
     pub confirming: Option<Confirm>,
     /// Message the keyboard is on, when navigating the log without a mouse.
@@ -345,6 +347,7 @@ impl Workspace {
             voice_scope_joined: None,
             channel_muted: false,
             guild_muted: false,
+            send_as_tts: false,
             confirming: None,
             selected_message: None,
             focus_pane: Pane::Channels,
@@ -642,6 +645,46 @@ impl Workspace {
             .set_offset(gpui::point(offset.x, offset.y + height * pages));
     }
 
+    /// Widen or narrow the focused pane, persisting the width.
+    ///
+    /// Bounded so a pane cannot be dragged to nothing: a zero-width sidebar
+    /// looks like it vanished, and there is no handle left to bring it back.
+    fn resize_pane(&mut self, delta: i16) {
+        let width = match self.focus_pane {
+            Pane::Guilds => &mut self.ui_state.server_width,
+            Pane::Channels => &mut self.ui_state.channel_list_width,
+            Pane::Members => &mut self.ui_state.member_list_width,
+            // The log takes what the panes leave, so it has no width of its own.
+            Pane::Messages => return,
+        };
+
+        *width = (*width as i16 + delta).clamp(120, 480) as u16;
+
+        if let Err(error) = config::save_ui_state_options(&self.ui_state) {
+            tracing::debug!("could not save pane width: {error}");
+        }
+    }
+
+    /// Step the interface scale.
+    ///
+    /// Applied to the type scale rather than to the window, so layout reflows
+    /// at the new size instead of being magnified with it.
+    fn adjust_zoom(&mut self, delta: f32) {
+        let next = (crate::theme::zoom() + delta).clamp(0.75, 2.0);
+        crate::theme::set_zoom(next);
+        self.model.status_line = format!("Interface scale {:.0}%", next * 100.0);
+    }
+
+    /// Toggle whether messages are sent as text-to-speech.
+    fn toggle_tts(&mut self) {
+        self.send_as_tts = !self.send_as_tts;
+        self.model.status_line = if self.send_as_tts {
+            "Next messages send as /tts".to_string()
+        } else {
+            "Sending normally".to_string()
+        };
+    }
+
     /// Set how loudly one participant is played, or mute them locally.
     ///
     /// Local only: this changes playback here, not what anyone else hears.
@@ -925,13 +968,23 @@ impl Workspace {
                 mention_author: self.reply_ping,
             });
 
-        handle.send(AppCommand::SendMessage {
-            channel_id,
-            nonce: next_message_nonce(),
-            content,
-            reply_to,
-            attachments: std::mem::take(&mut self.attachments),
-        });
+        if self.send_as_tts && reply_to.is_none() && self.attachments.is_empty() {
+            // TTS has no reply or attachment form, so it applies only to a
+            // plain message rather than silently dropping either.
+            handle.send(AppCommand::SendTtsMessage {
+                channel_id,
+                nonce: next_message_nonce(),
+                content,
+            });
+        } else {
+            handle.send(AppCommand::SendMessage {
+                channel_id,
+                nonce: next_message_nonce(),
+                content,
+                reply_to,
+                attachments: std::mem::take(&mut self.attachments),
+            });
+        }
         self.attachment_error = None;
     }
 
@@ -1974,7 +2027,7 @@ impl Workspace {
                 .px(px(space::MD))
                 .border_b_1()
                 .border_color(rgb(active().border))
-                .text_size(px(text::SM))
+                .text_size(px(scaled(text::SM)))
                 .text_color(rgb(active().text))
                 .child("Search"),
         );
@@ -1990,7 +2043,7 @@ impl Workspace {
                     .bg(rgb(active().surface))
                     .border_1()
                     .border_color(rgb(active().accent))
-                    .text_size(px(text::SM))
+                    .text_size(px(scaled(text::SM)))
                     .child(if search.input.text().is_empty() {
                         gpui::div()
                             .text_color(rgb(active().text_subtle))
@@ -2018,7 +2071,7 @@ impl Workspace {
                 gpui::div()
                     .px(px(space::MD))
                     .pb(px(space::XS))
-                    .text_size(px(text::XS))
+                    .text_size(px(scaled(text::XS)))
                     .text_color(rgb(active().text_subtle))
                     .child(status),
             );
@@ -2051,13 +2104,13 @@ impl Workspace {
                     }))
                     .child(
                         gpui::div()
-                            .text_size(px(text::XS))
+                            .text_size(px(scaled(text::XS)))
                             .text_color(rgb(active().accent))
                             .child(result.author.clone()),
                     )
                     .child(
                         gpui::div()
-                            .text_size(px(text::SM))
+                            .text_size(px(scaled(text::SM)))
                             .text_color(rgb(active().text_muted))
                             .child(preview),
                     ),
@@ -2096,13 +2149,13 @@ impl Workspace {
                             .flex_1()
                             .child(
                                 gpui::div()
-                                    .text_size(px(text::XS))
+                                    .text_size(px(scaled(text::XS)))
                                     .text_color(rgb(active().success))
                                     .child("Voice Connected"),
                             )
                             .child(
                                 gpui::div()
-                                    .text_size(px(text::XS))
+                                    .text_size(px(scaled(text::XS)))
                                     .text_color(rgb(active().text_subtle))
                                     .child(name.to_string()),
                             ),
@@ -2267,13 +2320,13 @@ impl Workspace {
                             .overflow_hidden()
                             .child(
                                 gpui::div()
-                                    .text_size(px(text::SM))
+                                    .text_size(px(scaled(text::SM)))
                                     .text_color(rgb(active().text))
                                     .child(user_name),
                             )
                             .child(
                                 gpui::div()
-                                    .text_size(px(text::XS))
+                                    .text_size(px(scaled(text::XS)))
                                     .text_color(rgb(active().text_subtle))
                                     .child("Online"),
                             ),
@@ -3213,7 +3266,7 @@ impl Workspace {
             .px(px(space::MD))
             .border_b_1()
             .border_color(rgb(active().border))
-            .text_size(px(text::BASE))
+            .text_size(px(scaled(text::BASE)))
             .text_color(rgb(active().text))
             .child(guild_name);
 
@@ -3237,7 +3290,7 @@ impl Workspace {
                     .w_full()
                     .px(px(space::MD))
                     .py(px(space::XS))
-                    .text_size(px(text::XS))
+                    .text_size(px(scaled(text::XS)))
                     .text_color(rgb(active().accent))
                     .child(if filter.text().is_empty() {
                         "filter…".to_string()
@@ -3316,7 +3369,7 @@ impl Workspace {
                         .px(px(6.))
                         .rounded_full()
                         .bg(rgb(active().danger))
-                        .text_size(px(text::XS))
+                        .text_size(px(scaled(text::XS)))
                         .text_color(rgb(active().on_accent))
                         .child(channel.mentions.to_string()),
                 );
@@ -3400,7 +3453,7 @@ impl Workspace {
                 gpui::div()
                     .px(px(space::MD))
                     .pt(px(space::MD))
-                    .text_size(px(text::XS))
+                    .text_size(px(scaled(text::XS)))
                     .text_color(rgb(active().text_subtle))
                     .child("No member data"),
             );
@@ -3435,7 +3488,7 @@ impl Workspace {
                         .px(px(4.))
                         .rounded(px(3.))
                         .bg(rgb(active().accent))
-                        .text_size(px(text::XS))
+                        .text_size(px(scaled(text::XS)))
                         .text_color(rgb(active().on_accent))
                         .child("BOT"),
                 );
@@ -3532,7 +3585,7 @@ impl Workspace {
                     .child(
                         gpui::div()
                             .flex_1()
-                            .text_size(px(text::BASE))
+                            .text_size(px(scaled(text::BASE)))
                             .text_color(rgb(active().text))
                             .child(channel_name.clone()),
                     )
@@ -3547,7 +3600,7 @@ impl Workspace {
                                     .py(px(space::XS))
                                     .rounded(px(layout::RADIUS))
                                     .cursor_pointer()
-                                    .text_size(px(text::XS))
+                                    .text_size(px(scaled(text::XS)))
                                     .text_color(rgb(active().text_muted))
                                     .hover(|style| style.bg(rgb(active().surface_hover)))
                                     .child("follow")
@@ -3563,7 +3616,7 @@ impl Workspace {
                                     .py(px(space::XS))
                                     .rounded(px(layout::RADIUS))
                                     .cursor_pointer()
-                                    .text_size(px(text::XS))
+                                    .text_size(px(scaled(text::XS)))
                                     .text_color(rgb(active().text_muted))
                                     .hover(|style| style.bg(rgb(active().surface_hover)))
                                     .child("all")
@@ -3579,7 +3632,7 @@ impl Workspace {
                                     .py(px(space::XS))
                                     .rounded(px(layout::RADIUS))
                                     .cursor_pointer()
-                                    .text_size(px(text::XS))
+                                    .text_size(px(scaled(text::XS)))
                                     .text_color(rgb(active().text_muted))
                                     .hover(|style| style.bg(rgb(active().surface_hover)))
                                     .child("mentions")
@@ -3595,7 +3648,7 @@ impl Workspace {
                                     .py(px(space::XS))
                                     .rounded(px(layout::RADIUS))
                                     .cursor_pointer()
-                                    .text_size(px(text::XS))
+                                    .text_size(px(scaled(text::XS)))
                                     .text_color(rgb(active().text_muted))
                                     .hover(|style| style.bg(rgb(active().surface_hover)))
                                     .child("none")
@@ -3611,7 +3664,7 @@ impl Workspace {
                                     .py(px(space::XS))
                                     .rounded(px(layout::RADIUS))
                                     .cursor_pointer()
-                                    .text_size(px(text::XS))
+                                    .text_size(px(scaled(text::XS)))
                                     .text_color(rgb(active().text_muted))
                                     .hover(|style| style.bg(rgb(active().surface_hover)))
                                     .child("archive")
@@ -3628,7 +3681,7 @@ impl Workspace {
                             .py(px(space::XS))
                             .rounded(px(layout::RADIUS))
                             .cursor_pointer()
-                            .text_size(px(text::XS))
+                            .text_size(px(scaled(text::XS)))
                             .text_color(rgb(active().text_muted))
                             .hover(|style| style.bg(rgb(active().surface_hover)))
                             .child("pins")
@@ -3644,7 +3697,7 @@ impl Workspace {
                             .py(px(space::XS))
                             .rounded(px(layout::RADIUS))
                             .cursor_pointer()
-                            .text_size(px(text::XS))
+                            .text_size(px(scaled(text::XS)))
                             .text_color(rgb(if self.channel_muted {
                                 active().danger
                             } else {
@@ -3668,7 +3721,7 @@ impl Workspace {
                                 .rounded(px(layout::RADIUS))
                                 .cursor_pointer()
                                 .bg(rgb(active().surface_hover))
-                                .text_size(px(text::XS))
+                                .text_size(px(scaled(text::XS)))
                                 .text_color(rgb(active().success))
                                 .child("call")
                                 .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -3734,7 +3787,7 @@ impl Workspace {
             .bg(rgb(active().surface_sunken))
             .border_t_1()
             .border_color(rgb(active().border))
-            .text_size(px(text::XS))
+            .text_size(px(scaled(text::XS)))
             .text_color(rgb(active().text_subtle))
             .child(presence_dot(if self.model.connected {
                 Presence::Online
@@ -4066,6 +4119,24 @@ impl Render for Workspace {
                                 "p" => this.act_on_selection(MessageAction::TogglePin),
                                 _ => this.act_on_selection(MessageAction::Delete),
                             }
+                        } else if event.keystroke.modifiers.control
+                            && event.keystroke.modifiers.shift
+                            && matches!(key, "left" | "right")
+                        {
+                            this.resize_pane(if key == "right" { 20 } else { -20 });
+                        } else if event.keystroke.modifiers.control
+                            && matches!(key, "=" | "+" | "-" | "0")
+                        {
+                            match key {
+                                "-" => this.adjust_zoom(-0.1),
+                                "0" => crate::theme::set_zoom(1.0),
+                                _ => this.adjust_zoom(0.1),
+                            }
+                        } else if key == "t"
+                            && event.keystroke.modifiers.control
+                            && event.keystroke.modifiers.shift
+                        {
+                            this.toggle_tts();
                         } else if key == "slash" && event.keystroke.modifiers.control {
                             this.toggle_pane_filter();
                         } else if key == "tab" {
@@ -4163,7 +4234,7 @@ impl Render for Workspace {
             }))
             .size_full()
             .bg(rgb(active().bg))
-            .text_size(px(text::BASE))
+            .text_size(px(scaled(text::BASE)))
             .when(matches!(self.screen, Screen::Login(_)), |d| {
                 let Screen::Login(login) = &self.screen else {
                     return d;

@@ -17,7 +17,7 @@ use gpui::{Context, Div, prelude::*, px, rgb};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::theme::{active, layout, space, text};
+use crate::theme::{active, layout, scaled, space, text};
 use crate::ui::chrome::{column, row};
 use crate::ui::composer::Composer;
 use crate::ui::workspace::{LoginAction, Workspace};
@@ -192,13 +192,13 @@ fn method_btn(
                 .gap(px(2.))
                 .child(
                     gpui::div()
-                        .text_size(px(text::BASE))
+                        .text_size(px(scaled(text::BASE)))
                         .text_color(rgb(active().text))
                         .child(label.to_string()),
                 )
                 .child(
                     gpui::div()
-                        .text_size(px(text::XS))
+                        .text_size(px(scaled(text::XS)))
                         .text_color(rgb(active().text_subtle))
                         .child(subtitle.to_string()),
                 ),
@@ -254,7 +254,7 @@ fn input_row(label: &str, value: &str, focused: bool, mask: Mask, error: bool) -
         .gap(px(space::XS))
         .child(
             gpui::div()
-                .text_size(px(text::XS))
+                .text_size(px(scaled(text::XS)))
                 .text_color(rgb(active().text_muted))
                 .child(label.to_string()),
         )
@@ -274,7 +274,7 @@ fn input_row(label: &str, value: &str, focused: bool, mask: Mask, error: bool) -
                 } else {
                     active().border
                 }))
-                .text_size(px(text::BASE))
+                .text_size(px(scaled(text::BASE)))
                 .child(if value.is_empty() {
                     gpui::div()
                         .text_color(rgb(active().text_subtle))
@@ -293,7 +293,7 @@ fn back_button(cx: &mut Context<Workspace>) -> gpui::Stateful<Div> {
         .py(px(space::XS))
         .px(px(space::SM))
         .rounded(px(layout::RADIUS))
-        .text_size(px(text::SM))
+        .text_size(px(scaled(text::SM)))
         .text_color(rgb(active().text_muted))
         .cursor_pointer()
         .hover(|d| {
@@ -325,7 +325,7 @@ fn action_btn(
         } else {
             active().surface_active
         }))
-        .text_size(px(text::BASE))
+        .text_size(px(scaled(text::BASE)))
         .text_color(rgb(if enabled {
             active().on_accent
         } else {
@@ -433,7 +433,7 @@ fn picker_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
                 )
                 .child(
                     gpui::div()
-                        .text_size(px(text::SM))
+                        .text_size(px(scaled(text::SM)))
                         .text_color(rgb(active().text_muted))
                         .child("Choose how to log in"),
                 ),
@@ -482,7 +482,7 @@ fn picker_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
 
     card.child(
         gpui::div()
-            .text_size(px(text::XS))
+            .text_size(px(scaled(text::XS)))
             .text_color(rgb(active().text_subtle))
             .child("Third-party clients are against Discord's ToS; use at your own risk."),
     )
@@ -510,7 +510,7 @@ fn password_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
                 .child(
                     gpui::div()
                         .flex_1()
-                        .text_size(px(text::LG))
+                        .text_size(px(scaled(text::LG)))
                         .text_color(rgb(active().text))
                         .child("Username + Password"),
                 ),
@@ -549,14 +549,14 @@ fn password_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
 
     card.child(
         gpui::div()
-            .text_size(px(text::XS))
+            .text_size(px(scaled(text::XS)))
             .text_color(rgb(active().text_subtle))
             .child("Tab to switch fields · Enter to submit · ctrl-r to save token"),
     )
     .when(!pw.status.is_empty(), |d| {
         d.child(
             gpui::div()
-                .text_size(px(text::XS))
+                .text_size(px(scaled(text::XS)))
                 .text_color(rgb(active().text_muted))
                 .child(pw.status.clone()),
         )
@@ -582,13 +582,13 @@ fn mfa_select_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
                 .gap(px(space::XS))
                 .child(
                     gpui::div()
-                        .text_size(px(text::LG))
+                        .text_size(px(scaled(text::LG)))
                         .text_color(rgb(active().text))
                         .child("Two-Factor Authentication"),
                 )
                 .child(
                     gpui::div()
-                        .text_size(px(text::SM))
+                        .text_size(px(scaled(text::SM)))
                         .text_color(rgb(active().text_muted))
                         .child("Choose a verification method"),
                 ),
@@ -651,7 +651,7 @@ fn mfa_code_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
                 .child(
                     gpui::div()
                         .flex_1()
-                        .text_size(px(text::LG))
+                        .text_size(px(scaled(text::LG)))
                         .text_color(rgb(active().text))
                         .child(method_name),
                 ),
@@ -659,7 +659,7 @@ fn mfa_code_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
         .when(!pw.status.is_empty(), |d| {
             d.child(
                 gpui::div()
-                    .text_size(px(text::SM))
+                    .text_size(px(scaled(text::SM)))
                     .text_color(rgb(active().text_muted))
                     .child(pw.status.clone()),
             )
@@ -706,7 +706,7 @@ fn token_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
                 .child(
                     gpui::div()
                         .flex_1()
-                        .text_size(px(text::LG))
+                        .text_size(px(scaled(text::LG)))
                         .text_color(rgb(active().text))
                         .child("User / Bot Token"),
                 ),
@@ -729,7 +729,7 @@ fn token_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
 
     card.child(
         gpui::div()
-            .text_size(px(text::XS))
+            .text_size(px(scaled(text::XS)))
             .text_color(rgb(active().text_subtle))
             .child(if login.remember {
                 "Enter to connect  ·  ctrl-r: will be saved to the credential store"
@@ -760,7 +760,7 @@ fn qr_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
                 .child(
                     gpui::div()
                         .flex_1()
-                        .text_size(px(text::LG))
+                        .text_size(px(scaled(text::LG)))
                         .text_color(rgb(active().text))
                         .child("QR Code"),
                 ),
@@ -775,7 +775,7 @@ fn qr_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
                 .when(qr.pending_user.is_some(), |d| {
                     d.child(
                         gpui::div()
-                            .text_size(px(text::SM))
+                            .text_size(px(scaled(text::SM)))
                             .text_color(rgb(active().success))
                             .child(format!(
                                 "Confirm login in the Discord app as {}",
@@ -787,7 +787,7 @@ fn qr_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
     } else {
         card.child(
             gpui::div()
-                .text_size(px(text::SM))
+                .text_size(px(scaled(text::SM)))
                 .text_color(rgb(active().text_muted))
                 .child(if qr.status.is_empty() {
                     "Starting QR login\u{2026}".to_string()
@@ -800,7 +800,7 @@ fn qr_view(login: &Login, cx: &mut Context<Workspace>) -> Div {
     if !qr.status.is_empty() && qr.bitmap.is_some() {
         card = card.child(
             gpui::div()
-                .text_size(px(text::XS))
+                .text_size(px(scaled(text::XS)))
                 .text_color(rgb(active().text_muted))
                 .child(qr.status.clone()),
         );
@@ -817,7 +817,7 @@ fn maybe_error(card: Div, error: &Option<String>) -> Div {
     if let Some(msg) = error {
         card.child(
             gpui::div()
-                .text_size(px(text::SM))
+                .text_size(px(scaled(text::SM)))
                 .text_color(rgb(active().danger))
                 .child(msg.clone()),
         )

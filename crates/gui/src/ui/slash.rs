@@ -8,7 +8,7 @@
 use concord::discord::{ApplicationCommandInfo, BuiltinSlashCommandInfo, builtin_slash_commands};
 use gpui::{Div, prelude::*, px, rgb};
 
-use crate::theme::{active, layout, space, text};
+use crate::theme::{active, layout, scaled, space, text};
 use crate::ui::chrome::{column, row};
 
 /// One offered command, from either source.
@@ -141,7 +141,7 @@ pub fn slash_view(picker: &SlashPicker) -> Div {
                 .child(
                     gpui::div()
                         .w(px(90.))
-                        .text_size(px(text::SM))
+                        .text_size(px(scaled(text::SM)))
                         .text_color(rgb(if selected {
                             active().text
                         } else {
@@ -152,13 +152,13 @@ pub fn slash_view(picker: &SlashPicker) -> Div {
                 .child(
                     gpui::div()
                         .flex_1()
-                        .text_size(px(text::XS))
+                        .text_size(px(scaled(text::XS)))
                         .text_color(rgb(active().text_subtle))
                         .child(command.description().to_string()),
                 )
                 .children(command.source().map(|application| {
                     gpui::div()
-                        .text_size(px(text::XS))
+                        .text_size(px(scaled(text::XS)))
                         .text_color(rgb(active().accent))
                         .child(application.to_string())
                 })),

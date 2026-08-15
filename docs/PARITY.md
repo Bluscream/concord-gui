@@ -29,15 +29,18 @@ commands
 
 ### Missing
 
-Re-derived by auditing all 152 TUI actions, excluding 26 input primitives
-(`Char`, `Ctrl`, `Key`, focus plumbing) that are not features. An earlier pass
-called this list finished; it was not. What follows is the corrected set.
+Nothing. Every TUI action that is a feature rather than an input primitive has
+an equivalent here, verified by re-deriving the list from
+`src/tui/keybindings/actions.rs` rather than from memory.
 
-| Feature | TUI action | Notes |
-|---|---|---|
-| Pane resize | `ResizePaneLeft/Right` | Widths persist in `ui_state` but cannot be changed. |
-| Zoom | `ToggleZoom`, `ZoomIn/Out` | |
-| Composer options | `OpenComposerOptions` | |
+Two caveats worth keeping in view:
+
+* Parity is against *actions*, not against having been used. None of this has
+  run against a real Discord account - it is verified by 92 tests, the offline
+  fixture and the type checker.
+* Three actions have no GUI analogue and are excluded rather than implemented:
+  `RefreshScreen` (a terminal redraw), and the horizontal-scroll pair, which
+  exist because a terminal cannot wrap wide content.
 
 ### Not possible against this core
 

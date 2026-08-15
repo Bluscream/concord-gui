@@ -976,3 +976,20 @@ fn plain_messages_expose_no_links() {
         "ordinary messages should not manufacture links"
     );
 }
+
+#[test]
+fn zoom_scales_type_and_clamps_at_both_ends() {
+    use crate::theme;
+
+    theme::set_zoom(1.0);
+    let base = theme::scaled(14.0);
+
+    theme::set_zoom(2.0);
+    assert!(theme::scaled(14.0) > base, "zooming in must enlarge type");
+
+    theme::set_zoom(0.5);
+    assert!(theme::scaled(14.0) < base, "zooming out must shrink it");
+
+    theme::set_zoom(1.0);
+    assert_eq!(theme::scaled(14.0), base, "reset must restore the base size");
+}

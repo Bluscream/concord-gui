@@ -15,7 +15,7 @@
 use concord::discord::{StreamCaptureTarget, StreamCaptureTargetKind};
 use gpui::{Div, prelude::*, px, rgb};
 
-use crate::theme::{active, layout, space, text};
+use crate::theme::{active, layout, scaled, space, text};
 use crate::ui::chrome::{column, row};
 
 /// Picker state for choosing what to broadcast.
@@ -63,7 +63,7 @@ pub fn picker_view(
         .border_color(rgb(active().border))
         .child(
             gpui::div()
-                .text_size(px(text::SM))
+                .text_size(px(scaled(text::SM)))
                 .text_color(rgb(active().text))
                 .child("Share a screen or window"),
         );
@@ -71,7 +71,7 @@ pub fn picker_view(
     if picker.loading {
         return panel.child(
             gpui::div()
-                .text_size(px(text::XS))
+                .text_size(px(scaled(text::XS)))
                 .text_color(rgb(active().text_subtle))
                 .child("Finding capture sources…"),
         );
@@ -80,7 +80,7 @@ pub fn picker_view(
     if let Some(error) = &picker.error {
         panel = panel.child(
             gpui::div()
-                .text_size(px(text::XS))
+                .text_size(px(scaled(text::XS)))
                 .text_color(rgb(active().danger))
                 .child(error.clone()),
         );
@@ -89,7 +89,7 @@ pub fn picker_view(
         // worth naming: the user can install it and retry.
         panel = panel.child(
             gpui::div()
-                .text_size(px(text::XS))
+                .text_size(px(scaled(text::XS)))
                 .text_color(rgb(active().text_subtle))
                 .child("No capture sources. On Linux this needs xdg-desktop-portal."),
         );
@@ -116,14 +116,14 @@ pub fn picker_view(
                 .child(
                     gpui::div()
                         .w(px(52.))
-                        .text_size(px(text::XS))
+                        .text_size(px(scaled(text::XS)))
                         .text_color(rgb(active().text_subtle))
                         .child(kind_label(target.kind)),
                 )
                 .child(
                     gpui::div()
                         .flex_1()
-                        .text_size(px(text::SM))
+                        .text_size(px(scaled(text::SM)))
                         .text_color(rgb(active().text))
                         .child(target.title.clone()),
                 )
@@ -138,7 +138,7 @@ pub fn picker_view(
             .py(px(space::XS))
             .rounded(px(layout::RADIUS))
             .cursor_pointer()
-            .text_size(px(text::XS))
+            .text_size(px(scaled(text::XS)))
             .text_color(rgb(active().text_muted))
             .hover(|style| style.bg(rgb(active().surface_hover)))
             .child("Cancel")
@@ -161,7 +161,7 @@ pub fn share_button(broadcasting: bool, available: bool) -> Div {
         .px(px(space::SM))
         .py(px(space::XS))
         .rounded(px(layout::RADIUS))
-        .text_size(px(text::XS))
+        .text_size(px(scaled(text::XS)))
         .bg(rgb(if broadcasting {
             active().surface_active
         } else {

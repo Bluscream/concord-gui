@@ -9,7 +9,7 @@
 
 use gpui::{Div, prelude::*, px, rgb};
 
-use crate::theme::{active, layout, space, text};
+use crate::theme::{active, layout, scaled, space, text};
 use crate::ui::chrome::{column, row};
 
 /// One forum post, flattened for rendering.
@@ -77,7 +77,7 @@ pub fn forum_view(
             .child(
                 gpui::div()
                     .flex_1()
-                    .text_size(px(text::BASE))
+                    .text_size(px(scaled(text::BASE)))
                     .text_color(rgb(active().text))
                     .child(view.name.clone()),
             )
@@ -88,7 +88,7 @@ pub fn forum_view(
                     .py(px(space::XS))
                     .rounded(px(layout::RADIUS))
                     .cursor_pointer()
-                    .text_size(px(text::XS))
+                    .text_size(px(scaled(text::XS)))
                     .bg(rgb(if view.showing_archived {
                         active().surface_active
                     } else {
@@ -116,14 +116,14 @@ pub fn forum_view(
     if let Some(error) = &view.error {
         list = list.child(
             gpui::div()
-                .text_size(px(text::SM))
+                .text_size(px(scaled(text::SM)))
                 .text_color(rgb(active().danger))
                 .child(error.clone()),
         );
     } else if view.posts.is_empty() && !view.loading {
         list = list.child(
             gpui::div()
-                .text_size(px(text::SM))
+                .text_size(px(scaled(text::SM)))
                 .text_color(rgb(active().text_subtle))
                 .child(if view.showing_archived {
                     "No archived posts"
@@ -156,13 +156,13 @@ pub fn forum_view(
                         .child(
                             gpui::div()
                                 .flex_1()
-                                .text_size(px(text::BASE))
+                                .text_size(px(scaled(text::BASE)))
                                 .text_color(rgb(active().text))
                                 .child(post.title.clone()),
                         )
                         .child(
                             gpui::div()
-                                .text_size(px(text::XS))
+                                .text_size(px(scaled(text::XS)))
                                 .text_color(rgb(active().text_subtle))
                                 .child(format!("{} replies", post.message_count)),
                         ),
@@ -170,14 +170,14 @@ pub fn forum_view(
                 .when(!post.preview.is_empty(), |d| {
                     d.child(
                         gpui::div()
-                            .text_size(px(text::SM))
+                            .text_size(px(scaled(text::SM)))
                             .text_color(rgb(active().text_muted))
                             .child(post.preview.clone()),
                     )
                 })
                 .child(
                     gpui::div()
-                        .text_size(px(text::XS))
+                        .text_size(px(scaled(text::XS)))
                         .text_color(rgb(active().text_subtle))
                         .child(post.author.clone()),
                 )
@@ -188,7 +188,7 @@ pub fn forum_view(
     if view.loading {
         list = list.child(
             gpui::div()
-                .text_size(px(text::XS))
+                .text_size(px(scaled(text::XS)))
                 .text_color(rgb(active().text_subtle))
                 .child("Loading posts…"),
         );
@@ -202,7 +202,7 @@ pub fn forum_view(
                 .py(px(space::SM))
                 .rounded(px(layout::RADIUS))
                 .cursor_pointer()
-                .text_size(px(text::SM))
+                .text_size(px(scaled(text::SM)))
                 .text_color(rgb(active().accent))
                 .hover(|style| style.bg(rgb(active().surface_hover)))
                 .child("Load more")

@@ -10,7 +10,7 @@
 
 use gpui::{Div, KeyDownEvent, prelude::*, px, rgb};
 
-use crate::theme::{active, layout, space, text};
+use crate::theme::{active, layout, scaled, space, text};
 use crate::ui::chrome::{column, row};
 
 /// What a key press asked the host to do with the clipboard.
@@ -562,7 +562,7 @@ pub fn composer_view(composer: &Composer, focused: bool, enabled: bool, placehol
                 } else {
                     active().border
                 }))
-                .text_size(px(text::BASE))
+                .text_size(px(scaled(text::BASE)))
                 .child(content),
         )
 }

@@ -10,7 +10,7 @@
 use concord::discord::{Id, marker};
 use gpui::{Div, prelude::*, px, rgb};
 
-use crate::theme::{active, layout, space, text};
+use crate::theme::{active, layout, scaled, space, text};
 use crate::ui::chrome::{column, row};
 use crate::ui::workspace::ChannelKind;
 
@@ -99,7 +99,7 @@ pub fn switcher_view(switcher: &Switcher) -> Div {
             .px(px(space::LG))
             .border_b_1()
             .border_color(rgb(active().border))
-            .text_size(px(text::BASE))
+            .text_size(px(scaled(text::BASE)))
             .child(if switcher.query.text().is_empty() {
                 gpui::div()
                     .text_color(rgb(active().text_subtle))
@@ -116,7 +116,7 @@ pub fn switcher_view(switcher: &Switcher) -> Div {
             gpui::div()
                 .px(px(space::LG))
                 .py(px(space::MD))
-                .text_size(px(text::SM))
+                .text_size(px(scaled(text::SM)))
                 .text_color(rgb(active().text_subtle))
                 .child("No matches"),
         );
@@ -146,7 +146,7 @@ pub fn switcher_view(switcher: &Switcher) -> Div {
                 .child(
                     gpui::div()
                         .flex_1()
-                        .text_size(px(text::SM))
+                        .text_size(px(scaled(text::SM)))
                         .text_color(rgb(if candidate.unread || selected {
                             active().text
                         } else {
@@ -156,7 +156,7 @@ pub fn switcher_view(switcher: &Switcher) -> Div {
                 )
                 .child(
                     gpui::div()
-                        .text_size(px(text::XS))
+                        .text_size(px(scaled(text::XS)))
                         .text_color(rgb(active().text_subtle))
                         .child(candidate.context.clone()),
                 ),

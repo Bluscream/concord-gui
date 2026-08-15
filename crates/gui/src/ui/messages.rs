@@ -15,7 +15,7 @@ use crate::model::markdown::{self, Kind};
 use concord::discord::custom_emoji_image_url;
 
 use crate::model::message::{MessageRow, format_bytes};
-use crate::theme::{active, layout, space, text};
+use crate::theme::{active, layout, scaled, space, text};
 use crate::ui::chrome::{avatar_with_url, column, row};
 
 /// Width reserved to the left of message bodies, so continuation rows align
@@ -124,7 +124,7 @@ pub fn message_list(
         return list.child(
             column().flex_1().items_center().justify_center().child(
                 gpui::div()
-                    .text_size(px(text::SM))
+                    .text_size(px(scaled(text::SM)))
                     .text_color(rgb(active().text_subtle))
                     .child("No messages loaded"),
             ),
@@ -144,7 +144,7 @@ pub fn message_list(
                 .flex()
                 .justify_center()
                 .cursor_pointer()
-                .text_size(px(text::XS))
+                .text_size(px(scaled(text::XS)))
                 .text_color(rgb(active().accent))
                 .hover(|style| style.bg(rgb(active().surface_hover)))
                 .child("Load earlier messages")
@@ -249,7 +249,7 @@ fn action_bar(
             .py(px(2.))
             .rounded(px(3.))
             .cursor_pointer()
-            .text_size(px(text::XS))
+            .text_size(px(scaled(text::XS)))
             .text_color(rgb(if danger {
                 active().danger
             } else {
@@ -326,7 +326,7 @@ fn message_block(
                     gpui::div()
                         .w(px(GUTTER))
                         .flex_none()
-                        .text_size(px(text::XS))
+                        .text_size(px(scaled(text::XS)))
                         .text_color(rgb(active().text_subtle))
                         .child(message.short_time(hour24)),
                 )
@@ -375,7 +375,7 @@ fn author_line(message: &MessageRow, hour24: bool) -> Div {
 
     let mut line = row().gap(px(space::SM)).child(
         gpui::div()
-            .text_size(px(text::BASE))
+            .text_size(px(scaled(text::BASE)))
             .text_color(rgb(name_color))
             .child(message.author.clone()),
     );
@@ -386,7 +386,7 @@ fn author_line(message: &MessageRow, hour24: bool) -> Div {
                 .px(px(4.))
                 .rounded(px(3.))
                 .bg(rgb(active().accent))
-                .text_size(px(text::XS))
+                .text_size(px(scaled(text::XS)))
                 .text_color(rgb(active().on_accent))
                 .child("BOT"),
         );
@@ -394,7 +394,7 @@ fn author_line(message: &MessageRow, hour24: bool) -> Div {
 
     line = line.child(
         gpui::div()
-            .text_size(px(text::XS))
+            .text_size(px(scaled(text::XS)))
             .text_color(rgb(active().text_subtle))
             .child(message.long_time(hour24)),
     );
@@ -402,7 +402,7 @@ fn author_line(message: &MessageRow, hour24: bool) -> Div {
     if message.pinned {
         line = line.child(
             gpui::div()
-                .text_size(px(text::XS))
+                .text_size(px(scaled(text::XS)))
                 .text_color(rgb(active().text_subtle))
                 .child("pinned"),
         );
@@ -441,7 +441,7 @@ fn message_body(
         if message.edited {
             body = body.child(
                 gpui::div()
-                    .text_size(px(text::XS))
+                    .text_size(px(scaled(text::XS)))
                     .text_color(rgb(active().text_subtle))
                     .child("edited"),
             );
@@ -475,7 +475,7 @@ fn message_body(
                     .py(px(2.))
                     .rounded(px(layout::RADIUS))
                     .cursor_pointer()
-                    .text_size(px(text::XS))
+                    .text_size(px(scaled(text::XS)))
                     .text_color(rgb(active().accent))
                     .hover(|style| style.bg(rgb(active().surface_hover)))
                     .child("open externally")
@@ -506,7 +506,7 @@ fn message_body(
                     .rounded(px(layout::RADIUS))
                     .cursor_pointer()
                     .bg(rgb(active().surface_hover))
-                    .text_size(px(text::XS))
+                    .text_size(px(scaled(text::XS)))
                     .text_color(rgb(active().accent))
                     .hover(|style| style.bg(rgb(active().surface_active)))
                     .child(label)
@@ -522,7 +522,7 @@ fn message_body(
     if message.embed_count > 0 {
         body = body.child(
             gpui::div()
-                .text_size(px(text::XS))
+                .text_size(px(scaled(text::XS)))
                 .text_color(rgb(active().text_subtle))
                 .child(format!(
                     "{} embed{}",
@@ -696,7 +696,7 @@ fn rich_text(parsed: &markdown::Parsed, reveal_spoilers: bool) -> impl IntoEleme
     });
 
     gpui::div()
-        .text_size(px(text::BASE))
+        .text_size(px(scaled(text::BASE)))
         .text_color(rgb(active().text))
         .child(StyledText::new(parsed.text.clone()).with_highlights(highlights.collect::<Vec<_>>()))
 }
@@ -722,7 +722,7 @@ fn poll_view(
         .border_color(rgb(active().border))
         .child(
             gpui::div()
-                .text_size(px(text::BASE))
+                .text_size(px(scaled(text::BASE)))
                 .text_color(rgb(active().text))
                 .child(poll.question.clone()),
         );
@@ -773,14 +773,14 @@ fn poll_view(
                         .child(
                             gpui::div()
                                 .flex_1()
-                                .text_size(px(text::SM))
+                                .text_size(px(scaled(text::SM)))
                                 .text_color(rgb(active().text))
                                 .child(answer.text.clone()),
                         )
                         .when(reveal, |d| {
                             d.child(
                                 gpui::div()
-                                    .text_size(px(text::XS))
+                                    .text_size(px(scaled(text::XS)))
                                     .text_color(rgb(active().text_subtle))
                                     .child(answer.votes.to_string()),
                             )
@@ -791,7 +791,7 @@ fn poll_view(
 
     panel.child(
         gpui::div()
-            .text_size(px(text::XS))
+            .text_size(px(scaled(text::XS)))
             .text_color(rgb(active().text_subtle))
             .child(if poll.finalized {
                 format!("Final · {} votes", poll.total_votes)
@@ -819,7 +819,7 @@ fn reply_context(
         .w_full()
         .gap(px(space::SM))
         .pl(px(GUTTER))
-        .text_size(px(text::XS))
+        .text_size(px(scaled(text::XS)))
         .text_color(rgb(active().text_subtle))
         // Only clickable when the target is known: a reply whose reference
         // Discord did not supply would jump nowhere.
@@ -848,7 +848,7 @@ fn attachment_chip(filename: &str, size: u64, is_image: bool) -> Div {
         .bg(rgb(active().surface_hover))
         .border_1()
         .border_color(rgb(active().border))
-        .text_size(px(text::SM))
+        .text_size(px(scaled(text::SM)))
         .child(
             gpui::div()
                 .text_color(rgb(active().text_subtle))
@@ -861,7 +861,7 @@ fn attachment_chip(filename: &str, size: u64, is_image: bool) -> Div {
         )
         .child(
             gpui::div()
-                .text_size(px(text::XS))
+                .text_size(px(scaled(text::XS)))
                 .text_color(rgb(active().text_subtle))
                 .child(format_bytes(size)),
         )
@@ -909,7 +909,7 @@ fn reaction_bar(
                     active().surface_hover
                 }))
                 .when(*mine, |d| d.border_1().border_color(rgb(active().accent)))
-                .text_size(px(text::XS))
+                .text_size(px(scaled(text::XS)))
                 .child(gpui::div().child(glyph.clone()))
                 .child(
                     gpui::div()

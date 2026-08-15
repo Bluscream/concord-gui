@@ -7,7 +7,7 @@
 
 use gpui::{Context, Div, FocusHandle, KeyDownEvent, Render, Window, prelude::*, px, rgb};
 
-use crate::theme::{DARK, LIGHT, Palette, active, layout, space, text};
+use crate::theme::{DARK, LIGHT, Palette, active, layout, scaled, space, text};
 use crate::ui::chrome::{column, row};
 use crate::ui::composer::Composer;
 
@@ -154,7 +154,7 @@ impl Render for SettingsWindow {
                         gpui::div()
                             .px(px(space::SM))
                             .pb(px(space::SM))
-                            .text_size(px(text::XS))
+                            .text_size(px(scaled(text::XS)))
                             .text_color(rgb(theme.text_subtle))
                             .child("APP SETTINGS"),
                     )
@@ -174,7 +174,7 @@ impl Render for SettingsWindow {
                             .border_color(rgb(theme.border))
                             .child(
                                 gpui::div()
-                                    .text_size(px(text::XS))
+                                    .text_size(px(scaled(text::XS)))
                                     .text_color(rgb(theme.text_subtle))
                                     .child("concord v0.1.0"),
                             ),
@@ -199,7 +199,7 @@ impl Render for SettingsWindow {
                             .border_color(rgb(theme.border))
                             .child(
                                 gpui::div()
-                                    .text_size(px(text::LG))
+                                    .text_size(px(scaled(text::LG)))
                                     .text_color(rgb(theme.text))
                                     .child("Client Settings"),
                             ),
@@ -247,13 +247,13 @@ impl Render for SettingsWindow {
                                             }))
                                             .child(
                                                 gpui::div()
-                                                    .text_size(px(text::BASE))
+                                                    .text_size(px(scaled(text::BASE)))
                                                     .text_color(rgb(theme.text))
                                                     .child("🌙 Dark Mode"),
                                             )
                                             .child(
                                                 gpui::div()
-                                                    .text_size(px(text::XS))
+                                                    .text_size(px(scaled(text::XS)))
                                                     .text_color(rgb(theme.text_subtle))
                                                     .child("Neutral dark theme tuned for long reading sessions"),
                                             ),
@@ -285,13 +285,13 @@ impl Render for SettingsWindow {
                                             }))
                                             .child(
                                                 gpui::div()
-                                                    .text_size(px(text::BASE))
+                                                    .text_size(px(scaled(text::BASE)))
                                                     .text_color(rgb(theme.text))
                                                     .child("☀️ Light Mode"),
                                             )
                                             .child(
                                                 gpui::div()
-                                                    .text_size(px(text::XS))
+                                                    .text_size(px(scaled(text::XS)))
                                                     .text_color(rgb(theme.text_subtle))
                                                     .child("Bright light mode theme"),
                                             ),
@@ -370,7 +370,7 @@ impl Render for SettingsWindow {
                             .bg(rgb(theme.surface_sunken))
                             .child(
                                 gpui::div()
-                                    .text_size(px(text::XS))
+                                    .text_size(px(scaled(text::XS)))
                                     .text_color(rgb(theme.text_subtle))
                                     .child(saved_note.unwrap_or("Settings saved automatically").to_string()),
                             ),
@@ -390,7 +390,7 @@ fn sidebar_nav_item(label: &'static str, active: bool, theme: &Palette) -> Div {
         } else {
             theme.surface_sunken
         }))
-        .text_size(px(text::SM))
+        .text_size(px(scaled(text::SM)))
         .text_color(rgb(if active { theme.text } else { theme.text_muted }))
         .cursor_pointer()
         .hover(|s| s.bg(rgb(theme.surface_hover)).text_color(rgb(theme.text)))
@@ -403,7 +403,7 @@ fn section_title(title: &'static str, theme: &Palette) -> Div {
         .pb(px(space::XS))
         .border_b_1()
         .border_color(rgb(theme.border))
-        .text_size(px(text::SM))
+        .text_size(px(scaled(text::SM)))
         .text_color(rgb(theme.accent))
         .child(title)
 }
@@ -429,14 +429,14 @@ fn toggle_row(
                 .flex_1()
                 .child(
                     gpui::div()
-                        .text_size(px(text::SM))
+                        .text_size(px(scaled(text::SM)))
                         .text_color(rgb(theme.text))
                         .child(toggle.label()),
                 )
                 .when_some(toggle.hint(), |c, hint| {
                     c.child(
                         gpui::div()
-                            .text_size(px(text::XS))
+                            .text_size(px(scaled(text::XS)))
                             .text_color(rgb(theme.text_subtle))
                             .child(hint),
                     )

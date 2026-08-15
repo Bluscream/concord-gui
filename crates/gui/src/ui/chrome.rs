@@ -6,7 +6,7 @@
 
 use gpui::{Div, prelude::*, px, rgb};
 
-use crate::theme::{Presence, active, layout, space, text};
+use crate::theme::{Presence, active, layout, scaled, space, text};
 
 /// A vertical divider-free column that fills its parent.
 pub fn column() -> Div {
@@ -34,7 +34,7 @@ pub fn section_label(title: impl Into<gpui::SharedString>) -> Div {
         .px(px(space::MD))
         .pt(px(space::MD))
         .pb(px(space::XS))
-        .text_size(px(text::XS))
+        .text_size(px(scaled(text::XS)))
         .text_color(rgb(active().text_subtle))
         .child(title.into())
 }
@@ -48,7 +48,7 @@ pub fn sidebar_row(selected: bool) -> Div {
         .mx(px(space::XS))
         .gap(px(space::SM))
         .rounded(px(layout::RADIUS))
-        .text_size(px(text::SM));
+        .text_size(px(scaled(text::SM)));
 
     if selected {
         base.bg(rgb(active().surface_active))
@@ -149,7 +149,7 @@ pub fn header() -> Div {
 /// Muted helper text, e.g. empty states.
 pub fn hint(message: impl Into<gpui::SharedString>) -> Div {
     gpui::div()
-        .text_size(px(text::SM))
+        .text_size(px(scaled(text::SM)))
         .text_color(rgb(active().text_subtle))
         .child(message.into())
 }
@@ -168,7 +168,7 @@ pub fn voice_participant_row(
         .pl(px(space::XL))
         .pr(px(space::SM))
         .gap(px(space::SM))
-        .text_size(px(text::XS))
+        .text_size(px(scaled(text::XS)))
         .child(avatar(layout::AVATAR_SM, name))
         .child(
             gpui::div()

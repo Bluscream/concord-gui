@@ -114,6 +114,24 @@ pub const LIGHT: Palette = Palette {
 /// every signature in the UI for a value that is effectively constant.
 static LIGHT_MODE: AtomicBool = AtomicBool::new(false);
 
+/// Interface scale, as a percentage held in an integer because floats have no
+/// atomic form. Applied to the type scale rather than to the window, so layout
+/// reflows at the new size instead of being magnified with it.
+static ZOOM_PERCENT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(100);
+
+pub fn set_zoom(scale: f32) {
+    ZOOM_PERCENT.store((scale * 100.0) as u32, Ordering::Relaxed);
+}
+
+pub fn zoom() -> f32 {
+    ZOOM_PERCENT.load(Ordering::Relaxed) as f32 / 100.0
+}
+
+/// Scale a type size by the current zoom.
+pub fn scaled(size: f32) -> f32 {
+    size * zoom()
+}
+
 /// Switch palettes. Takes effect on the next render.
 pub fn set_light_mode(enabled: bool) {
     LIGHT_MODE.store(enabled, Ordering::Relaxed);
