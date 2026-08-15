@@ -23,17 +23,35 @@ Three checks, because the first two each missed real gaps:
    Stronger, and it found 26 gaps that check 1 had reported as complete. But
    it asks only whether a command *can* be sent.
 3. **Render reachability.** Whether the control that sends a command is
-   actually drawn. This found seven panels - the quick switcher, emoji picker,
-   screenshare picker, confirmation dialog, reaction users, mention inbox -
-   that had full state and key handling and were never rendered at all.
+   actually drawn. This found eight panels - the quick switcher, slash picker,
+   emoji picker, screenshare picker, confirmation dialog, reaction users,
+   mention inbox - with full state and key handling and no render path at all.
    `switcher_view` had zero callers in the crate.
 
-The lesson from all three: a proxy for functionality is not functionality.
-Any future parity claim should re-run check 2 and spot-check check 3.
+   Its cheap form is a caller-count sweep, which also catches handlers with no
+   control attached:
+
+   ```sh
+   for f in $(grep -rhoE "pub fn [a-z_]+" crates/gui/src/ui/*.rs | awk '{print $3}' | sort -u); do
+     n=$(grep -rc "\b$f\b" crates/gui/src/ --include=*.rs | awk -F: '{s+=$2} END{print s}')
+     d=$(grep -rc "pub fn $f\b" crates/gui/src/ --include=*.rs | awk -F: '{s+=$2} END{print s}')
+     [ "$n" -le "$d" ] && echo "UNCALLED: $f"
+   done
+   ```
+
+4. **Event handling.** `DiscordState::apply_event` has a no-op arm listing 41
+   events it deliberately does not absorb. A snapshot-driven UI reprojects
+   everything else for free, but these carry information stored nowhere, so
+   ignoring one loses it outright - `MessageSendFailed` meant a rejected
+   message vanished silently. 24 were unhandled.
+
+The lesson from all four: a proxy for functionality is not functionality.
+Any future parity claim should re-run 2 and 4, which are exact, and sweep 3.
 
 ### Status
 
-Command coverage is **68 of 69**. The one command the GUI does not send is
+Command coverage is **68 of 69**, event coverage **44 of 46**, and both the
+uncalled-function sweep and the render sweep are clean. The one command the GUI does not send is
 `LoadAttachmentPreview`, and this is deliberate - see below.
 
 Working: login (token, QR, password, MFA) · guild/channel navigation ·
