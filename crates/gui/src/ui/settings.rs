@@ -24,26 +24,28 @@ pub enum Toggle {
 }
 
 impl Toggle {
-    pub fn label(self) -> &'static str {
-        match self {
-            Toggle::Hour24 => "24-hour timestamps",
-            Toggle::ShowAvatars => "Show avatars",
-            Toggle::ShowCustomEmoji => "Show custom emoji",
-            Toggle::MediaPlayback => "External media playback",
-            Toggle::CircularAvatars => "Circular avatars",
-            Toggle::DesktopNotifications => "Desktop notifications",
-            Toggle::NoiseSuppression => "Noise suppression",
-            Toggle::ShareRichPresence => "Share rich presence",
-        }
+    pub fn label(self) -> String {
+        concord::t!(match self {
+            Toggle::Hour24 => "toggle-hour24",
+            Toggle::ShowAvatars => "toggle-show-avatars",
+            Toggle::ShowCustomEmoji => "toggle-show-custom-emoji",
+            Toggle::MediaPlayback => "toggle-media-playback",
+            Toggle::CircularAvatars => "toggle-circular-avatars",
+            Toggle::DesktopNotifications => "toggle-desktop-notifications",
+            Toggle::NoiseSuppression => "toggle-noise-suppression",
+            Toggle::ShareRichPresence => "toggle-share-rich-presence",
+        })
     }
 
-    fn hint(self) -> Option<&'static str> {
-        match self {
-            Toggle::ShareRichPresence => Some("Lets others see what you are playing"),
-            Toggle::NoiseSuppression => Some("Applied when joining a voice channel"),
-            Toggle::MediaPlayback => Some("Opens video and audio in an external player"),
-            _ => None,
-        }
+    /// The explanatory line under a toggle, where one earns its place.
+    fn hint(self) -> Option<String> {
+        let key = match self {
+            Toggle::ShareRichPresence => "hint-share-rich-presence",
+            Toggle::NoiseSuppression => "hint-noise-suppression",
+            Toggle::MediaPlayback => "hint-media-playback",
+            _ => return None,
+        };
+        Some(concord::t!(key))
     }
 
     fn slot(self) -> usize {
@@ -99,7 +101,7 @@ impl SettingsWindow {
         crate::theme::set_light_mode(self.options.display.light_mode);
 
         self.settings_note = match concord::config::save_options(&self.options) {
-            Ok(()) => Some("Saved to config.toml".to_string()),
+            Ok(()) => Some(concord::t!("settings-saved-to").to_string()),
             Err(err) => Some(format!("Failed to save: {err}")),
         };
 
@@ -151,7 +153,7 @@ impl Render for SettingsWindow {
                             .pb(px(space::SM))
                             .text_size(px(scaled(text::XS)))
                             .text_color(rgb(theme.text_subtle))
-                            .child("APP SETTINGS"),
+                            .child(concord::t!("settings-app-settings")),
                     )
                     .child(sidebar_nav_item("⚙ Appearance", true, theme))
                     .child(sidebar_nav_item("🌐 Server Endpoint", false, theme))
@@ -196,7 +198,7 @@ impl Render for SettingsWindow {
                                 gpui::div()
                                     .text_size(px(scaled(text::LG)))
                                     .text_color(rgb(theme.text))
-                                    .child("Client Settings"),
+                                    .child(concord::t!("settings-title")),
                             ),
                     )
                     // Scrollable Settings Sections Body
@@ -250,7 +252,7 @@ impl Render for SettingsWindow {
                                                 gpui::div()
                                                     .text_size(px(scaled(text::XS)))
                                                     .text_color(rgb(theme.text_subtle))
-                                                    .child("Neutral dark theme tuned for long reading sessions"),
+                                                    .child(concord::t!("settings-theme-dark")),
                                             ),
                                     )
                                     .child(
@@ -288,12 +290,15 @@ impl Render for SettingsWindow {
                                                 gpui::div()
                                                     .text_size(px(scaled(text::XS)))
                                                     .text_color(rgb(theme.text_subtle))
-                                                    .child("Bright light mode theme"),
+                                                    .child(concord::t!("settings-theme-light")),
                                             ),
                                     ),
                             )
                             // --- Section 3: Interface & Display ---
-                            .child(section_title("Interface & Display", theme))
+                            .child(section_title(
+                                concord::t!("settings-interface-display"),
+                                theme,
+                            ))
                             // Language, first in this section because it
                             // changes every other label under it.
                             .child(language_row(options.display.language, theme, cx))
@@ -302,7 +307,8 @@ impl Render for SettingsWindow {
                                 options.display.show_avatars,
                                 theme,
                                 cx.listener(|this, _, _, cx| {
-                                    this.options.display.show_avatars = !this.options.display.show_avatars;
+                                    this.options.display.show_avatars =
+                                        !this.options.display.show_avatars;
                                     this.save_options(cx);
                                     cx.notify();
                                 }),
@@ -312,7 +318,8 @@ impl Render for SettingsWindow {
                                 options.display.circular_avatars,
                                 theme,
                                 cx.listener(|this, _, _, cx| {
-                                    this.options.display.circular_avatars = !this.options.display.circular_avatars;
+                                    this.options.display.circular_avatars =
+                                        !this.options.display.circular_avatars;
                                     this.save_options(cx);
                                     cx.notify();
                                 }),
@@ -351,7 +358,7 @@ impl Render for SettingsWindow {
                                 }),
                             ))
                             // --- Section 4: Notifications ---
-                            .child(section_title("Notifications", theme))
+                            .child(section_title(concord::t!("settings-notifications"), theme))
                             .child(toggle_row(
                                 Toggle::DesktopNotifications,
                                 options.notifications.desktop_notifications,
@@ -370,13 +377,14 @@ impl Render for SettingsWindow {
                                 options.voice.noise_suppression,
                                 theme,
                                 cx.listener(|this, _, _, cx| {
-                                    this.options.voice.noise_suppression = !this.options.voice.noise_suppression;
+                                    this.options.voice.noise_suppression =
+                                        !this.options.voice.noise_suppression;
                                     this.save_options(cx);
                                     cx.notify();
                                 }),
                             ))
                             // --- Section 6: Presence ---
-                            .child(section_title("Presence", theme))
+                            .child(section_title(concord::t!("settings-presence"), theme))
                             .child(toggle_row(
                                 Toggle::ShareRichPresence,
                                 options.presence.share_rich_presence,
@@ -403,7 +411,9 @@ impl Render for SettingsWindow {
                                 gpui::div()
                                     .text_size(px(scaled(text::XS)))
                                     .text_color(rgb(theme.text_subtle))
-                                    .child(saved_note.unwrap_or("Settings saved automatically").to_string()),
+                                    .child(saved_note.map(str::to_owned).unwrap_or_else(|| {
+                                        concord::t!("settings-saved-automatically")
+                                    })),
                             ),
                     ),
             )
@@ -428,7 +438,7 @@ fn sidebar_nav_item(label: &'static str, active: bool, theme: &Palette) -> Div {
         .child(label)
 }
 
-fn section_title(title: &'static str, theme: &Palette) -> Div {
+fn section_title(title: impl Into<gpui::SharedString>, theme: &Palette) -> Div {
     gpui::div()
         .pt(px(space::SM))
         .pb(px(space::XS))
@@ -436,7 +446,7 @@ fn section_title(title: &'static str, theme: &Palette) -> Div {
         .border_color(rgb(theme.border))
         .text_size(px(scaled(text::SM)))
         .text_color(rgb(theme.accent))
-        .child(title)
+        .child(title.into())
 }
 
 fn toggle_row(
