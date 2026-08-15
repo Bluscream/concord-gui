@@ -42,6 +42,7 @@ use crate::ui::emoji::{self, EmojiPicker};
 use crate::ui::forum::{self, ForumPost, ForumView};
 use crate::ui::login::{Login, LoginEvent, LoginHandle, LoginScreen, PasswordField, login_view};
 use crate::ui::messages::{MessageAction, message_list};
+use crate::ui::overlay;
 use crate::ui::profile::{ProfileView, profile_view};
 use crate::ui::settings::{OnChange, SettingsWindow};
 use crate::ui::slash::{SlashPicker, slash_view};
@@ -115,6 +116,18 @@ pub struct VoiceMember {
     pub deafened: bool,
     pub streaming: bool,
     pub speaking: bool,
+}
+
+/// Audio devices offered by the picker.
+#[derive(Default)]
+pub struct AudioDevices {
+    /// Input devices as (id, label).
+    pub inputs: Vec<(String, String)>,
+    pub outputs: Vec<(String, String)>,
+    pub selected_input: Option<String>,
+    pub selected_output: Option<String>,
+    /// Why enumeration failed, if it did.
+    pub error: Option<String>,
 }
 
 pub struct MemberEntry {
@@ -311,6 +324,18 @@ pub struct Workspace {
     voice_scope_joined: Option<VoiceScope>,
     pub self_mute: bool,
     pub self_deaf: bool,
+    /// Audio device picker: input and output devices as (id, label), with the
+    /// current selections. `None` while the picker is closed.
+    pub audio_devices: Option<AudioDevices>,
+    /// Whether this client is allowed to transmit. Distinct from self-mute:
+    /// mute is a per-session toggle others can see, while this governs whether
+    /// the capture device is opened at all.
+    pub allow_microphone_transmit: bool,
+    /// Stream being watched, if any.
+    pub watching: Option<(Id<marker::UserMarker>, String)>,
+    /// Sequence number for device-list requests, so a slow earlier reply
+    /// cannot overwrite the list from a later one.
+    audio_sources_request: u64,
     /// Search state. `None` when the search panel is closed.
     pub search: Option<Search>,
     /// Emoji picker, anchored to the message being reacted to.
@@ -379,6 +404,10 @@ impl Workspace {
             forum: None,
             stream_picker: None,
             broadcasting: false,
+            audio_devices: None,
+            audio_sources_request: 0,
+            allow_microphone_transmit: true,
+            watching: None,
             self_mute: false,
             self_deaf: false,
             search: None,
@@ -1825,6 +1854,85 @@ impl Workspace {
         }
     }
 
+    /// Open the audio device picker, asking the core for the device list.
+    ///
+    /// The list is fetched rather than cached: devices appear and disappear
+    /// while the app runs, and a stale list offers a device that is gone.
+    pub fn open_audio_devices(&mut self) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+
+        self.audio_sources_request = self.audio_sources_request.wrapping_add(1);
+        self.audio_devices = Some(AudioDevices::default());
+        handle.send(AppCommand::LoadVoiceAudioSources {
+            request_id: self.audio_sources_request,
+        });
+    }
+
+    /// Select an input or output device.
+    pub fn set_audio_device(&mut self, input: Option<String>, output: Option<String>) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+
+        if let Some(devices) = &mut self.audio_devices {
+            if input.is_some() {
+                devices.selected_input = input.clone();
+            }
+            if output.is_some() {
+                devices.selected_output = output.clone();
+            }
+        }
+
+        handle.send(AppCommand::UpdateVoiceAudioSources {
+            input_source: input,
+            output_source: output,
+        });
+    }
+
+    /// Allow or block microphone transmission for the joined connection.
+    pub fn set_microphone_allowed(&mut self, allowed: bool) {
+        self.allow_microphone_transmit = allowed;
+
+        let (Some(handle), Some(scope), Some((channel_id, _))) = (
+            &self.handle,
+            self.voice_scope_joined,
+            self.voice_channel.clone(),
+        ) else {
+            return;
+        };
+
+        handle.send(AppCommand::UpdateVoiceCapturePermission {
+            scope,
+            channel_id,
+            allow_microphone_transmit: allowed,
+            noise_suppression: self.options.voice.noise_suppression,
+            microphone_sensitivity: Default::default(),
+            microphone_volume: Default::default(),
+            voice_output_volume: Default::default(),
+        });
+    }
+
+    /// Watch another participant's stream.
+    pub fn watch_stream(&mut self, user_id: Id<marker::UserMarker>, display_name: String) {
+        let (Some(handle), Some(scope), Some((channel_id, _))) = (
+            &self.handle,
+            self.voice_scope_joined,
+            self.voice_channel.clone(),
+        ) else {
+            return;
+        };
+
+        handle.send(AppCommand::WatchVoiceStream {
+            scope,
+            channel_id,
+            user_id,
+            display_name: display_name.clone(),
+        });
+        self.watching = Some((user_id, display_name));
+    }
+
     /// Join a voice channel or start a DM call, leaving any current one first.
     pub fn join_voice(&mut self, channel_id: Id<marker::ChannelMarker>, name: String) {
         let scope = self.voice_scope(channel_id);
@@ -1840,9 +1948,17 @@ impl Workspace {
                 channel_id,
                 self_mute: self.self_mute,
                 self_deaf: self.self_deaf,
-                input_source: None,
-                output_source: None,
-                allow_microphone_transmit: true,
+                // Carried from the picker so a device chosen before joining is
+                // honoured, rather than silently falling back to the default.
+                input_source: self
+                    .audio_devices
+                    .as_ref()
+                    .and_then(|devices| devices.selected_input.clone()),
+                output_source: self
+                    .audio_devices
+                    .as_ref()
+                    .and_then(|devices| devices.selected_output.clone()),
+                allow_microphone_transmit: self.allow_microphone_transmit,
                 // Audio tuning lives in settings, which does not exist yet; the
                 // core's defaults are the right starting point.
                 noise_suppression: self.options.voice.noise_suppression,
@@ -2444,11 +2560,15 @@ impl Workspace {
                             .text_color(rgb(active().text))
                             .cursor_pointer()
                             .hover(|s| s.bg(rgb(active().surface_hover)))
-                            .child("🖥"),
+                            .child("🖥")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open_stream_picker();
+                                cx.notify();
+                            })),
                     )
                     .child(
                         gpui::div()
-                            .id("card-activity")
+                            .id("card-devices")
                             .flex_1()
                             .h(px(28.))
                             .items_center()
@@ -2459,7 +2579,11 @@ impl Workspace {
                             .text_color(rgb(active().text))
                             .cursor_pointer()
                             .hover(|s| s.bg(rgb(active().surface_hover)))
-                            .child("🎮"),
+                            .child("🎚")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open_audio_devices();
+                                cx.notify();
+                            })),
                     ),
             )
     }
@@ -3380,6 +3504,17 @@ impl Workspace {
             // A reconnect can have dropped messages while the socket was down.
             // Neither paging direction fills that hole, because both extend
             // from what is already cached.
+            AppEvent::VoiceAudioSourcesLoaded {
+                request_id,
+                inputs,
+                outputs,
+                error,
+            } if *request_id == self.audio_sources_request => {
+                let devices = self.audio_devices.get_or_insert_with(Default::default);
+                devices.inputs = inputs.clone();
+                devices.outputs = outputs.clone();
+                devices.error = error.clone();
+            }
             AppEvent::Ready { .. } => {
                 self.refresh_history();
                 self.hydrate_missing_members();
@@ -3745,13 +3880,24 @@ impl Workspace {
             // Occupants render nested under their voice channel.
             for participant in &channel.voice {
                 let participant_id = participant.user_id;
-                let participant_muted = participant.muted;
+                let participant_name = participant.name.clone();
                 list = list.child(voice_participant_row(
                     &participant.name,
                     participant.muted,
                     participant.deafened,
                     participant.streaming,
                     participant.speaking,
+                    participant_id.get(),
+                    {
+                        let entity = cx.entity();
+                        move |cx: &mut gpui::App| {
+                            let name = participant_name.clone();
+                            entity.update(cx, |workspace, cx| {
+                                workspace.watch_stream(participant_id, name);
+                                cx.notify();
+                            });
+                        }
+                    },
                 ));
             }
         }
@@ -3846,6 +3992,175 @@ impl Workspace {
         }
 
         pane
+    }
+
+    /// The single open modal, if any.
+    ///
+    /// Ordered by urgency: a confirmation blocks whatever opened it, so it
+    /// wins over everything else. Only one is returned, because a second modal
+    /// drawn over the first would leave the one underneath clickable.
+    fn overlays(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let entity = cx.entity();
+
+        if let Some(pending) = &self.confirming {
+            let prompt = pending.action.prompt();
+            return Some(overlay::scrim().child(overlay::confirm_view(
+                prompt,
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.confirm();
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.confirming = None;
+                            cx.notify();
+                        });
+                    }
+                },
+            )));
+        }
+
+        if let Some(switcher) = &self.switcher {
+            return Some(
+                overlay::scrim()
+                    .items_start()
+                    .pt(px(96.))
+                    .child(switcher::switcher_view(switcher)),
+            );
+        }
+
+        if let Some(picker) = &self.picker {
+            let cursor = picker.cursor;
+            return Some(overlay::scrim().child(emoji::picker_view(cursor, {
+                let entity = entity.clone();
+                move |glyph: &'static str, cx: &mut gpui::App| {
+                    entity.update(cx, |workspace, cx| {
+                        workspace.pick_emoji(glyph);
+                        cx.notify();
+                    });
+                }
+            })));
+        }
+
+        if let Some(picker) = &self.stream_picker {
+            return Some(overlay::scrim().child(stream::picker_view(
+                picker,
+                {
+                    let entity = entity.clone();
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.start_stream(index);
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.stream_picker = None;
+                            cx.notify();
+                        });
+                    }
+                },
+            )));
+        }
+
+        if let Some(devices) = &self.audio_devices {
+            return Some(overlay::scrim().child(overlay::audio_devices_view(
+                &devices.inputs,
+                &devices.outputs,
+                devices.selected_input.as_deref(),
+                devices.selected_output.as_deref(),
+                devices.error.as_deref(),
+                {
+                    let entity = entity.clone();
+                    move |is_input, id, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            if is_input {
+                                workspace.set_audio_device(Some(id.clone()), None);
+                            } else {
+                                workspace.set_audio_device(None, Some(id.clone()));
+                            }
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.audio_devices = None;
+                            cx.notify();
+                        });
+                    }
+                },
+            )));
+        }
+
+        if let Some((_, glyph, users)) = &self.reaction_users {
+            return Some(
+                overlay::scrim().child(overlay::reaction_users_view(glyph, users, {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.reaction_users = None;
+                            cx.notify();
+                        });
+                    }
+                })),
+            );
+        }
+
+        if let Some(mentions) = &self.inbox {
+            let rows: Vec<_> = mentions
+                .iter()
+                .map(|mention| overlay::InboxRow {
+                    author: mention.author.clone(),
+                    content: mention.content.clone(),
+                })
+                .collect();
+
+            return Some(overlay::scrim().child(overlay::inbox_view(
+                &rows,
+                {
+                    let entity = entity.clone();
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.open_mention(index);
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.dismiss_mention(index);
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.inbox = None;
+                            cx.notify();
+                        });
+                    }
+                },
+            )));
+        }
+
+        None
     }
 
     fn content(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -4700,6 +5015,7 @@ impl Render for Workspace {
                         ),
                 )
                 .child(self.status_bar(cx))
+                .children(self.overlays(cx))
             })
     }
 }

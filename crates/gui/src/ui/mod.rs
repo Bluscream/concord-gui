@@ -4,6 +4,7 @@ pub mod emoji;
 pub mod forum;
 pub mod login;
 pub mod messages;
+pub mod overlay;
 pub mod profile;
 pub mod settings;
 pub mod slash;

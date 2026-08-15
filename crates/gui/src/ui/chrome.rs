@@ -161,6 +161,9 @@ pub fn voice_participant_row(
     deafened: bool,
     streaming: bool,
     speaking: bool,
+    // Distinguishes this row's element ids from every other participant's.
+    id_seed: u64,
+    on_watch: impl Fn(&mut gpui::App) + 'static,
 ) -> Div {
     row()
         .w_full()
@@ -183,7 +186,19 @@ pub fn voice_participant_row(
                 .child(name.to_string()),
         )
         .when(streaming, |d| {
-            d.child(gpui::div().text_color(rgb(active().accent)).child("live"))
+            // "live" is the label; the click target is the whole badge, since
+            // watching is the only thing a viewer wants from a live marker.
+            d.child(
+                gpui::div()
+                    .id(("watch-stream", id_seed))
+                    .px(px(space::XS))
+                    .rounded(px(layout::RADIUS))
+                    .cursor_pointer()
+                    .text_color(rgb(active().accent))
+                    .hover(|style| style.bg(rgb(active().surface_hover)))
+                    .child("live")
+                    .on_click(move |_event, _window, cx| on_watch(cx)),
+            )
         })
         .when(muted || deafened, |d| {
             d.child(
