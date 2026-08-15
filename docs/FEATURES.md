@@ -120,7 +120,11 @@ Upload, rename and delete guild emoji.
 - **Rich presence / activity** — Custom status works; showing and setting full activities does not. Tracked as task 7.
 - **Server management** — Kick, ban, timeout and roles are done. Invites, emoji and audit log are not.
 - **Invite management** — Joining by invite works. Creating, listing and revoking invites does not.
-- **Animated emoji** — Static custom emoji render. APNG and GIF animation do not.
+- **Animated emoji and avatars** — These already worked; the survey entry was
+  an assumption rather than a check. GPUI decodes animated WebP and GIF, the
+  core builds animated URLs for both, and Discord's `a_` hash prefix selects
+  the GIF. What was genuinely missing - and Abaddon offers - is a way to turn
+  animation *off*, which now exists and matters on a Raspberry Pi.
 - **Sounds** — The core plays voice join/leave sounds. There is no general notification sound.
 - **Screenshare** — Compile-verified only - blocked by a zbus/tokio incompatibility reaching us through GPUI's own dependencies.
 - **Image viewer** — Images render inline. There is no full-size viewer with zoom.

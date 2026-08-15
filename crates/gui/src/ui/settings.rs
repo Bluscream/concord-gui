@@ -16,6 +16,7 @@ pub enum Toggle {
     Hour24,
     ShowAvatars,
     ShowCustomEmoji,
+    AnimateImages,
     MediaPlayback,
     CircularAvatars,
     DesktopNotifications,
@@ -29,6 +30,7 @@ impl Toggle {
             Toggle::Hour24 => "toggle-hour24",
             Toggle::ShowAvatars => "toggle-show-avatars",
             Toggle::ShowCustomEmoji => "toggle-show-custom-emoji",
+            Toggle::AnimateImages => "toggle-animate-images",
             Toggle::MediaPlayback => "toggle-media-playback",
             Toggle::CircularAvatars => "toggle-circular-avatars",
             Toggle::DesktopNotifications => "toggle-desktop-notifications",
@@ -43,6 +45,7 @@ impl Toggle {
             Toggle::ShareRichPresence => "hint-share-rich-presence",
             Toggle::NoiseSuppression => "hint-noise-suppression",
             Toggle::MediaPlayback => "hint-media-playback",
+            Toggle::AnimateImages => "hint-animate-images",
             _ => return None,
         };
         Some(concord::t!(key))
@@ -53,6 +56,7 @@ impl Toggle {
             Toggle::Hour24 => 1,
             Toggle::ShowAvatars => 2,
             Toggle::ShowCustomEmoji => 3,
+            Toggle::AnimateImages => 9,
             Toggle::MediaPlayback => 8,
             Toggle::CircularAvatars => 4,
             Toggle::DesktopNotifications => 5,
@@ -320,6 +324,17 @@ impl Render for SettingsWindow {
                                 cx.listener(|this, _, _, cx| {
                                     this.options.display.circular_avatars =
                                         !this.options.display.circular_avatars;
+                                    this.save_options(cx);
+                                    cx.notify();
+                                }),
+                            ))
+                            .child(toggle_row(
+                                Toggle::AnimateImages,
+                                options.display.animate_images,
+                                theme,
+                                cx.listener(|this, _, _, cx| {
+                                    this.options.display.animate_images =
+                                        !this.options.display.animate_images;
                                     this.save_options(cx);
                                     cx.notify();
                                 }),

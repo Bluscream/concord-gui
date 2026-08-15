@@ -167,3 +167,6 @@ status-connecting-ellipsis = Connecting…
 
 status-share-screen-hint = Share a screen or window
 status-no-search-results = No results
+
+toggle-animate-images = Animate emoji and avatars
+hint-animate-images = Turn off on slow hardware

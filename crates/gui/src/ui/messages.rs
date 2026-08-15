@@ -35,6 +35,8 @@ pub struct RenderOptions<'a> {
     pub hour24: bool,
     pub show_emoji: bool,
     pub show_images: bool,
+    /// Whether animated emoji, avatars and stickers play.
+    pub animate: bool,
     pub previews: &'a Previews,
 }
 use crate::ui::chrome::{avatar_with_url, column, row};
@@ -524,6 +526,7 @@ fn message_body(
                     &message.body,
                     message.spoiler_revealed,
                     options.show_emoji,
+                    options.animate,
                 )),
         );
 
@@ -732,7 +735,12 @@ enum Segment {
 }
 
 /// Render a body, drawing custom emoji as images.
-fn rich_body(parsed: &markdown::Parsed, reveal_spoilers: bool, show_emoji: bool) -> Div {
+fn rich_body(
+    parsed: &markdown::Parsed,
+    reveal_spoilers: bool,
+    show_emoji: bool,
+    animate: bool,
+) -> Div {
     let parts = segments(parsed);
 
     // Fast path: no custom emoji, so no need to wrap in a row.
@@ -752,9 +760,14 @@ fn rich_body(parsed: &markdown::Parsed, reveal_spoilers: bool, show_emoji: bool)
             }
             Segment::Emoji { id, animated } => {
                 wrapper = wrapper.child(
-                    gpui::img(gpui::SharedUri::from(custom_emoji_image_url(id, animated)))
-                        .w(px(EMOJI_SIZE))
-                        .h(px(EMOJI_SIZE)),
+                    gpui::img(gpui::SharedUri::from(custom_emoji_image_url(
+                        id,
+                        // Animation is a display choice, so a still emoji is
+                        // a different URL rather than a paused decode.
+                        animated && animate,
+                    )))
+                    .w(px(EMOJI_SIZE))
+                    .h(px(EMOJI_SIZE)),
                 );
             }
         }

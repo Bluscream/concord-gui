@@ -2138,6 +2138,16 @@ impl Workspace {
         }
     }
 
+    /// An avatar URL honouring the animation setting.
+    fn still_avatar(&self, url: Option<&str>) -> Option<String> {
+        let url = url?;
+        Some(if self.options.display.animate_images {
+            url.to_owned()
+        } else {
+            concord::discord::still_avatar_url(url)
+        })
+    }
+
     fn channel_name(&self, channel_id: Id<marker::ChannelMarker>) -> String {
         self.model
             .channels
@@ -5625,10 +5635,13 @@ impl Workspace {
 
             let mut entry = sidebar_row(false)
                 .when(self.options.display.show_avatars, |d| {
+                    // Animation off swaps the URL for the still one Discord
+                    // serves at the same path, rather than pausing a decode.
+                    let avatar = self.still_avatar(member.avatar.as_deref());
                     d.child(avatar_with_url(
                         layout::AVATAR_SM,
                         &member.name,
-                        member.avatar.as_deref(),
+                        avatar.as_deref(),
                         self.options.display.circular_avatars,
                     ))
                 })
@@ -6524,6 +6537,7 @@ impl Workspace {
                     show_emoji: self.options.display.show_custom_emoji,
                     show_images: self.options.display.show_images
                         && !self.options.display.disable_image_preview,
+                    animate: self.options.display.animate_images,
                     previews: &self.attachment_previews,
                 },
                 self.has_newer_messages(),

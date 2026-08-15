@@ -31,6 +31,7 @@ fn display_options_default_to_all_media_enabled() {
 #[test]
 fn global_disable_overrides_individual_toggles() {
     let options = DisplayOptions {
+        animate_images: true,
         disable_image_preview: true,
         show_avatars: true,
         show_images: true,
@@ -680,6 +681,7 @@ fn options_save_and_load_round_trip() {
     let path = test_config_path();
     let options = AppOptions {
         display: DisplayOptions {
+            animate_images: true,
             disable_image_preview: true,
             show_avatars: false,
             show_images: false,

@@ -51,6 +51,7 @@ pub use application_commands::{
 // Public so that out-of-crate front-ends can drive the login flows and pass
 // the resulting session to `app::Session::start`.
 pub use auth_http::DiscordAuthSession;
+pub use avatar::still_avatar_url;
 pub use builtin_commands::{
     BuiltinSlashCommandInfo, BuiltinSlashCommandParse, BuiltinSlashCommandSubmit,
     builtin_slash_commands, parse_builtin_slash_command,

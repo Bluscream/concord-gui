@@ -18,6 +18,12 @@ pub struct DisplayOptions {
     /// Interface language. `None` follows the system locale, which is what
     /// someone who has never opened the setting expects.
     pub language: Option<crate::i18n::Language>,
+    /// Whether animated avatars, emoji and stickers play.
+    ///
+    /// On by default; worth turning off on slow hardware, where decoding a
+    /// wall of GIFs costs more than the movement is worth.
+    #[serde(default = "default_true")]
+    pub animate_images: bool,
     pub disable_image_preview: bool,
     pub show_avatars: bool,
     pub show_images: bool,
@@ -694,6 +700,7 @@ impl Default for DisplayOptions {
         Self {
             // Follows the system locale until the user chooses otherwise.
             language: None,
+            animate_images: true,
             disable_image_preview: false,
             show_avatars: true,
             show_images: true,
@@ -725,4 +732,8 @@ impl DisplayOptions {
     pub fn custom_emoji_visible(self) -> bool {
         !self.disable_image_preview && self.show_custom_emoji
     }
+}
+
+const fn default_true() -> bool {
+    true
 }
