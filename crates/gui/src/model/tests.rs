@@ -1223,3 +1223,27 @@ fn a_live_composer_never_loses_a_plain_character_to_the_keymap() {
         concord::tui::keybindings::external::Resolution::Action(_)
     ));
 }
+
+#[test]
+fn invite_links_are_parsed_from_what_a_user_would_paste() {
+    use concord::discord::invite_code_from;
+
+    // A user copies a link, not a code, so every form has to work.
+    for input in [
+        "aBc-123",
+        "discord.gg/aBc-123",
+        "https://discord.gg/aBc-123",
+        "https://discord.com/invite/aBc-123",
+        "https://discord.gg/aBc-123?event=1",
+    ] {
+        assert_eq!(
+            invite_code_from(input).as_deref(),
+            Some("aBc-123"),
+            "failed on {input}"
+        );
+    }
+
+    // And things that are not invites must not produce a lookup.
+    assert_eq!(invite_code_from("hello there"), None);
+    assert_eq!(invite_code_from(""), None);
+}

@@ -153,6 +153,23 @@ Deliberately **not** planned, as the "bloat" this project exists to avoid:
 - Discovery, quests, sponsored surfaces
 - Analytics and telemetry beyond what the API requires
 
-Worth having next: stickers, message forwarding, per-guild identities,
-invites, and full moderation (kick/ban/roles - Abaddon has these and they are
-the strongest argument for that client over this one).
+**Invites are done.** A client could previously leave a guild but never join
+one, so the official client was still required for the single most basic
+thing after reading messages. Paste a link or code into the `+` in the guild
+rail; the invite is previewed - server, channel, inviter, member counts -
+before anything is joined, because an invite code says nothing about where it
+leads.
+
+Still to do, and none of these are wiring jobs. The core has **no** commands
+or REST routes for any of them, so each means building from the transport
+layer up, the way invites just were:
+
+| Feature | What it needs |
+|---|---|
+| Stickers | REST send path, a picker, and rendering in the log |
+| Message forwarding | A `message_reference` of forward type on send |
+| Per-guild identities | Profile REST already exists; needs per-guild plumbing |
+| Moderation (kick/ban/roles) | Guild REST routes, permission checks, and UI |
+
+Moderation is the one place Abaddon is genuinely ahead, and the strongest
+argument for that client over this one.

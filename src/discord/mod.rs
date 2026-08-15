@@ -120,7 +120,7 @@ pub use profile::{
 };
 pub use read::ReadStateInfo;
 pub(crate) use request_lifecycle::GuildMemberSearchSurface;
-pub use rest::{ForumPostPage, ReactionUsersPage};
+pub use rest::{ForumPostPage, InvitePreview, ReactionUsersPage, invite_code_from};
 pub use state::{
     ChannelRecipientState, ChannelState, ChannelUnreadState, ChannelVisibilityStats,
     CurrentVoiceConnectionState, DiscordSnapshot, DiscordState, GuildMemberListEntry,

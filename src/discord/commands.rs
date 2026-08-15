@@ -495,6 +495,14 @@ pub enum AppCommand {
         guild_id: Id<GuildMarker>,
         label: String,
     },
+    /// Look up an invite without joining, so it can be shown before accepting.
+    ResolveInvite {
+        code: String,
+    },
+    /// Accept an invite, joining the guild it points at.
+    AcceptInvite {
+        code: String,
+    },
     SetSelectedMessageChannel {
         channel_id: Option<Id<ChannelMarker>>,
     },

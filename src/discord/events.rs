@@ -672,6 +672,21 @@ pub enum AppEvent {
     CaptchaRequired {
         action: String,
     },
+    InviteResolved {
+        preview: crate::discord::rest::InvitePreview,
+    },
+    InviteResolveFailed {
+        code: String,
+        message: String,
+    },
+    InviteAccepted {
+        code: String,
+        guild_id: Option<Id<GuildMarker>>,
+    },
+    InviteAcceptFailed {
+        code: String,
+        message: String,
+    },
     MediaPlaybackWindowReady {
         request_id: MediaPlaybackRequestId,
         url: String,
@@ -940,6 +955,10 @@ define_app_event_kinds! {
     UserGuildSettingsUpdate: AppEvent::UserGuildSettingsUpdate { .. },
     GatewayError: AppEvent::GatewayError { .. },
     CaptchaRequired: AppEvent::CaptchaRequired { .. },
+    InviteResolved: AppEvent::InviteResolved { .. },
+    InviteResolveFailed: AppEvent::InviteResolveFailed { .. },
+    InviteAccepted: AppEvent::InviteAccepted { .. },
+    InviteAcceptFailed: AppEvent::InviteAcceptFailed { .. },
     ThreadNotificationLevelUpdate: AppEvent::ThreadNotificationLevelUpdate { .. },
     ThreadMuteUpdate: AppEvent::ThreadMuteUpdate { .. },
     MediaPlaybackWindowReady: AppEvent::MediaPlaybackWindowReady { .. },
@@ -1978,7 +1997,14 @@ impl AppEventKind {
                 AppEventMetadata::mutating(SnapshotAreas::navigation_and_detail())
             }
 
-            AppEventKind::GatewayError
+            // Invites carry no state of their own: resolving one changes
+            // nothing, and accepting one is followed by the GuildCreate that
+            // actually adds the guild.
+            AppEventKind::InviteResolved
+            | AppEventKind::InviteResolveFailed
+            | AppEventKind::InviteAccepted
+            | AppEventKind::InviteAcceptFailed
+            | AppEventKind::GatewayError
             | AppEventKind::CaptchaRequired
             | AppEventKind::MessageSendFailed
             | AppEventKind::MessageSendRateLimited

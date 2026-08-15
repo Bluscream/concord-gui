@@ -280,6 +280,55 @@ pub(super) async fn leave_guild(client: DiscordClient, guild_id: Id<GuildMarker>
     }
 }
 
+/// Look up an invite so the user can see where it leads before joining.
+pub(super) async fn resolve_invite(client: DiscordClient, code: String) {
+    match client.resolve_invite(&code).await {
+        Ok(mut preview) => {
+            // Answered here rather than in the front end: whether the account
+            // is already a member is state the client owns, and a UI asking
+            // "join?" about a guild you are in is simply wrong.
+            preview.already_joined = preview
+                .guild_id
+                .is_some_and(|guild_id| client.is_member_of(guild_id));
+
+            client
+                .publish_event(AppEvent::InviteResolved { preview })
+                .await;
+        }
+        Err(error) => {
+            log_app_error("resolve invite failed", &error);
+            client
+                .publish_event(AppEvent::InviteResolveFailed {
+                    code,
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
+/// Accept an invite, joining the guild.
+pub(super) async fn accept_invite(client: DiscordClient, code: String) {
+    match client.accept_invite(&code).await {
+        Ok(guild_id) => {
+            // The guild itself arrives over the gateway as a GuildCreate; this
+            // only reports that the join was accepted.
+            client
+                .publish_event(AppEvent::InviteAccepted { code, guild_id })
+                .await;
+        }
+        Err(error) => {
+            log_app_error("accept invite failed", &error);
+            client
+                .publish_event(AppEvent::InviteAcceptFailed {
+                    code,
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
 pub(super) async fn add_reaction(
     client: DiscordClient,
     channel_id: Id<ChannelMarker>,

@@ -255,6 +255,22 @@ impl DiscordClient {
         self.rest.leave_guild(guild_id).await
     }
 
+    pub async fn resolve_invite(&self, code: &str) -> Result<crate::discord::rest::InvitePreview> {
+        self.rest.resolve_invite(code).await
+    }
+
+    pub async fn accept_invite(&self, code: &str) -> Result<Option<Id<GuildMarker>>> {
+        self.rest.accept_invite(code).await
+    }
+
+    /// Whether the account is already in a guild.
+    ///
+    /// Exposed for the invite flow: offering to join a guild you are already
+    /// in is worse than offering to open it.
+    pub fn is_member_of(&self, guild_id: Id<GuildMarker>) -> bool {
+        self.read_state().guild(guild_id).is_some()
+    }
+
     pub async fn ack_channel(
         &self,
         channel_id: Id<ChannelMarker>,

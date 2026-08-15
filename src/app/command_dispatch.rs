@@ -499,6 +499,12 @@ impl CommandDispatcher {
             AppCommand::LeaveGuild { guild_id, label } => {
                 message_commands::leave_guild(self.client.clone(), guild_id, label).await;
             }
+            AppCommand::ResolveInvite { code } => {
+                message_commands::resolve_invite(self.client.clone(), code).await;
+            }
+            AppCommand::AcceptInvite { code } => {
+                message_commands::accept_invite(self.client.clone(), code).await;
+            }
             AppCommand::AddReaction {
                 channel_id,
                 message_id,

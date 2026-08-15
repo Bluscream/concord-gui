@@ -11,11 +11,12 @@ use concord::discord::{
     ApplicationCommandInfo, ApplicationCommandInvocation, AttachmentDownloadId,
     BuiltinSlashCommandParse, BuiltinSlashCommandSubmit, DownloadAttachmentSource,
     ForumPostArchiveState, ForumPostCreate, GlobalUserProfileUpdate, GuildUserProfileUpdate, Id,
-    MAX_UPLOAD_ATTACHMENT_COUNT, MediaPlaybackSource, MediaPlaybackTarget, MessageAttachmentUpload,
-    MessageHistoryAfterMode, MessageSearchQuery, MuteDuration, PresenceStatus, ProfileAvatarUpload,
-    ReactionEmoji, ReplyReference, StreamCaptureTargetsRequestId, UserProfileUpdate,
-    VoiceConnectionStatus, VoiceParticipantPlaybackSettings, VoiceParticipantVolumePercent,
-    VoiceScope, VoiceVolumePercent, application_command_content_is_complete, marker,
+    InvitePreview, MAX_UPLOAD_ATTACHMENT_COUNT, MediaPlaybackSource, MediaPlaybackTarget,
+    MessageAttachmentUpload, MessageHistoryAfterMode, MessageSearchQuery, MuteDuration,
+    PresenceStatus, ProfileAvatarUpload, ReactionEmoji, ReplyReference,
+    StreamCaptureTargetsRequestId, UserProfileUpdate, VoiceConnectionStatus,
+    VoiceParticipantPlaybackSettings, VoiceParticipantVolumePercent, VoiceScope,
+    VoiceVolumePercent, application_command_content_is_complete, invite_code_from, marker,
     next_message_nonce, parse_builtin_slash_command,
     password_auth::{MfaMethod, PasswordAuthEvent},
     qr_auth::QrEvent,
@@ -187,6 +188,8 @@ pub enum Prompt {
     ThreadName,
     /// Title for a new forum post; the body comes from the composer.
     ForumPostTitle,
+    /// An invite link or code to join.
+    InviteCode,
 }
 
 impl Prompt {
@@ -194,6 +197,7 @@ impl Prompt {
         match self {
             Prompt::ThreadName => "Rename thread",
             Prompt::ForumPostTitle => "New post",
+            Prompt::InviteCode => "Join a server",
         }
     }
 
@@ -201,6 +205,7 @@ impl Prompt {
         match self {
             Prompt::ThreadName => "Thread name",
             Prompt::ForumPostTitle => "Post title",
+            Prompt::InviteCode => "discord.gg/... or an invite code",
         }
     }
 }
@@ -225,6 +230,14 @@ impl ConfirmAction {
             ConfirmAction::Unpin => "Unpin this message?",
         }
     }
+}
+
+/// An invite being looked at, before joining.
+pub struct InviteState {
+    pub code: String,
+    pub preview: Option<InvitePreview>,
+    /// Why it cannot be joined, when that is known.
+    pub error: Option<String>,
 }
 
 /// A pane that can be shown or hidden.
@@ -396,6 +409,8 @@ pub struct Workspace {
     /// URLs already requested, so a reprojection does not re-ask on every
     /// snapshot revision.
     requested_previews: std::collections::HashSet<String>,
+    /// Invite being previewed, once resolved or while resolving.
+    pub invite: Option<InviteState>,
     /// Custom status as last set, shown in the status bar.
     pub custom_status: String,
     /// Custom status being typed, when the editor is open.
@@ -505,6 +520,7 @@ impl Workspace {
             inbox_history_request: 0,
             attachment_previews: std::collections::HashMap::new(),
             requested_previews: std::collections::HashSet::new(),
+            invite: None,
             custom_status: String::new(),
             editing_status: None,
             keymap,
@@ -1137,6 +1153,7 @@ impl Workspace {
 
         match prompt {
             Prompt::ThreadName => self.rename_thread(text),
+            Prompt::InviteCode => self.resolve_invite(&text),
             Prompt::ForumPostTitle => {
                 // The body is the composer's content, so a post is written the
                 // same way a message is and the title is the only extra step.
@@ -1170,6 +1187,38 @@ impl Workspace {
         // Colour is left alone: the command carries both fields, and passing
         // None means unchanged rather than cleared.
         self.update_guild_folder(folder_id, Some(name), None);
+    }
+
+    /// Look up an invite the user pasted.
+    pub fn resolve_invite(&mut self, input: &str) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        // Parsed by the core, so both clients accept the same forms.
+        let Some(code) = invite_code_from(input) else {
+            self.model.status_line = "That does not look like an invite".to_string();
+            return;
+        };
+
+        self.invite = Some(InviteState {
+            code: code.clone(),
+            preview: None,
+            error: None,
+        });
+        handle.send(AppCommand::ResolveInvite { code });
+    }
+
+    /// Join the guild the previewed invite points at.
+    pub fn accept_invite(&mut self) {
+        let (Some(handle), Some(invite)) = (&self.handle, self.invite.as_ref()) else {
+            return;
+        };
+        handle.send(AppCommand::AcceptInvite {
+            code: invite.code.clone(),
+        });
+        // Closed immediately: the guild arrives over the gateway, and leaving
+        // the dialog up would invite a second click that joins twice.
+        self.invite = None;
     }
 
     /// Rename or recolour a guild folder.
@@ -1273,7 +1322,8 @@ impl Workspace {
     /// Ordered so one press closes one thing: escape with several panels open
     /// should peel them back, not clear the screen.
     pub fn close_popup(&mut self) {
-        if self.confirming.take().is_some()
+        if self.invite.take().is_some()
+            || self.confirming.take().is_some()
             || self.prompt.take().is_some()
             || self.editing_status.take().is_some()
             || self.renaming_folder.take().is_some()
@@ -4028,6 +4078,27 @@ impl Workspace {
 
             // Login cannot continue in this client: solving a captcha needs a
             // browser. Said plainly rather than leaving the attempt hanging.
+            AppEvent::InviteResolved { preview } => {
+                if let Some(invite) = &mut self.invite
+                    && invite.code == preview.code
+                {
+                    invite.preview = Some(preview.clone());
+                }
+            }
+            AppEvent::InviteResolveFailed { code, message } => {
+                if let Some(invite) = &mut self.invite
+                    && invite.code == *code
+                {
+                    invite.error = Some(message.clone());
+                }
+            }
+            AppEvent::InviteAccepted { .. } => {
+                // The guild itself arrives as a GuildCreate and reprojects.
+                self.model.status_line = "Joined".to_string();
+            }
+            AppEvent::InviteAcceptFailed { message, .. } => {
+                self.model.status_line = format!("Could not join: {message}");
+            }
             AppEvent::CaptchaRequired { action } => {
                 self.model.status_line =
                     format!("Discord demanded a captcha for {action}; use a browser to continue");
@@ -4452,7 +4523,28 @@ impl Workspace {
             );
         }
 
-        rail
+        // Joining a server. Until this existed a client could leave a guild
+        // but never join one, so the official client was still needed for it.
+        rail.child(
+            gpui::div()
+                .id("guild-join")
+                .w(px(44.))
+                .h(px(44.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .bg(rgb(active().surface))
+                .cursor_pointer()
+                .text_size(px(scaled(text::LG)))
+                .text_color(rgb(active().success))
+                .hover(|style| style.bg(rgb(active().surface_hover)))
+                .child("+")
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.prompt = Some((Prompt::InviteCode, Composer::default()));
+                    cx.notify();
+                })),
+        )
     }
 
     fn channel_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -4822,6 +4914,58 @@ impl Workspace {
                     move |cx: &mut gpui::App| {
                         entity.update(cx, |workspace, cx| {
                             workspace.confirming = None;
+                            cx.notify();
+                        });
+                    }
+                },
+            )));
+        }
+
+        if let Some(invite) = &self.invite {
+            let row = overlay::InviteRow {
+                guild_name: invite
+                    .preview
+                    .as_ref()
+                    .map(|preview| preview.guild_name.clone())
+                    .unwrap_or_else(|| "Looking up invite...".to_string()),
+                channel_name: invite
+                    .preview
+                    .as_ref()
+                    .and_then(|preview| preview.channel_name.clone()),
+                inviter: invite
+                    .preview
+                    .as_ref()
+                    .and_then(|preview| preview.inviter.clone()),
+                member_count: invite.preview.as_ref().and_then(|p| p.member_count),
+                online_count: invite.preview.as_ref().and_then(|p| p.online_count),
+                already_joined: invite
+                    .preview
+                    .as_ref()
+                    .is_some_and(|preview| preview.already_joined),
+                // No preview yet and no error means it is still in flight, so
+                // the join button stays hidden rather than acting on nothing.
+                status: invite
+                    .error
+                    .clone()
+                    .or_else(|| invite.preview.is_none().then(|| "Resolving...".to_string())),
+            };
+
+            return Some(overlay::scrim().child(overlay::invite_view(
+                &row,
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.accept_invite();
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.invite = None;
                             cx.notify();
                         });
                     }

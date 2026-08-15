@@ -339,6 +339,32 @@ fn handle_command(
             publish_state!();
         }
 
+        AppCommand::ResolveInvite { code } => {
+            // Answered with a plausible server so the flow can be exercised
+            // offline; the code is echoed back so the caller can match it.
+            publish_event!(AppEvent::InviteResolved {
+                preview: concord::discord::InvitePreview {
+                    code,
+                    guild_id: None,
+                    guild_name: "Rust Community".to_string(),
+                    channel_name: Some("welcome".to_string()),
+                    inviter: Some("ferris".to_string()),
+                    member_count: Some(48_213),
+                    online_count: Some(3_907),
+                    already_joined: false,
+                },
+            });
+        }
+
+        AppCommand::AcceptInvite { code } => {
+            // No guild is added: the fixture's guild list is fixed, and
+            // inventing one would leave a server that cannot be opened.
+            publish_event!(AppEvent::InviteAccepted {
+                code,
+                guild_id: None,
+            });
+        }
+
         AppCommand::LoadThreadPreview {
             channel_id,
             message_id,

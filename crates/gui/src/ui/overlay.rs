@@ -355,3 +355,90 @@ pub fn text_prompt_view(
                 .child(button("prompt-save", "Save", false, on_submit)),
         )
 }
+
+/// What an invite points at, as shown before joining.
+pub struct InviteRow {
+    pub guild_name: String,
+    pub channel_name: Option<String>,
+    pub inviter: Option<String>,
+    pub member_count: Option<u64>,
+    pub online_count: Option<u64>,
+    pub already_joined: bool,
+    /// Set while the lookup is still running, or when it failed.
+    pub status: Option<String>,
+}
+
+/// Invite preview, with the join confirmation.
+pub fn invite_view(
+    invite: &InviteRow,
+    on_accept: impl Fn(&mut gpui::App) + 'static,
+    on_cancel: impl Fn(&mut gpui::App) + 'static,
+) -> Div {
+    let mut body = column()
+        .px(px(space::LG))
+        .py(px(space::MD))
+        .gap(px(space::XS));
+
+    body = body.child(
+        gpui::div()
+            .text_size(px(scaled(text::BASE)))
+            .text_color(rgb(active().text))
+            .child(invite.guild_name.clone()),
+    );
+
+    // Counts are what tell someone whether this is the server they meant, so
+    // they are shown when Discord provided them and omitted when it did not -
+    // never guessed at.
+    if let (Some(members), Some(online)) = (invite.member_count, invite.online_count) {
+        body = body.child(
+            gpui::div()
+                .text_size(px(scaled(text::XS)))
+                .text_color(rgb(active().text_muted))
+                .child(format!("{members} members, {online} online")),
+        );
+    }
+
+    for (label, value) in [
+        ("Channel", invite.channel_name.clone()),
+        ("Invited by", invite.inviter.clone()),
+    ] {
+        if let Some(value) = value {
+            body = body.child(
+                gpui::div()
+                    .text_size(px(scaled(text::XS)))
+                    .text_color(rgb(active().text_subtle))
+                    .child(format!("{label}: {value}")),
+            );
+        }
+    }
+
+    if let Some(status) = &invite.status {
+        body = body.child(
+            gpui::div()
+                .text_size(px(scaled(text::XS)))
+                .text_color(rgb(active().danger))
+                .child(status.clone()),
+        );
+    }
+
+    let joinable = invite.status.is_none() && !invite.already_joined;
+    if invite.already_joined {
+        body = body.child(
+            gpui::div()
+                .text_size(px(scaled(text::XS)))
+                .text_color(rgb(active().text_muted))
+                .child("You are already in this server"),
+        );
+    }
+
+    panel("Join server", 400.).child(body).child(
+        row()
+            .w_full()
+            .px(px(space::LG))
+            .py(px(space::MD))
+            .gap(px(space::SM))
+            .justify_end()
+            .child(button("invite-cancel", "Cancel", false, on_cancel))
+            .children(joinable.then(|| button("invite-join", "Join", true, on_accept))),
+    )
+}

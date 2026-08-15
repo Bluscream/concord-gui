@@ -976,7 +976,11 @@ impl DiscordState {
             } => {
                 self.set_thread_mute(*channel_id, *muted, mute_end_time.clone());
             }
-            AppEvent::GatewayDispatchReceived { .. }
+            AppEvent::InviteResolved { .. }
+            | AppEvent::InviteResolveFailed { .. }
+            | AppEvent::InviteAccepted { .. }
+            | AppEvent::InviteAcceptFailed { .. }
+            | AppEvent::GatewayDispatchReceived { .. }
             | AppEvent::GatewayError { .. }
             | AppEvent::CaptchaRequired { .. }
             | AppEvent::MessageSendFailed { .. }
