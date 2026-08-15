@@ -153,23 +153,41 @@ Deliberately **not** planned, as the "bloat" this project exists to avoid:
 - Discovery, quests, sponsored surfaces
 - Analytics and telemetry beyond what the API requires
 
-**Invites are done.** A client could previously leave a guild but never join
-one, so the official client was still required for the single most basic
-thing after reading messages. Paste a link or code into the `+` in the guild
-rail; the invite is previewed - server, channel, inviter, member counts -
-before anything is joined, because an invite code says nothing about where it
-leads.
+### The rule for anything beyond TUI parity
 
-Still to do, and none of these are wiring jobs. The core has **no** commands
-or REST routes for any of them, so each means building from the transport
-layer up, the way invites just were:
+New features go in the **core**, and land in **both** front ends. Otherwise
+the core grows capabilities that half its clients cannot reach - which is
+exactly what happened when invites and forwarding were built for the GUI
+alone, and had to be retrofitted into the TUI afterwards.
+
+### Done
+
+| Feature | GUI | TUI |
+|---|---|---|
+| Invites (join a server) | `+` in the guild rail | Guild actions, `j` |
+| Message forwarding | Message toolbar | Message actions, `f` |
+| Sticker rendering | Inline image | Existing name display |
+
+Joining mattered most: a client could leave a guild but never join one, so
+the official client was still required for the most basic thing after reading
+messages. Both clients preview the invite - server, channel, inviter, member
+counts - before joining, because an invite code says nothing about where it
+leads. Forwarding reuses each client's own channel switcher, so destinations
+rank identically in both.
+
+Sticker *sending* is not done: the core carries ids and formats now, which is
+what rendering needed, but there is no send path or picker.
+
+### Still to do
+
+None are wiring jobs. The core has no commands or REST routes for these, so
+each means building from the transport layer up, the way invites were:
 
 | Feature | What it needs |
 |---|---|
-| Stickers | REST send path, a picker, and rendering in the log |
-| Message forwarding | A `message_reference` of forward type on send |
-| Per-guild identities | Profile REST already exists; needs per-guild plumbing |
-| Moderation (kick/ban/roles) | Guild REST routes, permission checks, and UI |
+| Sticker sending | `sticker_ids` on send, plus a picker sourced from guild stickers |
+| Per-guild identities | Profile REST exists; needs per-guild plumbing |
+| Moderation (kick/ban/roles) | Guild REST routes, permission checks, and UI in both clients |
 
 Moderation is the one place Abaddon is genuinely ahead, and the strongest
 argument for that client over this one.
