@@ -196,37 +196,40 @@ third-party clients flagged.
   again on reconnect rather than silently connecting audio to a channel the
   user queued an hour ago. Confirm if it is stale.
 
-### 9. Lurkable guilds - confirmed
+### 9. Lurking - confirmed, and it is read-only
 
-Lurking is a real Discord state, and it is entered explicitly. What the
-references establish:
+Lurking is a real Discord state, it is entered explicitly, and **you cannot
+send messages while in it**. That last point is the one that matters for
+anything built on this, and it is the one the reference clients do not say.
 
-- **`joinGuild` takes a `lurker` flag.** A Vencord patch in
-  `discord-screenaudio`'s bundle matches `guildId:(\i),lurker:(\i)` in the
-  official client's own join call, and skips its auto-mute when the join was a
-  lurk. So lurking is a *join* with `lurker: true`, not a side effect of
+What the sources establish:
+
+- **It is read-only.** Discord's `PREVIEW_ENABLED` guild feature is documented
+  as "Guild is accessable (read-only) without passing member verification",
+  and preview is described as letting members who have not passed the
+  verification gate view the guild *without interacting with it*. A pending
+  member has to finish membership screening before becoming a full member who
+  can talk. So a lurked guild is browsable and nothing more.
+- **`LURKABLE` itself is deprecated.** The userdoccers guild-features list
+  shows it struck through; the live mechanism is `PREVIEW_ENABLED`. discordgo's
+  "lurkable guild" wording predates that rename, so treat it as historical.
+- **It is entered by joining.** A Vencord patch in `discord-screenaudio`'s
+  bundle matches `guildId:(\i),lurker:(\i)` in the official client's own
+  `joinGuild` call. Lurking is a join with `lurker: true`, not a side effect of
   reading a guild you have no relationship with.
 - **Leaving distinguishes the two.** `DELETE /users/@me/guilds/{id}` carries
-  `{"lurking": bool}` - the `dm` client sends `false`, and chorus models it as
-  `GuildLeaveSchema { lurking }`. A lurk is left the same way a membership is,
-  with the flag saying which it was.
-- **"Lurkable" is a documented guild property.** discordgo: only textual
-  channels "visible to everyone in a lurkable guild" appear in
-  `mention_channels`. That is about channel visibility, not about message
-  access for strangers.
+  `{"lurking": bool}` - the `dm` client sends `false`, chorus models it as
+  `GuildLeaveSchema { lurking }`.
 - **Widget endpoints are unauthenticated** (`reflectcord` exempts
-  `/guilds/{id}/widget.(json|png)` from auth), but widget.json carries channel
-  names and an online count - *not* messages.
+  `/guilds/{id}/widget.(json|png)`), but widget.json carries channel names and
+  an online count - not messages.
 
-**The practical consequence, which matters more than the mechanism:** lurking
-still goes through the join endpoint. Anything this client does to browse a
-discoverable server without really joining is a join as far as Discord's
-anti-spam heuristics are concerned, so it belongs behind the rule 6 warning
-exactly like a normal join does - see `RiskKind::JoinGuild`.
-
-The stronger claim that a discoverable guild answers message requests from
-someone with no relationship to it at all is **not** supported by anything in
-the references, and the `lurker` flag is positive evidence against it.
+**Two consequences for this client.** A lurk still goes through the join
+endpoint, so it carries the same anti-spam risk a normal join does and belongs
+behind the rule 6 warning. And a lurked guild must present as read-only: the
+composer has to be disabled with a reason, the same way rule 5 says a refused
+action is shown with its reason rather than hidden. Offering a composer that
+silently fails would be the worst of both.
 
 ### How a source is shown
 
