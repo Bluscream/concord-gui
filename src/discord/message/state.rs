@@ -145,6 +145,14 @@ impl MessageState {
                     )
                     .filter_map(EmbedInfo::inline_preview_info),
             )
+            // Stickers render where images do. Both front ends read this, so
+            // adding them here gives the TUI sticker images without its own
+            // fetch path - it already draws inline previews.
+            .chain(
+                self.stickers
+                    .iter()
+                    .filter_map(crate::discord::StickerInfo::inline_preview_info),
+            )
             .collect()
     }
 

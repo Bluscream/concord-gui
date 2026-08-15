@@ -93,17 +93,16 @@ pub(super) fn parse_guild_create(data: &Value) -> Option<AppEvent> {
                 .iter()
                 .filter_map(|item| {
                     let id = item.get("id").and_then(parse_id)?;
-                    Some(crate::discord::StickerInfo {
+                    Some(crate::discord::StickerInfo::new(
                         id,
-                        name: item
-                            .get("name")
+                        item.get("name")
                             .and_then(Value::as_str)
                             .unwrap_or("sticker")
                             .to_owned(),
-                        format: crate::discord::StickerFormat::from_wire(
+                        crate::discord::StickerFormat::from_wire(
                             item.get("format_type").and_then(Value::as_u64).unwrap_or(1),
                         ),
-                    })
+                    ))
                 })
                 .collect()
         })

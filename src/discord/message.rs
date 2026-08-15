@@ -250,6 +250,34 @@ pub struct StickerInfo {
     pub id: Id<crate::discord::ids::marker::StickerMarker>,
     pub name: String,
     pub format: StickerFormat,
+    /// CDN URL, stored rather than derived so it can be borrowed by an
+    /// inline preview. Empty for formats with no image, such as Lottie.
+    pub url: String,
+}
+
+impl StickerInfo {
+    /// Build one, deriving the CDN URL from the id and format.
+    pub fn new(
+        id: Id<crate::discord::ids::marker::StickerMarker>,
+        name: String,
+        format: StickerFormat,
+    ) -> Self {
+        let url = if format.is_image() {
+            format!(
+                "https://media.discordapp.net/stickers/{}.{}",
+                id.get(),
+                format.extension()
+            )
+        } else {
+            String::new()
+        };
+        Self {
+            id,
+            name,
+            format,
+            url,
+        }
+    }
 }
 
 /// Discord's sticker `format_type`.
@@ -292,15 +320,31 @@ impl StickerFormat {
 }
 
 impl StickerInfo {
-    /// CDN URL for the sticker image.
-    pub fn image_url(&self) -> Option<String> {
-        self.format.is_image().then(|| {
-            format!(
-                "https://media.discordapp.net/stickers/{}.{}",
-                self.id.get(),
-                self.format.extension()
-            )
+    /// A sticker as an inline preview, so it renders where images do.
+    ///
+    /// Lottie stickers return `None`: they are vector animations, and no front
+    /// end here can play one, so they fall back to the name instead of showing
+    /// a broken image.
+    pub fn inline_preview_info(&self) -> Option<InlinePreviewInfo<'_>> {
+        self.format.is_image().then_some(InlinePreviewInfo {
+            url: self.url.as_str(),
+            proxy_url: None,
+            filename: self.name.as_str(),
+            // Discord renders stickers at 160 square. Sending the real size
+            // lets a terminal reserve the right number of cells before the
+            // image arrives, rather than reflowing when it does.
+            width: Some(160),
+            height: Some(160),
+            accent_color: None,
+            animated: matches!(self.format, StickerFormat::Apng | StickerFormat::Gif),
+            proxy_preview_only: false,
+            show_play_marker: false,
         })
+    }
+
+    /// CDN URL for the sticker image, if it has one.
+    pub fn image_url(&self) -> Option<String> {
+        (!self.url.is_empty()).then(|| self.url.clone())
     }
 }
 
@@ -713,4 +757,49 @@ fn filename_has_extension(filename: &str, extensions: &[&str]) -> bool {
             .iter()
             .any(|value| extension.eq_ignore_ascii_case(value))
     })
+}
+
+#[cfg(test)]
+mod sticker_tests {
+    use super::*;
+
+    #[test]
+    fn a_sticker_url_matches_its_format() {
+        let png = StickerInfo::new(Id::new(1), "wave".to_owned(), StickerFormat::Png);
+        assert!(png.url.ends_with("/1.png"));
+
+        // APNG is served as .png: the extension is the container, not the
+        // animation, and asking for .apng returns nothing.
+        let apng = StickerInfo::new(Id::new(2), "spin".to_owned(), StickerFormat::Apng);
+        assert!(apng.url.ends_with("/2.png"));
+
+        let gif = StickerInfo::new(Id::new(3), "dance".to_owned(), StickerFormat::Gif);
+        assert!(gif.url.ends_with("/3.gif"));
+    }
+
+    #[test]
+    fn a_lottie_sticker_has_no_image() {
+        // A vector animation neither front end can play. It must not produce
+        // a preview, or both would show a broken image where a name belongs.
+        let lottie = StickerInfo::new(Id::new(4), "bounce".to_owned(), StickerFormat::Lottie);
+
+        assert!(lottie.url.is_empty());
+        assert!(lottie.image_url().is_none());
+        assert!(lottie.inline_preview_info().is_none());
+    }
+
+    #[test]
+    fn an_image_sticker_previews_at_discords_own_size() {
+        let sticker = StickerInfo::new(Id::new(5), "hello".to_owned(), StickerFormat::Png);
+        let preview = sticker
+            .inline_preview_info()
+            .expect("an image sticker should preview");
+
+        // Sent so a terminal can reserve cells before the image arrives,
+        // rather than reflowing the log when it does.
+        assert_eq!(preview.width, Some(160));
+        assert_eq!(preview.height, Some(160));
+        assert_eq!(preview.url, sticker.url);
+        assert!(!preview.animated);
+    }
 }
