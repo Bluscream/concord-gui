@@ -46,6 +46,7 @@ fn kind_label(kind: StreamCaptureTargetKind) -> &'static str {
         // The portal picks the source itself, so the label promises nothing
         // about what will be captured.
         StreamCaptureTargetKind::Portal => "Choose…",
+        StreamCaptureTargetKind::Camera => "Camera",
     }
 }
 

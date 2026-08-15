@@ -21,6 +21,21 @@ pub enum StreamCaptureTargetKind {
     Display,
     Window,
     Portal,
+    /// A camera. Shares the capture, encode and RTP path with screen capture -
+    /// only the source of the frames differs - which is why it is a target
+    /// kind rather than a second pipeline.
+    Camera,
+}
+
+impl StreamCaptureTargetKind {
+    /// Whether this target is a camera rather than something on screen.
+    ///
+    /// Worth a name: the two are offered in different places and refused for
+    /// different reasons, and `== Camera` at each site invites one being
+    /// missed when a kind is added.
+    pub fn is_camera(self) -> bool {
+        matches!(self, Self::Camera)
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

@@ -252,6 +252,12 @@ fn resolve_audio_scope(
     target: &StreamCaptureTarget,
 ) -> Result<SystemAudioScope, SystemAudioCaptureError> {
     match target.kind {
+        // A camera has no audio to capture alongside it. The microphone is
+        // already on the voice connection, and pulling system audio in for a
+        // camera would broadcast whatever else is playing.
+        StreamCaptureTargetKind::Camera => Err(SystemAudioCaptureError::new(
+            "a camera has no system audio to capture".to_owned(),
+        )),
         StreamCaptureTargetKind::Display | StreamCaptureTargetKind::Portal => {
             Ok(SystemAudioScope {
                 target_pid: std::process::id(),

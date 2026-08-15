@@ -46,7 +46,29 @@ const FRAME_QUEUE_CAPACITY: usize = 2;
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 const CANCEL_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 
-pub(super) struct CaptureSession {
+#[path = "linux/camera.rs"]
+mod camera;
+
+/// A capture in progress.
+///
+/// Two variants rather than two pipelines: a camera and a shared window differ
+/// only in where the frames come from, and everything downstream - scaling,
+/// encoding, RTP - is the same for both.
+pub(super) enum CaptureSession {
+    Screen(ScreenCaptureSession),
+    Camera(camera::CameraSession),
+}
+
+impl CaptureSession {
+    pub(super) fn stop(&mut self) -> Result<(), String> {
+        match self {
+            Self::Screen(session) => session.stop(),
+            Self::Camera(session) => session.stop(),
+        }
+    }
+}
+
+pub(super) struct ScreenCaptureSession {
     stop_tx: pw::channel::Sender<()>,
     stopping: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
@@ -109,17 +131,26 @@ struct PipeWirePortal {
 }
 
 pub(super) fn list_targets() -> Result<Vec<StreamCaptureTarget>, String> {
-    Ok(vec![StreamCaptureTarget {
+    let mut targets = vec![StreamCaptureTarget {
         kind: StreamCaptureTargetKind::Portal,
         id: 0,
         title: "Screen or window...".to_owned(),
-    }])
+    }];
+    // Listed alongside screens rather than in a menu of their own: from the
+    // client's point of view a camera is another thing to send video from.
+    targets.extend(camera::list_cameras());
+    Ok(targets)
 }
 
 pub(super) fn start_capture(
     target: &StreamCaptureTarget,
     stop: &AtomicBool,
 ) -> Result<(CaptureSession, CaptureOutput), String> {
+    if target.kind.is_camera() {
+        let (session, output) =
+            camera::start_camera_capture(target, CaptureFrameBufferPool::default())?;
+        return Ok((CaptureSession::Camera(session), output));
+    }
     if target.kind != StreamCaptureTargetKind::Portal {
         return Err("Linux screen sharing requires a portal capture target".to_owned());
     }
@@ -188,13 +219,13 @@ pub(super) fn start_capture(
 
     match wait_for_pipewire_start(&ready_rx, stop) {
         Ok(()) => Ok((
-            CaptureSession {
+            CaptureSession::Screen(ScreenCaptureSession {
                 stop_tx,
                 stopping,
                 worker: Some(worker),
                 portal_runtime: runtime,
                 portal_session: Some(portal_session),
-            },
+            }),
             CaptureOutput {
                 frames: frames_rx,
                 errors: errors_rx,
@@ -234,7 +265,7 @@ fn wait_for_pipewire_start(
     }
 }
 
-impl CaptureSession {
+impl ScreenCaptureSession {
     pub(super) fn stop(&mut self) -> Result<(), String> {
         self.stopping.store(true, Ordering::Release);
         let _ = self.stop_tx.send(());

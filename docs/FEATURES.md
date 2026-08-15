@@ -60,7 +60,7 @@ third-party Discord clients actually expect.
 | Stickers | 7 | done |
 | Edit / delete | 6 | done |
 | User profiles | 5 | done |
-| Video / camera | 5 | **missing** |
+| Video / camera | 5 | partial |
 | Noise suppression | 4 | done |
 | Server management | 4 | done |
 | Image viewer | 4 | done |
@@ -95,7 +95,23 @@ the composer when more than one account could send. Design in AGENTS.md.
 
 *5 clients* — NativeCord, Voxa, cordless, popcord, reliable-discord-client-irc-daemon
 
-Voice works; camera does not. The core has no capture path for it.
+**Half done, and worth being precise about which half.**
+
+A camera is now a capture target alongside screens and windows, so its frames
+go through the same scaling, encoding and RTP path the screenshare already
+uses. On Linux that is V4L2, converting YUYV or MJPEG to RGBA in-process
+rather than pulling in libv4l. Cameras appear in the existing capture picker.
+
+What that gives you is a camera over **Go Live**, which is the stream path.
+What it does not give you is Discord's "turn on camera" in a call, which puts
+video on the *voice* connection under a different SSRC and negotiation. That
+is the remaining half.
+
+macOS and Windows enumerate no cameras: the capture backends for those
+platforms are screen-only, and the honest failure is an empty list rather than
+a target that cannot start.
+
+Untested against real hardware, like everything else here.
 
 ## Partial
 

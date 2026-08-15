@@ -121,6 +121,7 @@ voice-playback = [
   "dep:xkeysym",
 ]
 stream-broadcast = [
+  "dep:v4l",
   "voice-playback",
   "dep:cros-codecs",
   "dep:openh264",
@@ -146,6 +147,12 @@ stream-broadcast = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa = { version = "0.11", optional = true }
+# Camera capture. Pure Rust against the kernel interface - the `v4l2` feature
+# avoids libv4l, which would be a C dependency for a conversion done here
+# anyway.
+v4l = { version = "0.14.0", optional = true, default-features = false, features = [
+  "v4l2",
+] }
 ashpd = { version = "0.13.13", default-features = false, features = [
   "tokio",
   "global_shortcuts",
