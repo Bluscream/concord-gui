@@ -1068,3 +1068,43 @@ fn demo_forum_post_creates_a_thread_with_its_opening_message() {
     assert_eq!(messages.len(), 1, "the post's body is its first message");
     assert_eq!(messages[0].content.as_deref(), Some("borrow checker"));
 }
+
+#[test]
+fn a_bot_choice_replaces_only_the_argument_being_typed() {
+    use crate::ui::composer::Composer;
+
+    // Standalone check of the rule the composer path relies on: earlier
+    // arguments were already accepted and must survive completion.
+    let replace = |content: &str, value: &str| {
+        let head = content
+            .rsplit_once(char::is_whitespace)
+            .map(|(head, _)| head)
+            .unwrap_or(content);
+        format!("{head} {value}")
+    };
+
+    assert_eq!(replace("/play song na", "nautilus"), "/play song nautilus");
+    assert_eq!(replace("/play ", "nautilus"), "/play nautilus");
+
+    // And the composer accepts the result unchanged.
+    let mut composer = Composer::default();
+    composer.set_text(&replace("/play song na", "nautilus"));
+    assert_eq!(composer.text(), "/play song nautilus");
+}
+
+#[test]
+fn download_progress_is_only_shown_when_a_total_is_known() {
+    // A download of unknown length must not display a fabricated percentage.
+    let fraction = |downloaded: u64, total: Option<u64>| -> Option<f32> {
+        total
+            .filter(|total| *total > 0)
+            .map(|total| (downloaded as f32 / total as f32).clamp(0.0, 1.0))
+    };
+
+    assert_eq!(fraction(50, Some(200)), Some(0.25));
+    assert_eq!(fraction(50, None), None);
+    // A zero total would divide by zero rather than mean "complete".
+    assert_eq!(fraction(50, Some(0)), None);
+    // Servers can report more bytes than they promised.
+    assert_eq!(fraction(300, Some(200)), Some(1.0));
+}

@@ -14,9 +14,9 @@ use concord::discord::{
     MAX_UPLOAD_ATTACHMENT_COUNT, MediaPlaybackSource, MediaPlaybackTarget, MessageAttachmentUpload,
     MessageHistoryAfterMode, MessageSearchQuery, MuteDuration, PresenceStatus, ProfileAvatarUpload,
     ReactionEmoji, ReplyReference, StreamCaptureTargetsRequestId, UserProfileUpdate,
-    VoiceParticipantPlaybackSettings, VoiceParticipantVolumePercent, VoiceScope,
-    VoiceVolumePercent, application_command_content_is_complete, marker, next_message_nonce,
-    parse_builtin_slash_command,
+    VoiceConnectionStatus, VoiceParticipantPlaybackSettings, VoiceParticipantVolumePercent,
+    VoiceScope, VoiceVolumePercent, application_command_content_is_complete, marker,
+    next_message_nonce, parse_builtin_slash_command,
     password_auth::{MfaMethod, PasswordAuthEvent},
     qr_auth::QrEvent,
 };
@@ -350,6 +350,13 @@ pub struct Workspace {
     audio_sources_request: u64,
     /// Sequence number for inbox-context requests.
     inbox_history_request: u64,
+    /// Content of sends still in flight, keyed by nonce, so a rejected send
+    /// can be put back in the composer rather than lost.
+    pending_sends: std::collections::HashMap<Id<marker::MessageMarker>, String>,
+    /// Downloads in progress: id to (filename, fraction complete).
+    pub downloads: Vec<(AttachmentDownloadId, String, Option<f32>)>,
+    /// Autocomplete choices offered by a bot for the argument being typed.
+    pub command_choices: Vec<String>,
     /// Folder being renamed, with the new name as typed.
     pub renaming_folder: Option<(u64, Composer)>,
     /// Key of the avatar preview being awaited, if any.
@@ -427,6 +434,9 @@ impl Workspace {
             audio_devices: None,
             audio_sources_request: 0,
             inbox_history_request: 0,
+            pending_sends: std::collections::HashMap::new(),
+            downloads: Vec::new(),
+            command_choices: Vec::new(),
             renaming_folder: None,
             pending_avatar: None,
             thread_previews: std::collections::HashSet::new(),
@@ -1316,18 +1326,24 @@ impl Workspace {
                 mention_author: self.reply_ping,
             });
 
+        let nonce = next_message_nonce();
+        // Kept so a failure can return the text to the composer. Discord
+        // rejects sends for reasons the client cannot predict (slowmode,
+        // permissions, filters), and without this the message is simply gone.
+        self.pending_sends.insert(nonce, content.clone());
+
         if self.send_as_tts && reply_to.is_none() && self.attachments.is_empty() {
             // TTS has no reply or attachment form, so it applies only to a
             // plain message rather than silently dropping either.
             handle.send(AppCommand::SendTtsMessage {
                 channel_id,
-                nonce: next_message_nonce(),
+                nonce,
                 content,
             });
         } else {
             handle.send(AppCommand::SendMessage {
                 channel_id,
-                nonce: next_message_nonce(),
+                nonce,
                 content,
                 reply_to,
                 attachments: std::mem::take(&mut self.attachments),
@@ -3690,12 +3706,6 @@ impl Workspace {
     /// represented in the state store, such as transient errors.
     fn absorb(&mut self, event: AppEvent) {
         match &event {
-            // A message landing in the channel on screen means the user is
-            // most likely looking at it, so schedule the ack rather than
-            // letting the badge sit there. The core owns the delay.
-            AppEvent::MessageCreate { message } if Some(message.channel_id) == self.nav.channel => {
-                self.schedule_mark_read();
-            }
             // A reconnect can have dropped messages while the socket was down.
             // Neither paging direction fills that hole, because both extend
             // from what is already cached.
@@ -3710,6 +3720,201 @@ impl Workspace {
                 devices.outputs = outputs.clone();
                 devices.error = error.clone();
             }
+            // A send that Discord rejected. The text goes back to the composer
+            // rather than being dropped: retyping a long message because the
+            // client silently ate it is the worst possible outcome here.
+            AppEvent::MessageSendFailed { channel_id, nonce } => {
+                let restored = self.pending_sends.remove(nonce);
+                if Some(*channel_id) == self.nav.channel
+                    && let Some(content) = restored
+                    && self.composer.is_empty()
+                {
+                    self.composer.set_text(&content);
+                }
+                self.model.status_line = "Message was not sent".to_string();
+            }
+            AppEvent::MessageSendRateLimited {
+                retry_after_millis, ..
+            } => {
+                self.model.status_line = format!(
+                    "Rate limited; retrying in {:.0}s",
+                    *retry_after_millis as f64 / 1000.0
+                );
+            }
+            AppEvent::MessageSendCooldownStarted {
+                duration_millis, ..
+            } => {
+                // Slowmode. Reported as a duration rather than a bare refusal
+                // so the user knows whether to wait or give up.
+                self.model.status_line = format!(
+                    "Slowmode: {:.0}s before the next message",
+                    *duration_millis as f64 / 1000.0
+                );
+            }
+            // One arm, not two: a message can be both in the open channel and
+            // one of ours, and separate guarded arms would let the first match
+            // shadow the second.
+            AppEvent::MessageCreate { message } => {
+                // Confirmed by the server, so the retry copy is no longer
+                // needed. The nonce comes back on its own field rather than as
+                // the message id, which the server assigns independently.
+                if let Some(nonce) = message.nonce {
+                    self.pending_sends.remove(&nonce);
+                }
+
+                // A message landing in the channel on screen means the user is
+                // most likely looking at it, so schedule the ack rather than
+                // letting the badge sit there. The core owns the delay.
+                if Some(message.channel_id) == self.nav.channel {
+                    self.schedule_mark_read();
+                }
+            }
+
+            // Login cannot continue in this client: solving a captcha needs a
+            // browser. Said plainly rather than leaving the attempt hanging.
+            AppEvent::CaptchaRequired { action } => {
+                self.model.status_line =
+                    format!("Discord demanded a captcha for {action}; use a browser to continue");
+            }
+            AppEvent::SignedOut => {
+                self.model.connected = false;
+                self.model.status_line = "Signed out".to_string();
+            }
+            AppEvent::GatewayClosed => {
+                self.model.connected = false;
+                self.model.status_line = "Disconnected; reconnecting".to_string();
+            }
+            AppEvent::GatewayResumed => {
+                self.model.connected = true;
+                self.model.status_line = "Reconnected".to_string();
+            }
+            AppEvent::UpdateAvailable { latest_version } => {
+                self.model.status_line = format!("concord {latest_version} is available");
+            }
+
+            AppEvent::InteractionFailed { reason_code, .. } => {
+                self.model.status_line = format!("The command failed (code {reason_code})");
+            }
+            AppEvent::InteractionSucceeded { .. } => {
+                // The bot's reply arrives as an ordinary message, so there is
+                // nothing to show beyond clearing any earlier failure.
+                self.model.status_line.clear();
+            }
+            AppEvent::ApplicationCommandAutocompleteResponse { choices, .. } => {
+                self.command_choices = choices.iter().map(|choice| choice.name.clone()).collect();
+            }
+            AppEvent::ApplicationCommandIndexUpdated { guild_id } => {
+                // A bot's command list changed; re-fetch so the picker is not
+                // offering commands that no longer exist.
+                if self.nav.selection == Selection::Guild(*guild_id)
+                    && let Some(handle) = &self.handle
+                {
+                    handle.send(AppCommand::LoadApplicationCommands {
+                        guild_id: Some(*guild_id),
+                    });
+                }
+            }
+
+            AppEvent::AttachmentDownloadStarted {
+                id,
+                filename,
+                total_bytes,
+                ..
+            } => {
+                self.downloads
+                    .push((*id, filename.clone(), total_bytes.map(|_| 0.0)));
+                self.model.status_line = format!("Downloading {filename}");
+            }
+            AppEvent::AttachmentDownloadProgress {
+                id,
+                downloaded_bytes,
+                total_bytes,
+            } => {
+                if let Some(entry) = self.downloads.iter_mut().find(|entry| entry.0 == *id) {
+                    // Only meaningful with a known total; a download of unknown
+                    // length shows activity without a false percentage.
+                    entry.2 = total_bytes
+                        .filter(|total| *total > 0)
+                        .map(|total| (*downloaded_bytes as f32 / total as f32).clamp(0.0, 1.0));
+                }
+            }
+            AppEvent::AttachmentDownloadCompleted { id, path, .. } => {
+                self.downloads.retain(|entry| entry.0 != *id);
+                self.model.status_line = format!("Saved to {path}");
+            }
+            AppEvent::AttachmentDownloadFailed {
+                id,
+                filename,
+                message,
+                ..
+            } => {
+                self.downloads.retain(|entry| entry.0 != *id);
+                self.model.status_line = format!("{filename}: {message}");
+            }
+
+            AppEvent::UserProfileLoadFailed { message, .. } => {
+                // The panel is closed rather than left on a spinner that will
+                // never resolve.
+                self.profile = None;
+                self.model.status_line = format!("Could not load profile: {message}");
+            }
+            AppEvent::UserProfileUpdateFailed { message, .. } => {
+                self.model.status_line = format!("Profile not updated: {message}");
+            }
+
+            AppEvent::VoiceAudioSourcesApplyFailed {
+                active_input_source,
+                active_output_source,
+                message,
+                ..
+            } => {
+                // The picker is corrected to what is actually in use, so it
+                // does not keep showing a device that was refused.
+                if let Some(devices) = &mut self.audio_devices {
+                    devices.selected_input = active_input_source.clone();
+                    devices.selected_output = active_output_source.clone();
+                    devices.error = Some(message.clone());
+                }
+                self.model.status_line = message.clone();
+            }
+            AppEvent::VoiceConnectionStatusChanged {
+                status, message, ..
+            } => {
+                self.model.status_line = match status {
+                    VoiceConnectionStatus::Connecting => "Voice: connecting".to_string(),
+                    VoiceConnectionStatus::Connected => "Voice: connected".to_string(),
+                    VoiceConnectionStatus::Disconnected => "Voice: disconnected".to_string(),
+                    VoiceConnectionStatus::Failed => message
+                        .clone()
+                        .unwrap_or_else(|| "Voice: connection failed".to_string()),
+                };
+
+                // A failed or dropped connection clears the local voice state,
+                // or the sidebar keeps showing a call that is not happening.
+                if matches!(
+                    status,
+                    VoiceConnectionStatus::Disconnected | VoiceConnectionStatus::Failed
+                ) {
+                    self.voice_channel = None;
+                    self.voice_scope_joined = None;
+                    self.broadcasting = false;
+                    self.watching = None;
+                }
+            }
+            AppEvent::VoiceSound { .. } => {
+                // The core plays the sound; there is nothing to display.
+            }
+            AppEvent::MediaPlaybackWindowReady { .. }
+            | AppEvent::StreamPlaybackWindowReady { .. } => {
+                // Playback opens in an external player, which is its own
+                // visible confirmation.
+            }
+            AppEvent::StreamPlaybackEnded { reconnecting, .. } => {
+                if !reconnecting {
+                    self.watching = None;
+                }
+            }
+
             AppEvent::Ready { .. } => {
                 self.refresh_history();
                 self.hydrate_missing_members();
@@ -4735,12 +4940,64 @@ impl Workspace {
             format!("Message #{name}  ·  ctrl-o to attach")
         };
 
-        composer_view(
-            &self.composer,
-            self.focus.is_focused(window),
-            enabled,
-            &placeholder,
-        )
+        // The pickers sit above the composer, in a column with it, so they
+        // push the input down rather than covering the text being typed.
+        column()
+            .w_full()
+            .children(self.slash.as_ref().map(slash_view))
+            .children((!self.command_choices.is_empty()).then(|| {
+                // Choices supplied by a bot for the argument in progress.
+                // Listed rather than auto-inserted: the values are the bot's,
+                // and picking one for the user would guess at intent.
+                let mut list = column()
+                    .w_full()
+                    .rounded(px(layout::RADIUS))
+                    .bg(rgb(active().surface))
+                    .border_1()
+                    .border_color(rgb(active().border));
+
+                for (slot, choice) in self.command_choices.iter().enumerate().take(10) {
+                    let value = choice.clone();
+                    list = list.child(
+                        gpui::div()
+                            .id(("choice", slot))
+                            .w_full()
+                            .px(px(space::MD))
+                            .py(px(space::XS))
+                            .cursor_pointer()
+                            .text_size(px(scaled(text::SM)))
+                            .text_color(rgb(active().text_muted))
+                            .hover(|style| style.bg(rgb(active().surface_hover)))
+                            .child(choice.clone())
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.accept_command_choice(&value);
+                                cx.notify();
+                            })),
+                    );
+                }
+
+                list
+            }))
+            .child(composer_view(
+                &self.composer,
+                self.focus.is_focused(window),
+                enabled,
+                &placeholder,
+            ))
+    }
+
+    /// Put a bot-supplied choice into the composer, replacing the argument
+    /// being typed.
+    fn accept_command_choice(&mut self, value: &str) {
+        let content = self.composer.text().to_string();
+        // Only the last whitespace-separated token is replaced: earlier
+        // arguments were already accepted and must survive.
+        let head = content
+            .rsplit_once(char::is_whitespace)
+            .map(|(head, _)| head)
+            .unwrap_or(&content);
+        self.composer.set_text(&format!("{head} {value}"));
+        self.command_choices.clear();
     }
 
     fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -4784,7 +5041,25 @@ impl Workspace {
             } else {
                 Presence::Offline
             }))
-            .child(self.model.status_line.clone())
+            .child(gpui::div().flex_1().child(self.model.status_line.clone()))
+            // Downloads live here rather than in a modal: they run alongside
+            // whatever the user is doing, and a dialog would interrupt it.
+            .children(
+                self.downloads
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, (_, filename, progress))| {
+                        gpui::div()
+                            .id(("download", slot))
+                            .px(px(space::SM))
+                            .text_color(rgb(active().accent))
+                            .child(match progress {
+                                Some(fraction) => format!("{filename} {:.0}%", fraction * 100.0),
+                                // No total means no honest percentage to show.
+                                None => format!("{filename}..."),
+                            })
+                    }),
+            )
     }
 }
 
