@@ -35,12 +35,10 @@ called this list finished; it was not. What follows is the corrected set.
 
 | Feature | TUI action | Notes |
 |---|---|---|
-| Confirmation prompts | `OpenDeleteConfirmation`, `OpenPinConfirmation` | Delete and pin act immediately. |
 | Voice volume | `AdjustVolume`, `UpdateVoiceParticipantPlayback` | No output or per-participant volume control. |
 | Notification levels | `OpenNotificationOptions` | Only mute/unmute; no all/mentions/nothing. |
 | Pane resize | `ResizePaneLeft/Right` | Widths persist in `ui_state` but cannot be changed. |
 | Zoom | `ToggleZoom`, `ZoomIn/Out` | |
-| Open thread from a message | `OpenThread` | Threads are reachable from the sidebar only. |
 | Composer options | `OpenComposerOptions` | |
 
 ### Not possible against this core

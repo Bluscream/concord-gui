@@ -130,6 +130,8 @@ pub struct MessageRow {
     pub spoiler_revealed: bool,
     /// Links found in the body, in order, so they can be opened.
     pub links: Vec<String>,
+    /// Thread started from this message, if one exists.
+    pub thread: Option<Id<marker::ChannelMarker>>,
     /// Whether the authenticated user wrote this message, which gates the
     /// edit and delete actions.
     pub own: bool,
@@ -234,6 +236,12 @@ pub fn project_messages(
             poll: message.poll.as_ref().map(project_poll),
             spoiler_revealed: false,
             links: Vec::new(),
+            // Discord gives a thread the same id as the message that started
+            // it, so a thread channel under that id is this message's thread.
+            thread: state
+                .channel(Id::new(message.id.get()))
+                .filter(|channel| channel.is_thread())
+                .map(|channel| channel.id),
             own: current_user == Some(message.author_id),
         });
 

@@ -145,6 +145,32 @@ impl WorkspaceModel {
     }
 }
 
+/// A destructive action held for confirmation.
+///
+/// Deleting is irreversible and pinning is visible to everyone in the channel,
+/// so both are worth a second press rather than a single misplaced click.
+pub struct Confirm {
+    pub message: usize,
+    pub action: ConfirmAction,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmAction {
+    Delete,
+    Pin,
+    Unpin,
+}
+
+impl ConfirmAction {
+    fn prompt(self) -> &'static str {
+        match self {
+            ConfirmAction::Delete => "Delete this message?",
+            ConfirmAction::Pin => "Pin this message for everyone?",
+            ConfirmAction::Unpin => "Unpin this message?",
+        }
+    }
+}
+
 /// A pane that can be shown or hidden.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Pane {
@@ -232,6 +258,8 @@ pub struct Workspace {
     pub guild_muted: bool,
     /// Recent error-log lines, shown when the debug panel is open.
     pub debug_log: Option<Vec<String>>,
+    /// A destructive action awaiting confirmation.
+    pub confirming: Option<Confirm>,
     /// Message the keyboard is on, when navigating the log without a mouse.
     pub selected_message: Option<usize>,
     /// Which pane keyboard focus is on, for cycling and filtering.
@@ -314,6 +342,7 @@ impl Workspace {
             voice_scope_joined: None,
             channel_muted: false,
             guild_muted: false,
+            confirming: None,
             selected_message: None,
             focus_pane: Pane::Channels,
             pane_filter: None,
@@ -608,6 +637,33 @@ impl Workspace {
         let height = self.message_scroll.bounds().size.height;
         self.message_scroll
             .set_offset(gpui::point(offset.x, offset.y + height * pages));
+    }
+
+    /// Carry out the pending confirmation.
+    fn confirm(&mut self) {
+        let Some(pending) = self.confirming.take() else {
+            return;
+        };
+        let Some(row) = self.messages.get(pending.message) else {
+            return;
+        };
+        let message_id = row.id;
+
+        match pending.action {
+            ConfirmAction::Delete => self.delete_message(message_id),
+            ConfirmAction::Pin => self.set_pinned(pending.message, true),
+            ConfirmAction::Unpin => self.set_pinned(pending.message, false),
+        }
+    }
+
+    /// Open the thread started from a message, if it has one.
+    fn open_message_thread(&mut self, index: usize) {
+        let Some(thread) = self.messages.get(index).and_then(|row| row.thread) else {
+            self.model.status_line = "This message has no thread".to_string();
+            return;
+        };
+        self.forum = None;
+        self.open_channel(thread);
     }
 
     /// Move the message selection, entering the log if not already in it.
@@ -1556,7 +1612,12 @@ impl Workspace {
         match action {
             MessageAction::Reply => self.start_reply(message_id, author),
             MessageAction::Edit => self.start_edit(message_id),
-            MessageAction::Delete => self.delete_message(message_id),
+            MessageAction::Delete => {
+                self.confirming = Some(Confirm {
+                    message: index,
+                    action: ConfirmAction::Delete,
+                });
+            }
             MessageAction::LoadOlder => self.load_older_messages(),
             MessageAction::JumpToReplied => {
                 if let Some(target) = self
@@ -1590,6 +1651,7 @@ impl Workspace {
             }
             MessageAction::RemoveEmbeds => self.remove_embeds(index),
             MessageAction::OpenLink(link) => self.open_link(index, link),
+            MessageAction::OpenThread => self.open_message_thread(index),
             MessageAction::TogglePin => {
                 let pinned = self
                     .messages
@@ -3767,7 +3829,13 @@ impl Render for Workspace {
                     Screen::Ready => {
                         let key = event.keystroke.key.as_str();
 
-                        if let Some(switcher) = &mut this.switcher {
+                        if this.confirming.is_some() {
+                            match key {
+                                "enter" => this.confirm(),
+                                "escape" => this.confirming = None,
+                                _ => {}
+                            }
+                        } else if let Some(switcher) = &mut this.switcher {
                             match key {
                                 "escape" => this.switcher = None,
                                 "up" => switcher.move_selection(-1),

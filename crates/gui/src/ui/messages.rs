@@ -48,6 +48,7 @@ impl MessageAction {
             MessageAction::PlayAttachment(_) => 15,
             MessageAction::RemoveEmbeds => 16,
             MessageAction::OpenLink(_) => 17,
+            MessageAction::OpenThread => 18,
         }
     }
 }
@@ -84,6 +85,8 @@ pub enum MessageAction {
     RemoveEmbeds,
     /// Open a link found in this message's body.
     OpenLink(usize),
+    /// Open the thread started from this message.
+    OpenThread,
     /// Toggle an existing reaction, identified by its index in the row's
     /// reaction list. Carrying the index avoids threading emoji identity
     /// through the callback.
@@ -216,6 +219,7 @@ fn message_row(
                     own,
                     message.pinned,
                     message.embed_count > 0,
+                    message.thread.is_some(),
                     on_action,
                 )),
         )
@@ -226,6 +230,7 @@ fn action_bar(
     own: bool,
     pinned: bool,
     has_embeds: bool,
+    has_thread: bool,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> Div {
     let mut bar = row()
@@ -254,6 +259,10 @@ fn action_bar(
             .child(label)
             .on_click(move |_event, _window, cx| handler(index, action, cx))
     };
+
+    if has_thread {
+        bar = bar.child(button("thread", MessageAction::OpenThread, false));
+    }
 
     bar = bar
         .child(button("reply", MessageAction::Reply, false))
