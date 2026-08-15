@@ -213,6 +213,17 @@ Worth confirming against a real account before relying on it. If it holds, it
 pairs well with rule 7: a public guild you left could stay genuinely live
 rather than only browsable from cache.
 
+## Sequencing
+
+Rules 7, 8 and the merged multi-account design below are **architectural work
+to start last**. Before any of them: everything collected from the other
+clients - `docs/FEATURES.md` and the task list - should be implemented,
+tested, fixed and actually working.
+
+The reason is that those three all rewire how state is stored, shared and
+fanned out. Doing them over a moving feature set means doing them twice, and
+doing them first means a long stretch with nothing a user can see.
+
 ## Planned: merged multi-account
 
 The largest feature on the roadmap, described here because the design is
