@@ -733,14 +733,14 @@ pub enum AttachmentViewerZoom {
 }
 
 impl AttachmentViewerZoom {
-    pub(super) fn zoom_in(self) -> Self {
+    pub fn zoom_in(self) -> Self {
         match self {
             Self::Default => Self::Large,
             Self::Large | Self::Fullscreen => Self::Fullscreen,
         }
     }
 
-    pub(super) fn zoom_out(self) -> Self {
+    pub fn zoom_out(self) -> Self {
         match self {
             Self::Fullscreen => Self::Large,
             Self::Large | Self::Default => Self::Default,

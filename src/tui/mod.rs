@@ -38,6 +38,13 @@ use crate::{
 
 pub use runtime::DashboardExit;
 
+/// How far an image viewer is zoomed in.
+///
+/// Re-exported because both front ends have a viewer and the steps should
+/// match: an image that reads as "large" in one client should not be a
+/// different size in the other.
+pub use state::AttachmentViewerZoom;
+
 pub fn validate_keymap_options(keymap_options: &KeymapOptions) -> Result<()> {
     keybindings::KeyBindings::try_from_options(keymap_options)
         .map(|_| ())

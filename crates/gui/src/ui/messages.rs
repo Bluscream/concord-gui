@@ -74,6 +74,7 @@ impl MessageAction {
             MessageAction::OpenThread => 18,
             MessageAction::LoadNewer => 19,
             MessageAction::Forward => 20,
+            MessageAction::ViewImage(_) => 21,
         }
     }
 }
@@ -122,6 +123,8 @@ pub enum MessageAction {
     ToggleReaction(usize),
     /// Reveal a spoiler that was hidden in this message.
     RevealSpoiler,
+    /// Open an image attachment full size, by index.
+    ViewImage(usize),
 }
 
 /// Render the full message list, oldest first.
@@ -583,13 +586,24 @@ fn message_body(
             && options.show_images
             && let Some(image) = options.previews.get(attachment.url.as_str())
         {
+            let view = on_action.clone();
             body = body.child(
-                gpui::img(image.clone())
-                    // Bounded so one large image cannot push the rest of
-                    // the conversation off screen.
-                    .max_w(px(400.))
-                    .max_h(px(300.))
-                    .rounded(px(layout::RADIUS)),
+                gpui::div()
+                    .id(("image", index * 16 + position))
+                    .cursor_pointer()
+                    // Clicking opens it full size. Inline is bounded so one
+                    // large image cannot push the conversation off screen,
+                    // which makes a way to see the whole thing necessary
+                    // rather than a nicety.
+                    .on_click(move |_event, _window, cx| {
+                        view(index, MessageAction::ViewImage(position), cx)
+                    })
+                    .child(
+                        gpui::img(image.clone())
+                            .max_w(px(400.))
+                            .max_h(px(300.))
+                            .rounded(px(layout::RADIUS)),
+                    ),
             );
         }
 

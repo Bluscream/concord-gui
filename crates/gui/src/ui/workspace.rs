@@ -24,6 +24,7 @@ use concord::discord::{
 use concord::risk::RiskKind;
 use concord::t;
 use concord::token_store;
+use concord::tui::AttachmentViewerZoom;
 use gpui::{
     ClipboardItem, Context, FocusHandle, KeyDownEvent, PathPromptOptions, Window, WindowHandle,
     prelude::*, px, rgb,
@@ -432,6 +433,39 @@ fn audit_line(entry: &concord::discord::AuditLogEntryInfo) -> String {
     }
 }
 
+/// An image opened full size.
+///
+/// Carries every image in the message rather than only the one clicked, so
+/// paging between them does not have to go back to the row it came from -
+/// which may have scrolled away by then.
+pub struct ImageViewerView {
+    pub urls: Vec<String>,
+    pub index: usize,
+    pub zoom: AttachmentViewerZoom,
+}
+
+impl ImageViewerView {
+    pub fn url(&self) -> Option<&str> {
+        self.urls.get(self.index).map(String::as_str)
+    }
+
+    /// Step to the next or previous image, wrapping at each end.
+    ///
+    /// Wrapping rather than stopping: an arrow that does nothing at the edge
+    /// reads as a broken control rather than as the end of the list.
+    fn step(&mut self, forward: bool) {
+        let count = self.urls.len();
+        if count == 0 {
+            return;
+        }
+        self.index = if forward {
+            (self.index + 1) % count
+        } else {
+            (self.index + count - 1) % count
+        };
+    }
+}
+
 /// Which part of the server-management panel is showing.
 ///
 /// One panel with three tabs rather than three separate ones: they are all
@@ -713,6 +747,8 @@ pub struct Workspace {
     pub bans: Option<BanListView>,
     /// The server-management panel, once opened.
     pub server_management: Option<ServerManagementView>,
+    /// An image being viewed full size.
+    pub viewing_image: Option<ImageViewerView>,
     /// Roles being edited for a member: who, and the set as edited so far.
     pub editing_roles: Option<(Id<marker::UserMarker>, Vec<Id<marker::RoleMarker>>)>,
     /// Stickers staged for the next send. Discord accepts at most three.
@@ -849,6 +885,7 @@ impl Workspace {
             risk: None,
             bans: None,
             server_management: None,
+            viewing_image: None,
             editing_roles: None,
             pending_stickers: Vec::new(),
             sticker_picker: false,
@@ -1867,6 +1904,7 @@ impl Workspace {
             || self.prompt.take().is_some()
             || self.editing_status.take().is_some()
             || self.editing_activity.take().is_some()
+            || self.viewing_image.take().is_some()
             || self.renaming_folder.take().is_some()
             || self.picker.take().is_some()
             || self.stream_picker.take().is_some()
@@ -3163,6 +3201,7 @@ impl Workspace {
             MessageAction::LoadOlder => self.load_older_messages(),
             MessageAction::LoadNewer => self.load_newer_messages(MessageHistoryAfterMode::GapFill),
             MessageAction::Forward => self.start_forward(index),
+            MessageAction::ViewImage(position) => self.view_image(index, position),
             MessageAction::JumpToReplied => {
                 if let Some(target) = self
                     .messages
@@ -3686,6 +3725,58 @@ impl Workspace {
             ServerTab::Emoji
         } else {
             ServerTab::AuditLog
+        }
+    }
+
+    /// Open a message's images full size, starting at the one clicked.
+    pub fn view_image(&mut self, row_index: usize, position: usize) {
+        let Some(row) = self.messages.get(row_index) else {
+            return;
+        };
+
+        // Only the images: paging through a message that mixes an image with
+        // a zip file should not land on the zip.
+        let urls: Vec<String> = row
+            .attachments
+            .iter()
+            .filter(|attachment| attachment.is_image)
+            .map(|attachment| attachment.url.clone())
+            .collect();
+        if urls.is_empty() {
+            return;
+        }
+
+        // The clicked position counts every attachment, so it has to be
+        // mapped onto the image-only list rather than used directly.
+        let index = row
+            .attachments
+            .iter()
+            .take(position + 1)
+            .filter(|attachment| attachment.is_image)
+            .count()
+            .saturating_sub(1);
+
+        self.viewing_image = Some(ImageViewerView {
+            urls,
+            index,
+            zoom: AttachmentViewerZoom::default(),
+        });
+    }
+
+    /// Step through the images in the open message, wrapping at each end.
+    pub fn step_viewed_image(&mut self, forward: bool) {
+        if let Some(view) = &mut self.viewing_image {
+            view.step(forward);
+        }
+    }
+
+    pub fn zoom_viewed_image(&mut self, in_: bool) {
+        if let Some(view) = &mut self.viewing_image {
+            view.zoom = if in_ {
+                view.zoom.zoom_in()
+            } else {
+                view.zoom.zoom_out()
+            };
         }
     }
 
@@ -6365,6 +6456,67 @@ impl Workspace {
             )));
         }
 
+        if let Some(view) = &self.viewing_image
+            && let Some(url) = view.url()
+            && let Some(image) = self.attachment_previews.get(url)
+        {
+            // Each step is roughly half again as large. Three steps rather
+            // than free zoom because the TUI has three, and an image that
+            // reads as "large" in one client should not differ in the other.
+            let (max_width, max_height) = match view.zoom {
+                AttachmentViewerZoom::Default => (720., 540.),
+                AttachmentViewerZoom::Large => (1080., 810.),
+                AttachmentViewerZoom::Fullscreen => (1920., 1440.),
+            };
+            let position =
+                (view.urls.len() > 1).then(|| format!("{} / {}", view.index + 1, view.urls.len()));
+
+            let close = {
+                let entity = entity.clone();
+                move |cx: &mut gpui::App| {
+                    entity.update(cx, |workspace, cx| {
+                        workspace.viewing_image = None;
+                        cx.notify();
+                    });
+                }
+            };
+
+            // The scrim is the close target as well as the backdrop, so it is
+            // wrapped in a plain div: `id` makes it Stateful, which is not
+            // what the overlay slot holds.
+            return Some(
+                gpui::div().child(
+                    overlay::scrim()
+                        .id("image-viewer-scrim")
+                        .on_click(move |_event, _window, cx| close(cx))
+                        .child(overlay::image_viewer_view(
+                            gpui::ImageSource::Image(image.clone()),
+                            position,
+                            max_width,
+                            max_height,
+                            {
+                                let entity = entity.clone();
+                                move |forward, cx: &mut gpui::App| {
+                                    entity.update(cx, |workspace, cx| {
+                                        workspace.step_viewed_image(forward);
+                                        cx.notify();
+                                    });
+                                }
+                            },
+                            {
+                                let entity = entity.clone();
+                                move |in_, cx: &mut gpui::App| {
+                                    entity.update(cx, |workspace, cx| {
+                                        workspace.zoom_viewed_image(in_);
+                                        cx.notify();
+                                    });
+                                }
+                            },
+                        )),
+                ),
+            );
+        }
+
         if let Some(view) = &self.server_management {
             let tabs: Vec<(String, bool)> = ServerTab::ALL
                 .iter()
@@ -7843,6 +7995,7 @@ impl Render for Workspace {
                             || this.prompt.is_some()
                             || this.editing_status.is_some()
                             || this.editing_activity.is_some()
+                            || this.viewing_image.is_some()
                             || this.renaming_folder.is_some()
                             // The search panel owns typing whenever it is open;
                             // it has no separate focus flag.
@@ -7918,6 +8071,18 @@ impl Render for Workspace {
                                         text.handle_key_with_clipboard(event, pasted);
                                     }
                                 }
+                            }
+                        } else if this.viewing_image.is_some() {
+                            match key {
+                                "escape" => this.viewing_image = None,
+                                "left" => this.step_viewed_image(false),
+                                "right" => this.step_viewed_image(true),
+                                // Both spellings of each: the key is "+" on
+                                // some layouts and "=" on others, and nobody
+                                // should have to find out which.
+                                "+" | "=" => this.zoom_viewed_image(true),
+                                "-" | "_" => this.zoom_viewed_image(false),
+                                _ => {}
                             }
                         } else if this.editing_activity.is_some() {
                             match key {
@@ -8463,5 +8628,74 @@ mod server_management_tests {
 
         assert!(line.contains("999"));
         assert!(line.starts_with(&t!("label-unknown")));
+    }
+}
+
+#[cfg(test)]
+mod image_viewer_tests {
+    use super::*;
+
+    fn view(count: usize) -> ImageViewerView {
+        ImageViewerView {
+            urls: (0..count).map(|index| format!("image-{index}")).collect(),
+            index: 0,
+            zoom: AttachmentViewerZoom::default(),
+        }
+    }
+
+    #[test]
+    fn stepping_wraps_at_both_ends() {
+        // Forward off the end comes back to the start, and backward off the
+        // start goes to the end. Stopping at an edge would look like the
+        // control had broken.
+        let mut images = view(3);
+
+        images.step(true);
+        assert_eq!(images.url(), Some("image-1"));
+        images.step(true);
+        images.step(true);
+        assert_eq!(images.url(), Some("image-0"));
+
+        images.step(false);
+        assert_eq!(images.url(), Some("image-2"));
+    }
+
+    #[test]
+    fn stepping_an_empty_viewer_does_nothing() {
+        // Not reachable through view_image, which refuses to open with no
+        // images - but a modulo by zero would panic, so it is guarded.
+        let mut empty = view(0);
+        empty.step(true);
+        assert_eq!(empty.url(), None);
+    }
+
+    #[test]
+    fn zoom_stops_at_each_end_rather_than_wrapping() {
+        // Zoom is not a cycle: zooming in past the largest must not drop back
+        // to the smallest, which would be the opposite of what was asked.
+        let mut zoom = AttachmentViewerZoom::default();
+        for _ in 0..5 {
+            zoom = zoom.zoom_in();
+        }
+        assert_eq!(zoom, AttachmentViewerZoom::Fullscreen);
+
+        for _ in 0..5 {
+            zoom = zoom.zoom_out();
+        }
+        assert_eq!(zoom, AttachmentViewerZoom::Default);
+    }
+
+    #[test]
+    fn a_single_image_still_has_a_url() {
+        let single = view(1);
+        assert_eq!(single.url(), Some("image-0"));
+    }
+
+    #[test]
+    fn an_index_past_the_end_yields_nothing_rather_than_panicking() {
+        // Reachable if a message is edited while its images are open.
+        let mut stale = view(1);
+        stale.index = 5;
+        assert_eq!(stale.url(), None);
     }
 }

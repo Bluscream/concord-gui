@@ -32,7 +32,7 @@ third-party Discord clients actually expect.
 | File upload | 30 | done |
 | Theming | 28 | done |
 | Unread / mentions | 27 | done |
-| Per-channel tabs | 26 | **missing** |
+| Per-channel tabs | 26 | done (GUI) |
 | Custom emoji | 25 | done |
 | Threads | 22 | done |
 | Search | 22 | done |
@@ -42,18 +42,18 @@ third-party Discord clients actually expect.
 | Cross-platform | 17 | partial |
 | Token login | 16 | done |
 | Keybindings / vim | 16 | done |
-| Rich presence / activity | 15 | yes |
+| Rich presence / activity | 15 | done |
 | Reactions | 14 | done |
 | Moderation (kick/ban) | 14 | done |
 | Voice / calls | 14 | done |
-| Friends list | 13 | yes |
+| Friends list | 13 | done |
 | Markdown parsing | 12 | done |
 | Pins | 11 | done |
 | Forums | 9 | done |
 | Guild folders | 9 | done |
 | QR login | 9 | done |
-| Animated emoji | 9 | partial |
-| Sounds | 9 | yes |
+| Animated emoji | 9 | done |
+| Sounds | 9 | done |
 | Slash commands | 8 | done |
 | Typing indicators | 8 | done |
 | Screenshare | 7 | partial |
@@ -62,8 +62,8 @@ third-party Discord clients actually expect.
 | User profiles | 5 | done |
 | Video / camera | 5 | **missing** |
 | Noise suppression | 4 | done |
-| Server management | 4 | yes |
-| Image viewer | 4 | partial |
+| Server management | 4 | done |
+| Image viewer | 4 | done |
 | Inline images | 4 | done |
 | Multi-account | 3 | **missing** |
 | Not Electron | 3 | done |
@@ -72,10 +72,10 @@ third-party Discord clients actually expect.
 | Custom status | 3 | done |
 | Read receipts / ack | 3 | done |
 | Polls | 3 | done |
-| Audit log | 2 | **missing** |
+| Audit log | 2 | done |
 | Role management | 1 | done |
-| Invite management | 1 | partial |
-| Emoji management | 1 | **missing** |
+| Invite management | 1 | done |
+| Emoji management | 1 | done |
 
 ## Missing, most-wanted first
 
@@ -136,7 +136,14 @@ Upload, rename and delete guild emoji.
   rather than following the desktop-notification one, because wanting the
   popup without the noise is common.
 - **Screenshare** — Compile-verified only - blocked by a zbus/tokio incompatibility reaching us through GPUI's own dependencies.
-- **Image viewer** — Images render inline. There is no full-size viewer with zoom.
+- **Image viewer** - Clicking an inline image opens it full size, with three
+  zoom steps and arrows through the other images in the same message. The zoom
+  steps are the TUI's own `AttachmentViewerZoom`, re-exported rather than
+  reinvented, so "large" means the same thing in both clients.
+
+  Paging carries every image in the message rather than looking them up again
+  from the row, which may have scrolled away. It skips non-images: a message
+  mixing a screenshot with a zip should not page onto the zip.
 - **Friends list** - Both clients can now send, accept, cancel and decline
   requests, unfriend, block and unblock. The four outcomes of "remove" are one
   endpoint at Discord, so each is named for what it does rather than sharing a

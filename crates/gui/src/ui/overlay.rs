@@ -1112,3 +1112,83 @@ pub fn server_management_view(
                 .child(button("server-close", &t!("action-close"), true, on_close)),
         )
 }
+
+/// One image, full size.
+///
+/// The scrim is the close target as well as the backdrop: clicking beside a
+/// full-screen image to dismiss it is what every other viewer does, and
+/// hunting for a small button is not.
+pub fn image_viewer_view(
+    image: gpui::ImageSource,
+    position: Option<String>,
+    max_width: f32,
+    max_height: f32,
+    on_step: impl Fn(bool, &mut gpui::App) + Clone + 'static,
+    on_zoom: impl Fn(bool, &mut gpui::App) + Clone + 'static,
+) -> Div {
+    let back = on_step.clone();
+    let zoom_out = on_zoom.clone();
+
+    column()
+        .items_center()
+        .gap(px(space::SM))
+        .child(
+            gpui::img(image)
+                .max_w(px(max_width))
+                .max_h(px(max_height))
+                .rounded(px(layout::RADIUS)),
+        )
+        .child(
+            row()
+                .gap(px(space::SM))
+                .items_center()
+                .child(
+                    gpui::div()
+                        .id("image-prev")
+                        .px(px(space::SM))
+                        .cursor_pointer()
+                        .text_color(rgb(active().text_muted))
+                        .hover(|style| style.text_color(rgb(active().text)))
+                        .on_click(move |_event, _window, cx| back(false, cx))
+                        .child("\u{25C0}"),
+                )
+                .child(
+                    gpui::div()
+                        .id("image-zoom-out")
+                        .px(px(space::SM))
+                        .cursor_pointer()
+                        .text_color(rgb(active().text_muted))
+                        .hover(|style| style.text_color(rgb(active().text)))
+                        .on_click(move |_event, _window, cx| zoom_out(false, cx))
+                        .child("\u{2212}"),
+                )
+                // Only when there is more than one, so a single image does not
+                // carry a meaningless "1 / 1".
+                .children(position.map(|label| {
+                    gpui::div()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().text_subtle))
+                        .child(label)
+                }))
+                .child(
+                    gpui::div()
+                        .id("image-zoom-in")
+                        .px(px(space::SM))
+                        .cursor_pointer()
+                        .text_color(rgb(active().text_muted))
+                        .hover(|style| style.text_color(rgb(active().text)))
+                        .on_click(move |_event, _window, cx| on_zoom(true, cx))
+                        .child("\u{002B}"),
+                )
+                .child(
+                    gpui::div()
+                        .id("image-next")
+                        .px(px(space::SM))
+                        .cursor_pointer()
+                        .text_color(rgb(active().text_muted))
+                        .hover(|style| style.text_color(rgb(active().text)))
+                        .on_click(move |_event, _window, cx| on_step(true, cx))
+                        .child("\u{25B6}"),
+                ),
+        )
+}
