@@ -11,8 +11,6 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use gpui::{Hsla, Rgba, rgb};
-
 /// Semantic colour tokens.
 #[derive(Clone, Copy)]
 pub struct Palette {
@@ -146,12 +144,7 @@ pub fn active() -> &'static Palette {
     if is_light_mode() { &LIGHT } else { &DARK }
 }
 
-impl Palette {
-    pub fn c(&self, value: u32) -> Rgba {
-        let _ = self;
-        rgb(value)
-    }
-}
+impl Palette {}
 
 /// Spacing scale (px). A 4px base grid - every gap and pad is a multiple,
 /// which is most of what keeps a dense chat UI from looking arbitrary.
@@ -173,8 +166,6 @@ pub mod text {
     pub const BASE: f32 = 14.;
     /// Section headers.
     pub const LG: f32 = 16.;
-    /// Screen titles.
-    pub const XL: f32 = 20.;
 }
 
 /// Fixed layout dimensions (px).
@@ -213,9 +204,4 @@ impl Presence {
             Presence::Offline => p.offline,
         }
     }
-}
-
-/// Convenience for callers that need an `Hsla` (GPUI's native colour type).
-pub fn hsla(value: u32) -> Hsla {
-    rgb(value).into()
 }

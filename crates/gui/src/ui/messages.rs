@@ -16,6 +16,9 @@ use concord::discord::custom_emoji_image_url;
 
 use crate::model::message::{MessageRow, format_bytes};
 use crate::theme::{active, layout, scaled, space, text};
+
+/// Decoded image attachments, keyed by URL.
+pub type Previews = std::collections::HashMap<String, std::sync::Arc<gpui::Image>>;
 use crate::ui::chrome::{avatar_with_url, column, row};
 
 /// Width reserved to the left of message bodies, so continuation rows align
@@ -111,6 +114,7 @@ pub fn message_list(
     hour24: bool,
     show_emoji: bool,
     show_images: bool,
+    previews: &Previews,
     // Whether newer messages exist beyond the loaded range.
     has_newer: bool,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
@@ -168,6 +172,7 @@ pub fn message_list(
             hour24,
             show_emoji,
             show_images,
+            previews,
             on_action.clone(),
         ));
     }
@@ -210,6 +215,7 @@ fn message_row(
     hour24: bool,
     show_emoji: bool,
     show_images: bool,
+    previews: &Previews,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> impl IntoElement {
     let own = message.own;
@@ -235,6 +241,7 @@ fn message_row(
             hour24,
             show_emoji,
             show_images,
+            previews,
             on_action.clone(),
         ))
         .child(
@@ -330,6 +337,7 @@ fn message_block(
     hour24: bool,
     show_emoji: bool,
     show_images: bool,
+    previews: &Previews,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> Div {
     let mut block = column()
@@ -366,6 +374,7 @@ fn message_block(
                     message,
                     show_emoji,
                     show_images,
+                    previews,
                     on_action,
                 )),
         )
@@ -407,6 +416,7 @@ fn message_block(
                         message,
                         show_emoji,
                         show_images,
+                        previews,
                         on_action,
                     )),
             )
@@ -459,6 +469,7 @@ fn message_body(
     message: &MessageRow,
     show_emoji: bool,
     show_images: bool,
+    previews: &Previews,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> Div {
     let mut body = column().flex_1().gap(px(space::XS));
@@ -493,22 +504,21 @@ fn message_body(
     }
 
     for (position, attachment) in message.attachments.iter().enumerate() {
-        // Images render inline rather than only as a chip. GPUI fetches them
-        // through the app's HTTP client, so unlike the TUI - which has to pull
-        // the bytes itself to encode them for the terminal - no separate
-        // preview request is needed.
-        //
-        // Gated on the same display option the chip respects, and skipped for
-        // demo attachments, which have no URL to fetch.
-        if attachment.is_image && show_images && !attachment.url.is_empty() {
-            body = body.child(
-                gpui::img(gpui::SharedUri::from(attachment.url.clone()))
-                    // Bounded so one large image cannot push the rest of the
-                    // conversation off screen.
-                    .max_w(px(400.))
-                    .max_h(px(300.))
-                    .rounded(px(layout::RADIUS)),
-            );
+        // Images render inline rather than only as a chip, from bytes the core
+        // fetched. Going through the core rather than GPUI's URL loader means
+        // one fetch, with the session's headers, landing in the cache the TUI
+        // also uses.
+        if attachment.is_image && show_images {
+            if let Some(image) = previews.get(attachment.url.as_str()) {
+                body = body.child(
+                    gpui::img(image.clone())
+                        // Bounded so one large image cannot push the rest of
+                        // the conversation off screen.
+                        .max_w(px(400.))
+                        .max_h(px(300.))
+                        .rounded(px(layout::RADIUS)),
+                );
+            }
         }
 
         let handler = on_action.clone();

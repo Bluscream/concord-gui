@@ -372,6 +372,21 @@ fn handle_command(
             publish_state!();
         }
 
+        AppCommand::LoadAttachmentPreview { url } => {
+            // Seeded from the URL so each attachment gets a distinguishable
+            // image rather than every preview looking identical.
+            let seed = url.bytes().map(u64::from).sum::<u64>();
+            let bytes = fixtures::demo_preview_png(seed);
+            if bytes.is_empty() {
+                publish_event!(AppEvent::AttachmentPreviewLoadFailed {
+                    url,
+                    message: "could not encode the demo image".to_string(),
+                });
+            } else {
+                publish_event!(AppEvent::AttachmentPreviewLoaded { url, bytes });
+            }
+        }
+
         AppCommand::LoadProfileAvatarPreview { .. }
         | AppCommand::RequestApplicationCommandAutocomplete { .. } => {
             // Both need a real upload or a real bot; there is nothing

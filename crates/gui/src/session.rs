@@ -27,7 +27,7 @@ use tokio::sync::mpsc;
 use crate::runtime;
 
 // Re-export the auth event types so workspace.rs only needs to import from here.
-pub use concord::discord::password_auth::{MfaChallenge, MfaMethod};
+pub use concord::discord::password_auth::MfaMethod;
 
 /// Spawn a password-auth task and return a receiver for its events.
 ///

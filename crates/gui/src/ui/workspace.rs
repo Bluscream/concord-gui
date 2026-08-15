@@ -32,9 +32,9 @@ use crate::model::projection::{self, Navigation, Selection};
 use crate::notify;
 use crate::session::{SessionHandle, Update};
 
-use crate::theme::{self, Presence, active, layout, scaled, space, text};
+use crate::theme::{Presence, active, layout, scaled, space, text};
 use crate::ui::chrome::{
-    avatar, avatar_with_url, column, header, hint, panel_sunken, presence_dot, row, section_label,
+    avatar, avatar_with_url, column, header, panel_sunken, presence_dot, row, section_label,
     sidebar_row, voice_participant_row,
 };
 use crate::ui::composer::{ClipboardIntent, Composer, composer_view};
@@ -178,6 +178,30 @@ impl WorkspaceModel {
 ///
 /// Deleting is irreversible and pinning is visible to everyone in the channel,
 /// so both are worth a second press rather than a single misplaced click.
+/// What a one-line text prompt is collecting.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Prompt {
+    ThreadName,
+    /// Title for a new forum post; the body comes from the composer.
+    ForumPostTitle,
+}
+
+impl Prompt {
+    fn title(self) -> &'static str {
+        match self {
+            Prompt::ThreadName => "Rename thread",
+            Prompt::ForumPostTitle => "New post",
+        }
+    }
+
+    fn placeholder(self) -> &'static str {
+        match self {
+            Prompt::ThreadName => "Thread name",
+            Prompt::ForumPostTitle => "Post title",
+        }
+    }
+}
+
 pub struct Confirm {
     pub message: usize,
     pub action: ConfirmAction,
@@ -357,10 +381,23 @@ pub struct Workspace {
     pub downloads: Vec<(AttachmentDownloadId, String, Option<f32>)>,
     /// Autocomplete choices offered by a bot for the argument being typed.
     pub command_choices: Vec<String>,
+    /// Decoded image attachments, keyed by URL.
+    ///
+    /// Fetched through the core rather than by GPUI's URL loader so the
+    /// request goes out with the session's headers and lands in the core's
+    /// cache, the same path the TUI uses.
+    pub attachment_previews: std::collections::HashMap<String, std::sync::Arc<gpui::Image>>,
+    /// URLs already requested, so a reprojection does not re-ask on every
+    /// snapshot revision.
+    requested_previews: std::collections::HashSet<String>,
     /// Custom status as last set, shown in the status bar.
     pub custom_status: String,
     /// Custom status being typed, when the editor is open.
     pub editing_status: Option<Composer>,
+    /// Participants muted locally, which no one else can see.
+    pub locally_muted: std::collections::HashSet<Id<marker::UserMarker>>,
+    /// A one-line prompt awaiting input: what it is for, and the text so far.
+    pub prompt: Option<(Prompt, Composer)>,
     /// Folder being renamed, with the new name as typed.
     pub renaming_folder: Option<(u64, Composer)>,
     /// Key of the avatar preview being awaited, if any.
@@ -438,8 +475,12 @@ impl Workspace {
             audio_devices: None,
             audio_sources_request: 0,
             inbox_history_request: 0,
+            attachment_previews: std::collections::HashMap::new(),
+            requested_previews: std::collections::HashSet::new(),
             custom_status: String::new(),
             editing_status: None,
+            locally_muted: std::collections::HashSet::new(),
+            prompt: None,
             pending_sends: std::collections::HashMap::new(),
             downloads: Vec::new(),
             command_choices: Vec::new(),
@@ -1054,6 +1095,27 @@ impl Workspace {
         });
     }
 
+    /// Apply whatever the open prompt was collecting.
+    fn submit_prompt(&mut self) {
+        let Some((prompt, text)) = self.prompt.take() else {
+            return;
+        };
+        let text = text.text().trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+
+        match prompt {
+            Prompt::ThreadName => self.rename_thread(text),
+            Prompt::ForumPostTitle => {
+                // The body is the composer's content, so a post is written the
+                // same way a message is and the title is the only extra step.
+                let body = self.composer.take();
+                self.create_forum_post(text, body);
+            }
+        }
+    }
+
     /// Apply the typed custom status.
     fn submit_custom_status(&mut self) {
         let Some(text) = self.editing_status.take() else {
@@ -1410,6 +1472,25 @@ impl Workspace {
             .collect();
         for (thread, message_id) in pending {
             self.request_thread_preview(thread, message_id);
+        }
+
+        // Image attachments in view. Gated on the display options, so turning
+        // previews off stops the fetch rather than only hiding the result.
+        if self.options.display.show_images && !self.options.display.disable_image_preview {
+            let urls: Vec<_> = self
+                .messages
+                .iter()
+                .flat_map(|row| row.attachments.iter())
+                .filter(|attachment| attachment.is_image && !attachment.url.is_empty())
+                .map(|attachment| attachment.url.clone())
+                .filter(|url| self.requested_previews.insert(url.clone()))
+                .collect();
+
+            for url in urls {
+                if let Some(handle) = &self.handle {
+                    handle.send(AppCommand::LoadAttachmentPreview { url });
+                }
+            }
         }
 
         if let Some((voice_channel_id, _)) = &self.voice_channel {
@@ -2249,12 +2330,22 @@ impl Workspace {
             MessageAction::OpenLink(link) => self.open_link(index, link),
             MessageAction::OpenThread => self.open_message_thread(index),
             MessageAction::TogglePin => {
+                // Confirmed rather than applied directly: pinning is visible
+                // to the whole channel, and the prompts for it already
+                // existed with nothing constructing them.
                 let pinned = self
                     .messages
                     .get(index)
                     .map(|row| row.pinned)
                     .unwrap_or(false);
-                self.set_pinned(index, !pinned);
+                self.confirming = Some(Confirm {
+                    message: index,
+                    action: if pinned {
+                        ConfirmAction::Unpin
+                    } else {
+                        ConfirmAction::Pin
+                    },
+                });
             }
             MessageAction::React => self.open_emoji_picker(message_id),
             MessageAction::OpenProfile => {
@@ -2770,7 +2861,11 @@ impl Workspace {
                             .text_color(rgb(active().text))
                             .cursor_pointer()
                             .hover(|s| s.bg(rgb(active().surface_hover)))
-                            .child("🖥")
+                            // Labelled rather than a bare icon: without the
+                            // media feature there is no capture path at all,
+                            // and an icon that silently does nothing is worse
+                            // than one that says why.
+                            .child(share_button(self.broadcasting, self.can_broadcast()))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 // Toggles: while broadcasting this stops it,
                                 // which is what a lit button should do.
@@ -3898,6 +3993,30 @@ impl Workspace {
                 self.model.status_line = format!("{filename}: {message}");
             }
 
+            AppEvent::AttachmentPreviewLoaded { url, bytes } => {
+                match image_format_for(url) {
+                    Some(format) => {
+                        self.attachment_previews.insert(
+                            url.clone(),
+                            std::sync::Arc::new(gpui::Image::from_bytes(format, bytes.clone())),
+                        );
+                    }
+                    // An extension GPUI cannot decode. Dropped rather than
+                    // guessed at, since handing it the wrong format renders
+                    // nothing and logs nothing.
+                    None => {
+                        self.model.status_line =
+                            "Attachment is in a format this client cannot display".to_string();
+                    }
+                }
+            }
+            AppEvent::AttachmentPreviewLoadFailed { url, message } => {
+                // Dropped from the requested set so a later reprojection can
+                // retry; a transient CDN failure should not be permanent.
+                self.requested_previews.remove(url);
+                self.model.status_line = format!("Preview failed: {message}");
+            }
+
             AppEvent::UserProfileLoadFailed { message, .. } => {
                 // The panel is closed rather than left on a spinner that will
                 // never resolve.
@@ -4191,6 +4310,29 @@ impl Workspace {
                         d.border_1()
                             .border_color(rgb(active().text_muted))
                             .rounded_full()
+                    })
+                    // Mention count, which the projection computed but the
+                    // rail never showed. Without it a server with unread
+                    // mentions looks the same as one with idle chatter.
+                    .when(guild.mentions > 0, |d| {
+                        d.child(
+                            gpui::div()
+                                .absolute()
+                                .bottom(px(-2.))
+                                .right(px(-2.))
+                                .px(px(5.))
+                                .rounded_full()
+                                .bg(rgb(active().danger))
+                                .text_size(px(scaled(text::XS)))
+                                .text_color(rgb(active().on_accent))
+                                // Capped, because a four-digit badge is wider
+                                // than the avatar it sits on.
+                                .child(if guild.mentions > 99 {
+                                    "99+".to_string()
+                                } else {
+                                    guild.mentions.to_string()
+                                }),
+                        )
                     }),
             );
         }
@@ -4424,6 +4566,23 @@ impl Workspace {
                             });
                         }
                     },
+                    {
+                        // Locally muting one participant, which is separate
+                        // from their own mute state and visible only here.
+                        let entity = cx.entity();
+                        move |cx: &mut gpui::App| {
+                            entity.update(cx, |workspace, cx| {
+                                let muted = workspace.locally_muted.insert(participant_id);
+                                if !muted {
+                                    workspace.locally_muted.remove(&participant_id);
+                                }
+                                let volume =
+                                    workspace.options.voice.voice_output_volume.value() as u16;
+                                workspace.set_participant_playback(participant_id, volume, muted);
+                                cx.notify();
+                            });
+                        }
+                    },
                 ));
             }
         }
@@ -4546,6 +4705,33 @@ impl Workspace {
                     move |cx: &mut gpui::App| {
                         entity.update(cx, |workspace, cx| {
                             workspace.confirming = None;
+                            cx.notify();
+                        });
+                    }
+                },
+            )));
+        }
+
+        if let Some((prompt, text)) = &self.prompt {
+            let (title, placeholder) = (prompt.title(), prompt.placeholder());
+            return Some(overlay::scrim().child(overlay::text_prompt_view(
+                title,
+                placeholder,
+                text.text(),
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.submit_prompt();
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.prompt = None;
                             cx.notify();
                         });
                     }
@@ -4777,6 +4963,15 @@ impl Workspace {
                         });
                     }
                 },
+                {
+                    let entity = cx.entity();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.prompt = Some((Prompt::ForumPostTitle, Composer::default()));
+                            cx.notify();
+                        });
+                    }
+                },
             )
             .into_any_element();
         }
@@ -4913,6 +5108,23 @@ impl Workspace {
                             )
                             .child(
                                 gpui::div()
+                                    .id("thread-rename")
+                                    .px(px(space::SM))
+                                    .py(px(space::XS))
+                                    .rounded(px(layout::RADIUS))
+                                    .cursor_pointer()
+                                    .text_size(px(scaled(text::XS)))
+                                    .text_color(rgb(active().text_muted))
+                                    .hover(|style| style.bg(rgb(active().surface_hover)))
+                                    .child("rename")
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.prompt =
+                                            Some((Prompt::ThreadName, Composer::default()));
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                gpui::div()
                                     .id("thread-lock")
                                     .px(px(space::SM))
                                     .py(px(space::XS))
@@ -5028,6 +5240,7 @@ impl Workspace {
                 self.options.display.hour_format_24,
                 self.options.display.show_custom_emoji,
                 self.options.display.show_images && !self.options.display.disable_image_preview,
+                &self.attachment_previews,
                 self.has_newer_messages(),
                 {
                     // Click handlers run with only an `App`, so the workspace is
@@ -5062,6 +5275,53 @@ impl Workspace {
         // push the input down rather than covering the text being typed.
         column()
             .w_full()
+            // Staged files. Without this, attaching produced no visible change
+            // at all and there was no way to remove one before sending.
+            .children((!self.attachments.is_empty()).then(|| {
+                let mut tray = row()
+                    .w_full()
+                    .gap(px(space::SM))
+                    .px(px(space::MD))
+                    .py(px(space::XS));
+                for (index, upload) in self.attachments.iter().enumerate() {
+                    tray = tray.child(
+                        row()
+                            .id(("staged", index))
+                            .gap(px(space::XS))
+                            .px(px(space::SM))
+                            .py(px(space::XS))
+                            .rounded(px(layout::RADIUS))
+                            .bg(rgb(active().surface_hover))
+                            .text_size(px(scaled(text::XS)))
+                            .text_color(rgb(active().text))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(rgb(active().surface_active)))
+                            .child(upload.filename.clone())
+                            .child(gpui::div().text_color(rgb(active().danger)).child("x"))
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.remove_attachment(index);
+                                cx.notify();
+                            })),
+                    );
+                }
+                tray
+            }))
+            .children(self.attachment_error.as_ref().map(|error| {
+                gpui::div()
+                    .px(px(space::MD))
+                    .text_size(px(scaled(text::XS)))
+                    .text_color(rgb(active().danger))
+                    .child(error.clone())
+            }))
+            // Whether the last settings write actually landed. Silently
+            // failing to persist a preference is worse than saying so.
+            .children(self.settings_note.as_ref().map(|note| {
+                gpui::div()
+                    .px(px(space::MD))
+                    .text_size(px(scaled(text::XS)))
+                    .text_color(rgb(active().text_subtle))
+                    .child(note.clone())
+            }))
             .children(self.slash.as_ref().map(slash_view))
             .children((!self.command_choices.is_empty()).then(|| {
                 // Choices supplied by a bot for the argument in progress.
@@ -5239,7 +5499,6 @@ impl Render for Workspace {
                                     _ => None,
                                 };
                                 if let Some(a) = action {
-                                    drop(login); // release borrow before calling
                                     this.handle_login_action(a, window, cx);
                                 }
                             }
@@ -5248,7 +5507,6 @@ impl Render for Workspace {
                             LoginScreen::Password => {
                                 match key {
                                     "escape" => {
-                                        drop(login);
                                         this.handle_login_action(LoginAction::Back, window, cx);
                                     }
                                     "tab" => {
@@ -5259,7 +5517,6 @@ impl Render for Workspace {
                                         }
                                     }
                                     "enter" => {
-                                        drop(login);
                                         this.handle_login_action(
                                             LoginAction::SubmitPassword,
                                             window,
@@ -5301,11 +5558,9 @@ impl Render for Workspace {
                                     .unwrap_or_default();
                                 match key {
                                     "escape" => {
-                                        drop(login);
                                         this.handle_login_action(LoginAction::Back, window, cx);
                                     }
                                     "1" if !methods.is_empty() => {
-                                        drop(login);
                                         this.handle_login_action(
                                             LoginAction::PickMfaMethod(methods[0]),
                                             window,
@@ -5313,7 +5568,6 @@ impl Render for Workspace {
                                         );
                                     }
                                     "2" if methods.len() >= 2 => {
-                                        drop(login);
                                         this.handle_login_action(
                                             LoginAction::PickMfaMethod(methods[1]),
                                             window,
@@ -5332,7 +5586,6 @@ impl Render for Workspace {
                                     }
                                 }
                                 "enter" => {
-                                    drop(login);
                                     this.handle_login_action(
                                         LoginAction::SubmitMfaCode,
                                         window,
@@ -5356,7 +5609,6 @@ impl Render for Workspace {
                             // ---- Token entry ------------------------------
                             LoginScreen::Token => match key {
                                 "escape" => {
-                                    drop(login);
                                     this.handle_login_action(LoginAction::Back, window, cx);
                                 }
                                 _ => {
@@ -5383,7 +5635,6 @@ impl Render for Workspace {
                             // ---- QR scan: only Escape to cancel ----------
                             LoginScreen::QrScan => {
                                 if key == "escape" {
-                                    drop(login);
                                     this.handle_login_action(LoginAction::Back, window, cx);
                                 }
                             }
@@ -5422,6 +5673,23 @@ impl Render for Workspace {
                                 || event.keystroke.modifiers.platform)
                         {
                             this.open_switcher();
+                        } else if this.prompt.is_some() {
+                            match key {
+                                "escape" => this.prompt = None,
+                                "enter" => this.submit_prompt(),
+                                _ => {
+                                    let pasted = (key == "v"
+                                        && (event.keystroke.modifiers.control
+                                            || event.keystroke.modifiers.platform))
+                                        .then(|| {
+                                            cx.read_from_clipboard().and_then(|item| item.text())
+                                        })
+                                        .flatten();
+                                    if let Some((_, text)) = &mut this.prompt {
+                                        text.handle_key_with_clipboard(event, pasted);
+                                    }
+                                }
+                            }
                         } else if this.editing_status.is_some() {
                             match key {
                                 "escape" => this.editing_status = None,
@@ -5505,6 +5773,14 @@ impl Render for Workspace {
                             && event.keystroke.modifiers.shift
                         {
                             this.compose_externally(cx);
+                        } else if event.keystroke.modifiers.control
+                            && event.keystroke.modifiers.shift
+                            && matches!(key, "-" | "=" | "+")
+                        {
+                            // ctrl-shift +/-: output volume. Shifted so it does
+                            // not collide with the zoom bindings on the same
+                            // keys, which are far more frequently used.
+                            this.adjust_output_volume(if key == "-" { -5 } else { 5 });
                         } else if event.keystroke.modifiers.control && matches!(key, "d" | "u") {
                             // ctrl-d / ctrl-u: half page, as in vim and less.
                             this.scroll_by_pages(if key == "d" { 0.5 } else { -0.5 });
@@ -5718,5 +5994,28 @@ impl Render for Workspace {
                 .child(self.status_bar(cx))
                 .children(self.overlays(cx))
             })
+    }
+}
+
+/// Pick a decoder from a URL's file extension.
+///
+/// Discord's CDN serves the content type in a header the image bytes do not
+/// carry, so the extension is what is left. An unknown one returns `None`
+/// rather than defaulting to PNG: a wrong format decodes to nothing at all.
+pub fn image_format_for(url: &str) -> Option<gpui::ImageFormat> {
+    // Query strings are always present on CDN links, and would otherwise be
+    // part of the "extension".
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let extension = path.rsplit_once('.')?.1.to_ascii_lowercase();
+
+    match extension.as_str() {
+        "png" => Some(gpui::ImageFormat::Png),
+        "jpg" | "jpeg" => Some(gpui::ImageFormat::Jpeg),
+        "webp" => Some(gpui::ImageFormat::Webp),
+        "gif" => Some(gpui::ImageFormat::Gif),
+        "svg" => Some(gpui::ImageFormat::Svg),
+        "bmp" => Some(gpui::ImageFormat::Bmp),
+        "tiff" | "tif" => Some(gpui::ImageFormat::Tiff),
+        _ => None,
     }
 }

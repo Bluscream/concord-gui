@@ -15,7 +15,6 @@ use concord::discord::{
 };
 use gpui::{Context, Div, prelude::*, px, rgb};
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 
 use crate::theme::{active, layout, scaled, space, text};
 use crate::ui::chrome::{column, row};

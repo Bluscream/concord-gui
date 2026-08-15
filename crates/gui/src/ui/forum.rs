@@ -62,6 +62,7 @@ pub fn forum_view(
     on_open: impl Fn(usize, &mut gpui::App) + Clone + 'static,
     on_toggle_archived: impl Fn(&mut gpui::App) + Clone + 'static,
     on_load_more: impl Fn(&mut gpui::App) + Clone + 'static,
+    on_new_post: impl Fn(&mut gpui::App) + Clone + 'static,
 ) -> Div {
     let mut panel = column().flex_1().h_full().bg(rgb(active().surface));
 
@@ -101,6 +102,19 @@ pub fn forum_view(
                         "Active"
                     })
                     .on_click(move |_event, _window, cx| on_toggle_archived(cx)),
+            )
+            .child(
+                gpui::div()
+                    .id("forum-new-post")
+                    .px(px(space::SM))
+                    .py(px(space::XS))
+                    .rounded(px(layout::RADIUS))
+                    .cursor_pointer()
+                    .text_size(px(scaled(text::XS)))
+                    .bg(rgb(active().accent))
+                    .text_color(rgb(active().on_accent))
+                    .child("New post")
+                    .on_click(move |_event, _window, cx| on_new_post(cx)),
             ),
     );
 

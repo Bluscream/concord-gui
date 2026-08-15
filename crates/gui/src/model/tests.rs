@@ -1108,3 +1108,37 @@ fn download_progress_is_only_shown_when_a_total_is_known() {
     // Servers can report more bytes than they promised.
     assert_eq!(fraction(300, Some(200)), Some(1.0));
 }
+
+#[test]
+fn image_format_comes_from_the_extension_not_a_default() {
+    use crate::ui::workspace::image_format_for;
+
+    assert_eq!(image_format_for("a/b.png"), Some(gpui::ImageFormat::Png));
+    assert_eq!(image_format_for("a/b.JPG"), Some(gpui::ImageFormat::Jpeg));
+    assert_eq!(image_format_for("a/b.jpeg"), Some(gpui::ImageFormat::Jpeg));
+
+    // CDN links always carry a query string, which would otherwise be read as
+    // part of the extension.
+    assert_eq!(
+        image_format_for("https://cdn.example/x.webp?size=1024&ex=aa"),
+        Some(gpui::ImageFormat::Webp)
+    );
+
+    // An unknown or absent extension must not fall back to PNG: decoding with
+    // the wrong format renders nothing and reports nothing.
+    assert_eq!(image_format_for("https://cdn.example/x.heic"), None);
+    assert_eq!(image_format_for("https://cdn.example/noextension"), None);
+}
+
+#[test]
+fn the_demo_preview_encodes_to_a_real_png() {
+    use concord::discord::fixtures;
+
+    let bytes = fixtures::demo_preview_png(7);
+    assert!(!bytes.is_empty(), "the encoder should produce output");
+    // PNG magic, so this is verified as decodable rather than merely non-empty.
+    assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+
+    // Different seeds must differ, or every attachment looks the same.
+    assert_ne!(bytes, fixtures::demo_preview_png(200));
+}

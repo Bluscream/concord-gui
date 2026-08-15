@@ -7,9 +7,8 @@
 
 use gpui::{Context, Div, FocusHandle, KeyDownEvent, Render, Window, prelude::*, px, rgb};
 
-use crate::theme::{DARK, LIGHT, Palette, active, layout, scaled, space, text};
+use crate::theme::{DARK, LIGHT, Palette, layout, scaled, space, text};
 use crate::ui::chrome::{column, row};
-use crate::ui::composer::Composer;
 
 /// Toggleable boolean settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,13 +21,11 @@ pub enum Toggle {
     DesktopNotifications,
     NoiseSuppression,
     ShareRichPresence,
-    LightMode,
 }
 
 impl Toggle {
     pub fn label(self) -> &'static str {
         match self {
-            Toggle::LightMode => "Light theme",
             Toggle::Hour24 => "24-hour timestamps",
             Toggle::ShowAvatars => "Show avatars",
             Toggle::ShowCustomEmoji => "Show custom emoji",
@@ -42,7 +39,6 @@ impl Toggle {
 
     fn hint(self) -> Option<&'static str> {
         match self {
-            Toggle::LightMode => Some("Switch between Dark and Light mode interface themes"),
             Toggle::ShareRichPresence => Some("Lets others see what you are playing"),
             Toggle::NoiseSuppression => Some("Applied when joining a voice channel"),
             Toggle::MediaPlayback => Some("Opens video and audio in an external player"),
@@ -52,7 +48,6 @@ impl Toggle {
 
     fn slot(self) -> usize {
         match self {
-            Toggle::LightMode => 0,
             Toggle::Hour24 => 1,
             Toggle::ShowAvatars => 2,
             Toggle::ShowCustomEmoji => 3,
@@ -315,6 +310,39 @@ impl Render for SettingsWindow {
                                 theme,
                                 cx.listener(|this, _, _, cx| {
                                     this.options.display.circular_avatars = !this.options.display.circular_avatars;
+                                    this.save_options(cx);
+                                    cx.notify();
+                                }),
+                            ))
+                            .child(toggle_row(
+                                Toggle::ShowCustomEmoji,
+                                options.display.show_custom_emoji,
+                                theme,
+                                cx.listener(|this, _, _, cx| {
+                                    this.options.display.show_custom_emoji =
+                                        !this.options.display.show_custom_emoji;
+                                    this.save_options(cx);
+                                    cx.notify();
+                                }),
+                            ))
+                            .child(toggle_row(
+                                Toggle::Hour24,
+                                options.display.hour_format_24,
+                                theme,
+                                cx.listener(|this, _, _, cx| {
+                                    this.options.display.hour_format_24 =
+                                        !this.options.display.hour_format_24;
+                                    this.save_options(cx);
+                                    cx.notify();
+                                }),
+                            ))
+                            .child(toggle_row(
+                                Toggle::MediaPlayback,
+                                options.display.media_playback,
+                                theme,
+                                cx.listener(|this, _, _, cx| {
+                                    this.options.display.media_playback =
+                                        !this.options.display.media_playback;
                                     this.save_options(cx);
                                     cx.notify();
                                 }),

@@ -55,18 +55,14 @@ where
     shared().map(|runtime| runtime.spawn(future))
 }
 
-/// Run a future to completion on the shared runtime, blocking the caller.
+/// Run a future to completion on the shared runtime.
 ///
-/// Never call this from GPUI's thread: it would freeze the UI until the future
-/// resolves. It exists for worker threads that need a synchronous result.
-pub fn block_on<F: Future>(future: F) -> Option<F::Output> {
+/// Only the tests use it: the UI never blocks its thread on a future, which is
+/// the whole reason `spawn` exists. Kept because the tests need a way to drive
+/// one to completion without a second runtime.
+#[cfg(test)]
+pub fn block_on<F: std::future::Future>(future: F) -> Option<F::Output> {
     shared().map(|runtime| runtime.block_on(future))
-}
-
-/// Whether the runtime is available, for callers that want to fail early with
-/// a useful message.
-pub fn is_available() -> bool {
-    shared().is_some()
 }
 
 /// Install the shared runtime as the calling thread's ambient context.

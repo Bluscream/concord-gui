@@ -71,8 +71,13 @@ pub trait Mentions {
 ///
 /// Unresolved mentions render with the snowflake rather than a fake name, so
 /// an unknown target is visibly unknown instead of silently wrong.
+///
+/// Only the tests construct it: every render path has guild state to hand, and
+/// `parse` is the resolver-free entry point they use.
+#[cfg(test)]
 pub struct Unresolved;
 
+#[cfg(test)]
 impl Mentions for Unresolved {
     fn user(&self, _id: u64) -> Option<String> {
         None
@@ -113,6 +118,7 @@ impl Parsed {
 /// Fenced blocks are extracted *before* line splitting, because they span
 /// lines - splitting first would tear them apart and leak the fences into the
 /// rendered text.
+#[cfg(test)]
 pub fn parse(input: &str) -> Parsed {
     parse_with(input, &Unresolved)
 }

@@ -94,6 +94,22 @@ fn main() {
 
     let status = CoreStatus::probe();
 
+    // Reported once at startup. These are the first three questions any bug
+    // report needs answered, and asking a user to find their config path is
+    // worse than printing it.
+    eprintln!(
+        "concord-gui {} (core {})\n  config: {}\n  state:  {}\n  credential: {}",
+        env!("CARGO_PKG_VERSION"),
+        status.core_version,
+        status.config_path,
+        status.state_path,
+        if status.has_token {
+            "present"
+        } else {
+            "absent"
+        },
+    );
+
     // GPUI needs an HTTP client before it will load images from a URI.
     Application::new()
         .with_http_client(http::ReqwestClient::new())

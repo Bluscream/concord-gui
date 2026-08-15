@@ -15,7 +15,7 @@
 //! render as timestamps near the Discord epoch (2015). Message ids are
 //! therefore built from real times via [`snowflake_at`].
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -633,11 +633,6 @@ pub fn is_fixture_token(token: &str) -> bool {
     token.trim().eq_ignore_ascii_case(FIXTURE_TOKEN)
 }
 
-/// A VecDeque helper used by the cache setters.
-pub(in crate::discord) fn into_deque<T>(items: Vec<T>) -> VecDeque<T> {
-    items.into()
-}
-
 // ---------------------------------------------------------------------------
 // Demo-mode mutation
 //
@@ -985,10 +980,22 @@ pub fn attach_to_last_message(
     };
 
     for (index, (filename, size)) in files.iter().enumerate() {
+        // Image attachments get a URL, because a preview is requested by URL
+        // and an empty one is skipped. It is not reachable over the network -
+        // demo mode answers the request itself.
+        let url = if guess_content_type(filename)
+            .as_deref()
+            .is_some_and(|kind| kind.starts_with("image/"))
+        {
+            format!("concord-demo://attachment/{filename}")
+        } else {
+            String::new()
+        };
+
         message.attachments.push(crate::discord::AttachmentInfo {
             id: Id::new(9_000 + index as u64 + 1),
             filename: filename.clone(),
-            url: String::new(),
+            url,
             proxy_url: String::new(),
             content_type: guess_content_type(filename),
             size: *size,
@@ -1319,4 +1326,33 @@ pub fn search_members(
         })
         .map(|member| member.user_id)
         .collect()
+}
+
+/// A small generated image, used to answer preview requests in demo mode.
+///
+/// Generated rather than embedded so the fixture carries no binary blob: a
+/// gradient is enough to show that decoding, sizing and layout all work.
+pub fn demo_preview_png(seed: u64) -> Vec<u8> {
+    use image::{ImageEncoder, codecs::png::PngEncoder};
+
+    const W: u32 = 320;
+    const H: u32 = 180;
+
+    let mut pixels = Vec::with_capacity((W * H * 3) as usize);
+    for y in 0..H {
+        for x in 0..W {
+            // The seed shifts the hue so two attachments are distinguishable.
+            pixels.push((x * 255 / W) as u8);
+            pixels.push((y * 255 / H) as u8);
+            pixels.push((seed % 256) as u8);
+        }
+    }
+
+    let mut out = Vec::new();
+    let encoded =
+        PngEncoder::new(&mut out).write_image(&pixels, W, H, image::ExtendedColorType::Rgb8);
+
+    // An encoder failure would mean a bug here, not bad input; an empty
+    // result is preferable to a panic in a demo path.
+    if encoded.is_err() { Vec::new() } else { out }
 }

@@ -146,14 +146,6 @@ pub fn header() -> Div {
         .border_color(rgb(active().border))
 }
 
-/// Muted helper text, e.g. empty states.
-pub fn hint(message: impl Into<gpui::SharedString>) -> Div {
-    gpui::div()
-        .text_size(px(scaled(text::SM)))
-        .text_color(rgb(active().text_subtle))
-        .child(message.into())
-}
-
 /// A voice participant nested under its channel in the sidebar.
 pub fn voice_participant_row(
     name: &str,
@@ -164,6 +156,7 @@ pub fn voice_participant_row(
     // Distinguishes this row's element ids from every other participant's.
     id_seed: u64,
     on_watch: impl Fn(&mut gpui::App) + 'static,
+    on_toggle_mute: impl Fn(&mut gpui::App) + 'static,
 ) -> Div {
     row()
         .w_full()
@@ -207,4 +200,17 @@ pub fn voice_participant_row(
                     .child(if deafened { "deaf" } else { "mute" }),
             )
         })
+        // Local mute, offered on every participant: it is about what this
+        // client plays, so it applies whether or not they muted themselves.
+        .child(
+            gpui::div()
+                .id(("local-mute", id_seed))
+                .px(px(space::XS))
+                .rounded(px(layout::RADIUS))
+                .cursor_pointer()
+                .text_color(rgb(active().text_subtle))
+                .hover(|style| style.text_color(rgb(active().text)))
+                .child("vol")
+                .on_click(move |_event, _window, cx| on_toggle_mute(cx)),
+        )
 }

@@ -400,8 +400,3 @@ pub fn switcher_candidates(state: &DiscordState) -> Vec<Candidate> {
 
     out
 }
-
-/// Presence lookup for a single user, used by DM rows and member entries.
-pub fn user_presence(state: &DiscordState, user_id: Id<marker::UserMarker>) -> Presence {
-    presence_of(state.user_presence(user_id))
-}

@@ -70,10 +70,6 @@ impl Composer {
         self.selection().map(|range| &self.text[range])
     }
 
-    pub fn cursor(&self) -> usize {
-        self.cursor
-    }
-
     /// Record the current buffer so the next edit can be undone.
     ///
     /// `coalesce` groups consecutive inserts: without it every keystroke
