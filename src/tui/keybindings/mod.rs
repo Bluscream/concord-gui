@@ -891,6 +891,7 @@ impl ChannelActionKind {
             Self::ToggleMute => "ToggleMute",
             Self::WatchStream => "WatchStream",
             Self::ParticipantAudioSettings => "VoiceParticipantAudio",
+            Self::CreateInvite => "CreateInvite",
         }
     }
 }

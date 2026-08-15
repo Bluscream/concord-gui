@@ -6,6 +6,7 @@
 
 use crate::discord::ids::{Id, marker::GuildMarker};
 use crate::discord::{AppCommand, AuditLogEntryInfo, GuildEmojiInfo, GuildInviteInfo};
+use crate::tui::text_input::{TextEditAction, TextInputState};
 
 use super::super::DashboardState;
 use super::{ActiveModalPopupKind, ModalPopup, SelectablePopupState, SelectablePopupTarget};
@@ -50,6 +51,8 @@ pub(in crate::tui) struct ServerManagementState {
     /// rather than looking like an empty list.
     pub(super) loading: bool,
     pub(super) error: Option<String>,
+    /// The emoji being renamed and the name as typed, while renaming.
+    pub(super) renaming: Option<(usize, TextInputState)>,
 }
 
 impl ServerManagementState {
@@ -78,6 +81,11 @@ impl ServerManagementState {
     }
 
     /// How many rows the open tab has, which is what the selection moves over.
+    /// The name being typed, while renaming an emoji.
+    pub(in crate::tui) fn renaming(&self) -> Option<&TextInputState> {
+        self.renaming.as_ref().map(|(_, input)| input)
+    }
+
     pub(in crate::tui) fn row_count(&self) -> usize {
         match self.tab {
             ServerPanelTab::Invites => self.invites.len(),
@@ -103,6 +111,7 @@ impl DashboardState {
                 audit_log: Vec::new(),
                 loading: true,
                 error: None,
+                renaming: None,
             }));
         Some(tab.load(guild_id))
     }
@@ -141,6 +150,75 @@ impl DashboardState {
         state.loading = !already_loaded;
         let guild_id = state.guild_id;
         (!already_loaded).then(|| tab.load(guild_id))
+    }
+
+    /// Start renaming the highlighted emoji.
+    ///
+    /// Seeded with the current name: a rename is usually a correction, and
+    /// retyping the whole thing to fix one letter is busywork.
+    pub fn start_emoji_rename(&mut self) {
+        let Some(index) = self.selected_server_row() else {
+            return;
+        };
+        let Some(state) = self.popups.server_management_mut() else {
+            return;
+        };
+        if state.tab != ServerPanelTab::Emoji {
+            return;
+        }
+        let Some(emoji) = state.emojis.get(index) else {
+            return;
+        };
+
+        let mut input = TextInputState::default();
+        input.set_value(emoji.name.clone());
+        state.renaming = Some((index, input));
+    }
+
+    pub fn cancel_emoji_rename(&mut self) {
+        if let Some(state) = self.popups.server_management_mut() {
+            state.renaming = None;
+        }
+    }
+
+    pub fn insert_emoji_rename_char(&mut self, value: char) {
+        if let Some(state) = self.popups.server_management_mut()
+            && let Some((_, input)) = &mut state.renaming
+        {
+            input.insert_char(value);
+        }
+    }
+
+    pub fn edit_emoji_rename(&mut self, action: TextEditAction) {
+        if let Some(state) = self.popups.server_management_mut()
+            && let Some((_, input)) = &mut state.renaming
+        {
+            input.apply_edit_action(action);
+        }
+    }
+
+    /// Send the renamed emoji.
+    pub fn submit_emoji_rename(&mut self) -> Option<AppCommand> {
+        let state = self.popups.server_management_mut()?;
+        let (index, input) = state.renaming.take()?;
+        let name = input.value().trim().to_owned();
+        let guild_id = state.guild_id;
+        let emoji = state.emojis.get_mut(index)?;
+
+        // An empty name is a cancel rather than a rename to nothing, which
+        // Discord would reject anyway.
+        if name.is_empty() || emoji.name == name {
+            return None;
+        }
+
+        // Applied locally too: the list is a snapshot, and leaving the old
+        // name showing makes a successful rename look like it failed.
+        emoji.name = name.clone();
+        Some(AppCommand::RenameEmoji {
+            guild_id,
+            emoji_id: emoji.id,
+            name,
+        })
     }
 
     pub fn reload_server_management(&mut self) -> Option<AppCommand> {

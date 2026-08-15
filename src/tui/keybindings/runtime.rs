@@ -910,6 +910,7 @@ impl KeyBindings {
             ChannelActionKind::LeaveVoice => vec![char_chord('l')],
             ChannelActionKind::ToggleStream => vec![char_chord('s')],
             ChannelActionKind::ShowPinnedMessages => vec![char_chord('p')],
+            ChannelActionKind::CreateInvite => vec![char_chord('i')],
             ChannelActionKind::ShowThreads => vec![char_chord('t')],
             ChannelActionKind::MarkAsRead => vec![char_chord('m')],
             ChannelActionKind::ToggleMute => vec![char_chord('u')],

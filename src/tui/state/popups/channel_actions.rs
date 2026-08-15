@@ -214,6 +214,20 @@ impl DashboardState {
                 stream_disabled_reason,
             ),
             ChannelActionItem::new(
+                ChannelActionKind::CreateInvite,
+                "Create an invite",
+                if channel.is_category() {
+                    Some("not supported for categories".to_owned())
+                } else if !channel
+                    .guild_id
+                    .is_some_and(|guild_id| self.discord.cache.can_create_invites(guild_id))
+                {
+                    Some("you do not have permission".to_owned())
+                } else {
+                    None
+                },
+            ),
+            ChannelActionItem::new(
                 ChannelActionKind::ShowPinnedMessages,
                 "Show pinned messages",
                 if channel.is_category() {
@@ -394,6 +408,18 @@ impl DashboardState {
                     ChannelActionKind::ToggleStream => {
                         self.close_channel_action_menu();
                         self.toggle_current_voice_stream_command()
+                    }
+                    ChannelActionKind::CreateInvite => {
+                        self.close_channel_action_menu();
+                        Some(AppCommand::CreateChannelInvite {
+                            channel_id,
+                            // Discord's own defaults: a day, unlimited uses,
+                            // not temporary. Anything narrower would be a
+                            // guess about what was wanted.
+                            max_age_seconds: 86_400,
+                            max_uses: 0,
+                            temporary: false,
+                        })
                     }
                     ChannelActionKind::ShowPinnedMessages => {
                         self.close_channel_action_menu();

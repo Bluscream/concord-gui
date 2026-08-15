@@ -870,9 +870,31 @@ fn handle_search_popup_key(state: &mut DashboardState, key: KeyEvent) -> Option<
     }
 }
 
-/// The ban list: enter lifts the highlighted ban, esc closes.
 /// Tab cycles the three lists; the rest is ordinary selection.
 fn handle_server_management_key(state: &mut DashboardState, key: KeyEvent) -> Option<AppCommand> {
+    // While renaming, the keyboard belongs to the field: navigation keys are
+    // cursor movement, and 'r' is a letter rather than reload.
+    if state
+        .server_management_state()
+        .is_some_and(|panel| panel.renaming().is_some())
+    {
+        // Reuses the composer's key mapping so editing behaves the way every
+        // other text field in this client does, including any rebinding.
+        match state.key_bindings().composer_action(key) {
+            ComposerAction::Submit => return state.submit_emoji_rename(),
+            ComposerAction::Close => state.cancel_emoji_rename(),
+            ComposerAction::ClearInput => {
+                state.edit_emoji_rename(TextEditAction::DeleteToLineStart);
+            }
+            ComposerAction::EditText(action) => state.edit_emoji_rename(action),
+            ComposerAction::InsertChar(value) => state.insert_emoji_rename_char(value),
+            // Newlines, editors and attachments have no meaning in a one-line
+            // name field.
+            _ => {}
+        }
+        return None;
+    }
+
     if let Some(action) = state
         .key_bindings()
         .selection_action(key, SelectionKeySet::Navigation)
@@ -891,6 +913,7 @@ fn handle_server_management_key(state: &mut DashboardState, key: KeyEvent) -> Op
         // Reload is worth a key of its own: these lists go stale the moment
         // somebody else changes something, and nothing tells this client.
         KeyCode::Char('r') => return state.reload_server_management(),
+        KeyCode::Char('n') => state.start_emoji_rename(),
         _ => {}
     }
     None

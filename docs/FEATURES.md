@@ -79,11 +79,12 @@ third-party Discord clients actually expect.
 
 ## Missing, most-wanted first
 
-### Per-channel tabs
+### Per-channel tabs (TUI)
 
 *26 clients* — 6cord, Dorion, Echo-Client, Fast-Discord, SailDiscord, Turbulence
 
-The single most common thing this fork lacks. Open several channels at once and switch without losing scroll position. Both clients would need a tab strip and per-tab view state.
+Done in the GUI: a tab strip with per-tab draft and scroll position, restored
+across restarts. The TUI still has none, so this stays listed.
 
 ### Multi-account
 
@@ -103,17 +104,13 @@ the composer when more than one account could send. Design in AGENTS.md.
 
 Voice works; camera does not. The core has no capture path for it.
 
-### Audit log
-
-*2 clients* — OldCordV3, abaddon
-
-GET /guilds/{id}/audit-logs, plus a viewer. Abaddon has it.
-
-### Emoji management
+### Emoji upload
 
 *1 client (Abaddon)* — abaddon
 
-Upload, rename and delete guild emoji.
+Renaming and deleting are done in both clients. Uploading is not: it needs the
+image picked, encoded as a data URI and sized against Discord's 256 KB limit,
+which is a different job from the other two.
 
 ## Partial
 

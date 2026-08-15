@@ -19,6 +19,20 @@ fn past_the_risk_warning(
     state.confirm_risk_warning()
 }
 
+/// Find a channel action by what it is, not where it sits.
+///
+/// Positional assertions here broke every time a row was inserted above them,
+/// and an index says nothing about which action was meant.
+fn channel_action(
+    actions: &[crate::tui::state::ChannelActionItem],
+    kind: ChannelActionKind,
+) -> &crate::tui::state::ChannelActionItem {
+    actions
+        .iter()
+        .find(|action| action.kind == kind)
+        .unwrap_or_else(|| panic!("{kind:?} must be offered"))
+}
+
 #[test]
 fn leader_message_action_copy_closes_action_popup() {
     let mut state = state_with_messages(1);
@@ -49,26 +63,30 @@ fn channel_action_menu_show_threads_opens_thread_list_view() {
 
     assert!(state.is_channel_action_menu_active());
     let actions = state.selected_channel_action_items();
-    assert_eq!(actions.len(), 7);
+    assert_eq!(actions.len(), 8);
     assert_eq!(actions[0].kind, ChannelActionKind::JoinVoice);
     assert_eq!(actions[0].label, "Join voice");
     assert!(!actions[0].is_enabled());
     assert_eq!(actions[0].disabled_reason(), Some("not a voice channel"));
     assert_eq!(actions[1].kind, ChannelActionKind::LeaveVoice);
-    assert_eq!(actions[1].label, "Leave voice");
-    assert!(!actions[1].is_enabled());
-    assert_eq!(actions[1].disabled_reason(), Some("not connected here"));
-    assert_eq!(actions[2].kind, ChannelActionKind::ToggleStream);
-    assert!(!actions[2].is_enabled());
-    assert_eq!(actions[3].kind, ChannelActionKind::ShowPinnedMessages);
-    assert_eq!(actions[3].label, "Show pinned messages");
-    assert!(actions[3].is_enabled());
-    assert_eq!(actions[4].kind, ChannelActionKind::ShowThreads);
-    assert!(actions[4].is_enabled());
-    assert_eq!(actions[5].kind, ChannelActionKind::MarkAsRead);
-    assert_eq!(actions[5].label, "Mark as read");
-    assert_eq!(actions[6].kind, ChannelActionKind::ToggleMute);
-    assert_eq!(actions[6].label, "Mute channel");
+    let leave = channel_action(&actions, ChannelActionKind::LeaveVoice);
+    assert_eq!(leave.label, "Leave voice");
+    assert!(!leave.is_enabled());
+    assert_eq!(leave.disabled_reason(), Some("not connected here"));
+    assert!(!channel_action(&actions, ChannelActionKind::ToggleStream).is_enabled());
+
+    let pins = channel_action(&actions, ChannelActionKind::ShowPinnedMessages);
+    assert_eq!(pins.label, "Show pinned messages");
+    assert!(pins.is_enabled());
+    assert!(channel_action(&actions, ChannelActionKind::ShowThreads).is_enabled());
+    assert_eq!(
+        channel_action(&actions, ChannelActionKind::MarkAsRead).label,
+        "Mark as read"
+    );
+    assert_eq!(
+        channel_action(&actions, ChannelActionKind::ToggleMute).label,
+        "Mute channel"
+    );
 
     // "Show threads" opens the thread-list view in the message pane, not a submenu.
     let command = state.activate_channel_action_shortcut("t".parse().expect("t should parse"));
@@ -342,7 +360,14 @@ fn channel_action_menu_toggle_mute_opens_duration_then_dispatches_command() {
     state.focus_pane(FocusPane::Channels);
     state.move_down();
     state.open_selected_channel_actions();
-    state.select_channel_action_row(6);
+    // Looked up rather than counted: this broke three times as rows were
+    // inserted above it, and a positional index says nothing about intent.
+    let mute_row = state
+        .selected_channel_action_items()
+        .iter()
+        .position(|action| action.kind == ChannelActionKind::ToggleMute)
+        .expect("mute must be offered");
+    state.select_channel_action_row(mute_row);
 
     assert_eq!(state.activate_selected_channel_action(), None);
     assert!(state.is_channel_action_mute_duration_phase());
@@ -371,26 +396,37 @@ fn category_leader_action_lists_disabled_rows_and_dispatches_mute_command() {
 
     assert!(state.is_channel_action_menu_active());
     let actions = state.selected_channel_action_items();
-    assert_eq!(actions.len(), 7);
-    assert_eq!(actions[0].kind, ChannelActionKind::JoinVoice);
-    assert!(!actions[0].is_enabled());
-    assert_eq!(actions[1].kind, ChannelActionKind::LeaveVoice);
-    assert!(!actions[1].is_enabled());
-    assert_eq!(actions[2].kind, ChannelActionKind::ToggleStream);
-    assert!(!actions[2].is_enabled());
-    assert_eq!(actions[3].kind, ChannelActionKind::ShowPinnedMessages);
-    assert!(!actions[3].is_enabled());
-    assert_eq!(actions[4].kind, ChannelActionKind::ShowThreads);
-    assert!(!actions[4].is_enabled());
-    assert_eq!(actions[5].kind, ChannelActionKind::MarkAsRead);
-    assert!(!actions[5].is_enabled());
-    assert_eq!(actions[6].kind, ChannelActionKind::ToggleMute);
-    assert_eq!(actions[6].label, "Mute category");
-    assert!(actions[6].is_enabled());
+    assert_eq!(actions.len(), 8);
+    // Everything but muting is refused on a category, and each says why.
+    for kind in [
+        ChannelActionKind::JoinVoice,
+        ChannelActionKind::LeaveVoice,
+        ChannelActionKind::ToggleStream,
+        ChannelActionKind::ShowPinnedMessages,
+        ChannelActionKind::ShowThreads,
+        ChannelActionKind::MarkAsRead,
+        ChannelActionKind::CreateInvite,
+    ] {
+        assert!(
+            !channel_action(&actions, kind).is_enabled(),
+            "{kind:?} should be refused on a category"
+        );
+    }
+
+    let mute = channel_action(&actions, ChannelActionKind::ToggleMute);
+    assert_eq!(mute.label, "Mute category");
+    assert!(mute.is_enabled());
 
     assert_eq!(state.activate_selected_channel_action(), None);
     assert!(state.is_channel_action_menu_active());
-    state.select_channel_action_row(6);
+    // Looked up rather than counted: this broke three times as rows were
+    // inserted above it, and a positional index says nothing about intent.
+    let mute_row = state
+        .selected_channel_action_items()
+        .iter()
+        .position(|action| action.kind == ChannelActionKind::ToggleMute)
+        .expect("mute must be offered");
+    state.select_channel_action_row(mute_row);
     assert_eq!(state.activate_selected_channel_action(), None);
     assert!(state.is_channel_action_mute_duration_phase());
 
@@ -847,4 +883,92 @@ fn a_reply_for_another_guild_does_not_fill_this_panel() {
     let panel = state.server_management_state().expect("panel is open");
     assert!(panel.invites().is_empty());
     assert!(panel.is_loading(), "the real fetch is still outstanding");
+}
+
+#[test]
+fn renaming_an_emoji_seeds_the_field_and_applies_locally() {
+    let mut state = state_with_many_guilds(1);
+    let guild_id = Id::new(1);
+    state.open_server_management(guild_id, ServerPanelTab::Emoji);
+    state.apply_guild_emojis(
+        guild_id,
+        vec![crate::discord::GuildEmojiInfo {
+            id: Id::new(8001),
+            name: "ferris".to_owned(),
+            animated: false,
+            role_restricted: false,
+        }],
+    );
+
+    state.start_emoji_rename();
+    // Seeded rather than blank: a rename is usually a correction, and
+    // retyping the whole name to fix one letter is busywork.
+    assert_eq!(
+        state
+            .server_management_state()
+            .and_then(|p| p.renaming())
+            .map(|input| input.value()),
+        Some("ferris")
+    );
+
+    state.insert_emoji_rename_char('2');
+    assert_eq!(
+        state.submit_emoji_rename(),
+        Some(AppCommand::RenameEmoji {
+            guild_id,
+            emoji_id: Id::new(8001),
+            name: "ferris2".to_owned(),
+        })
+    );
+
+    // Applied locally too: leaving the old name showing makes a successful
+    // rename look like it failed.
+    assert_eq!(
+        state
+            .server_management_state()
+            .map(|p| p.emojis()[0].name.clone()),
+        Some("ferris2".to_owned())
+    );
+}
+
+#[test]
+fn an_unchanged_or_empty_emoji_name_sends_nothing() {
+    let mut state = state_with_many_guilds(1);
+    let guild_id = Id::new(1);
+    state.open_server_management(guild_id, ServerPanelTab::Emoji);
+    state.apply_guild_emojis(
+        guild_id,
+        vec![crate::discord::GuildEmojiInfo {
+            id: Id::new(8001),
+            name: "ferris".to_owned(),
+            animated: false,
+            role_restricted: false,
+        }],
+    );
+
+    // Confirming without changing anything is not a rename.
+    state.start_emoji_rename();
+    assert_eq!(state.submit_emoji_rename(), None);
+
+    // Nor is clearing it: Discord would reject an empty name, so this reads
+    // as a cancel rather than costing a request to be told so.
+    state.start_emoji_rename();
+    state.edit_emoji_rename(crate::tui::text_input::TextEditAction::DeleteToLineStart);
+    assert_eq!(state.submit_emoji_rename(), None);
+}
+
+#[test]
+fn renaming_is_refused_on_the_tabs_that_have_no_emoji() {
+    // 'n' is a plain letter; on the invite or audit tab it must do nothing
+    // rather than seed a field from whatever row happens to be highlighted.
+    let mut state = state_with_many_guilds(1);
+    state.open_server_management(Id::new(1), ServerPanelTab::Invites);
+
+    state.start_emoji_rename();
+    assert!(
+        state
+            .server_management_state()
+            .and_then(|p| p.renaming())
+            .is_none()
+    );
 }

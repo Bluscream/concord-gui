@@ -196,11 +196,14 @@ pub enum Prompt {
     ForumPostTitle,
     /// An invite link or code to join.
     InviteCode,
+    /// A new name for a custom emoji, by its index in the open emoji tab.
+    EmojiName(usize),
 }
 
 impl Prompt {
     fn title(self) -> &'static str {
         match self {
+            Prompt::EmojiName(_) => "Rename emoji",
             Prompt::ThreadName => "Rename thread",
             Prompt::ForumPostTitle => "New post",
             Prompt::InviteCode => "Join a server",
@@ -209,6 +212,7 @@ impl Prompt {
 
     fn placeholder(self) -> &'static str {
         match self {
+            Prompt::EmojiName(_) => "Emoji name",
             Prompt::ThreadName => "Thread name",
             Prompt::ForumPostTitle => "Post title",
             Prompt::InviteCode => "discord.gg/... or an invite code",
@@ -1594,6 +1598,7 @@ impl Workspace {
 
         match prompt {
             Prompt::ThreadName => self.rename_thread(text),
+            Prompt::EmojiName(index) => self.rename_emoji(index, text),
             Prompt::InviteCode => self.resolve_invite(&text),
             Prompt::ForumPostTitle => {
                 // The body is the composer's content, so a post is written the
@@ -3846,6 +3851,44 @@ impl Workspace {
         }
         let invite = view.invites.remove(index);
         handle.send(AppCommand::RevokeInvite { code: invite.code });
+    }
+
+    /// Start renaming a custom emoji.
+    pub fn start_emoji_rename(&mut self, index: usize) {
+        let Some(view) = &self.server_management else {
+            return;
+        };
+        let Some(emoji) = view.emojis.get(index) else {
+            return;
+        };
+
+        // Seeded with the current name: a rename is usually a correction, and
+        // retyping the whole thing to fix one letter is busywork.
+        let mut text = Composer::default();
+        text.set_text(&emoji.name);
+        self.prompt = Some((Prompt::EmojiName(index), text));
+    }
+
+    /// Apply a renamed emoji.
+    fn rename_emoji(&mut self, index: usize, name: String) {
+        let (Some(handle), Some(view)) = (&self.handle, &mut self.server_management) else {
+            return;
+        };
+        let Some(emoji) = view.emojis.get_mut(index) else {
+            return;
+        };
+        if emoji.name == name {
+            return;
+        }
+
+        // Applied locally too: the list is a snapshot, and leaving the old
+        // name showing makes a successful rename look like it failed.
+        emoji.name = name.clone();
+        handle.send(AppCommand::RenameEmoji {
+            guild_id: view.guild_id,
+            emoji_id: emoji.id,
+            name,
+        });
     }
 
     /// Delete a custom emoji.
@@ -6531,6 +6574,7 @@ impl Workspace {
                             primary: format!("discord.gg/{}", invite.code),
                             secondary: Some(invite_summary(invite)),
                             action: Some(t!("action-revoke")),
+                            secondary_action: None,
                         })
                         .collect::<Vec<_>>(),
                     t!("status-no-invites"),
@@ -6542,6 +6586,7 @@ impl Workspace {
                             primary: format!(":{}:", emoji.name),
                             secondary: emoji_summary(emoji),
                             action: Some(t!("action-delete")),
+                            secondary_action: Some(t!("action-rename")),
                         })
                         .collect(),
                     t!("status-no-emoji"),
@@ -6555,6 +6600,7 @@ impl Workspace {
                             // No action: the log is a record, not something to
                             // be edited from the client that reads it.
                             action: None,
+                            secondary_action: None,
                         })
                         .collect(),
                     t!("status-no-audit-entries"),
@@ -6591,6 +6637,19 @@ impl Workspace {
                                 // The audit log offers no row action, so there
                                 // is nothing to do here.
                                 ServerTab::AuditLog => {}
+                            }
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    let tab = view.tab;
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            // Only emoji have a second action.
+                            if tab == ServerTab::Emoji {
+                                workspace.start_emoji_rename(index);
                             }
                             cx.notify();
                         });

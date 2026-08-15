@@ -1,5 +1,6 @@
 use super::*;
 use crate::discord::AppCommand;
+use crate::tui::state::ChannelActionKind;
 use crate::tui::state::MessagePaneSource;
 
 #[test]
@@ -7,7 +8,14 @@ fn channel_show_pinned_messages_action_enters_pinned_message_view() {
     let mut state = state_with_messages(1);
     state.focus_pane(FocusPane::Channels);
     state.open_selected_channel_actions();
-    state.select_channel_action_row(3);
+    // Looked up rather than counted: a positional index breaks whenever a
+    // row is inserted above it, and says nothing about which action is meant.
+    let row = state
+        .selected_channel_action_items()
+        .iter()
+        .position(|action| action.kind == ChannelActionKind::ShowPinnedMessages)
+        .expect("pinned messages must be offered");
+    state.select_channel_action_row(row);
 
     let command = state.activate_selected_channel_action();
 

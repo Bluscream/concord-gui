@@ -722,12 +722,23 @@ pub(in crate::tui::ui) fn render_server_management(
         }
     };
 
-    // The audit log has no row action - history is a record, not something to
-    // be edited from the client that reads it - so the hint changes with it.
-    let hint = match tab {
-        ServerPanelTab::Invites => "tab to switch, r to reload, enter to revoke",
-        ServerPanelTab::Emoji => "tab to switch, r to reload, enter to delete",
-        ServerPanelTab::AuditLog => "tab to switch, r to reload",
+    // While renaming, the field is what the popup is for, so it replaces the
+    // list rather than sitting under it in a menu that no longer responds.
+    let (lines, hint) = match panel.renaming() {
+        Some(input) => (
+            vec![Line::from(Span::raw(format!("Name: {}", input.value())))],
+            "enter to rename, esc to cancel",
+        ),
+        // The audit log has no row action - history is a record, not something
+        // to be edited from the client that reads it - so the hint changes.
+        None => (
+            lines,
+            match tab {
+                ServerPanelTab::Invites => "tab to switch, r to reload, enter to revoke",
+                ServerPanelTab::Emoji => "tab, r to reload, n to rename, enter to delete",
+                ServerPanelTab::AuditLog => "tab to switch, r to reload",
+            },
+        ),
     };
 
     render_action_menu(

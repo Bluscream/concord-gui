@@ -231,3 +231,24 @@ cargo clippy --release -p concord-gui --features fixtures --all-targets
 
 A `never used` warning on a `pub fn` in a front end means a control was never
 attached to it.
+
+## Commands only one client sends
+
+Clippy cannot catch a core `AppCommand` variant that no front end ever
+constructs - it is public API, so it is never "dead". This finds them, and
+finds the ones only one client can reach:
+
+```bash
+for v in $(grep -oE '^    [A-Z][A-Za-z]+ \{' src/discord/commands.rs | tr -d ' {'); do
+  t=$(grep -rl "AppCommand::$v" src/tui --include=*.rs 2>/dev/null | grep -vc test)
+  g=$(grep -rl "AppCommand::$v" crates/gui/src --include=*.rs 2>/dev/null | grep -v demo.rs | grep -vc "^$")
+  [ "$t" -eq 0 ] && [ "$g" -gt 0 ] && echo "GUI only: $v"
+  [ "$g" -eq 0 ] && [ "$t" -gt 0 ] && echo "TUI only: $v"
+done
+```
+
+Both lists should be empty. `RenameEmoji` was dispatched and reachable from
+neither; `CreateChannelInvite` and `RenameEmoji` were later reachable only from
+the GUI. All three were found this way rather than by noticing.
+
+Ignore `Custom` - it is a `ReactionEmoji` variant the pattern also matches.
