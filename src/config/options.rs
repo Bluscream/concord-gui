@@ -233,6 +233,26 @@ pub struct AppOptions {
     pub notifications: NotificationOptions,
     pub voice: VoiceOptions,
     pub presence: PresenceOptions,
+    pub warnings: WarningOptions,
+}
+
+/// Which risk warnings the user has chosen not to see again.
+///
+/// Each of these actions is one Discord's anti-spam heuristics treat harshly
+/// from a third-party client, and a false positive costs the user their
+/// account. They are warned rather than blocked - the decision is theirs -
+/// but somebody who has read the warning once and meant it should not be
+/// asked forever, so each can be silenced independently.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WarningOptions {
+    /// Joining a server: the action most likely to get a client flagged.
+    pub suppress_join_guild: bool,
+    pub suppress_leave_guild: bool,
+    /// Starting a conversation with someone new.
+    pub suppress_new_dm: bool,
+    /// Editing your profile while connected through a third-party client.
+    pub suppress_profile_edit: bool,
 }
 
 /// Validated Highlight Group and UI definitions from `theme.toml`.

@@ -52,6 +52,7 @@ fn options_popup_toggles_and_cycles_display_settings() {
                 notifications: state.notification_options(),
                 voice: state.voice_options(),
                 presence: Default::default(),
+                warnings: Default::default(),
             }),
             "{label}"
         );
@@ -114,6 +115,7 @@ fn options_popup_h_l_adjust_microphone_sensitivity_by_one_or_ten_db() {
             notifications: state.notification_options(),
             voice: state.voice_options(),
             presence: Default::default(),
+            warnings: Default::default(),
         })
     );
 }
@@ -280,6 +282,7 @@ fn options_popup_sequences_own_continuations_then_restore_fixed_shortcuts() {
             notifications: state.notification_options(),
             voice: state.voice_options(),
             presence: Default::default(),
+            warnings: Default::default(),
         })
     );
 }

@@ -244,6 +244,38 @@ pub enum SwitcherPurpose {
     },
 }
 
+/// An action Discord's anti-spam checks watch, which is warned about before
+/// it is carried out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RiskAction {
+    JoinGuild,
+    LeaveGuild,
+}
+
+impl RiskAction {
+    fn body(self) -> &'static str {
+        match self {
+            Self::JoinGuild => t!("warning.join_guild"),
+            Self::LeaveGuild => t!("warning.leave_guild"),
+        }
+    }
+
+    /// Whether the user has already asked not to be warned about this.
+    fn suppressed(self, options: &AppOptions) -> bool {
+        match self {
+            Self::JoinGuild => options.warnings.suppress_join_guild,
+            Self::LeaveGuild => options.warnings.suppress_leave_guild,
+        }
+    }
+
+    fn suppress(self, options: &mut AppOptions) {
+        match self {
+            Self::JoinGuild => options.warnings.suppress_join_guild = true,
+            Self::LeaveGuild => options.warnings.suppress_leave_guild = true,
+        }
+    }
+}
+
 /// A guild's ban list, as shown.
 pub struct BanListView {
     pub guild_id: Id<marker::GuildMarker>,
@@ -443,6 +475,9 @@ pub struct Workspace {
     requested_previews: std::collections::HashSet<String>,
     /// What the open switcher will do with its selection.
     switcher_purpose: SwitcherPurpose,
+    /// A risk warning awaiting an answer, with the "don't ask again" box as
+    /// currently ticked.
+    pub risk: Option<(RiskAction, bool)>,
     /// The guild's bans, once asked for. `None` while the panel is closed.
     pub bans: Option<BanListView>,
     /// Roles being edited for a member: who, and the set as edited so far.
@@ -572,6 +607,7 @@ impl Workspace {
             attachment_previews: std::collections::HashMap::new(),
             requested_previews: std::collections::HashSet::new(),
             switcher_purpose: SwitcherPurpose::Navigate,
+            risk: None,
             bans: None,
             editing_roles: None,
             pending_stickers: Vec::new(),
@@ -1053,6 +1089,13 @@ impl Workspace {
 
     /// Leave the open guild.
     pub fn leave_guild(&mut self) {
+        if !self.confirm_risk(RiskAction::LeaveGuild) {
+            return;
+        }
+        self.leave_guild_confirmed();
+    }
+
+    fn leave_guild_confirmed(&mut self) {
         let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
             return;
         };
@@ -1331,8 +1374,49 @@ impl Workspace {
         handle.send(AppCommand::ResolveInvite { code });
     }
 
+    /// Ask before an action Discord's anti-spam checks watch.
+    ///
+    /// Returns whether the caller may proceed now. A warning that has been
+    /// silenced proceeds immediately - the user has already decided.
+    fn confirm_risk(&mut self, action: RiskAction) -> bool {
+        if action.suppressed(&self.options) {
+            return true;
+        }
+        self.risk = Some((action, false));
+        false
+    }
+
+    /// Carry out whatever the open warning was about.
+    fn accept_risk(&mut self) {
+        let Some((action, dont_ask)) = self.risk.take() else {
+            return;
+        };
+        if dont_ask {
+            action.suppress(&mut self.options);
+            if let Err(error) = config::save_options(&self.options) {
+                // Saying so matters: silently failing means the warning
+                // returns next time and looks like the box did nothing.
+                self.settings_note = Some(format!("Could not save preference: {error}"));
+            }
+        }
+
+        match action {
+            RiskAction::JoinGuild => self.accept_invite_confirmed(),
+            RiskAction::LeaveGuild => self.leave_guild_confirmed(),
+        }
+    }
+
     /// Join the guild the previewed invite points at.
     pub fn accept_invite(&mut self) {
+        // Joining is the action most likely to get a third-party client
+        // flagged, so it is warned about before it happens.
+        if !self.confirm_risk(RiskAction::JoinGuild) {
+            return;
+        }
+        self.accept_invite_confirmed();
+    }
+
+    fn accept_invite_confirmed(&mut self) {
         let (Some(handle), Some(invite)) = (&self.handle, self.invite.as_ref()) else {
             return;
         };
@@ -1445,7 +1529,8 @@ impl Workspace {
     /// Ordered so one press closes one thing: escape with several panels open
     /// should peel them back, not clear the screen.
     pub fn close_popup(&mut self) {
-        if self.bans.take().is_some()
+        if self.risk.take().is_some()
+            || self.bans.take().is_some()
             || self.editing_roles.take().is_some()
             || self.invite.take().is_some()
             || self.confirming.take().is_some()
@@ -5388,6 +5473,46 @@ impl Workspace {
                     move |cx: &mut gpui::App| {
                         entity.update(cx, |workspace, cx| {
                             workspace.confirming = None;
+                            cx.notify();
+                        });
+                    }
+                },
+            )));
+        }
+
+        if let Some((action, dont_ask)) = self.risk {
+            return Some(overlay::scrim().child(overlay::risk_warning_view(
+                t!("warning.title"),
+                action.body(),
+                t!("warning.dont_ask_again"),
+                dont_ask,
+                t!("warning.continue"),
+                t!("action.cancel"),
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            if let Some((_, dont_ask)) = &mut workspace.risk {
+                                *dont_ask = !*dont_ask;
+                            }
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.accept_risk();
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.risk = None;
                             cx.notify();
                         });
                     }

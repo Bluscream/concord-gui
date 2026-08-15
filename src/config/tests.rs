@@ -7,7 +7,7 @@ use super::{
     AppOptions, BorderShape, BorderSurface, ComposerOptions, CredentialOptions,
     CredentialStoreMode, DisplayOptions, HighlightGroup, ImagePreviewQualityPreset,
     ImageProtocolPreference, KeymapBinding, KeymapFileOptions, KeymapOptions, NotificationOptions,
-    PresenceOptions, ThemeOptions, VoiceOptions, load_keymap_options_from_path,
+    PresenceOptions, ThemeOptions, VoiceOptions, WarningOptions, load_keymap_options_from_path,
     load_options_from_path, parse_app_options, parse_theme_options, save_options_to_path,
 };
 use crate::discord::{MicrophoneSensitivityDb, VoiceParticipantVolumePercent, VoiceVolumePercent};
@@ -722,6 +722,12 @@ fn options_save_and_load_round_trip() {
         },
         presence: PresenceOptions {
             share_rich_presence: false,
+        },
+        warnings: WarningOptions {
+            suppress_join_guild: true,
+            suppress_leave_guild: false,
+            suppress_new_dm: true,
+            suppress_profile_edit: false,
         },
     };
 

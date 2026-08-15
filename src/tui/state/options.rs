@@ -69,6 +69,7 @@ pub(super) struct SettingsState {
     // Not editable in the TUI: kept only so saving unrelated options round-trips
     // the user's Rich Presence choice instead of resetting it to the default.
     pub(super) presence_options: PresenceOptions,
+    pub(super) warning_options: crate::config::WarningOptions,
     pub(super) key_bindings: KeyBindings,
     pub(super) voice_participant_playback:
         BTreeMap<Id<UserMarker>, VoiceParticipantPlaybackSettings>,
@@ -358,6 +359,7 @@ impl DashboardState {
             notifications: self.options.notification_options.clone(),
             voice: self.options.voice_options.clone(),
             presence: self.options.presence_options,
+            warnings: self.options.warning_options,
         })
     }
 

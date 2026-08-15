@@ -394,6 +394,50 @@ const CATALOGUE: &[Entry] = &[
         english: "Language",
         german: Some("Sprache"),
     },
+    // ---- risk warnings ----------------------------------------------------
+    Entry {
+        key: "warning.title",
+        english: "This may get your account flagged",
+        german: Some("Das kann dein Konto auffällig machen"),
+    },
+    Entry {
+        key: "warning.join_guild",
+        english: "Discord's anti-spam checks treat third-party clients more                   harshly than the official one, and joining servers is the                   action most likely to trigger them. A false positive can                   disable your account or force a password reset.",
+        german: Some(
+            "Discords Spam-Erkennung behandelt Drittanbieter-Clients strenger              als den offiziellen, und das Beitreten zu Servern löst sie am              ehesten aus. Ein Fehlalarm kann dein Konto sperren oder ein              Zurücksetzen des Passworts erzwingen.",
+        ),
+    },
+    Entry {
+        key: "warning.leave_guild",
+        english: "Leaving servers is one of the actions most likely to trip                   Discord's anti-spam checks from a third-party client.",
+        german: Some(
+            "Das Verlassen von Servern gehört zu den Aktionen, die Discords              Spam-Erkennung bei Drittanbieter-Clients am ehesten auslösen.",
+        ),
+    },
+    Entry {
+        key: "warning.new_dm",
+        english: "Starting new conversations is one of the actions Discord's                   anti-spam checks watch most closely.",
+        german: Some(
+            "Das Starten neuer Unterhaltungen gehört zu den Aktionen, die              Discords Spam-Erkennung besonders beobachtet.",
+        ),
+    },
+    Entry {
+        key: "warning.profile_edit",
+        english: "Editing your profile while connected through a third-party                   client is one of the actions Discord's anti-spam checks                   watch for.",
+        german: Some(
+            "Das Bearbeiten deines Profils über einen Drittanbieter-Client              gehört zu den Aktionen, auf die Discords Spam-Erkennung achtet.",
+        ),
+    },
+    Entry {
+        key: "warning.dont_ask_again",
+        english: "Don't ask again",
+        german: Some("Nicht mehr fragen"),
+    },
+    Entry {
+        key: "warning.continue",
+        english: "Continue anyway",
+        german: Some("Trotzdem fortfahren"),
+    },
     // ---- status ---------------------------------------------------------
     Entry {
         key: "status.loading",

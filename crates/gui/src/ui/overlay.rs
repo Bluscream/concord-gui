@@ -681,3 +681,84 @@ pub fn ban_list_view(
             .child(button("bans-close", "Close", false, on_close)),
     )
 }
+
+/// A risk warning: what the risk is, and a way to proceed anyway.
+///
+/// Never a refusal. The account is the user's and so is the decision; this
+/// exists to make it an informed one. "Don't ask again" is offered because a
+/// warning that cannot be dismissed becomes noise, and noise gets clicked
+/// through without reading.
+pub fn risk_warning_view(
+    title: &str,
+    body: &str,
+    dont_ask_label: &str,
+    dont_ask: bool,
+    continue_label: &str,
+    cancel_label: &str,
+    on_toggle: impl Fn(&mut gpui::App) + 'static,
+    on_continue: impl Fn(&mut gpui::App) + 'static,
+    on_cancel: impl Fn(&mut gpui::App) + 'static,
+) -> Div {
+    panel(title, 460.)
+        .child(
+            gpui::div()
+                .px(px(space::LG))
+                .py(px(space::MD))
+                .text_size(px(scaled(text::SM)))
+                .text_color(rgb(active().text_muted))
+                .child(body.to_owned()),
+        )
+        .child(
+            row()
+                .id("warning-dont-ask")
+                .w_full()
+                .px(px(space::LG))
+                .pb(px(space::SM))
+                .gap(px(space::SM))
+                .items_center()
+                .cursor_pointer()
+                .child(
+                    gpui::div()
+                        .w(px(14.))
+                        .h(px(14.))
+                        .rounded(px(3.))
+                        .border_1()
+                        .border_color(rgb(active().border))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .when(dont_ask, |box_| {
+                            box_.bg(rgb(active().accent)).child(
+                                gpui::div()
+                                    .text_size(px(scaled(text::XS)))
+                                    .text_color(rgb(active().on_accent))
+                                    // A tick from the Basic Multilingual Plane:
+                                    // the emoji one renders as an empty box.
+                                    .child("\u{2713}"),
+                            )
+                        }),
+                )
+                .child(
+                    gpui::div()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().text_subtle))
+                        .child(dont_ask_label.to_owned()),
+                )
+                .on_click(move |_event, _window, cx| on_toggle(cx)),
+        )
+        .child(
+            row()
+                .w_full()
+                .px(px(space::LG))
+                .py(px(space::MD))
+                .gap(px(space::SM))
+                .justify_end()
+                .child(button("warning-cancel", cancel_label, false, on_cancel))
+                .child(button(
+                    "warning-continue",
+                    continue_label,
+                    true,
+                    on_continue,
+                )),
+        )
+}
