@@ -1,0 +1,74 @@
+# concord translations - German
+#
+# Fluent format (https://projectfluent.org). Edit via Weblate where possible;
+# see docs/TRANSLATING.md. A missing key falls back to English rather than
+# showing the key, so a partial translation is still usable.
+
+presence-online = Online
+presence-idle = Abwesend
+presence-dnd = Bitte nicht stören
+presence-invisible = Unsichtbar
+presence-offline = Offline
+action-set-status = Status setzen
+action-mute = Stummschalten
+action-unmute = Stummschaltung aufheben
+action-deafen = Ton aus
+action-undeafen = Ton an
+action-leave = Verlassen
+action-leave-voice = Trennen
+action-join = Beitreten
+action-cancel = Abbrechen
+action-save = Speichern
+action-close = Schließen
+action-confirm = Bestätigen
+action-remove = Entfernen
+action-reply = Antworten
+action-forward = Weiterleiten
+action-edit = Bearbeiten
+action-delete = Löschen
+action-pin = Anheften
+action-unpin = Loslösen
+action-react = Reagieren
+action-copy-text = Text kopieren
+action-copy-link = Link kopieren
+action-share-screen = Bildschirm teilen
+action-stop-sharing = Teilen beenden
+action-audio-devices = Audiogeräte
+action-microphone = Mikrofon
+action-sticker = Sticker
+action-attach = Anhängen
+action-join-server = Server beitreten
+action-manage-roles = Rollen verwalten
+action-kick = Kicken
+action-ban = Bannen
+action-unban = Bann aufheben
+action-timeout = Auszeit
+action-clear-timeout = Auszeit aufheben
+label-bans = Banns
+label-roles = Rollen
+label-stickers = Sticker
+label-mentions = Erwähnungen
+label-pins = Angeheftet
+label-settings = Einstellungen
+label-voice-connected = Sprachkanal verbunden
+label-moderation = Moderation
+label-language = Sprache
+warning-title = Das kann dein Konto auffällig machen
+warning-join-guild = Discords Spam-Erkennung behandelt Drittanbieter-Clients strenger als den offiziellen, und das Beitreten zu Servern löst sie am ehesten aus. Ein Fehlalarm kann dein Konto sperren oder ein Zurücksetzen des Passworts erzwingen.
+warning-leave-guild = Das Verlassen von Servern gehört zu den Aktionen, die Discords Spam-Erkennung bei Drittanbieter-Clients am ehesten auslösen.
+warning-new-dm = Das Starten neuer Unterhaltungen gehört zu den Aktionen, die Discords Spam-Erkennung besonders beobachtet.
+warning-profile-edit = Das Bearbeiten deines Profils über einen Drittanbieter-Client gehört zu den Aktionen, auf die Discords Spam-Erkennung achtet.
+warning-dont-ask-again = Nicht mehr fragen
+warning-continue = Trotzdem fortfahren
+status-loading = Wird geladen …
+status-no-matches = Keine Treffer
+status-connecting = verbinde …
+status-reconnected = Wieder verbunden
+status-disconnected = Getrennt; verbinde neu
+status-signed-out = Abgemeldet
+status-joined = Beigetreten
+status-message-not-sent = Nachricht wurde nicht gesendet
+status-no-stickers = Dieser Server hat keine Sticker
+status-no-bans = Niemand ist von diesem Server gebannt
+status-no-mentions = Keine neuen Erwähnungen
+status-already-joined = Du bist bereits auf diesem Server

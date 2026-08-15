@@ -253,10 +253,10 @@ pub enum RiskAction {
 }
 
 impl RiskAction {
-    fn body(self) -> &'static str {
+    fn body(self) -> String {
         match self {
-            Self::JoinGuild => t!("warning.join_guild"),
-            Self::LeaveGuild => t!("warning.leave_guild"),
+            Self::JoinGuild => t!("warning-join-guild"),
+            Self::LeaveGuild => t!("warning-leave-guild"),
         }
     }
 
@@ -3467,9 +3467,9 @@ impl Workspace {
                             "card-mute",
                             if mute { "\u{2298}" } else { "\u{25CB}" },
                             if mute {
-                                t!("action.unmute")
+                                t!("action-unmute")
                             } else {
-                                t!("action.mute")
+                                t!("action-mute")
                             },
                             mute,
                         )
@@ -3484,9 +3484,9 @@ impl Workspace {
                             "card-deafen",
                             if deaf { "\u{2297}" } else { "\u{25D1}" },
                             if deaf {
-                                t!("action.undeafen")
+                                t!("action-undeafen")
                             } else {
-                                t!("action.deafen")
+                                t!("action-deafen")
                             },
                             deaf,
                         )
@@ -3525,7 +3525,7 @@ impl Workspace {
                         icon_button(
                             "card-devices",
                             "\u{2699}",
-                            t!("action.audio_devices"),
+                            t!("action-audio-devices"),
                             false,
                         )
                         .flex_1()
@@ -3538,7 +3538,7 @@ impl Workspace {
                         icon_button(
                             "card-mic-permission",
                             "\u{25C9}",
-                            t!("action.microphone"),
+                            t!("action-microphone"),
                             !self.allow_microphone_transmit,
                         )
                         .flex_1()
@@ -5482,12 +5482,12 @@ impl Workspace {
 
         if let Some((action, dont_ask)) = self.risk {
             return Some(overlay::scrim().child(overlay::risk_warning_view(
-                t!("warning.title"),
-                action.body(),
-                t!("warning.dont_ask_again"),
+                &t!("warning-title"),
+                &action.body(),
+                &t!("warning-dont-ask-again"),
                 dont_ask,
-                t!("warning.continue"),
-                t!("action.cancel"),
+                &t!("warning-continue"),
+                &t!("action-cancel"),
                 {
                     let entity = entity.clone();
                     move |cx: &mut gpui::App| {
@@ -6441,25 +6441,25 @@ impl Workspace {
                         "status-online",
                         Presence::Online,
                         PresenceStatus::Online,
-                        t!("presence.online"),
+                        t!("presence-online"),
                     ),
                     (
                         "status-idle",
                         Presence::Idle,
                         PresenceStatus::Idle,
-                        t!("presence.idle"),
+                        t!("presence-idle"),
                     ),
                     (
                         "status-dnd",
                         Presence::Dnd,
                         PresenceStatus::DoNotDisturb,
-                        t!("presence.dnd"),
+                        t!("presence-dnd"),
                     ),
                     (
                         "status-invisible",
                         Presence::Offline,
                         PresenceStatus::Offline,
-                        t!("presence.invisible"),
+                        t!("presence-invisible"),
                     ),
                 ]
                 .map(|(id, presence, status, tooltip)| {

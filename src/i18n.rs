@@ -4,16 +4,22 @@
 //! the same catalogue: a string added for the GUI is available to the TUI, and
 //! a translator has one place to work.
 //!
-//! Deliberately small - a static table and a lookup, no Fluent or gettext.
-//! The catalogue is compile-time, so a missing key is a build error rather
-//! than a blank label at runtime, and there is no loader, no plural rules
-//! engine and no runtime file format to keep in step.
+//! Strings are [Fluent](https://projectfluent.org) files under `i18n/`, which
+//! is what makes community translation possible - Weblate hosts that format
+//! natively, with suggestions, review and voting. See `docs/TRANSLATING.md`.
+//! Fluent was chosen over gettext because it handles plurals, gender and
+//! per-language grammar without the source language having to anticipate them.
 //!
-//! Adding a language means adding a column to `CATALOGUE`. Adding a string
-//! means adding a row, with English required and others optional - an
-//! untranslated string falls back to English rather than showing its key.
+//! The files are embedded at compile time. A translation platform edits the
+//! files in the repository, so there is nothing to ship or load at runtime and
+//! a broken install cannot leave the interface blank.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{OnceLock, RwLock};
+
+use fluent_bundle::{FluentArgs, FluentResource, FluentValue};
+use unic_langid::LanguageIdentifier;
 
 /// Languages the interface is available in.
 ///
@@ -29,6 +35,9 @@ pub enum Language {
     German,
 }
 
+/// The source language every other one falls back to.
+const SOURCE: Language = Language::English;
+
 impl Language {
     /// Parse a locale tag such as `de`, `de-DE` or `de_DE.UTF-8`.
     ///
@@ -41,14 +50,12 @@ impl Language {
             .unwrap_or(tag)
             .to_ascii_lowercase();
 
-        match primary.as_str() {
-            "en" => Some(Self::English),
-            "de" => Some(Self::German),
-            _ => None,
-        }
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|language| language.tag() == primary)
     }
 
-    /// The tag this language is configured as.
     pub const fn tag(self) -> &'static str {
         match self {
             Self::English => "en",
@@ -61,6 +68,16 @@ impl Language {
         match self {
             Self::English => "English",
             Self::German => "Deutsch",
+        }
+    }
+
+    /// The Fluent source for this language.
+    ///
+    /// Adding a language means adding a variant, a file, and a line here.
+    const fn source(self) -> &'static str {
+        match self {
+            Self::English => include_str!("../i18n/en.ftl"),
+            Self::German => include_str!("../i18n/de.ftl"),
         }
     }
 
@@ -83,7 +100,7 @@ impl Language {
 
 /// The active language.
 ///
-/// Global because every render path needs it and threading a locale through
+/// Global because every render path needs it, and threading a locale through
 /// every view signature would touch all of both front ends for no benefit.
 static ACTIVE: AtomicU8 = AtomicU8::new(0);
 
@@ -95,7 +112,7 @@ pub fn language() -> Language {
     Language::from_index(ACTIVE.load(Ordering::Relaxed))
 }
 
-/// Pick a language from the system locale, falling back to English.
+/// Pick a language from the system locale, falling back to the source.
 pub fn language_from_system() -> Language {
     sys_locale::get_locale()
         .as_deref()
@@ -103,27 +120,99 @@ pub fn language_from_system() -> Language {
         .unwrap_or_default()
 }
 
+// The concurrent bundle rather than the default one: bundles are shared
+// across threads here, and the default carries a RefCell that is not Sync.
+type Bundle = fluent_bundle::concurrent::FluentBundle<FluentResource>;
+
+/// Parsed bundles, built once per language on first use.
+fn bundles() -> &'static RwLock<HashMap<u8, &'static Bundle>> {
+    static BUNDLES: OnceLock<RwLock<HashMap<u8, &'static Bundle>>> = OnceLock::new();
+    BUNDLES.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn bundle(language: Language) -> &'static Bundle {
+    if let Some(bundle) = bundles()
+        .read()
+        .ok()
+        .and_then(|cache| cache.get(&language.index()).copied())
+    {
+        return bundle;
+    }
+
+    let identifier: LanguageIdentifier = language
+        .tag()
+        .parse()
+        .unwrap_or_else(|_| "en".parse().expect("en is a valid language tag"));
+
+    let mut built = Bundle::new_concurrent(vec![identifier]);
+    // Fluent isolates interpolated values with directional marks by default,
+    // which is correct for bidirectional text but shows up as stray characters
+    // in a terminal that does not handle them.
+    built.set_use_isolating(false);
+
+    // A syntax error yields a partial resource rather than nothing, so the
+    // strings that did parse still work. The test below catches the error.
+    let resource = FluentResource::try_new(language.source().to_owned())
+        .unwrap_or_else(|(resource, _)| resource);
+    let _ = built.add_resource(resource);
+
+    // Leaked deliberately: bundles live for the process, and this keeps the
+    // lookup free of locks and lifetimes on a path every label takes.
+    let leaked: &'static Bundle = Box::leak(Box::new(built));
+    if let Ok(mut cache) = bundles().write() {
+        cache.insert(language.index(), leaked);
+    }
+    leaked
+}
+
 /// Translate a key into the active language.
 ///
 /// An unknown key returns itself. That is deliberate: it makes the mistake
-/// visible in the interface rather than showing an empty label, and the key
-/// is written to be readable if it ever escapes.
-pub fn translate(key: &str) -> &'static str {
-    let language = language();
-    for entry in CATALOGUE {
-        if entry.key == key {
-            return match language {
-                Language::English => entry.english,
-                // An untranslated string falls back to English rather than
-                // showing the key, so a partial translation is still usable.
-                Language::German => entry.german.unwrap_or(entry.english),
-            };
-        }
+/// visible in the interface rather than showing an empty label, and the keys
+/// are written to be readable if one ever escapes.
+pub fn translate(key: &str) -> String {
+    translate_args(key, None)
+}
+
+/// Translate a key, substituting named arguments.
+///
+/// Counts belong here rather than being formatted into the string by the
+/// caller: only the translation knows how its language inflects around them,
+/// which is the whole reason for choosing Fluent.
+pub fn translate_args(key: &str, args: Option<&FluentArgs<'_>>) -> String {
+    if let Some(text) = lookup(language(), key, args) {
+        return text;
     }
-    // Leaked rather than returned by value so the signature stays &'static,
-    // which is what GPUI and ratatui both want. Only reached for a key that
-    // is not in the catalogue, which is a bug either way.
-    Box::leak(key.to_owned().into_boxed_str())
+    // A language with a missing key falls back to the source rather than
+    // showing the key, so a partial translation stays usable - which is the
+    // normal state of a language being worked on, not an edge case.
+    if language() != SOURCE
+        && let Some(text) = lookup(SOURCE, key, args)
+    {
+        return text;
+    }
+    key.to_owned()
+}
+
+fn lookup(language: Language, key: &str, args: Option<&FluentArgs<'_>>) -> Option<String> {
+    let bundle = bundle(language);
+    let message = bundle.get_message(key)?;
+    let pattern = message.value()?;
+
+    // Formatting errors leave placeholders in the output rather than failing,
+    // which is preferable to a blank label.
+    let mut errors = Vec::new();
+    let text = bundle.format_pattern(pattern, args, &mut errors);
+    Some(text.into_owned())
+}
+
+/// Build arguments for [`translate_args`].
+pub fn args<'a>(pairs: &[(&'a str, i64)]) -> FluentArgs<'a> {
+    let mut built = FluentArgs::new();
+    for (name, value) in pairs {
+        built.set(*name, FluentValue::from(*value));
+    }
+    built
 }
 
 /// Shorthand for [`translate`].
@@ -132,388 +221,14 @@ macro_rules! t {
     ($key:expr) => {
         $crate::i18n::translate($key)
     };
+    ($key:expr, $($name:expr => $value:expr),+ $(,)?) => {
+        $crate::i18n::translate_args($key, Some(&$crate::i18n::args(&[$(($name, $value)),+])))
+    };
 }
-
-struct Entry {
-    key: &'static str,
-    english: &'static str,
-    german: Option<&'static str>,
-}
-
-/// The catalogue.
-///
-/// Keys are dotted and describe where the string appears, so a translator can
-/// tell a noun from a verb without reading the source: `action.` is something
-/// the user does, `label.` names a thing, `status.` reports state.
-const CATALOGUE: &[Entry] = &[
-    // ---- presence -------------------------------------------------------
-    Entry {
-        key: "presence.online",
-        english: "Online",
-        german: Some("Online"),
-    },
-    Entry {
-        key: "presence.idle",
-        english: "Idle",
-        german: Some("Abwesend"),
-    },
-    Entry {
-        key: "presence.dnd",
-        english: "Do not disturb",
-        german: Some("Bitte nicht stören"),
-    },
-    Entry {
-        key: "presence.invisible",
-        english: "Invisible",
-        german: Some("Unsichtbar"),
-    },
-    Entry {
-        key: "presence.offline",
-        english: "Offline",
-        german: Some("Offline"),
-    },
-    // ---- actions --------------------------------------------------------
-    Entry {
-        key: "action.set_status",
-        english: "Set status",
-        german: Some("Status setzen"),
-    },
-    Entry {
-        key: "action.mute",
-        english: "Mute",
-        german: Some("Stummschalten"),
-    },
-    Entry {
-        key: "action.unmute",
-        english: "Unmute",
-        german: Some("Stummschaltung aufheben"),
-    },
-    Entry {
-        key: "action.deafen",
-        english: "Deafen",
-        german: Some("Ton aus"),
-    },
-    Entry {
-        key: "action.undeafen",
-        english: "Undeafen",
-        german: Some("Ton an"),
-    },
-    Entry {
-        key: "action.leave",
-        english: "Leave",
-        german: Some("Verlassen"),
-    },
-    Entry {
-        key: "action.leave_voice",
-        english: "Disconnect",
-        german: Some("Trennen"),
-    },
-    Entry {
-        key: "action.join",
-        english: "Join",
-        german: Some("Beitreten"),
-    },
-    Entry {
-        key: "action.cancel",
-        english: "Cancel",
-        german: Some("Abbrechen"),
-    },
-    Entry {
-        key: "action.save",
-        english: "Save",
-        german: Some("Speichern"),
-    },
-    Entry {
-        key: "action.close",
-        english: "Close",
-        german: Some("Schließen"),
-    },
-    Entry {
-        key: "action.confirm",
-        english: "Confirm",
-        german: Some("Bestätigen"),
-    },
-    Entry {
-        key: "action.remove",
-        english: "Remove",
-        german: Some("Entfernen"),
-    },
-    Entry {
-        key: "action.reply",
-        english: "Reply",
-        german: Some("Antworten"),
-    },
-    Entry {
-        key: "action.forward",
-        english: "Forward",
-        german: Some("Weiterleiten"),
-    },
-    Entry {
-        key: "action.edit",
-        english: "Edit",
-        german: Some("Bearbeiten"),
-    },
-    Entry {
-        key: "action.delete",
-        english: "Delete",
-        german: Some("Löschen"),
-    },
-    Entry {
-        key: "action.pin",
-        english: "Pin",
-        german: Some("Anheften"),
-    },
-    Entry {
-        key: "action.unpin",
-        english: "Unpin",
-        german: Some("Loslösen"),
-    },
-    Entry {
-        key: "action.react",
-        english: "React",
-        german: Some("Reagieren"),
-    },
-    Entry {
-        key: "action.copy_text",
-        english: "Copy text",
-        german: Some("Text kopieren"),
-    },
-    Entry {
-        key: "action.copy_link",
-        english: "Copy link",
-        german: Some("Link kopieren"),
-    },
-    Entry {
-        key: "action.share_screen",
-        english: "Share screen",
-        german: Some("Bildschirm teilen"),
-    },
-    Entry {
-        key: "action.stop_sharing",
-        english: "Stop sharing",
-        german: Some("Teilen beenden"),
-    },
-    Entry {
-        key: "action.audio_devices",
-        english: "Audio devices",
-        german: Some("Audiogeräte"),
-    },
-    Entry {
-        key: "action.microphone",
-        english: "Microphone",
-        german: Some("Mikrofon"),
-    },
-    Entry {
-        key: "action.sticker",
-        english: "Sticker",
-        german: Some("Sticker"),
-    },
-    Entry {
-        key: "action.attach",
-        english: "Attach",
-        german: Some("Anhängen"),
-    },
-    Entry {
-        key: "action.join_server",
-        english: "Join a server",
-        german: Some("Server beitreten"),
-    },
-    Entry {
-        key: "action.manage_roles",
-        english: "Manage roles",
-        german: Some("Rollen verwalten"),
-    },
-    Entry {
-        key: "action.kick",
-        english: "Kick",
-        german: Some("Kicken"),
-    },
-    Entry {
-        key: "action.ban",
-        english: "Ban",
-        german: Some("Bannen"),
-    },
-    Entry {
-        key: "action.unban",
-        english: "Unban",
-        german: Some("Bann aufheben"),
-    },
-    Entry {
-        key: "action.timeout",
-        english: "Time out",
-        german: Some("Auszeit"),
-    },
-    Entry {
-        key: "action.clear_timeout",
-        english: "Clear timeout",
-        german: Some("Auszeit aufheben"),
-    },
-    // ---- labels ---------------------------------------------------------
-    Entry {
-        key: "label.bans",
-        english: "Bans",
-        german: Some("Banns"),
-    },
-    Entry {
-        key: "label.roles",
-        english: "Roles",
-        german: Some("Rollen"),
-    },
-    Entry {
-        key: "label.stickers",
-        english: "Stickers",
-        german: Some("Sticker"),
-    },
-    Entry {
-        key: "label.mentions",
-        english: "Mentions",
-        german: Some("Erwähnungen"),
-    },
-    Entry {
-        key: "label.pins",
-        english: "Pins",
-        german: Some("Angeheftet"),
-    },
-    Entry {
-        key: "label.settings",
-        english: "Settings",
-        german: Some("Einstellungen"),
-    },
-    Entry {
-        key: "label.voice_connected",
-        english: "Voice Connected",
-        german: Some("Sprachkanal verbunden"),
-    },
-    Entry {
-        key: "label.moderation",
-        english: "Moderation",
-        german: Some("Moderation"),
-    },
-    Entry {
-        key: "label.language",
-        english: "Language",
-        german: Some("Sprache"),
-    },
-    // ---- risk warnings ----------------------------------------------------
-    Entry {
-        key: "warning.title",
-        english: "This may get your account flagged",
-        german: Some("Das kann dein Konto auffällig machen"),
-    },
-    Entry {
-        key: "warning.join_guild",
-        english: "Discord's anti-spam checks treat third-party clients more                   harshly than the official one, and joining servers is the                   action most likely to trigger them. A false positive can                   disable your account or force a password reset.",
-        german: Some(
-            "Discords Spam-Erkennung behandelt Drittanbieter-Clients strenger              als den offiziellen, und das Beitreten zu Servern löst sie am              ehesten aus. Ein Fehlalarm kann dein Konto sperren oder ein              Zurücksetzen des Passworts erzwingen.",
-        ),
-    },
-    Entry {
-        key: "warning.leave_guild",
-        english: "Leaving servers is one of the actions most likely to trip                   Discord's anti-spam checks from a third-party client.",
-        german: Some(
-            "Das Verlassen von Servern gehört zu den Aktionen, die Discords              Spam-Erkennung bei Drittanbieter-Clients am ehesten auslösen.",
-        ),
-    },
-    Entry {
-        key: "warning.new_dm",
-        english: "Starting new conversations is one of the actions Discord's                   anti-spam checks watch most closely.",
-        german: Some(
-            "Das Starten neuer Unterhaltungen gehört zu den Aktionen, die              Discords Spam-Erkennung besonders beobachtet.",
-        ),
-    },
-    Entry {
-        key: "warning.profile_edit",
-        english: "Editing your profile while connected through a third-party                   client is one of the actions Discord's anti-spam checks                   watch for.",
-        german: Some(
-            "Das Bearbeiten deines Profils über einen Drittanbieter-Client              gehört zu den Aktionen, auf die Discords Spam-Erkennung achtet.",
-        ),
-    },
-    Entry {
-        key: "warning.dont_ask_again",
-        english: "Don't ask again",
-        german: Some("Nicht mehr fragen"),
-    },
-    Entry {
-        key: "warning.continue",
-        english: "Continue anyway",
-        german: Some("Trotzdem fortfahren"),
-    },
-    // ---- status ---------------------------------------------------------
-    Entry {
-        key: "status.loading",
-        english: "Loading...",
-        german: Some("Wird geladen …"),
-    },
-    Entry {
-        key: "status.no_matches",
-        english: "No matches",
-        german: Some("Keine Treffer"),
-    },
-    Entry {
-        key: "status.connecting",
-        english: "connecting…",
-        german: Some("verbinde …"),
-    },
-    Entry {
-        key: "status.reconnected",
-        english: "Reconnected",
-        german: Some("Wieder verbunden"),
-    },
-    Entry {
-        key: "status.disconnected",
-        english: "Disconnected; reconnecting",
-        german: Some("Getrennt; verbinde neu"),
-    },
-    Entry {
-        key: "status.signed_out",
-        english: "Signed out",
-        german: Some("Abgemeldet"),
-    },
-    Entry {
-        key: "status.joined",
-        english: "Joined",
-        german: Some("Beigetreten"),
-    },
-    Entry {
-        key: "status.message_not_sent",
-        english: "Message was not sent",
-        german: Some("Nachricht wurde nicht gesendet"),
-    },
-    Entry {
-        key: "status.no_stickers",
-        english: "This server has no stickers",
-        german: Some("Dieser Server hat keine Sticker"),
-    },
-    Entry {
-        key: "status.no_bans",
-        english: "Nobody is banned from this server",
-        german: Some("Niemand ist von diesem Server gebannt"),
-    },
-    Entry {
-        key: "status.no_mentions",
-        english: "No recent mentions",
-        german: Some("Keine neuen Erwähnungen"),
-    },
-    Entry {
-        key: "status.already_joined",
-        english: "You are already in this server",
-        german: Some("Du bist bereits auf diesem Server"),
-    },
-];
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn every_key_is_unique() {
-        // A duplicate key silently shadows the later one, and the lookup would
-        // return whichever happened to come first.
-        let mut seen = std::collections::BTreeSet::new();
-        for entry in CATALOGUE {
-            assert!(seen.insert(entry.key), "duplicate key: {}", entry.key);
-        }
-    }
 
     #[test]
     fn locale_tags_resolve_to_a_language() {
@@ -528,32 +243,54 @@ mod tests {
     }
 
     #[test]
-    fn an_untranslated_string_falls_back_to_english() {
-        // A partial translation must stay usable rather than showing keys.
-        set_language(Language::German);
-        let entry = CATALOGUE
-            .iter()
-            .find(|entry| entry.german.is_none())
-            .map(|entry| (entry.key, entry.english));
-
-        if let Some((key, english)) = entry {
-            assert_eq!(translate(key), english);
+    fn every_language_file_parses() {
+        // A syntax error would otherwise surface as every string in that
+        // language silently falling back to English, which looks like a
+        // missing translation rather than a broken file.
+        for language in Language::ALL {
+            assert!(
+                FluentResource::try_new(language.source().to_owned()).is_ok(),
+                "{}.ftl has Fluent syntax errors",
+                language.tag()
+            );
         }
-        set_language(Language::English);
     }
 
     #[test]
-    fn german_is_used_when_selected() {
+    fn every_translated_key_exists_in_the_source() {
+        // A key only a translation has is dead weight, and usually a typo that
+        // leaves the English string showing with no obvious cause.
+        let source = Language::English.source();
+        for language in Language::ALL.iter().filter(|l| **l != Language::English) {
+            for line in language.source().lines() {
+                let Some((key, _)) = line.split_once(" = ") else {
+                    continue;
+                };
+                let key = key.trim();
+                if key.starts_with('#') || key.is_empty() {
+                    continue;
+                }
+                assert!(
+                    source.contains(&format!("{key} = ")),
+                    "{}.ftl has key {key}, which the source does not",
+                    language.tag()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn translations_resolve_in_each_language() {
         set_language(Language::German);
-        assert_eq!(translate("presence.idle"), "Abwesend");
+        assert_eq!(translate("presence-idle"), "Abwesend");
         set_language(Language::English);
-        assert_eq!(translate("presence.idle"), "Idle");
+        assert_eq!(translate("presence-idle"), "Idle");
     }
 
     #[test]
     fn an_unknown_key_returns_itself_rather_than_nothing() {
         // Visible in the interface beats a blank label: a missing string
         // should look like a bug, not like an empty control.
-        assert_eq!(translate("does.not.exist"), "does.not.exist");
+        assert_eq!(translate("does-not-exist"), "does-not-exist");
     }
 }

@@ -1,0 +1,76 @@
+# concord translations - English (source language)
+#
+# Fluent format (https://projectfluent.org). Hosted for community translation
+# on Weblate; see docs/TRANSLATING.md.
+#
+# This file is the source. Translators should not edit it - edit the target
+# language file, or use Weblate.
+
+presence-online = Online
+presence-idle = Idle
+presence-dnd = Do not disturb
+presence-invisible = Invisible
+presence-offline = Offline
+action-set-status = Set status
+action-mute = Mute
+action-unmute = Unmute
+action-deafen = Deafen
+action-undeafen = Undeafen
+action-leave = Leave
+action-leave-voice = Disconnect
+action-join = Join
+action-cancel = Cancel
+action-save = Save
+action-close = Close
+action-confirm = Confirm
+action-remove = Remove
+action-reply = Reply
+action-forward = Forward
+action-edit = Edit
+action-delete = Delete
+action-pin = Pin
+action-unpin = Unpin
+action-react = React
+action-copy-text = Copy text
+action-copy-link = Copy link
+action-share-screen = Share screen
+action-stop-sharing = Stop sharing
+action-audio-devices = Audio devices
+action-microphone = Microphone
+action-sticker = Sticker
+action-attach = Attach
+action-join-server = Join a server
+action-manage-roles = Manage roles
+action-kick = Kick
+action-ban = Ban
+action-unban = Unban
+action-timeout = Time out
+action-clear-timeout = Clear timeout
+label-bans = Bans
+label-roles = Roles
+label-stickers = Stickers
+label-mentions = Mentions
+label-pins = Pins
+label-settings = Settings
+label-voice-connected = Voice Connected
+label-moderation = Moderation
+label-language = Language
+warning-title = This may get your account flagged
+warning-join-guild = Discord's anti-spam checks treat third-party clients more harshly than the official one, and joining servers is the action most likely to trigger them. A false positive can disable your account or force a password reset.
+warning-leave-guild = Leaving servers is one of the actions most likely to trip Discord's anti-spam checks from a third-party client.
+warning-new-dm = Starting new conversations is one of the actions Discord's anti-spam checks watch most closely.
+warning-profile-edit = Editing your profile while connected through a third-party client is one of the actions Discord's anti-spam checks watch for.
+warning-dont-ask-again = Don't ask again
+warning-continue = Continue anyway
+status-loading = Loading...
+status-no-matches = No matches
+status-connecting = connecting…
+status-reconnected = Reconnected
+status-disconnected = Disconnected; reconnecting
+status-signed-out = Signed out
+status-joined = Joined
+status-message-not-sent = Message was not sent
+status-no-stickers = This server has no stickers
+status-no-bans = Nobody is banned from this server
+status-no-mentions = No recent mentions
+status-already-joined = You are already in this server

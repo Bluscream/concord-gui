@@ -287,6 +287,41 @@ Worth knowing before starting:
   Reconnect behaviour should be gentle, and connecting many accounts at once
   is worth a warning.
 
+### 10. Every user-facing string goes through the catalogue
+
+No literal text in the interface. Strings live in `i18n/*.ftl` and are read
+with `t!("some-key")`; see `docs/TRANSLATING.md`.
+
+The catalogue is in the core, so a string added for one front end is available
+to the other. Fluent rather than gettext because it handles plurals and
+grammatical agreement per language, and because Weblate hosts it natively -
+community translation with suggestions and voting is the point, not an
+afterthought.
+
+Counts and names are **arguments**, not formatting:
+
+```rust
+t!("unread-count", "count" => unread as i64)   // yes
+format!("{} unread", t!("unread"))             // no - unformattable in most languages
+```
+
+A missing translation falls back to English, so a partial language is usable.
+A key with no entry at all returns itself, which looks like a bug in the
+interface rather than an empty control.
+
+### 11. Icons must render
+
+Glyphs come from the Basic Multilingual Plane. Astral-plane emoji - U+1F3A4
+and friends - have no coverage in the shipped fonts and draw as empty boxes,
+which is what the first version of the voice controls did across four
+buttons. Geometric and technical symbols (U+25xx, U+26xx, U+27xx) are safe.
+
+Where the meaning is a colour, **draw it** rather than reaching for an emoji:
+a filled circle is a div, and always renders.
+
+Every icon needs a tooltip, and every tooltip goes through the catalogue. Use
+`chrome::icon_button`, which does both.
+
 ## Practical notes
 
 - **Building**: the host is immutable, so builds run in the `arch` distrobox

@@ -272,9 +272,10 @@ impl gpui::Render for Tooltip {
 pub fn icon_button(
     id: &'static str,
     glyph: &'static str,
-    tooltip: &'static str,
+    tooltip: impl Into<gpui::SharedString>,
     active_state: bool,
 ) -> gpui::Stateful<Div> {
+    let tooltip = tooltip.into();
     gpui::div()
         .id(id)
         .w(px(28.))
@@ -297,7 +298,7 @@ pub fn icon_button(
         }))
         .hover(|style| style.bg(rgb(active().surface_hover)))
         .child(glyph)
-        .tooltip(move |_window, cx| cx.new(|_| Tooltip::new(tooltip)).into())
+        .tooltip(move |_window, cx| cx.new(|_| Tooltip::new(tooltip.clone())).into())
 }
 
 /// A presence swatch with a tooltip, for picking a status.
@@ -307,9 +308,10 @@ pub fn icon_button(
 pub fn presence_swatch(
     id: &'static str,
     presence: Presence,
-    tooltip: &'static str,
+    tooltip: impl Into<gpui::SharedString>,
     selected: bool,
 ) -> gpui::Stateful<Div> {
+    let tooltip = tooltip.into();
     gpui::div()
         .id(id)
         .w(px(20.))
@@ -331,5 +333,5 @@ pub fn presence_swatch(
                 // row reads as a set of choices with one of them current.
                 .when(!selected, |dot| dot.opacity(0.55)),
         )
-        .tooltip(move |_window, cx| cx.new(|_| Tooltip::new(tooltip)).into())
+        .tooltip(move |_window, cx| cx.new(|_| Tooltip::new(tooltip.clone())).into())
 }

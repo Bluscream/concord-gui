@@ -1,0 +1,14 @@
+{
+  "$comment": "Weblate component configuration. Import at hosted.weblate.org with this repository; see docs/TRANSLATING.md.",
+  "name": "concord",
+  "slug": "concord",
+  "file_format": "fluent",
+  "filemask": "i18n/*.ftl",
+  "template": "i18n/en.ftl",
+  "source_language": "en",
+  "new_lang": "add",
+  "suggestion_voting": true,
+  "suggestion_autoaccept": 3,
+  "allow_translation_propagation": true,
+  "check_flags": "rust-format"
+}
