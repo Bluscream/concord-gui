@@ -146,18 +146,32 @@ pub fn header() -> Div {
         .border_color(rgb(active().border))
 }
 
+/// What a voice participant row displays.
+pub struct VoiceRow<'a> {
+    pub name: &'a str,
+    pub muted: bool,
+    pub deafened: bool,
+    pub streaming: bool,
+    pub speaking: bool,
+    /// Distinguishes this row's element ids from every other participant's.
+    pub id_seed: u64,
+}
+
 /// A voice participant nested under its channel in the sidebar.
 pub fn voice_participant_row(
-    name: &str,
-    muted: bool,
-    deafened: bool,
-    streaming: bool,
-    speaking: bool,
-    // Distinguishes this row's element ids from every other participant's.
-    id_seed: u64,
+    row_data: VoiceRow<'_>,
     on_watch: impl Fn(&mut gpui::App) + 'static,
     on_toggle_mute: impl Fn(&mut gpui::App) + 'static,
 ) -> Div {
+    let VoiceRow {
+        name,
+        muted,
+        deafened,
+        streaming,
+        speaking,
+        id_seed,
+    } = row_data;
+
     row()
         .w_full()
         .h(px(24.))

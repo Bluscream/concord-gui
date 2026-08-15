@@ -245,8 +245,8 @@ fn project_members(state: &DiscordState, nav: &Navigation) -> Vec<MemberEntry> {
 
     entries
         .into_iter()
-        .filter_map(|(_, entry)| match entry {
-            GuildMemberListEntry::Group { id, count } => Some(MemberEntry {
+        .map(|(_, entry)| match entry {
+            GuildMemberListEntry::Group { id, count } => MemberEntry {
                 name: format!("{} - {}", id.to_uppercase(), count),
                 user_id: None,
                 avatar: None,
@@ -254,10 +254,10 @@ fn project_members(state: &DiscordState, nav: &Navigation) -> Vec<MemberEntry> {
                 is_group: true,
                 is_bot: false,
                 color: None,
-            }),
+            },
             GuildMemberListEntry::Member { user_id } => {
                 let member = state.member_for_guild(guild_id, *user_id);
-                Some(MemberEntry {
+                MemberEntry {
                     name: member
                         .map(|m| m.display_name.clone())
                         .unwrap_or_else(|| "unknown".to_string()),
@@ -269,7 +269,7 @@ fn project_members(state: &DiscordState, nav: &Navigation) -> Vec<MemberEntry> {
                     color: state
                         .member_role_color(guild_id, *user_id)
                         .filter(|color| *color != 0),
-                })
+                }
             }
         })
         .collect()

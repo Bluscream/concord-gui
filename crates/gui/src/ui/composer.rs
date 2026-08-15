@@ -353,12 +353,12 @@ impl Composer {
                 // `key_char` carries the text the platform produced, which
                 // already accounts for layout and dead keys. Control chords
                 // are filtered out so e.g. ctrl-a does not insert "a".
-                if !control {
-                    if let Some(input) = keystroke.key_char.as_ref() {
-                        if !input.is_empty() && !input.chars().any(char::is_control) {
-                            self.insert(input);
-                        }
-                    }
+                if !control
+                    && let Some(input) = keystroke.key_char.as_ref()
+                    && !input.is_empty()
+                    && !input.chars().any(char::is_control)
+                {
+                    self.insert(input);
                 }
             }
         }
@@ -456,11 +456,9 @@ mod tests {
 /// Render the composer. `enabled` is false when no channel is open, in which
 /// case it shows why rather than accepting input that could not be sent.
 pub fn composer_view(composer: &Composer, focused: bool, enabled: bool, placeholder: &str) -> Div {
-    let content: Div = if !enabled {
-        gpui::div()
-            .text_color(rgb(active().text_subtle))
-            .child(placeholder.to_string())
-    } else if composer.text().is_empty() {
+    // Disabled and empty look the same on purpose: both show the placeholder,
+    // which in the disabled case is the explanation of why.
+    let content: Div = if !enabled || composer.text().is_empty() {
         gpui::div()
             .text_color(rgb(active().text_subtle))
             .child(placeholder.to_string())

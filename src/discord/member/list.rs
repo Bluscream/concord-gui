@@ -508,12 +508,13 @@ impl GuildMemberListState {
     pub(in crate::discord) fn from_fixture_entries(
         entries: Vec<(u32, GuildMemberListEntry)>,
     ) -> Self {
-        let mut state = Self::default();
-        state.stable = Some(GuildMemberListSnapshot {
-            list_id: Some("everyone".to_string()),
-            entries: entries.into_iter().collect(),
-            ..Default::default()
-        });
-        state
+        Self {
+            stable: Some(GuildMemberListSnapshot {
+                list_id: Some("everyone".to_string()),
+                entries: entries.into_iter().collect(),
+                ..Default::default()
+            }),
+            ..Self::default()
+        }
     }
 }

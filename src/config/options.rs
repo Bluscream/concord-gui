@@ -272,8 +272,8 @@ macro_rules! define_border_surfaces {
         }
 
         impl BorderSurface {
-            pub(crate) const ALL: &'static [Self] = &[$(Self::$variant),+];
-            pub(crate) const COUNT: usize = Self::ALL.len();
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+            pub const COUNT: usize = Self::ALL.len();
 
             pub(crate) fn from_name(name: &str) -> Option<Self> {
                 match name {
@@ -375,15 +375,15 @@ macro_rules! define_highlight_groups {
     ($($variant:ident => $name:literal),+ $(,)?) => {
         #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
         #[repr(usize)]
-        pub(crate) enum HighlightGroup {
+        pub enum HighlightGroup {
             $($variant),+
         }
 
         impl HighlightGroup {
-            pub(crate) const ALL: &'static [Self] = &[$(Self::$variant),+];
-            pub(crate) const COUNT: usize = Self::ALL.len();
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+            pub const COUNT: usize = Self::ALL.len();
 
-            pub(crate) const fn name(self) -> &'static str {
+            pub const fn name(self) -> &'static str {
                 match self {
                     $(Self::$variant => $name),+
                 }

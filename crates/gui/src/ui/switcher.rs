@@ -59,7 +59,7 @@ impl Switcher {
                 })
                 .collect();
 
-            scored.sort_by(|(a, _), (b, _)| a.cmp(b));
+            scored.sort_by_key(|(a, _)| *a);
             self.results = scored
                 .into_iter()
                 .map(|(_, candidate)| candidate)

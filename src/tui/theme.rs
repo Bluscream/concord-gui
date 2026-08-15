@@ -2,6 +2,8 @@
 use std::cell::RefCell;
 use std::sync::OnceLock;
 
+pub mod external;
+
 use ratatui::{
     style::{Color, Modifier, Style},
     symbols::border,

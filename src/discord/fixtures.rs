@@ -184,14 +184,15 @@ fn message(
 ) -> MessageState {
     // MessageState implements Default (with a placeholder id), so only the
     // fields that matter to rendering are overridden here.
-    let mut message = MessageState::default();
-    message.id = message_id(snowflake_at(age).max(id));
-    message.channel_id = channel_id(channel);
-    message.guild_id = guild.map(guild_id);
-    message.author_id = user_id(author);
-    message.author = name.to_string();
-    message.content = Some(body.to_string());
-    message
+    MessageState {
+        id: message_id(snowflake_at(age).max(id)),
+        channel_id: channel_id(channel),
+        guild_id: guild.map(guild_id),
+        author_id: user_id(author),
+        author: name.to_string(),
+        content: Some(body.to_string()),
+        ..MessageState::default()
+    }
 }
 
 /// A fully-populated state for offline UI work.
@@ -270,7 +271,7 @@ pub fn demo_state() -> DiscordState {
     // ---- roles and members -------------------------------------------------
     let guild_details = Arc::make_mut(&mut state.guild_details);
 
-    let roles = vec![
+    let roles = [
         RoleState {
             id: role_id(1),
             name: "Maintainer".into(),
@@ -301,7 +302,7 @@ pub fn demo_state() -> DiscordState {
         roles.iter().map(|role| (role.id, role.clone())).collect(),
     );
 
-    let members = vec![
+    let members = [
         member(1001, "blu", false, &[1]),
         member(1002, "ferris", false, &[2]),
         member(1003, "turing", false, &[2]),
@@ -652,13 +653,15 @@ pub fn append_message(
     author: &str,
     content: &str,
 ) -> Id<marker::MessageMarker> {
-    let mut message = MessageState::default();
-    message.id = message_id(snowflake_at(0));
-    message.channel_id = channel_id;
-    message.guild_id = guild_id;
-    message.author_id = author_id;
-    message.author = author.to_string();
-    message.content = Some(content.to_string());
+    let message = MessageState {
+        id: message_id(snowflake_at(0)),
+        channel_id,
+        guild_id,
+        author_id,
+        author: author.to_string(),
+        content: Some(content.to_string()),
+        ..MessageState::default()
+    };
 
     let id = message.id;
 
@@ -821,16 +824,17 @@ pub fn demo_channel_ids() -> Vec<Id<marker::ChannelMarker>> {
 /// Convert a stored message into the wire-shaped `MessageInfo` that search
 /// results and forum pages carry.
 pub fn message_info(message: &MessageState) -> crate::discord::MessageInfo {
-    let mut info = crate::discord::MessageInfo::default();
-    info.guild_id = message.guild_id;
-    info.channel_id = message.channel_id;
-    info.message_id = message.id;
-    info.author_id = message.author_id;
-    info.author = message.author.clone();
-    info.author_is_bot = message.author_is_bot;
-    info.content = message.content.clone();
-    info.pinned = message.pinned;
-    info
+    crate::discord::MessageInfo {
+        guild_id: message.guild_id,
+        channel_id: message.channel_id,
+        message_id: message.id,
+        author_id: message.author_id,
+        author: message.author.clone(),
+        author_is_bot: message.author_is_bot,
+        content: message.content.clone(),
+        pinned: message.pinned,
+        ..crate::discord::MessageInfo::default()
+    }
 }
 
 /// Synthetic forum posts for the demo forum channel.
@@ -927,13 +931,14 @@ pub fn forum_posts(
             is_spam: None,
         });
 
-        let mut opening = crate::discord::MessageInfo::default();
-        opening.guild_id = Some(guild_id(10));
-        opening.channel_id = thread_id;
-        opening.message_id = message_id(snowflake_at(3600));
-        opening.author = author.to_string();
-        opening.content = Some(body.to_string());
-        first_messages.push(opening);
+        first_messages.push(crate::discord::MessageInfo {
+            guild_id: Some(guild_id(10)),
+            channel_id: thread_id,
+            message_id: message_id(snowflake_at(3600)),
+            author: author.to_string(),
+            content: Some(body.to_string()),
+            ..crate::discord::MessageInfo::default()
+        });
     }
 
     (threads, first_messages)
@@ -1044,17 +1049,18 @@ pub fn prepend_history(
         // Ages increase with the page so ordering stays consistent.
         let age = 7200 + (page as u64 * 10 + index as u64) * 300;
 
-        let mut message = MessageState::default();
-        message.id = message_id(snowflake_at(age));
-        message.channel_id = channel_id;
-        message.guild_id = guild;
-        message.author_id = user_id(author);
-        message.author = name.to_string();
-        message.content = Some(format!(
-            "Earlier message {} from the backlog",
-            page * 10 + index
-        ));
-        older.push(message);
+        older.push(MessageState {
+            id: message_id(snowflake_at(age)),
+            channel_id,
+            guild_id: guild,
+            author_id: user_id(author),
+            author: name.to_string(),
+            content: Some(format!(
+                "Earlier message {} from the backlog",
+                page * 10 + index
+            )),
+            ..MessageState::default()
+        });
     }
 
     // Oldest first, inserted ahead of what is already loaded.

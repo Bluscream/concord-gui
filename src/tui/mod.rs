@@ -20,7 +20,9 @@ mod terminal;
 mod text;
 mod text_cursor;
 mod text_input;
-mod theme;
+// Public so the GUI resolves the same theme.toml the TUI does; only
+// `theme::external` is reachable from outside.
+pub mod theme;
 mod ui;
 
 use tokio::sync::{mpsc, watch};

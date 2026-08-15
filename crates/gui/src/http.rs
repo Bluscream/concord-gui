@@ -22,7 +22,11 @@ pub struct ReqwestClient {
 }
 
 impl ReqwestClient {
-    pub fn new() -> Arc<dyn HttpClient> {
+    /// Build the client GPUI's image loader expects.
+    ///
+    /// Named `shared` rather than `new` because it returns the trait object
+    /// GPUI takes, not a `Self`.
+    pub fn shared() -> Arc<dyn HttpClient> {
         // Discord's CDN serves avatars and emoji without authentication, but
         // rejects requests with no user agent.
         let user_agent = concat!("concord-gui/", env!("CARGO_PKG_VERSION"));

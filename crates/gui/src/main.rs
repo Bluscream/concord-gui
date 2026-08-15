@@ -25,7 +25,6 @@ mod ui;
 
 use gpui::{App, Application, Bounds, WindowBounds, WindowOptions, prelude::*, px, size};
 
-use crate::ui::login::Login;
 use crate::ui::workspace::{Screen, Workspace, WorkspaceModel};
 
 use concord::config::CredentialStoreMode;
@@ -113,7 +112,7 @@ fn main() {
 
     // GPUI needs an HTTP client before it will load images from a URI.
     Application::new()
-        .with_http_client(http::ReqwestClient::new())
+        .with_http_client(http::ReqwestClient::shared())
         .run(move |cx: &mut App| {
             let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
 
@@ -131,7 +130,7 @@ fn main() {
                         let screen = if status.has_token {
                             Screen::Ready
                         } else {
-                            Screen::Login(Login::default())
+                            Screen::Login(Box::default())
                         };
                         cx.new(|cx| Workspace::new(model, screen, cx))
                     },

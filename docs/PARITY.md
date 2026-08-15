@@ -79,33 +79,38 @@ reaction users · pins · mute channel · notification inbox with context ·
 builtin slash commands · application commands with autocomplete · status and
 custom status · leave guild · sign out · guild folders with rename
 
-### Known gaps
+### Configuration
 
-Found by a sixth check - which config surfaces each client reads. The five
-earlier checks cannot see these, because the GUI hardcodes equivalent
-behaviour: commands, events and reachability all look clean while the user's
-own configuration is ignored.
+A sixth check - which config surfaces each client reads. The five earlier
+checks cannot see this, because the GUI hardcodes equivalent behaviour:
+commands, events and reachability all look clean while the user's own
+configuration is ignored.
 
 | Surface | State |
 |---|---|
-| `config.toml` | Read, and its warnings are now reported |
+| `config.toml` | Read, with warnings reported |
 | `ui_state.toml` | Read and written, shared with the TUI |
-| `keymap.toml` | **Ignored.** The GUI hardcodes its keys |
-| `theme.toml` | **Ignored** |
+| `keymap.toml` | Read; resolved by the core so both clients agree |
+| `theme.toml` | Read; foreground colours applied to the palette |
 
-`keymap.toml` is the substantive one. The TUI resolves a user-defined map of
-152 actions, with a leader key and multi-chord sequences, and honours custom
-bindings over defaults with conflict resolution. The GUI matches on key names
-in one hardcoded arm. Someone who has customised their TUI bindings gets none
-of them here, and there is no leader-key support at all. Closing it means
-routing GUI input through `UiAction` rather than through string keys.
+Keymap resolution lives in `tui::keybindings::external` and theme resolution
+in `tui::theme::external`, both narrow facades over the TUI's own code. A
+second implementation in the GUI would drift from the file it is meant to be
+reading.
 
-`theme.toml` is a different shape of problem. Its accessors are
-`pub(crate)`, so the GUI cannot read it without a core change, and its
-contents are terminal-oriented - ratatui highlight groups and border shapes -
-so there is no mechanical mapping onto GPUI colours. It needs a decision
-about what a shared theme should even mean across the two front ends, not
-just an implementation.
+Two deliberate differences, both forced by the front ends not being alike:
+
+- **Bare-letter bindings.** The TUI is modal, so its defaults bind plain
+  letters - `q` is Quit. This client has no such mode; the composer is always
+  live. An unmodified character while the message pane has focus is therefore
+  always typed, never dispatched. Without this, the TUI's own default keymap
+  would quit the application when someone began a message with "q".
+- **Theme scope.** Only foregrounds are taken, and only for the groups with a
+  real counterpart. A terminal highlight's background applies to one span; on
+  a GUI surface it would flood the window. Groups about terminal mechanics -
+  scrollbars, border shapes, dim - are left alone rather than mapped onto
+  something the user did not ask for. ANSI colours resolve to nothing, since
+  they mean whatever the user's terminal palette says.
 
 ### A reversed decision, worth recording
 

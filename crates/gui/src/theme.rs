@@ -139,12 +139,86 @@ pub fn is_light_mode() -> bool {
     LIGHT_MODE.load(Ordering::Relaxed)
 }
 
+/// The user's `theme.toml`, resolved and applied over the built-in palettes.
+///
+/// Stored rather than consulted per read: `active()` is called thousands of
+/// times per frame, and reparsing config there would dominate rendering.
+static OVERRIDES: std::sync::OnceLock<Option<(Palette, Palette)>> = std::sync::OnceLock::new();
+
 /// The palette every view should read.
 pub fn active() -> &'static Palette {
-    if is_light_mode() { &LIGHT } else { &DARK }
+    let light = is_light_mode();
+
+    match OVERRIDES.get() {
+        Some(Some((dark, bright))) => {
+            if light {
+                bright
+            } else {
+                dark
+            }
+        }
+        // Either no theme.toml, or it changed nothing.
+        _ => {
+            if light {
+                &LIGHT
+            } else {
+                &DARK
+            }
+        }
+    }
 }
 
-impl Palette {}
+/// Apply `theme.toml` over both built-in palettes.
+///
+/// Returns the parser's warnings. Called once at startup - a theme change
+/// needs a restart, as it does in the TUI.
+pub fn load_overrides() -> Vec<String> {
+    let Ok((options, mut warnings)) = concord::config::load_theme_options_with_warnings() else {
+        return Vec::new();
+    };
+
+    let resolved = concord::tui::theme::external::resolved_highlights(&options, &mut warnings);
+
+    let mut dark = DARK;
+    let mut light = LIGHT;
+    let mut changed = false;
+
+    for (group, style) in resolved {
+        // Only the foreground is taken. A terminal highlight's background is
+        // per-span, so applying it to a whole GUI surface would flood the
+        // window with what was meant to tint one word.
+        let Some(colour) = style.foreground else {
+            continue;
+        };
+
+        // The subset with a genuine counterpart. Groups about terminal
+        // mechanics - scrollbars, border shapes, dim - are deliberately
+        // absent: mapping them would invent intent the user did not express.
+        let field: fn(&mut Palette) -> &mut u32 = match group {
+            "Normal" | "MessageBody" => |palette| &mut palette.text,
+            "Muted" | "MessageSecondary" => |palette| &mut palette.text_muted,
+            "Hint" | "Placeholder" | "Timestamp" => |palette| &mut palette.text_subtle,
+            "Border" | "PaneBorder" => |palette| &mut palette.border,
+            "FocusBorder" | "FocusedPaneBorder" => |palette| &mut palette.accent,
+            "Selection" | "SelectedRow" => |palette| &mut palette.surface_active,
+            "Error" => |palette| &mut palette.danger,
+            "Warning" => |palette| &mut palette.warning,
+            "Success" => |palette| &mut palette.success,
+            "MessageLink" => |palette| &mut palette.accent_hover,
+            _ => continue,
+        };
+
+        *field(&mut dark) = colour;
+        *field(&mut light) = colour;
+        changed = true;
+    }
+
+    // Storing `None` when nothing changed keeps `active()` on the static
+    // palettes, which is one branch cheaper on the hottest path in the client.
+    let _ = OVERRIDES.set(changed.then_some((dark, light)));
+
+    warnings
+}
 
 /// Spacing scale (px). A 4px base grid - every gap and pad is a multiple,
 /// which is most of what keeps a dense chat UI from looking arbitrary.

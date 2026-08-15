@@ -19,6 +19,21 @@ use crate::theme::{active, layout, scaled, space, text};
 
 /// Decoded image attachments, keyed by URL.
 pub type Previews = std::collections::HashMap<String, std::sync::Arc<gpui::Image>>;
+
+/// How messages should be drawn.
+///
+/// Grouped because every level of the list passes the same bundle down: as
+/// separate parameters they had grown to eleven, and adding one meant editing
+/// three signatures and three call sites in step.
+#[derive(Clone, Copy)]
+pub struct RenderOptions<'a> {
+    pub show_avatars: bool,
+    pub circular_avatars: bool,
+    pub hour24: bool,
+    pub show_emoji: bool,
+    pub show_images: bool,
+    pub previews: &'a Previews,
+}
 use crate::ui::chrome::{avatar_with_url, column, row};
 
 /// Width reserved to the left of message bodies, so continuation rows align
@@ -109,12 +124,7 @@ pub fn message_list(
     rows: &[MessageRow],
     selected: Option<usize>,
     scroll: &gpui::ScrollHandle,
-    show_avatars: bool,
-    circular_avatars: bool,
-    hour24: bool,
-    show_emoji: bool,
-    show_images: bool,
-    previews: &Previews,
+    options: RenderOptions<'_>,
     // Whether newer messages exist beyond the loaded range.
     has_newer: bool,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
@@ -167,12 +177,7 @@ pub fn message_list(
             index,
             message,
             selected == Some(index),
-            show_avatars,
-            circular_avatars,
-            hour24,
-            show_emoji,
-            show_images,
-            previews,
+            options,
             on_action.clone(),
         ));
     }
@@ -210,12 +215,7 @@ fn message_row(
     index: usize,
     message: &MessageRow,
     selected: bool,
-    show_avatars: bool,
-    circular_avatars: bool,
-    hour24: bool,
-    show_emoji: bool,
-    show_images: bool,
-    previews: &Previews,
+    options: RenderOptions<'_>,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> impl IntoElement {
     let own = message.own;
@@ -233,17 +233,7 @@ fn message_row(
                 .border_l_2()
                 .border_color(rgb(active().accent))
         })
-        .child(message_block(
-            index,
-            message,
-            show_avatars,
-            circular_avatars,
-            hour24,
-            show_emoji,
-            show_images,
-            previews,
-            on_action.clone(),
-        ))
+        .child(message_block(index, message, options, on_action.clone()))
         .child(
             gpui::div()
                 .absolute()
@@ -332,12 +322,7 @@ fn action_bar(
 fn message_block(
     index: usize,
     message: &MessageRow,
-    show_avatars: bool,
-    circular_avatars: bool,
-    hour24: bool,
-    show_emoji: bool,
-    show_images: bool,
-    previews: &Previews,
+    options: RenderOptions<'_>,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> Div {
     let mut block = column()
@@ -367,16 +352,9 @@ fn message_block(
                         .flex_none()
                         .text_size(px(scaled(text::XS)))
                         .text_color(rgb(active().text_subtle))
-                        .child(message.short_time(hour24)),
+                        .child(message.short_time(options.hour24)),
                 )
-                .child(message_body(
-                    index,
-                    message,
-                    show_emoji,
-                    show_images,
-                    previews,
-                    on_action,
-                )),
+                .child(message_body(index, message, options, on_action)),
         )
     } else {
         block
@@ -385,7 +363,7 @@ fn message_block(
                     .w_full()
                     .items_center()
                     .gap(px(space::MD))
-                    .when(show_avatars, |header| {
+                    .when(options.show_avatars, |header| {
                         header.child(
                             gpui::div()
                                 .id(("author-avatar", index))
@@ -400,25 +378,18 @@ fn message_block(
                                     layout::AVATAR,
                                     &message.author,
                                     message.author_avatar.as_deref(),
-                                    circular_avatars,
+                                    options.circular_avatars,
                                 )),
                         )
                     })
-                    .child(author_line(message, hour24)),
+                    .child(author_line(message, options.hour24)),
             )
             .child(
                 row()
                     .w_full()
                     .items_start()
                     .child(gpui::div().w(px(GUTTER)).flex_none())
-                    .child(message_body(
-                        index,
-                        message,
-                        show_emoji,
-                        show_images,
-                        previews,
-                        on_action,
-                    )),
+                    .child(message_body(index, message, options, on_action)),
             )
     }
 }
@@ -467,9 +438,7 @@ fn author_line(message: &MessageRow, hour24: bool) -> Div {
 fn message_body(
     index: usize,
     message: &MessageRow,
-    show_emoji: bool,
-    show_images: bool,
-    previews: &Previews,
+    options: RenderOptions<'_>,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> Div {
     let mut body = column().flex_1().gap(px(space::XS));
@@ -489,7 +458,7 @@ fn message_body(
                 .child(rich_body(
                     &message.body,
                     message.spoiler_revealed,
-                    show_emoji,
+                    options.show_emoji,
                 )),
         );
 
@@ -508,17 +477,18 @@ fn message_body(
         // fetched. Going through the core rather than GPUI's URL loader means
         // one fetch, with the session's headers, landing in the cache the TUI
         // also uses.
-        if attachment.is_image && show_images {
-            if let Some(image) = previews.get(attachment.url.as_str()) {
-                body = body.child(
-                    gpui::img(image.clone())
-                        // Bounded so one large image cannot push the rest of
-                        // the conversation off screen.
-                        .max_w(px(400.))
-                        .max_h(px(300.))
-                        .rounded(px(layout::RADIUS)),
-                );
-            }
+        if attachment.is_image
+            && options.show_images
+            && let Some(image) = options.previews.get(attachment.url.as_str())
+        {
+            body = body.child(
+                gpui::img(image.clone())
+                    // Bounded so one large image cannot push the rest of
+                    // the conversation off screen.
+                    .max_w(px(400.))
+                    .max_h(px(300.))
+                    .rounded(px(layout::RADIUS)),
+            );
         }
 
         let handler = on_action.clone();

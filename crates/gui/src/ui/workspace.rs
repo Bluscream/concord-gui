@@ -35,16 +35,16 @@ use crate::session::{SessionHandle, Update};
 use concord::tui::keybindings::external::Resolution;
 
 use crate::keymap::{self, Keymap};
-use crate::theme::{Presence, active, layout, scaled, space, text};
+use crate::theme::{self, Presence, active, layout, scaled, space, text};
 use crate::ui::chrome::{
-    avatar, avatar_with_url, column, header, panel_sunken, presence_dot, row, section_label,
-    sidebar_row, voice_participant_row,
+    VoiceRow, avatar, avatar_with_url, column, header, panel_sunken, presence_dot, row,
+    section_label, sidebar_row, voice_participant_row,
 };
 use crate::ui::composer::{ClipboardIntent, Composer, composer_view};
 use crate::ui::emoji::{self, EmojiPicker};
 use crate::ui::forum::{self, ForumPost, ForumView};
 use crate::ui::login::{Login, LoginEvent, LoginHandle, LoginScreen, PasswordField, login_view};
-use crate::ui::messages::{MessageAction, message_list};
+use crate::ui::messages::{MessageAction, RenderOptions, message_list};
 use crate::ui::overlay;
 use crate::ui::profile::{ProfileView, profile_view};
 use crate::ui::settings::{OnChange, SettingsWindow};
@@ -264,7 +264,10 @@ pub struct SearchResult {
 
 /// Which top-level surface is showing.
 pub enum Screen {
-    Login(Login),
+    // Boxed because `Login` is ~630 bytes of form state and `Ready` carries
+    // none: unboxed, every Screen - including the one the client spends all
+    // its time in - pays for the login form's size.
+    Login(Box<Login>),
     Ready,
 }
 
@@ -448,6 +451,10 @@ impl Workspace {
         let keymap = Keymap::load();
         config_warnings.extend(keymap.warnings.iter().cloned());
 
+        // theme.toml, applied over the built-in palettes. Once per process:
+        // active() is read thousands of times per frame.
+        config_warnings.extend(theme::load_overrides());
+
         let ui_state = match config::load_ui_state_options_with_warnings() {
             Ok((ui_state, warnings)) => {
                 config_warnings.extend(warnings);
@@ -584,7 +591,7 @@ impl Workspace {
         self.composer.clear();
         self.attachments.clear();
 
-        self.screen = Screen::Login(Login::default());
+        self.screen = Screen::Login(Box::default());
         cx.notify();
     }
 
@@ -1602,37 +1609,36 @@ impl Workspace {
             }
         }
 
-        if let Some((voice_channel_id, _)) = &self.voice_channel {
-            if let Some(channel) = self
+        if let Some((voice_channel_id, _)) = &self.voice_channel
+            && let Some(channel) = self
                 .model
                 .channels
                 .iter_mut()
                 .find(|c| c.id == Some(*voice_channel_id))
-            {
-                let user_name = self
-                    .last_state
-                    .as_ref()
-                    .and_then(|s| s.current_user())
-                    .unwrap_or("You")
-                    .to_string();
+        {
+            let user_name = self
+                .last_state
+                .as_ref()
+                .and_then(|s| s.current_user())
+                .unwrap_or("You")
+                .to_string();
 
-                if let Some(member) = channel
-                    .voice
-                    .iter_mut()
-                    .find(|m| m.name == user_name || m.name == "You")
-                {
-                    member.muted = self.self_mute;
-                    member.deafened = self.self_deaf;
-                } else {
-                    channel.voice.push(VoiceMember {
-                        user_id: self.current_user.unwrap_or(Id::new(1)),
-                        name: user_name,
-                        muted: self.self_mute,
-                        deafened: self.self_deaf,
-                        streaming: false,
-                        speaking: !self.self_mute,
-                    });
-                }
+            if let Some(member) = channel
+                .voice
+                .iter_mut()
+                .find(|m| m.name == user_name || m.name == "You")
+            {
+                member.muted = self.self_mute;
+                member.deafened = self.self_deaf;
+            } else {
+                channel.voice.push(VoiceMember {
+                    user_id: self.current_user.unwrap_or(Id::new(1)),
+                    name: user_name,
+                    muted: self.self_mute,
+                    deafened: self.self_deaf,
+                    streaming: false,
+                    speaking: !self.self_mute,
+                });
             }
         }
     }
@@ -4659,12 +4665,14 @@ impl Workspace {
                 let participant_id = participant.user_id;
                 let participant_name = participant.name.clone();
                 list = list.child(voice_participant_row(
-                    &participant.name,
-                    participant.muted,
-                    participant.deafened,
-                    participant.streaming,
-                    participant.speaking,
-                    participant_id.get(),
+                    VoiceRow {
+                        name: &participant.name,
+                        muted: participant.muted,
+                        deafened: participant.deafened,
+                        streaming: participant.streaming,
+                        speaking: participant.speaking,
+                        id_seed: participant_id.get(),
+                    },
                     {
                         let entity = cx.entity();
                         move |cx: &mut gpui::App| {
@@ -5344,12 +5352,15 @@ impl Workspace {
                 &self.messages,
                 self.selected_message,
                 &self.message_scroll,
-                self.options.display.show_avatars,
-                self.options.display.circular_avatars,
-                self.options.display.hour_format_24,
-                self.options.display.show_custom_emoji,
-                self.options.display.show_images && !self.options.display.disable_image_preview,
-                &self.attachment_previews,
+                RenderOptions {
+                    show_avatars: self.options.display.show_avatars,
+                    circular_avatars: self.options.display.circular_avatars,
+                    hour24: self.options.display.hour_format_24,
+                    show_emoji: self.options.display.show_custom_emoji,
+                    show_images: self.options.display.show_images
+                        && !self.options.display.disable_image_preview,
+                    previews: &self.attachment_previews,
+                },
                 self.has_newer_messages(),
                 {
                     // Click handlers run with only an `App`, so the workspace is

@@ -222,14 +222,14 @@ fn parse_inline(input: &str, base: Style, mentions: &dyn Mentions, out: &mut Par
         }
 
         // Angle-bracket entities: mentions, channels, roles, emoji, timestamps.
-        if bytes[index] == b'<' {
-            if let Some((consumed, text, kind)) = entity(rest, mentions) {
-                flush!(index);
-                out.push(&text, Style { kind, ..style });
-                index += consumed;
-                plain_start = index;
-                continue;
-            }
+        if bytes[index] == b'<'
+            && let Some((consumed, text, kind)) = entity(rest, mentions)
+        {
+            flush!(index);
+            out.push(&text, Style { kind, ..style });
+            index += consumed;
+            plain_start = index;
+            continue;
         }
 
         // Bare URLs.
