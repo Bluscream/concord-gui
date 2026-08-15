@@ -734,3 +734,47 @@ fn replies_carry_their_target_id_for_jumping() {
         "a reply must carry the id of the message it answers"
     );
 }
+
+#[test]
+fn slash_picker_only_opens_for_a_bare_command() {
+    use crate::ui::slash::SlashPicker;
+
+    assert!(SlashPicker::for_input("/sh").is_some(), "a prefix matches");
+    assert!(
+        SlashPicker::for_input("/").is_some(),
+        "a lone slash lists all"
+    );
+
+    // A slash mid-message is ordinary text, and a command with arguments
+    // should show the composer rather than a menu.
+    assert!(SlashPicker::for_input("and/or").is_none());
+    assert!(SlashPicker::for_input("/me waves").is_none());
+    assert!(SlashPicker::for_input("plain text").is_none());
+    assert!(SlashPicker::for_input("/zzzznotacommand").is_none());
+}
+
+#[test]
+fn slash_completion_returns_the_cores_replacement() {
+    use crate::ui::slash::SlashPicker;
+
+    let picker = SlashPicker::for_input("/shr").expect("shrug should match");
+    let completion = picker.completion().expect("a highlighted match");
+
+    // The replacement comes from the core, so the GUI and TUI expand the same
+    // command to the same text.
+    assert!(completion.starts_with("/shrug"), "got {completion}");
+}
+
+#[test]
+fn slash_selection_wraps() {
+    use crate::ui::slash::SlashPicker;
+
+    let mut picker = SlashPicker::for_input("/").expect("all commands");
+    let count = picker.matches.len();
+    assert!(count > 1);
+
+    picker.move_selection(-1);
+    assert_eq!(picker.selected, count - 1);
+    picker.move_selection(1);
+    assert_eq!(picker.selected, 0);
+}

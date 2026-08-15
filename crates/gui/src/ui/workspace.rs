@@ -7,9 +7,11 @@
 
 use concord::config::{self, AppOptions, CredentialStoreMode};
 use concord::discord::{
-    AppCommand, AppEvent, ForumPostArchiveState, Id, MAX_UPLOAD_ATTACHMENT_COUNT,
-    MessageAttachmentUpload, MessageSearchQuery, MuteDuration, ReactionEmoji, ReplyReference,
-    StreamCaptureTargetsRequestId, VoiceScope, marker, next_message_nonce,
+    AppCommand, AppEvent, BuiltinSlashCommandParse, BuiltinSlashCommandSubmit,
+    ForumPostArchiveState, GlobalUserProfileUpdate, GuildUserProfileUpdate, Id,
+    MAX_UPLOAD_ATTACHMENT_COUNT, MessageAttachmentUpload, MessageSearchQuery, MuteDuration,
+    ReactionEmoji, ReplyReference, StreamCaptureTargetsRequestId, UserProfileUpdate, VoiceScope,
+    marker, next_message_nonce, parse_builtin_slash_command,
     password_auth::{MfaMethod, PasswordAuthEvent},
     qr_auth::QrEvent,
 };
@@ -37,6 +39,7 @@ use crate::ui::login::{Login, LoginEvent, LoginHandle, LoginScreen, PasswordFiel
 use crate::ui::messages::{MessageAction, message_list};
 use crate::ui::profile::{ProfileView, profile_view};
 use crate::ui::settings::{OnChange, SettingsWindow};
+use crate::ui::slash::{SlashPicker, slash_view};
 use crate::ui::stream::{self, StreamPicker, share_button};
 use crate::ui::switcher::{self, Switcher};
 
@@ -210,6 +213,10 @@ pub struct Workspace {
     pub channel_muted: bool,
     /// Whether the open guild is muted.
     pub guild_muted: bool,
+    /// The authenticated user, once READY reports it.
+    pub current_user: Option<Id<marker::UserMarker>>,
+    /// Slash-command autocomplete, present while typing a bare command.
+    pub slash: Option<SlashPicker>,
     /// Recent mentions across every guild. `None` when the panel is closed.
     pub inbox: Option<Vec<InboxMention>>,
     /// Pinned messages for the open channel, shown in a panel when requested.
@@ -275,6 +282,8 @@ impl Workspace {
             voice_scope_joined: None,
             channel_muted: false,
             guild_muted: false,
+            current_user: None,
+            slash: None,
             inbox: None,
             pins: None,
             pending_copy: None,
@@ -322,21 +331,115 @@ impl Workspace {
         );
     }
 
+    /// Refresh slash autocomplete after the composer changes.
+    fn refresh_slash(&mut self) {
+        self.slash = SlashPicker::for_input(self.composer.text());
+    }
+
+    /// Accept the highlighted completion.
+    fn accept_slash(&mut self) {
+        if let Some(replacement) = self.slash.as_ref().and_then(|picker| picker.completion()) {
+            self.composer.set_text(replacement);
+        }
+        self.slash = None;
+    }
+
+    /// Dispatch a builtin slash command, if the content is one.
+    ///
+    /// Parsing lives in the core so the GUI and TUI accept the same syntax.
+    /// Returns true when the content was handled as a command.
+    fn dispatch_slash(&mut self, content: &str, channel_id: Id<marker::ChannelMarker>) -> bool {
+        let Some(handle) = &self.handle else {
+            return false;
+        };
+
+        match parse_builtin_slash_command(content) {
+            BuiltinSlashCommandParse::Ready(BuiltinSlashCommandSubmit::Message {
+                content,
+                tts,
+            }) => {
+                if tts {
+                    handle.send(AppCommand::SendTtsMessage {
+                        channel_id,
+                        nonce: next_message_nonce(),
+                        content,
+                    });
+                } else {
+                    handle.send(AppCommand::SendMessage {
+                        channel_id,
+                        nonce: next_message_nonce(),
+                        content,
+                        reply_to: None,
+                        attachments: Vec::new(),
+                    });
+                }
+                true
+            }
+            BuiltinSlashCommandParse::Ready(BuiltinSlashCommandSubmit::Nickname { nickname }) => {
+                // Nicknames are per guild; in a DM there is nothing to rename.
+                let Selection::Guild(guild_id) = self.nav.selection else {
+                    self.model.status_line = "Nicknames only apply inside a server".to_string();
+                    return true;
+                };
+                let Some(user_id) = self.current_user else {
+                    return true;
+                };
+
+                handle.send(AppCommand::UpdateUserProfile {
+                    update: UserProfileUpdate {
+                        user_id,
+                        guild_id: Some(guild_id),
+                        global: GlobalUserProfileUpdate::default(),
+                        guild: Some(GuildUserProfileUpdate {
+                            guild_id,
+                            nickname: Some(nickname),
+                            pronouns: None,
+                        }),
+                    },
+                });
+                true
+            }
+            BuiltinSlashCommandParse::Ready(BuiltinSlashCommandSubmit::Unsupported { message }) => {
+                // Reported rather than silently swallowed: a command that
+                // looks accepted but does nothing is worse than a refusal.
+                self.model.status_line = message;
+                true
+            }
+            // Still being typed, or not a command at all - send as written.
+            BuiltinSlashCommandParse::Incomplete | BuiltinSlashCommandParse::NotBuiltin => false,
+        }
+    }
+
     /// Send the composer's contents to the open channel.
     ///
     /// The nonce lets the core match the gateway echo back to this send, so
     /// the message does not briefly appear twice.
     fn send_message(&mut self) {
-        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+        let Some(channel_id) = self.nav.channel else {
             return;
         };
+        if self.handle.is_none() {
+            return;
+        }
 
         let content = self.composer.take();
+        self.slash = None;
 
         // A message may be attachments only, but never entirely empty.
         if content.trim().is_empty() && self.attachments.is_empty() {
             return;
         }
+
+        // A builtin command consumes the input instead of sending it. Done
+        // before the handle is borrowed, since dispatch needs &mut self.
+        if self.dispatch_slash(&content, channel_id) {
+            self.attachments.clear();
+            return;
+        }
+
+        let Some(handle) = &self.handle else {
+            return;
+        };
 
         if let Some(message_id) = self.editing.take() {
             handle.send(AppCommand::EditMessage {
@@ -2374,7 +2477,8 @@ impl Workspace {
                     search.error = Some("search failed".to_string());
                 }
             }
-            AppEvent::Ready { user, .. } => {
+            AppEvent::Ready { user, user_id } => {
+                self.current_user = user_id;
                 self.model.connected = true;
                 self.model.status_line = format!("connected as {user}");
             }
@@ -3089,6 +3193,25 @@ impl Render for Workspace {
                             } else {
                                 this.mark_read();
                             }
+                        } else if this.slash.is_some()
+                            && matches!(key, "up" | "down" | "tab" | "escape")
+                        {
+                            match key {
+                                "escape" => this.slash = None,
+                                "up" => {
+                                    if let Some(picker) = &mut this.slash {
+                                        picker.move_selection(-1);
+                                    }
+                                }
+                                "down" => {
+                                    if let Some(picker) = &mut this.slash {
+                                        picker.move_selection(1);
+                                    }
+                                }
+                                // Tab completes; Enter still sends, so a
+                                // fully-typed command is not intercepted.
+                                _ => this.accept_slash(),
+                            }
                         } else {
                             // Read the clipboard only for the paste chord, so
                             // ordinary typing does not hit the platform on
@@ -3119,6 +3242,8 @@ impl Render for Workspace {
 
                             if send {
                                 this.send_message();
+                            } else {
+                                this.refresh_slash();
                             }
                         }
                     }

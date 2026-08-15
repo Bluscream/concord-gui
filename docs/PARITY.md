@@ -20,7 +20,8 @@ indicators · guild voice · DM calls · mute/deafen · screenshare controls ·
 search with jump · desktop notifications · settings · history paging ·
 composer with selection, undo, clipboard, multi-line · mark read / mark all
 read · quick switcher · jump to replied message · copy message text and link ·
-reaction users · pins · mute channel · notification inbox
+reaction users · pins · mute channel · notification inbox · builtin slash
+commands
 
 ### Missing
 
@@ -36,7 +37,6 @@ Ordered roughly by how much a daily driver misses them.
 | Create thread | `OpenThread` | Threads are readable, not creatable. |
 | Remove embeds | `RemoveEmbeds`, `RemoveMessageEmbeds` | |
 | Reply ping toggle | `ToggleReplyPing` | Currently always mentions the author. |
-| Slash commands | 12 builtins | `/me`, `/shrug`, `/spoiler`, `/tts`, `/nick`, `/gif`, `/tenor`, `/tableflip`, `/unflip` |
 | Application commands | `RunApplicationCommand` | Server-side slash commands. |
 | Compose in external editor | `OpenInEditor` | |
 | Pane show/hide, resize, zoom | `Toggle*Pane`, `Resize*`, `ToggleZoom` | Layout is fixed. |
