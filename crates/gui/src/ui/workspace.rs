@@ -149,6 +149,9 @@ pub struct AudioDevices {
 
 pub struct MemberEntry {
     pub name: String,
+    /// What they are doing, shown under the name. `None` for group headers
+    /// and for anyone idle.
+    pub activity: Option<String>,
     /// `None` for group headers, which are not clickable.
     pub user_id: Option<Id<marker::UserMarker>>,
     pub avatar: Option<String>,
@@ -3276,6 +3279,7 @@ impl Workspace {
                     avatar: None,
                     pronouns: None,
                     bio: None,
+                    activities: Vec::new(),
                     roles: Vec::new(),
                     mutual_guilds: Vec::new(),
                     loaded: false,
@@ -5404,10 +5408,22 @@ impl Workspace {
                 })
                 .child(presence_dot(member.presence))
                 .child(
-                    gpui::div()
+                    // A column so an activity can sit under the name without
+                    // widening the row or pushing the badges off the end.
+                    column()
                         .flex_1()
-                        .text_color(rgb(member.color.unwrap_or(active().text_muted)))
-                        .child(member.name.clone()),
+                        .overflow_hidden()
+                        .child(
+                            gpui::div()
+                                .text_color(rgb(member.color.unwrap_or(active().text_muted)))
+                                .child(member.name.clone()),
+                        )
+                        .children(member.activity.clone().map(|activity| {
+                            gpui::div()
+                                .text_size(px(scaled(text::XS)))
+                                .text_color(rgb(active().text_subtle))
+                                .child(activity)
+                        })),
                 );
 
             if member.is_bot {

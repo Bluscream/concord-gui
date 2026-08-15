@@ -1313,3 +1313,65 @@ fn demo_mode_answers_every_command_the_ui_can_send() {
         "demo mode ignores these commands: {unanswered:?}"
     );
 }
+
+#[test]
+fn activities_reach_the_member_list_and_profile() {
+    use concord::discord::Id;
+
+    let state = demo_state();
+    // The member list only projects inside a guild, so the DM default would
+    // give an empty list and prove nothing.
+    let model = project(&state, &guild_nav(10, Some(112)), true);
+
+    // The member list carries one line per member, so a game reads at a
+    // glance without opening anything.
+    let playing = model
+        .members
+        .iter()
+        .find(|member| member.name == "ferris")
+        .expect("fixture defines ferris");
+    assert_eq!(playing.activity.as_deref(), Some("Playing Factorio"));
+
+    // A track names the song rather than the app, which is the whole point of
+    // reading details and state instead of the activity name.
+    let listening = model
+        .members
+        .iter()
+        .find(|member| member.name == "turing")
+        .expect("fixture defines turing");
+    assert_eq!(
+        listening.activity.as_deref(),
+        Some("Listening to Spotify - Windowlicker by Aphex Twin")
+    );
+
+    // Group headers are not people and must not sprout an activity line.
+    assert!(
+        model
+            .members
+            .iter()
+            .filter(|member| member.is_group)
+            .all(|member| member.activity.is_none())
+    );
+
+    // Profiles are populated on demand, the same way the real client fetches
+    // them, so the test asks for one first.
+    let mut state = state;
+    concord::discord::fixtures::add_profile(&mut state, Id::new(1004), Some(Id::new(10)));
+    let profile =
+        crate::model::projection::project_profile(&state, Id::new(1004), Some(Id::new(10)))
+            .expect("fixture defines a profile");
+    // A custom status shows its own text, never Discord's internal name for
+    // the activity.
+    assert!(
+        profile
+            .activities
+            .iter()
+            .any(|line| line == "out for lunch")
+    );
+    assert!(
+        !profile
+            .activities
+            .iter()
+            .any(|line| line.contains("Custom Status"))
+    );
+}

@@ -138,6 +138,60 @@ pub struct ActivityInfo {
 }
 
 impl ActivityInfo {
+    /// A one-line description, as a client should show it.
+    ///
+    /// Here rather than in a front end so both word it the same way, and so a
+    /// translator sees one set of strings instead of two.
+    ///
+    /// A custom status is its own text - "Custom Status" is Discord's internal
+    /// name for the activity, never something to show. Everything else reads
+    /// as a verb and a subject, with the extra fields appended when present:
+    /// Spotify puts the track in `details` and the artist in `state`, and
+    /// showing only the name would say "Listening to Spotify" for every song.
+    pub fn display_line(&self) -> Option<String> {
+        if self.kind == ActivityKind::Custom {
+            let text = self.state.as_deref().unwrap_or_default().trim();
+            return (!text.is_empty()).then(|| match &self.emoji {
+                Some(emoji) if !emoji.name.trim().is_empty() => {
+                    format!("{} {text}", emoji.name.trim())
+                }
+                _ => text.to_owned(),
+            });
+        }
+
+        let name = self.name.trim();
+        if name.is_empty() {
+            return None;
+        }
+
+        let verb = match self.kind {
+            ActivityKind::Playing => "Playing",
+            ActivityKind::Streaming => "Streaming",
+            ActivityKind::Listening => "Listening to",
+            ActivityKind::Watching => "Watching",
+            ActivityKind::Competing => "Competing in",
+            // An unrecognised kind still has a name worth showing, but no
+            // verb that would be honest.
+            ActivityKind::Custom | ActivityKind::Unknown => "",
+        };
+
+        let mut line = if verb.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{verb} {name}")
+        };
+
+        let details = self.details.as_deref().unwrap_or_default().trim();
+        let state = self.state.as_deref().unwrap_or_default().trim();
+        match (details.is_empty(), state.is_empty()) {
+            (false, false) => line.push_str(&format!(" - {details} by {state}")),
+            (false, true) => line.push_str(&format!(" - {details}")),
+            (true, false) => line.push_str(&format!(" - {state}")),
+            (true, true) => {}
+        }
+        Some(line)
+    }
+
     pub fn playing(name: impl Into<String>) -> Self {
         Self {
             kind: ActivityKind::Playing,
@@ -172,5 +226,96 @@ impl ActivityInfo {
             party: None,
             buttons: Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod activity_display_tests {
+    use super::*;
+
+    fn custom(state: Option<&str>, emoji: Option<&str>) -> ActivityInfo {
+        ActivityInfo {
+            kind: ActivityKind::Custom,
+            name: "Custom Status".to_owned(),
+            state: state.map(str::to_owned),
+            emoji: emoji.map(|name| ActivityEmoji {
+                name: name.to_owned(),
+                id: None,
+                animated: false,
+            }),
+            ..ActivityInfo::playing("")
+        }
+    }
+
+    #[test]
+    fn a_custom_status_shows_its_own_text() {
+        // "Custom Status" is Discord's internal name for the activity and must
+        // never reach the screen.
+        let activity = custom(Some("out for lunch"), None);
+        assert_eq!(activity.display_line().as_deref(), Some("out for lunch"));
+    }
+
+    #[test]
+    fn a_custom_status_keeps_its_emoji() {
+        let activity = custom(Some("busy"), Some(":coffee:"));
+        assert_eq!(activity.display_line().as_deref(), Some(":coffee: busy"));
+    }
+
+    #[test]
+    fn an_empty_custom_status_shows_nothing() {
+        // Someone with an emoji and no text, or nothing at all, should not
+        // produce a blank row.
+        assert_eq!(custom(None, None).display_line(), None);
+        assert_eq!(custom(Some("   "), None).display_line(), None);
+    }
+
+    #[test]
+    fn listening_names_the_track_rather_than_the_app() {
+        // Spotify puts the track in details and the artist in state, so
+        // showing only the name would say "Listening to Spotify" for
+        // every song anyone ever played.
+        let activity = ActivityInfo {
+            kind: ActivityKind::Listening,
+            name: "Spotify".to_owned(),
+            details: Some("Windowlicker".to_owned()),
+            state: Some("Aphex Twin".to_owned()),
+            ..ActivityInfo::playing("")
+        };
+
+        assert_eq!(
+            activity.display_line().as_deref(),
+            Some("Listening to Spotify - Windowlicker by Aphex Twin")
+        );
+    }
+
+    #[test]
+    fn each_kind_reads_as_a_sentence() {
+        for (kind, expected) in [
+            (ActivityKind::Playing, "Playing Doom"),
+            (ActivityKind::Streaming, "Streaming Doom"),
+            (ActivityKind::Watching, "Watching Doom"),
+            (ActivityKind::Competing, "Competing in Doom"),
+        ] {
+            let activity = ActivityInfo {
+                kind,
+                ..ActivityInfo::playing("Doom")
+            };
+            assert_eq!(activity.display_line().as_deref(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn an_unknown_kind_shows_the_name_without_inventing_a_verb() {
+        let activity = ActivityInfo {
+            kind: ActivityKind::Unknown,
+            ..ActivityInfo::playing("Something")
+        };
+        assert_eq!(activity.display_line().as_deref(), Some("Something"));
+    }
+
+    #[test]
+    fn a_nameless_activity_shows_nothing() {
+        let activity = ActivityInfo::playing("   ");
+        assert_eq!(activity.display_line(), None);
     }
 }

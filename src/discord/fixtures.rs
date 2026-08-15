@@ -388,6 +388,46 @@ pub fn demo_state() -> DiscordState {
         presence.user_presences.insert(user_id(user), status);
     }
 
+    // Activities, so both clients show something under a name and in a
+    // profile: a game, a track with artist, and a custom status - the three
+    // shapes that format differently.
+    for (user, activity) in [
+        (
+            1002u64,
+            crate::discord::ActivityInfo {
+                kind: crate::discord::ActivityKind::Playing,
+                name: "Factorio".to_string(),
+                ..crate::discord::ActivityInfo::playing("")
+            },
+        ),
+        (
+            1003,
+            crate::discord::ActivityInfo {
+                kind: crate::discord::ActivityKind::Listening,
+                name: "Spotify".to_string(),
+                details: Some("Windowlicker".to_string()),
+                state: Some("Aphex Twin".to_string()),
+                ..crate::discord::ActivityInfo::playing("")
+            },
+        ),
+        (
+            1004,
+            crate::discord::ActivityInfo {
+                kind: crate::discord::ActivityKind::Custom,
+                name: "Custom Status".to_string(),
+                state: Some("out for lunch".to_string()),
+                ..crate::discord::ActivityInfo::playing("")
+            },
+        ),
+    ] {
+        presence
+            .guild_user_activities
+            .insert((guild_id(10), user_id(user)), vec![activity.clone()]);
+        presence
+            .user_activities
+            .insert(user_id(user), vec![activity]);
+    }
+
     // Someone typing in #gui-rewrite, to exercise the indicator.
     presence.set_fixture_typing(channel_id(112), &[user_id(1002)]);
 

@@ -248,6 +248,7 @@ fn project_members(state: &DiscordState, nav: &Navigation) -> Vec<MemberEntry> {
         .map(|(_, entry)| match entry {
             GuildMemberListEntry::Group { id, count } => MemberEntry {
                 name: format!("{} - {}", id.to_uppercase(), count),
+                activity: None,
                 user_id: None,
                 avatar: None,
                 presence: Presence::Offline,
@@ -258,6 +259,12 @@ fn project_members(state: &DiscordState, nav: &Navigation) -> Vec<MemberEntry> {
             GuildMemberListEntry::Member { user_id } => {
                 let member = state.member_for_guild(guild_id, *user_id);
                 MemberEntry {
+                    // The first activity only: a sidebar row has space for one
+                    // line, and the list is for scanning rather than reading.
+                    activity: state
+                        .user_activities_for_guild(Some(guild_id), *user_id)
+                        .first()
+                        .and_then(|activity| activity.display_line()),
                     name: member
                         .map(|m| m.display_name.clone())
                         .unwrap_or_else(|| "unknown".to_string()),
@@ -306,7 +313,28 @@ pub fn project_profile(
         .map(|guild| guild.name.clone())
         .collect();
 
+    // Custom status first, then whatever they are doing - the same order the
+    // TUI's profile popup uses, so the two clients do not disagree.
+    let mut activities: Vec<_> = state
+        .user_activities_for_guild(guild_id, user_id)
+        .iter()
+        .collect();
+    activities.sort_by_key(|activity| match activity.kind {
+        concord::discord::ActivityKind::Custom => 0,
+        concord::discord::ActivityKind::Streaming => 1,
+        concord::discord::ActivityKind::Playing => 2,
+        concord::discord::ActivityKind::Listening => 3,
+        concord::discord::ActivityKind::Watching => 4,
+        concord::discord::ActivityKind::Competing => 5,
+        concord::discord::ActivityKind::Unknown => 6,
+    });
+    let activities = activities
+        .into_iter()
+        .filter_map(|activity| activity.display_line())
+        .collect();
+
     Some(ProfileView {
+        activities,
         display_name: profile
             .guild_nick
             .clone()

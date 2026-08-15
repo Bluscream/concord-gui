@@ -17,6 +17,9 @@ pub struct ProfileView {
     pub avatar: Option<String>,
     pub pronouns: Option<String>,
     pub bio: Option<String>,
+    /// What they are doing, as the core words it. Ordered as Discord orders
+    /// it, custom status first.
+    pub activities: Vec<String>,
     pub roles: Vec<(String, Option<u32>)>,
     pub mutual_guilds: Vec<String>,
     /// False while the fetch is in flight, so the panel can say so rather than
@@ -58,6 +61,19 @@ pub fn profile_view(profile: &ProfileView, circular_avatars: bool) -> Div {
 
     if let Some(handle) = &profile.handle {
         panel = panel.child(section("Username", handle.clone()));
+    }
+
+    // Above the bio: what someone is doing right now is the thing most worth
+    // seeing, and it is the reason to open a profile at all.
+    for activity in &profile.activities {
+        panel = panel.child(
+            gpui::div()
+                .px(px(space::LG))
+                .py(px(space::XS))
+                .text_size(px(scaled(text::SM)))
+                .text_color(rgb(active().text_muted))
+                .child(activity.clone()),
+        );
     }
 
     if let Some(pronouns) = &profile.pronouns {
