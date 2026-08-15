@@ -89,7 +89,10 @@ impl DashboardState {
     }
 
     /// Open the switcher to pick a channel for something other than navigating.
-    pub fn open_channel_switcher_for(&mut self, purpose: ChannelSwitcherPurpose) {
+    pub(in crate::tui::state) fn open_channel_switcher_for(
+        &mut self,
+        purpose: ChannelSwitcherPurpose,
+    ) {
         let items = self.all_channel_switcher_items();
         self.popups
             .set_modal(ModalPopup::ChannelSwitcher(ChannelSwitcherState::new(
