@@ -13,7 +13,7 @@ macro_rules! define_action_menu_scope {
         $field:ident, $item:ty,
         $shortcuts:ident, $label:ident, $default:ident $(, $shortcut_label:ident)?
     ) => {
-        pub fn $shortcuts(&self, actions: &[$item], index: usize) -> Vec<KeyChord> {
+        pub(in crate::tui) fn $shortcuts(&self, actions: &[$item], index: usize) -> Vec<KeyChord> {
             scoped_action_shortcuts(
                 index,
                 actions.iter().map(|item| item.kind),
@@ -22,12 +22,12 @@ macro_rules! define_action_menu_scope {
             )
         }
 
-        pub fn $label(&self, action: &$item) -> String {
+        pub(in crate::tui) fn $label(&self, action: &$item) -> String {
             action_label(&self.action_shortcuts.$field, action.kind, &action.label)
         }
 
         $(
-            pub fn $shortcut_label(&self, actions: &[$item], index: usize) -> String {
+            pub(in crate::tui) fn $shortcut_label(&self, actions: &[$item], index: usize) -> String {
                 let activation_shortcuts = self.$shortcuts(actions, index);
                 if !activation_shortcuts.is_empty() {
                     return key_chord_list_label(&activation_shortcuts);
@@ -879,7 +879,7 @@ impl KeyBindings {
         "Enter verify | Esc choose method | Ctrl-C quit"
     }
 
-    pub fn channel_action_shortcuts(
+    pub(in crate::tui) fn channel_action_shortcuts(
         &self,
         actions: &[ChannelActionItem],
         index: usize,

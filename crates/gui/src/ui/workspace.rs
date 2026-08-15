@@ -32,6 +32,9 @@ use crate::model::projection::{self, Navigation, Selection};
 use crate::notify;
 use crate::session::{SessionHandle, Update};
 
+use concord::tui::keybindings::external::Resolution;
+
+use crate::keymap::{self, Keymap};
 use crate::theme::{Presence, active, layout, scaled, space, text};
 use crate::ui::chrome::{
     avatar, avatar_with_url, column, header, panel_sunken, presence_dot, row, section_label,
@@ -394,6 +397,8 @@ pub struct Workspace {
     pub custom_status: String,
     /// Custom status being typed, when the editor is open.
     pub editing_status: Option<Composer>,
+    /// The user's keymap, shared with the TUI.
+    pub keymap: Keymap,
     /// Complaints from the config parsers, shown once at startup.
     pub config_warnings: Vec<String>,
     /// Participants muted locally, which no one else can see.
@@ -438,6 +443,11 @@ impl Workspace {
         // which means a typo silently does nothing unless it is reported.
         let (options, mut config_warnings) =
             config::load_options_with_warnings().unwrap_or_default();
+        // Keymap warnings join the others: a bad binding is skipped by the
+        // parser, so without this it would silently not exist.
+        let keymap = Keymap::load();
+        config_warnings.extend(keymap.warnings.iter().cloned());
+
         let ui_state = match config::load_ui_state_options_with_warnings() {
             Ok((ui_state, warnings)) => {
                 config_warnings.extend(warnings);
@@ -490,6 +500,7 @@ impl Workspace {
             requested_previews: std::collections::HashSet::new(),
             custom_status: String::new(),
             editing_status: None,
+            keymap,
             config_warnings,
             locally_muted: std::collections::HashSet::new(),
             prompt: None,
@@ -767,7 +778,7 @@ impl Workspace {
     /// Reads the in-memory error ring rather than the file: the file needs
     /// debug logging enabled, while errors are always retained, so the panel
     /// has something useful to show in a default build.
-    fn toggle_debug_log(&mut self) {
+    pub fn toggle_debug_log(&mut self) {
         self.debug_log = match self.debug_log {
             Some(_) => None,
             None => Some(
@@ -783,7 +794,7 @@ impl Workspace {
     ///
     /// A fraction rather than a fixed pixel count, so half-page means the same
     /// thing on a tall window as on a short one.
-    fn scroll_by_pages(&mut self, pages: f32) {
+    pub fn scroll_by_pages(&mut self, pages: f32) {
         let offset = self.message_scroll.offset();
         let height = self.message_scroll.bounds().size.height;
         self.message_scroll
@@ -970,7 +981,7 @@ impl Workspace {
     ///
     /// Bounded so a pane cannot be dragged to nothing: a zero-width sidebar
     /// looks like it vanished, and there is no handle left to bring it back.
-    fn resize_pane(&mut self, delta: i16) {
+    pub fn resize_pane(&mut self, delta: i16) {
         let width = match self.focus_pane {
             Pane::Guilds => &mut self.ui_state.server_width,
             Pane::Channels => &mut self.ui_state.channel_list_width,
@@ -1063,7 +1074,7 @@ impl Workspace {
     }
 
     /// Carry out the pending confirmation.
-    fn confirm(&mut self) {
+    pub fn confirm(&mut self) {
         let Some(pending) = self.confirming.take() else {
             return;
         };
@@ -1218,11 +1229,97 @@ impl Workspace {
         });
     }
 
+    /// Move keyboard focus to a pane, showing it first if it is hidden.
+    ///
+    /// Focusing a pane the user cannot see would send their next keystrokes
+    /// somewhere invisible.
+    pub fn focus_pane(&mut self, pane: Pane) {
+        if !self.pane_visible(pane) {
+            self.toggle_pane(pane);
+        }
+        self.focus_pane = pane;
+        // A filter belongs to the pane it was opened on.
+        self.pane_filter = None;
+    }
+
+    /// Jump to the oldest loaded message.
+    pub fn scroll_to_top(&mut self) {
+        self.message_scroll
+            .set_offset(gpui::point(gpui::px(0.), gpui::px(0.)));
+    }
+
+    /// Jump to the newest message.
+    pub fn scroll_to_bottom(&mut self) {
+        self.message_scroll.scroll_to_bottom();
+    }
+
+    /// Put the caret back in the composer.
+    pub fn focus_composer(&mut self) {
+        self.focus_pane = Pane::Messages;
+        self.pane_filter = None;
+        // Any modal would otherwise keep taking the keys that follow.
+        self.close_popup();
+    }
+
+    /// Dismiss whatever panel is open, innermost first.
+    ///
+    /// Ordered so one press closes one thing: escape with several panels open
+    /// should peel them back, not clear the screen.
+    pub fn close_popup(&mut self) {
+        if self.confirming.take().is_some()
+            || self.prompt.take().is_some()
+            || self.editing_status.take().is_some()
+            || self.renaming_folder.take().is_some()
+            || self.picker.take().is_some()
+            || self.stream_picker.take().is_some()
+            || self.audio_devices.take().is_some()
+            || self.reaction_users.take().is_some()
+            || self.switcher.take().is_some()
+            || self.inbox.take().is_some()
+            || self.pane_filter.take().is_some()
+        {
+            return;
+        }
+
+        // Nothing modal is open, so the selection is what escape clears.
+        self.clear_message_selection();
+    }
+
+    /// Open the action list for whichever pane has focus.
+    ///
+    /// The TUI shows a popup per pane. Here each pane's actions already sit on
+    /// the thing they act on, so this opens the one panel that has no other
+    /// route: the message list's action is its selection.
+    pub fn open_focused_pane_action(&mut self) {
+        match self.focus_pane {
+            Pane::Guilds | Pane::Channels => self.toggle_pane_filter(),
+            Pane::Messages => self.act_on_selection(MessageAction::React),
+            Pane::Members => self.toggle_pane_filter(),
+        }
+    }
+
+    /// Show who reacted, using the selected message's first reaction.
+    ///
+    /// The TUI's binding acts on the selection rather than naming a reaction,
+    /// so this matches it; the mouse path can still pick any of them.
+    pub fn show_first_reaction_users(&mut self) {
+        let Some(index) = self.selected_message else {
+            return;
+        };
+        if self
+            .messages
+            .get(index)
+            .is_some_and(|row| !row.reactions.is_empty())
+        {
+            self.show_reaction_users(index, 0);
+        }
+    }
+
     /// Move the message selection, entering the log if not already in it.
     ///
     /// Selection starts at the newest message rather than the oldest: that is
     /// where attention is, and the TUI does the same.
-    fn move_message_selection(&mut self, delta: isize) {
+    pub fn move_message_selection(&mut self, delta: isize) {
         if self.messages.is_empty() {
             return;
         }
@@ -1244,7 +1341,7 @@ impl Workspace {
     }
 
     /// Apply an action to the selected message, if any.
-    fn act_on_selection(&mut self, action: MessageAction) {
+    pub fn act_on_selection(&mut self, action: MessageAction) {
         let Some(index) = self.selected_message else {
             return;
         };
@@ -1252,7 +1349,7 @@ impl Workspace {
     }
 
     /// Move keyboard focus between panes.
-    fn cycle_focus(&mut self, forward: bool) {
+    pub fn cycle_focus(&mut self, forward: bool) {
         // Cycling only visits panes that are actually shown; focusing a hidden
         // pane would silently swallow keys.
         let order = [Pane::Guilds, Pane::Channels, Pane::Messages, Pane::Members];
@@ -1289,7 +1386,7 @@ impl Workspace {
     }
 
     /// Start or stop filtering the focused pane.
-    fn toggle_pane_filter(&mut self) {
+    pub fn toggle_pane_filter(&mut self) {
         self.pane_filter = match self.pane_filter {
             Some(_) => None,
             None => Some(Composer::default()),
@@ -1311,7 +1408,7 @@ impl Workspace {
     ///
     /// Explicit rather than window-close only, since the TUI has a quit key
     /// and muscle memory carries over.
-    fn quit(&mut self, cx: &mut Context<Self>) {
+    pub fn quit(&mut self, cx: &mut Context<Self>) {
         cx.quit();
     }
 
@@ -1339,7 +1436,7 @@ impl Workspace {
     ///
     /// Written through the same ui_state the TUI uses, so a layout chosen in
     /// one client is the layout in the other.
-    fn toggle_pane(&mut self, pane: Pane) {
+    pub fn toggle_pane(&mut self, pane: Pane) {
         let state = &mut self.ui_state;
         let field = match pane {
             Pane::Guilds => &mut state.guild_pane_visible,
@@ -5677,6 +5774,42 @@ impl Render for Workspace {
                     }
                     Screen::Ready => {
                         let key = event.keystroke.key.as_str();
+
+                        // Modal text entry takes the keyboard outright; the
+                        // composer only takes unmodified characters, which
+                        // `resolve` handles via `composer_live`.
+                        let modal_text = this.pane_filter.is_some()
+                            || this.prompt.is_some()
+                            || this.editing_status.is_some()
+                            || this.renaming_folder.is_some()
+                            // The search panel owns typing whenever it is open;
+                            // it has no separate focus flag.
+                            || this.search.is_some();
+
+                        if !modal_text || this.keymap.is_pending() {
+                            let composer_live = this.focus_pane == Pane::Messages && !modal_text;
+                            match this.keymap.resolve(event, composer_live) {
+                                Resolution::Action(action) => {
+                                    if keymap::apply(this, action, cx) {
+                                        cx.notify();
+                                        return;
+                                    }
+                                }
+                                // Mid-sequence: swallow the key so a leader
+                                // chord does not also type its own letters.
+                                Resolution::Pending => {
+                                    // Escape abandons the sequence even when it
+                                    // is itself a valid next chord; otherwise a
+                                    // half-typed leader has no way out.
+                                    if key == "escape" {
+                                        this.keymap.cancel();
+                                    }
+                                    cx.notify();
+                                    return;
+                                }
+                                Resolution::Unbound => {}
+                            }
+                        }
 
                         if this.confirming.is_some() {
                             match key {

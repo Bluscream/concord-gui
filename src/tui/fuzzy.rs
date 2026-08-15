@@ -23,12 +23,15 @@ impl FuzzyScore {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(super) enum FuzzyMatchQuality {
+pub enum FuzzyMatchQuality {
     Exact,
     Prefix,
     Fuzzy,
     Context,
 }
+
+// Public because it appears in `fuzzy_name_match_score`'s return type, which
+// the GUI calls.
 
 pub fn fuzzy_name_match_score(value: &str, query: &str) -> Option<(FuzzyMatchQuality, FuzzyScore)> {
     let score = fuzzy_text_score(value, query)?;

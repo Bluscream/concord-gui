@@ -24,12 +24,12 @@ pub(super) enum DefaultKeymapChord {
 macro_rules! define_ui_actions {
     ($($variant:ident => ($label:literal, $sequences:expr, $dashboard:expr),)*) => {
         #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-        pub(in crate::tui) enum UiAction {
+        pub enum UiAction {
             $($variant,)*
         }
 
         impl UiAction {
-            pub(in crate::tui) const ALL: &'static [Self] = &[$(Self::$variant,)*];
+            pub const ALL: &'static [Self] = &[$(Self::$variant,)*];
 
             pub(in crate::tui) fn from_name(name: &str) -> Option<Self> {
                 Self::ALL
@@ -38,7 +38,7 @@ macro_rules! define_ui_actions {
                     .find(|action| action.name() == name)
             }
 
-            pub(in crate::tui) fn name(self) -> &'static str {
+            pub fn name(self) -> &'static str {
                 match self {
                     $(Self::$variant => stringify!($variant),)*
                 }

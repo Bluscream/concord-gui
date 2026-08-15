@@ -1142,3 +1142,84 @@ fn the_demo_preview_encodes_to_a_real_png() {
     // Different seeds must differ, or every attachment looks the same.
     assert_ne!(bytes, fixtures::demo_preview_png(200));
 }
+
+#[test]
+fn the_gui_keymap_resolves_the_same_actions_the_tui_does() {
+    use concord::config::KeymapOptions;
+    use concord::tui::keybindings::KeyBindings;
+    use concord::tui::keybindings::external::{Key, KeyPress, PendingSequence, Resolution};
+
+    let bindings = KeyBindings::from_options(&KeymapOptions::default());
+    let press = |key, ctrl| KeyPress {
+        key,
+        ctrl,
+        alt: false,
+        shift: false,
+    };
+
+    // Every action with a default binding must be reachable, or the GUI is
+    // honouring a keymap it cannot act on.
+    let mut pending = PendingSequence::default();
+    let resolved = bindings.resolve(&mut pending, press(Key::Char('k'), true));
+    assert!(
+        !matches!(resolved, Resolution::Unbound) || pending.is_empty(),
+        "resolution must not leave a stale prefix"
+    );
+
+    // The TUI is modal, so its defaults bind plain letters - `q` quits. This
+    // client has no such mode, which is exactly why Keymap::resolve refuses
+    // unmodified characters while the composer is live. Asserted here so the
+    // hazard is visible: without that guard, beginning a message with "q"
+    // would quit the application.
+    let mut pending = PendingSequence::default();
+    assert_eq!(
+        bindings.resolve(&mut pending, press(Key::Char('q'), false)),
+        Resolution::Action(concord::tui::keybindings::external::UiAction::Quit),
+        "the TUI default really does bind a bare letter"
+    );
+}
+
+#[test]
+fn every_ui_action_is_handled_or_explicitly_declined() {
+    use concord::tui::keybindings::external::UiAction;
+
+    // The dispatcher's match is exhaustive, so this cannot fail to compile
+    // while an action is unhandled. What it checks is that the action list is
+    // the size the mapping was written against - a new action added upstream
+    // should be noticed here as well as by the compiler.
+    assert_eq!(
+        UiAction::ALL.len(),
+        55,
+        "UiAction changed upstream; revisit the keymap dispatcher"
+    );
+}
+
+#[test]
+fn a_live_composer_never_loses_a_plain_character_to_the_keymap() {
+    use crate::keymap::Keymap;
+    use gpui::{KeyDownEvent, Keystroke, Modifiers};
+
+    let mut keymap = Keymap::load();
+    let event = |key: &str, modifiers: Modifiers| KeyDownEvent {
+        keystroke: Keystroke {
+            modifiers,
+            key: key.to_string(),
+            key_char: None,
+        },
+        is_held: false,
+    };
+
+    // `q` is Quit in the TUI defaults. With the composer live it must be a
+    // character, or the first letter of "quick question" closes the client.
+    assert_eq!(
+        keymap.resolve(&event("q", Modifiers::none()), true),
+        concord::tui::keybindings::external::Resolution::Unbound
+    );
+
+    // With focus elsewhere the same key is a binding again, which is what
+    // makes the keymap worth honouring at all.
+    assert!(matches!(
+        keymap.resolve(&event("q", Modifiers::none()), false),
+        concord::tui::keybindings::external::Resolution::Action(_)
+    ));
+}

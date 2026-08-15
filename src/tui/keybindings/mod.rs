@@ -17,6 +17,8 @@ mod chord;
 mod composer;
 mod runtime;
 
+pub mod external;
+
 use actions::DefaultKeymapChord;
 pub use actions::OptionsCategoryShortcut;
 pub(in crate::tui) use actions::{

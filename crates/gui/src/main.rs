@@ -15,6 +15,7 @@
 mod demo;
 mod editor;
 mod http;
+mod keymap;
 mod model;
 mod notify;
 mod runtime;

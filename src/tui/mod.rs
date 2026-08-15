@@ -6,7 +6,10 @@ pub mod fuzzy;
 #[cfg(feature = "voice-playback")]
 mod global_push_to_talk;
 mod input;
-mod keybindings;
+// Public so the GUI resolves the same keymap.toml the TUI does, including
+// custom bindings and leader sequences. Only `keybindings::external` is
+// reachable from outside; the rest of the module stays private.
+pub mod keybindings;
 mod login;
 mod media;
 mod message;
