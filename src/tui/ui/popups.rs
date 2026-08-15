@@ -210,7 +210,7 @@ pub(super) use action_menu::{
     action_menu_area, key_sequence_hint_area_for_state, render_ban_list,
     render_channel_action_menu, render_guild_action_menu, render_key_sequence_hint,
     render_member_action_menu, render_message_action_menu, render_role_picker,
-    render_sticker_picker, render_thread_action_menu,
+    render_server_management, render_sticker_picker, render_thread_action_menu,
 };
 #[cfg(test)]
 pub(super) use action_menu::{
@@ -320,6 +320,7 @@ pub(super) fn active_selectable_popup_layout(
         SelectablePopupTarget::Stickers
         | SelectablePopupTarget::Roles
         | SelectablePopupTarget::Bans
+        | SelectablePopupTarget::ServerManagement
         | SelectablePopupTarget::MessageActions
         | SelectablePopupTarget::GuildActions
         | SelectablePopupTarget::ChannelActions
@@ -456,6 +457,13 @@ pub(super) fn background_media_occlusion_areas(
 fn active_modal_popup_area(frame_area: Rect, state: &DashboardState) -> Option<Rect> {
     let kind = state.active_modal_popup_kind()?;
     match kind {
+        ActiveModalPopupKind::ServerManagement => {
+            let count = state
+                .server_management_state()
+                .map(|panel| panel.row_count())
+                .unwrap_or(0);
+            Some(action_menu_area(frame_area, count.max(1)))
+        }
         ActiveModalPopupKind::BanList => {
             let count = state.ban_list_state().map(|s| s.bans().len()).unwrap_or(0);
             Some(action_menu_area(frame_area, count.max(1)))

@@ -176,6 +176,9 @@ fn dispatch_popup_key(
                 DashboardState::close_active_popup,
             ),
         },
+        ActiveModalPopupKind::ServerManagement => {
+            route_fallback_key(state, key, stage, handle_server_management_key)
+        }
         ActiveModalPopupKind::GuildLeaveConfirmation => route_confirmation_key(
             state,
             key,
@@ -868,6 +871,31 @@ fn handle_search_popup_key(state: &mut DashboardState, key: KeyEvent) -> Option<
 }
 
 /// The ban list: enter lifts the highlighted ban, esc closes.
+/// Tab cycles the three lists; the rest is ordinary selection.
+fn handle_server_management_key(state: &mut DashboardState, key: KeyEvent) -> Option<AppCommand> {
+    if let Some(action) = state
+        .key_bindings()
+        .selection_action(key, SelectionKeySet::Navigation)
+    {
+        match action {
+            SelectionAction::Next => state.move_server_selection_down(),
+            SelectionAction::Previous => state.move_server_selection_up(),
+        }
+        return None;
+    }
+
+    match key.code {
+        KeyCode::Tab | KeyCode::BackTab => return state.next_server_tab(),
+        KeyCode::Enter => return state.activate_selected_server_row(),
+        KeyCode::Esc => state.close_server_management(),
+        // Reload is worth a key of its own: these lists go stale the moment
+        // somebody else changes something, and nothing tells this client.
+        KeyCode::Char('r') => return state.reload_server_management(),
+        _ => {}
+    }
+    None
+}
+
 fn handle_ban_list_key(state: &mut DashboardState, key: KeyEvent) -> Option<AppCommand> {
     if let Some(action) = state
         .key_bindings()

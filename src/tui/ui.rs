@@ -84,12 +84,12 @@ use self::popups::{
     render_message_url_picker, render_notification_inbox_mark_all_confirmation,
     render_notification_inbox_popup, render_options_popup, render_poll_vote_picker,
     render_quit_confirmation, render_reaction_users_popup, render_risk_warning, render_role_picker,
-    render_search_popup, render_sticker_picker, render_stream_info, render_thread_action_menu,
-    render_thread_delete_confirmation, render_thread_edit, render_thread_edit_tag_picker,
-    render_toast, render_user_profile_popup, render_voice_participant_audio_popup,
-    thread_edit_metrics, thread_edit_popup_area, user_profile_popup_has_avatar,
-    user_profile_popup_selected_picker_line, user_profile_popup_text_geometry,
-    user_profile_popup_total_lines,
+    render_search_popup, render_server_management, render_sticker_picker, render_stream_info,
+    render_thread_action_menu, render_thread_delete_confirmation, render_thread_edit,
+    render_thread_edit_tag_picker, render_toast, render_user_profile_popup,
+    render_voice_participant_audio_popup, thread_edit_metrics, thread_edit_popup_area,
+    user_profile_popup_has_avatar, user_profile_popup_selected_picker_line,
+    user_profile_popup_text_geometry, user_profile_popup_total_lines,
 };
 pub(crate) use self::types::MouseTarget;
 pub use self::types::{
@@ -347,6 +347,7 @@ pub(in crate::tui) fn render_with_message_viewport_plan(
     render_sticker_picker(frame, popup_area, state);
     render_role_picker(frame, popup_area, state);
     render_ban_list(frame, popup_area, state);
+    render_server_management(frame, popup_area, state);
     render_long_message_confirmation(frame, popup_area, state);
     render_message_confirmation(frame, popup_area, state);
     render_quit_confirmation(frame, popup_area, state);

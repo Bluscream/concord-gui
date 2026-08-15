@@ -1,6 +1,7 @@
 use super::*;
 use crate::discord::AppCommand;
 use crate::discord::test_builders::{ForumPostsLoadedFixture, forum_posts_loaded_event};
+use crate::tui::state::ServerPanelTab;
 
 /// Carry out something that now raises a risk warning first.
 ///
@@ -708,4 +709,142 @@ fn text_that_is_not_an_invite_is_refused_without_a_request() {
             .is_some(),
         "the prompt must say why rather than silently doing nothing"
     );
+}
+
+#[test]
+fn the_server_panel_only_fetches_a_tab_it_has_not_seen() {
+    // Refetching on every tab switch would spend requests for no new
+    // information and make the panel flicker; reload is what refetching is
+    // for.
+    let mut state = state_with_many_guilds(1);
+    let guild_id = Id::new(1);
+
+    assert_eq!(
+        state.open_server_management(guild_id, ServerPanelTab::Invites),
+        Some(AppCommand::LoadGuildInvites { guild_id })
+    );
+    state.apply_guild_invites(
+        guild_id,
+        vec![crate::discord::GuildInviteInfo {
+            code: "aBc-123".to_owned(),
+            channel_id: None,
+            channel_name: None,
+            inviter: None,
+            uses: 0,
+            max_uses: None,
+            max_age_seconds: None,
+            temporary: false,
+        }],
+    );
+
+    // Moving on fetches, because that tab has never been loaded.
+    assert_eq!(
+        state.next_server_tab(),
+        Some(AppCommand::LoadGuildEmojis { guild_id })
+    );
+    state.apply_guild_emojis(guild_id, Vec::new());
+    assert_eq!(
+        state.next_server_tab(),
+        Some(AppCommand::LoadGuildAuditLog { guild_id })
+    );
+    state.apply_guild_audit_log(guild_id, Vec::new());
+
+    // Coming back round to invites does not, because they are already here.
+    assert_eq!(state.next_server_tab(), None);
+    assert_eq!(
+        state.server_management_state().map(|p| p.tab()),
+        Some(ServerPanelTab::Invites)
+    );
+
+    // Reload always asks again - that is the point of it.
+    assert_eq!(
+        state.reload_server_management(),
+        Some(AppCommand::LoadGuildInvites { guild_id })
+    );
+}
+
+#[test]
+fn the_audit_log_offers_no_row_action() {
+    // History is a record. Offering "enter to delete" over it would suggest
+    // the client can edit what happened, which it cannot and should not.
+    let mut state = state_with_many_guilds(1);
+    let guild_id = Id::new(1);
+    state.open_server_management(guild_id, ServerPanelTab::AuditLog);
+    state.apply_guild_audit_log(
+        guild_id,
+        vec![crate::discord::AuditLogEntryInfo {
+            id: Id::new(7001),
+            actor: Some("ferris".to_owned()),
+            action: crate::discord::AuditLogAction::MemberBanAdd,
+            target: Some("spammer".to_owned()),
+            reason: None,
+        }],
+    );
+
+    assert_eq!(state.activate_selected_server_row(), None);
+    // And the entry is still there afterwards.
+    assert_eq!(
+        state.server_management_state().map(|p| p.audit_log().len()),
+        Some(1)
+    );
+}
+
+#[test]
+fn revoking_an_invite_takes_the_row_out_straight_away() {
+    // The list is a snapshot. Leaving a revoked code on screen invites a
+    // second revoke for one that no longer exists.
+    let mut state = state_with_many_guilds(1);
+    let guild_id = Id::new(1);
+    state.open_server_management(guild_id, ServerPanelTab::Invites);
+    state.apply_guild_invites(
+        guild_id,
+        vec![crate::discord::GuildInviteInfo {
+            code: "aBc-123".to_owned(),
+            channel_id: None,
+            channel_name: None,
+            inviter: None,
+            uses: 0,
+            max_uses: None,
+            max_age_seconds: None,
+            temporary: false,
+        }],
+    );
+
+    assert_eq!(
+        state.activate_selected_server_row(),
+        Some(AppCommand::RevokeInvite {
+            code: "aBc-123".to_owned()
+        })
+    );
+    assert_eq!(
+        state.server_management_state().map(|p| p.invites().len()),
+        Some(0)
+    );
+    // A second activation has nothing left to revoke.
+    assert_eq!(state.activate_selected_server_row(), None);
+}
+
+#[test]
+fn a_reply_for_another_guild_does_not_fill_this_panel() {
+    // The panel can be closed and reopened elsewhere while a fetch is out.
+    let mut state = state_with_many_guilds(2);
+    state.open_server_management(Id::new(1), ServerPanelTab::Invites);
+
+    state.apply_guild_invites(
+        Id::new(2),
+        vec![crate::discord::GuildInviteInfo {
+            code: "wrong".to_owned(),
+            channel_id: None,
+            channel_name: None,
+            inviter: None,
+            uses: 0,
+            max_uses: None,
+            max_age_seconds: None,
+            temporary: false,
+        }],
+    );
+
+    let panel = state.server_management_state().expect("panel is open");
+    assert!(panel.invites().is_empty());
+    assert!(panel.is_loading(), "the real fetch is still outstanding");
 }

@@ -202,3 +202,22 @@ action-cancel-friend-request = Cancel friend request
 action-remove-friend = Remove friend
 action-block = Block
 action-unblock = Unblock
+
+label-invites = Invites
+label-emoji = Emoji
+label-audit-log = Audit log
+label-server-management = Server
+status-invite-created = Invite created: discord.gg/{ $code }
+status-no-invites = No invites
+status-no-emoji = No custom emoji
+status-no-audit-entries = Nothing recorded
+status-invite-unlimited = unlimited
+status-invite-never-expires = never expires
+action-revoke = Revoke
+action-delete = Delete
+action-reload = Reload
+action-create-invite = Invite to this channel
+label-emoji-animated = animated
+label-emoji-restricted = role-restricted
+
+label-unknown = someone

@@ -12,7 +12,7 @@ use super::super::model::{
 use super::super::{DashboardState, MuteActionDurationItem};
 use super::{
     ActiveModalPopupKind, GuildActionMenuState, GuildLeaveConfirmationState, ModalPopup,
-    SelectablePopupState, SelectablePopupTarget,
+    SelectablePopupState, SelectablePopupTarget, ServerPanelTab,
 };
 
 impl DashboardState {
@@ -94,6 +94,24 @@ impl DashboardState {
                     GuildActionKind::ViewBans,
                     "View bans",
                     (!self.discord.cache.can_ban_members(state.id))
+                        .then(|| "you do not have permission".to_owned()),
+                ),
+                GuildActionItem::new(
+                    GuildActionKind::ViewInvites,
+                    "View invites",
+                    (!self.discord.cache.can_manage_invites(state.id))
+                        .then(|| "you do not have permission".to_owned()),
+                ),
+                GuildActionItem::new(
+                    GuildActionKind::ViewEmoji,
+                    "Manage emoji",
+                    (!self.discord.cache.can_manage_emoji(state.id))
+                        .then(|| "you do not have permission".to_owned()),
+                ),
+                GuildActionItem::new(
+                    GuildActionKind::ViewAuditLog,
+                    "View audit log",
+                    (!self.discord.cache.can_view_audit_log(state.id))
                         .then(|| "you do not have permission".to_owned()),
                 ),
                 GuildActionItem::new(
@@ -208,6 +226,20 @@ impl DashboardState {
                         let guild_id = self.selected_guild_id()?;
                         self.close_guild_action_menu();
                         self.open_ban_list(guild_id)
+                    }
+                    GuildActionKind::ViewInvites
+                    | GuildActionKind::ViewEmoji
+                    | GuildActionKind::ViewAuditLog => {
+                        let guild_id = self.selected_guild_id()?;
+                        self.close_guild_action_menu();
+                        self.open_server_management(
+                            guild_id,
+                            match item.kind {
+                                GuildActionKind::ViewInvites => ServerPanelTab::Invites,
+                                GuildActionKind::ViewEmoji => ServerPanelTab::Emoji,
+                                _ => ServerPanelTab::AuditLog,
+                            },
+                        )
                     }
                     GuildActionKind::LeaveServer => {
                         self.close_guild_action_menu();

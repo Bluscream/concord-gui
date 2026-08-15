@@ -530,6 +530,36 @@ pub enum AppCommand {
     LoadGuildBans {
         guild_id: Id<GuildMarker>,
     },
+    LoadGuildInvites {
+        guild_id: Id<GuildMarker>,
+    },
+    CreateChannelInvite {
+        channel_id: Id<ChannelMarker>,
+        /// Seconds until it stops working. Zero never expires.
+        max_age_seconds: u32,
+        /// Zero is unlimited, which is what Discord means by it here.
+        max_uses: u32,
+        temporary: bool,
+    },
+    RevokeInvite {
+        code: String,
+    },
+    LoadGuildEmojis {
+        guild_id: Id<GuildMarker>,
+    },
+    RenameEmoji {
+        guild_id: Id<GuildMarker>,
+        emoji_id: Id<EmojiMarker>,
+        name: String,
+    },
+    DeleteEmoji {
+        guild_id: Id<GuildMarker>,
+        emoji_id: Id<EmojiMarker>,
+        label: String,
+    },
+    LoadGuildAuditLog {
+        guild_id: Id<GuildMarker>,
+    },
     UnbanMember {
         guild_id: Id<GuildMarker>,
         user_id: Id<UserMarker>,

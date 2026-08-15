@@ -952,3 +952,163 @@ pub fn activity_editor_view(
                 .child(button("activity-save", &t!("action-save"), true, on_save)),
         )
 }
+
+/// One row in the server-management panel.
+///
+/// Deliberately pre-rendered to strings by the caller: the three tabs show
+/// very different things - an invite, an emoji, a log entry - and a view that
+/// understood all three would grow a branch per kind for no benefit.
+pub struct ServerRow {
+    pub primary: String,
+    pub secondary: Option<String>,
+    /// What the row's button does, when it has one. The audit log has none:
+    /// history is not something to be edited from here.
+    pub action: Option<String>,
+}
+
+/// A guild's invites, emoji or audit log.
+/// What the panel is showing, as one value.
+///
+/// The five travel together because they are all "the state of the open tab";
+/// passing them separately made the signature long enough that clippy objected
+/// and a caller could transpose two without the compiler noticing.
+pub struct ServerPanel<'a> {
+    pub tabs: &'a [(String, bool)],
+    pub rows: &'a [ServerRow],
+    pub empty_label: &'a str,
+    pub loading: bool,
+    pub error: Option<&'a str>,
+}
+
+pub fn server_management_view(
+    panel_state: ServerPanel<'_>,
+    on_tab: impl Fn(usize, &mut gpui::App) + Clone + 'static,
+    on_row_action: impl Fn(usize, &mut gpui::App) + Clone + 'static,
+    on_reload: impl Fn(&mut gpui::App) + 'static,
+    on_close: impl Fn(&mut gpui::App) + 'static,
+) -> Div {
+    let mut tab_row = row()
+        .w_full()
+        .px(px(space::LG))
+        .py(px(space::SM))
+        .gap(px(space::XS));
+
+    for (index, (label, selected)) in panel_state.tabs.iter().enumerate() {
+        let pick = on_tab.clone();
+        tab_row = tab_row.child(
+            gpui::div()
+                .id(("server-tab", index))
+                .px(px(space::SM))
+                .py(px(space::XS))
+                .rounded(px(4.))
+                .cursor_pointer()
+                .text_size(px(scaled(text::SM)))
+                .bg(rgb(if *selected {
+                    active().accent
+                } else {
+                    active().surface
+                }))
+                .text_color(rgb(if *selected {
+                    active().text
+                } else {
+                    active().text_muted
+                }))
+                .hover(|style| style.bg(rgb(active().surface_hover)))
+                .on_click(move |_event, _window, cx| pick(index, cx))
+                .child(label.clone()),
+        );
+    }
+
+    let mut list = column()
+        .id("server-rows")
+        .max_h(px(360.))
+        .overflow_y_scroll();
+
+    // Loading, failed and empty are three different things and each says so.
+    // A blank list that might mean any of them is the worst of the three.
+    let notice = if panel_state.loading {
+        Some(t!("status-loading"))
+    } else if let Some(error) = panel_state.error {
+        Some(error.to_owned())
+    } else if panel_state.rows.is_empty() {
+        Some(panel_state.empty_label.to_owned())
+    } else {
+        None
+    };
+
+    if let Some(notice) = notice {
+        list = list.child(
+            gpui::div()
+                .px(px(space::LG))
+                .py(px(space::MD))
+                .text_size(px(scaled(text::SM)))
+                .text_color(rgb(if panel_state.error.is_some() {
+                    active().danger
+                } else {
+                    active().text_subtle
+                }))
+                .child(notice),
+        );
+    }
+
+    for (index, entry) in panel_state.rows.iter().enumerate() {
+        let act = on_row_action.clone();
+        list = list.child(
+            row()
+                .id(("server-row", index))
+                .w_full()
+                .px(px(space::LG))
+                .py(px(space::XS))
+                .gap(px(space::SM))
+                .items_center()
+                .child(
+                    column()
+                        .flex_1()
+                        .child(
+                            gpui::div()
+                                .text_size(px(scaled(text::SM)))
+                                .text_color(rgb(active().text))
+                                .child(entry.primary.clone()),
+                        )
+                        .children(entry.secondary.as_ref().map(|detail| {
+                            gpui::div()
+                                .text_size(px(scaled(text::XS)))
+                                .text_color(rgb(active().text_subtle))
+                                .child(detail.clone())
+                        })),
+                )
+                .children(entry.action.as_ref().map(|label| {
+                    gpui::div()
+                        .id(("server-row-action", index))
+                        .px(px(space::SM))
+                        .py(px(space::XS))
+                        .rounded(px(4.))
+                        .cursor_pointer()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().danger))
+                        .hover(|style| style.bg(rgb(active().surface_hover)))
+                        .on_click(move |_event, _window, cx| act(index, cx))
+                        .child(label.clone())
+                })),
+        );
+    }
+
+    panel(&t!("label-server-management"), 520.)
+        .child(tab_row)
+        .child(list)
+        .child(
+            row()
+                .w_full()
+                .px(px(space::LG))
+                .py(px(space::MD))
+                .gap(px(space::SM))
+                .justify_end()
+                .child(button(
+                    "server-reload",
+                    &t!("action-reload"),
+                    false,
+                    on_reload,
+                ))
+                .child(button("server-close", &t!("action-close"), true, on_close)),
+        )
+}

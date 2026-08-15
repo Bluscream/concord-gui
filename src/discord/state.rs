@@ -978,6 +978,16 @@ impl DiscordState {
             }
             AppEvent::GuildBansLoaded { .. }
             | AppEvent::GuildBansLoadFailed { .. }
+            // Server management results belong to the panel that asked for
+            // them, not the snapshot: a list of invites is a view of a moment,
+            // and caching it would show revoked codes as live.
+            | AppEvent::GuildInvitesLoaded { .. }
+            | AppEvent::GuildInvitesLoadFailed { .. }
+            | AppEvent::GuildEmojisLoaded { .. }
+            | AppEvent::GuildEmojisLoadFailed { .. }
+            | AppEvent::GuildAuditLogLoaded { .. }
+            | AppEvent::GuildAuditLogLoadFailed { .. }
+            | AppEvent::InviteCreated { .. }
             | AppEvent::InviteResolved { .. }
             | AppEvent::InviteResolveFailed { .. }
             | AppEvent::InviteAccepted { .. }

@@ -444,6 +444,9 @@ pub enum GuildActionKind {
     LeaveServer,
     JoinServer,
     ViewBans,
+    ViewInvites,
+    ViewEmoji,
+    ViewAuditLog,
     FolderSettings,
 }
 

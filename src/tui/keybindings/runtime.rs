@@ -933,6 +933,9 @@ impl KeyBindings {
             GuildActionKind::ToggleMute => vec![char_chord('u')],
             GuildActionKind::JoinServer => vec![char_chord('j')],
             GuildActionKind::ViewBans => vec![char_chord('b')],
+            GuildActionKind::ViewInvites => vec![char_chord('i')],
+            GuildActionKind::ViewEmoji => vec![char_chord('e')],
+            GuildActionKind::ViewAuditLog => vec![char_chord('A')],
             GuildActionKind::LeaveServer => vec![char_chord('l')],
             GuildActionKind::FolderSettings => vec![char_chord('r')],
         }

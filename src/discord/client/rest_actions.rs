@@ -310,6 +310,60 @@ impl DiscordClient {
         self.rest.unban_member(guild_id, user_id).await
     }
 
+    pub async fn guild_invites(
+        &self,
+        guild_id: Id<GuildMarker>,
+    ) -> Result<Vec<crate::discord::GuildInviteInfo>> {
+        self.rest.guild_invites(guild_id).await
+    }
+
+    pub async fn create_channel_invite(
+        &self,
+        channel_id: Id<crate::discord::ids::marker::ChannelMarker>,
+        max_age_seconds: u32,
+        max_uses: u32,
+        temporary: bool,
+    ) -> Result<String> {
+        self.rest
+            .create_channel_invite(channel_id, max_age_seconds, max_uses, temporary)
+            .await
+    }
+
+    pub async fn revoke_invite(&self, code: &str) -> Result<()> {
+        self.rest.revoke_invite(code).await
+    }
+
+    pub async fn guild_emojis(
+        &self,
+        guild_id: Id<GuildMarker>,
+    ) -> Result<Vec<crate::discord::GuildEmojiInfo>> {
+        self.rest.guild_emojis(guild_id).await
+    }
+
+    pub async fn rename_emoji(
+        &self,
+        guild_id: Id<GuildMarker>,
+        emoji_id: Id<crate::discord::ids::marker::EmojiMarker>,
+        name: &str,
+    ) -> Result<()> {
+        self.rest.rename_emoji(guild_id, emoji_id, name).await
+    }
+
+    pub async fn delete_emoji(
+        &self,
+        guild_id: Id<GuildMarker>,
+        emoji_id: Id<crate::discord::ids::marker::EmojiMarker>,
+    ) -> Result<()> {
+        self.rest.delete_emoji(guild_id, emoji_id).await
+    }
+
+    pub async fn guild_audit_log(
+        &self,
+        guild_id: Id<GuildMarker>,
+    ) -> Result<Vec<crate::discord::AuditLogEntryInfo>> {
+        self.rest.guild_audit_log(guild_id).await
+    }
+
     pub async fn send_friend_request(
         &self,
         username: &str,

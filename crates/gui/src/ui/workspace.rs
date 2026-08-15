@@ -387,6 +387,96 @@ impl RiskAction {
     }
 }
 
+/// An invite's limits, in the words Discord's own UI uses.
+fn invite_summary(invite: &concord::discord::GuildInviteInfo) -> String {
+    let uses = match invite.max_uses {
+        Some(max) => format!("{}/{max}", invite.uses),
+        // Discord writes "no limit" as 0; showing "3/0" would read as spent.
+        None => format!("{} ({})", invite.uses, t!("status-invite-unlimited")),
+    };
+    let expiry = match invite.max_age_seconds {
+        Some(seconds) => format!("{}m", seconds / 60),
+        None => t!("status-invite-never-expires"),
+    };
+
+    let mut parts = vec![uses, expiry];
+    if let Some(channel) = &invite.channel_name {
+        parts.push(format!("#{channel}"));
+    }
+    if let Some(inviter) = &invite.inviter {
+        parts.push(inviter.clone());
+    }
+    parts.join(" - ")
+}
+
+/// What is unusual about an emoji, if anything.
+fn emoji_summary(emoji: &concord::discord::GuildEmojiInfo) -> Option<String> {
+    let mut parts = Vec::new();
+    if emoji.animated {
+        parts.push(t!("label-emoji-animated"));
+    }
+    // Worth saying: a role-restricted emoji is invisible to most members, who
+    // would otherwise wonder why they cannot use one they can see listed.
+    if emoji.role_restricted {
+        parts.push(t!("label-emoji-restricted"));
+    }
+    (!parts.is_empty()).then(|| parts.join(" - "))
+}
+
+/// One audit entry as a sentence.
+fn audit_line(entry: &concord::discord::AuditLogEntryInfo) -> String {
+    let actor = entry.actor.clone().unwrap_or_else(|| t!("label-unknown"));
+    match &entry.target {
+        Some(target) => format!("{actor} {} {target}", entry.action.label()),
+        None => format!("{actor} {}", entry.action.label()),
+    }
+}
+
+/// Which part of the server-management panel is showing.
+///
+/// One panel with three tabs rather than three separate ones: they are all
+/// "administering this server", and three entry points to find would be worse
+/// than one with tabs in it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServerTab {
+    Invites,
+    Emoji,
+    AuditLog,
+}
+
+impl ServerTab {
+    pub const ALL: [Self; 3] = [Self::Invites, Self::Emoji, Self::AuditLog];
+
+    pub fn label(self) -> String {
+        match self {
+            Self::Invites => t!("label-invites"),
+            Self::Emoji => t!("label-emoji"),
+            Self::AuditLog => t!("label-audit-log"),
+        }
+    }
+
+    fn load(self, guild_id: Id<marker::GuildMarker>) -> AppCommand {
+        match self {
+            Self::Invites => AppCommand::LoadGuildInvites { guild_id },
+            Self::Emoji => AppCommand::LoadGuildEmojis { guild_id },
+            Self::AuditLog => AppCommand::LoadGuildAuditLog { guild_id },
+        }
+    }
+}
+
+/// A guild being administered.
+pub struct ServerManagementView {
+    pub guild_id: Id<marker::GuildMarker>,
+    pub tab: ServerTab,
+    pub invites: Vec<concord::discord::GuildInviteInfo>,
+    pub emojis: Vec<concord::discord::GuildEmojiInfo>,
+    pub audit_log: Vec<concord::discord::AuditLogEntryInfo>,
+    /// Set while the open tab's fetch is outstanding. Distinct from an empty
+    /// list: a slow fetch must not read as "there are none".
+    pub loading: bool,
+    pub error: Option<String>,
+}
+
 /// A guild's ban list, as shown.
 pub struct BanListView {
     pub guild_id: Id<marker::GuildMarker>,
@@ -621,6 +711,8 @@ pub struct Workspace {
     pub risk: Option<(RiskAction, bool)>,
     /// The guild's bans, once asked for. `None` while the panel is closed.
     pub bans: Option<BanListView>,
+    /// The server-management panel, once opened.
+    pub server_management: Option<ServerManagementView>,
     /// Roles being edited for a member: who, and the set as edited so far.
     pub editing_roles: Option<(Id<marker::UserMarker>, Vec<Id<marker::RoleMarker>>)>,
     /// Stickers staged for the next send. Discord accepts at most three.
@@ -756,6 +848,7 @@ impl Workspace {
             active_tab: 0,
             risk: None,
             bans: None,
+            server_management: None,
             editing_roles: None,
             pending_stickers: Vec::new(),
             sticker_picker: false,
@@ -3575,6 +3668,126 @@ impl Workspace {
             .unwrap_or_else(|| user_id.get().to_string())
     }
 
+    /// The first tab the account may actually see.
+    ///
+    /// Opening on Invites when the account cannot read them would show an
+    /// error where a usable tab was available.
+    fn first_server_tab(&self) -> ServerTab {
+        let Some(state) = self.last_state.as_ref() else {
+            return ServerTab::Invites;
+        };
+        let Selection::Guild(guild_id) = self.nav.selection else {
+            return ServerTab::Invites;
+        };
+
+        if state.can_manage_invites(guild_id) {
+            ServerTab::Invites
+        } else if state.can_manage_emoji(guild_id) {
+            ServerTab::Emoji
+        } else {
+            ServerTab::AuditLog
+        }
+    }
+
+    /// Open the server-management panel on the given tab.
+    pub fn open_server_management(&mut self, tab: ServerTab) {
+        let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
+            return;
+        };
+
+        self.server_management = Some(ServerManagementView {
+            guild_id,
+            tab,
+            invites: Vec::new(),
+            emojis: Vec::new(),
+            audit_log: Vec::new(),
+            loading: true,
+            error: None,
+        });
+        handle.send(tab.load(guild_id));
+    }
+
+    /// Switch tabs, fetching that tab's list if it has not been fetched.
+    pub fn select_server_tab(&mut self, tab: ServerTab) {
+        let (Some(handle), Some(view)) = (&self.handle, &mut self.server_management) else {
+            return;
+        };
+        if view.tab == tab {
+            return;
+        }
+        view.tab = tab;
+        view.error = None;
+
+        // Only fetch what has not arrived yet. Refetching on every tab switch
+        // would make the panel flicker and spend requests for no new
+        // information; a refresh is what the reload control is for.
+        let already_loaded = match tab {
+            ServerTab::Invites => !view.invites.is_empty(),
+            ServerTab::Emoji => !view.emojis.is_empty(),
+            ServerTab::AuditLog => !view.audit_log.is_empty(),
+        };
+        view.loading = !already_loaded;
+        if !already_loaded {
+            handle.send(tab.load(view.guild_id));
+        }
+    }
+
+    /// Refetch the open tab.
+    pub fn reload_server_tab(&mut self) {
+        let (Some(handle), Some(view)) = (&self.handle, &mut self.server_management) else {
+            return;
+        };
+        view.loading = true;
+        view.error = None;
+        handle.send(view.tab.load(view.guild_id));
+    }
+
+    /// Revoke an invite, taking the row out straight away.
+    ///
+    /// The list is a snapshot; leaving a revoked code on screen invites a
+    /// second revoke for one that no longer exists.
+    pub fn revoke_invite(&mut self, index: usize) {
+        let (Some(handle), Some(view)) = (&self.handle, &mut self.server_management) else {
+            return;
+        };
+        if index >= view.invites.len() {
+            return;
+        }
+        let invite = view.invites.remove(index);
+        handle.send(AppCommand::RevokeInvite { code: invite.code });
+    }
+
+    /// Delete a custom emoji.
+    pub fn delete_emoji(&mut self, index: usize) {
+        let (Some(handle), Some(view)) = (&self.handle, &mut self.server_management) else {
+            return;
+        };
+        if index >= view.emojis.len() {
+            return;
+        }
+        let emoji = view.emojis.remove(index);
+        handle.send(AppCommand::DeleteEmoji {
+            guild_id: view.guild_id,
+            emoji_id: emoji.id,
+            label: emoji.name,
+        });
+    }
+
+    /// Make an invite to the open channel.
+    pub fn create_invite_here(&mut self) {
+        let (Some(handle), Some(channel_id)) = (&self.handle, self.nav.channel) else {
+            return;
+        };
+        handle.send(AppCommand::CreateChannelInvite {
+            channel_id,
+            // Discord's own defaults: a day, unlimited uses, not temporary.
+            // Anything narrower would be a guess about what was wanted.
+            max_age_seconds: 86_400,
+            max_uses: 0,
+            temporary: false,
+        });
+    }
+
     /// Open the guild's ban list.
     pub fn open_ban_list(&mut self) {
         let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
@@ -5123,6 +5336,51 @@ impl Workspace {
 
             // Login cannot continue in this client: solving a captcha needs a
             // browser. Said plainly rather than leaving the attempt hanging.
+            AppEvent::GuildInvitesLoaded { guild_id, invites } => {
+                if let Some(view) = &mut self.server_management
+                    && view.guild_id == *guild_id
+                {
+                    view.loading = false;
+                    view.error = None;
+                    view.invites = invites.clone();
+                }
+            }
+            AppEvent::GuildEmojisLoaded { guild_id, emojis } => {
+                if let Some(view) = &mut self.server_management
+                    && view.guild_id == *guild_id
+                {
+                    view.loading = false;
+                    view.error = None;
+                    view.emojis = emojis.clone();
+                }
+            }
+            AppEvent::GuildAuditLogLoaded { guild_id, entries } => {
+                if let Some(view) = &mut self.server_management
+                    && view.guild_id == *guild_id
+                {
+                    view.loading = false;
+                    view.error = None;
+                    view.audit_log = entries.clone();
+                }
+            }
+            AppEvent::GuildInvitesLoadFailed { guild_id, message }
+            | AppEvent::GuildEmojisLoadFailed { guild_id, message }
+            | AppEvent::GuildAuditLogLoadFailed { guild_id, message } => {
+                if let Some(view) = &mut self.server_management
+                    && view.guild_id == *guild_id
+                {
+                    view.loading = false;
+                    view.error = Some(message.clone());
+                }
+            }
+            // Shown rather than only logged: an invite nobody can read is an
+            // invite nobody can send, which is the whole point of making one.
+            AppEvent::InviteCreated { code, .. } => {
+                self.model.status_line = concord::i18n::translate_text(
+                    "status-invite-created",
+                    &[("code", code.as_str())],
+                );
+            }
             AppEvent::GuildBansLoaded { guild_id, bans } => {
                 if let Some(view) = &mut self.bans
                     && view.guild_id == *guild_id
@@ -5683,6 +5941,33 @@ impl Workspace {
                                 )
                             },
                         )
+                        // Same reasoning as the ban list: an empty invite list
+                        // is indistinguishable from no permission, so it is
+                        // hidden rather than shown disabled.
+                        .when(
+                            self.last_state.as_ref().is_some_and(|state| {
+                                matches!(self.nav.selection, Selection::Guild(guild_id)
+                                    if state.can_manage_invites(guild_id)
+                                        || state.can_manage_emoji(guild_id)
+                                        || state.can_view_audit_log(guild_id))
+                            }),
+                            |header| {
+                                header.child(
+                                    icon_button(
+                                        "guild-manage",
+                                        "\u{2699}",
+                                        t!("label-server-management"),
+                                        false,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _event, _window, cx| {
+                                            this.open_server_management(this.first_server_tab());
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                            },
+                        )
                         .child(
                             icon_button(
                                 "guild-leave",
@@ -6073,6 +6358,106 @@ impl Workspace {
                     move |cx: &mut gpui::App| {
                         entity.update(cx, |workspace, cx| {
                             workspace.risk = None;
+                            cx.notify();
+                        });
+                    }
+                },
+            )));
+        }
+
+        if let Some(view) = &self.server_management {
+            let tabs: Vec<(String, bool)> = ServerTab::ALL
+                .iter()
+                .map(|tab| (tab.label(), *tab == view.tab))
+                .collect();
+
+            let (rows, empty_label) = match view.tab {
+                ServerTab::Invites => (
+                    view.invites
+                        .iter()
+                        .map(|invite| overlay::ServerRow {
+                            primary: format!("discord.gg/{}", invite.code),
+                            secondary: Some(invite_summary(invite)),
+                            action: Some(t!("action-revoke")),
+                        })
+                        .collect::<Vec<_>>(),
+                    t!("status-no-invites"),
+                ),
+                ServerTab::Emoji => (
+                    view.emojis
+                        .iter()
+                        .map(|emoji| overlay::ServerRow {
+                            primary: format!(":{}:", emoji.name),
+                            secondary: emoji_summary(emoji),
+                            action: Some(t!("action-delete")),
+                        })
+                        .collect(),
+                    t!("status-no-emoji"),
+                ),
+                ServerTab::AuditLog => (
+                    view.audit_log
+                        .iter()
+                        .map(|entry| overlay::ServerRow {
+                            primary: audit_line(entry),
+                            secondary: entry.reason.clone(),
+                            // No action: the log is a record, not something to
+                            // be edited from the client that reads it.
+                            action: None,
+                        })
+                        .collect(),
+                    t!("status-no-audit-entries"),
+                ),
+            };
+
+            return Some(overlay::scrim().child(overlay::server_management_view(
+                overlay::ServerPanel {
+                    tabs: &tabs,
+                    rows: &rows,
+                    empty_label: &empty_label,
+                    loading: view.loading,
+                    error: view.error.as_deref(),
+                },
+                {
+                    let entity = entity.clone();
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            if let Some(tab) = ServerTab::ALL.get(index) {
+                                workspace.select_server_tab(*tab);
+                            }
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    let tab = view.tab;
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            match tab {
+                                ServerTab::Invites => workspace.revoke_invite(index),
+                                ServerTab::Emoji => workspace.delete_emoji(index),
+                                // The audit log offers no row action, so there
+                                // is nothing to do here.
+                                ServerTab::AuditLog => {}
+                            }
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.reload_server_tab();
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.server_management = None;
                             cx.notify();
                         });
                     }
@@ -6855,6 +7240,30 @@ impl Workspace {
                                     })),
                             )
                     })
+                    // Only where the account may make one: an invite button
+                    // that always fails teaches nothing.
+                    .when(
+                        self.last_state.as_ref().is_some_and(|state| {
+                            matches!(self.nav.selection, Selection::Guild(guild_id)
+                                if state.can_create_invites(guild_id))
+                        }),
+                        |header| {
+                            header.child(
+                                icon_button(
+                                    "channel-invite",
+                                    "\u{2709}",
+                                    t!("action-create-invite"),
+                                    false,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
+                                        this.create_invite_here();
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                        },
+                    )
                     .child(
                         icon_button("channel-pins", "\u{27A6}", t!("action-pins"), false).on_click(
                             cx.listener(|this, _event, _window, cx| {
@@ -7947,5 +8356,112 @@ mod activity_tests {
             ActivityDraft::from_current(Some(&custom)).kind,
             ActivityKind::Playing
         );
+    }
+}
+
+#[cfg(test)]
+mod server_management_tests {
+    use super::*;
+    use concord::discord::{AuditLogAction, AuditLogEntryInfo, GuildEmojiInfo, GuildInviteInfo};
+
+    fn invite(max_uses: Option<u32>, max_age_seconds: Option<u32>) -> GuildInviteInfo {
+        GuildInviteInfo {
+            code: "aBc-123".to_owned(),
+            channel_id: None,
+            channel_name: Some("general".to_owned()),
+            inviter: Some("ferris".to_owned()),
+            uses: 3,
+            max_uses,
+            max_age_seconds,
+            temporary: false,
+        }
+    }
+
+    #[test]
+    fn an_unlimited_invite_does_not_read_as_spent() {
+        // Discord writes "no limit" as 0 in both fields. Showing that straight
+        // through would render as "3/0", which reads as already used up.
+        let summary = invite_summary(&invite(None, None));
+
+        assert!(summary.contains(&t!("status-invite-unlimited")));
+        assert!(summary.contains(&t!("status-invite-never-expires")));
+        assert!(!summary.contains("3/0"));
+    }
+
+    #[test]
+    fn a_limited_invite_shows_what_is_left() {
+        let summary = invite_summary(&invite(Some(10), Some(3600)));
+
+        assert!(summary.contains("3/10"));
+        assert!(summary.contains("60m"));
+        assert!(summary.contains("#general"));
+        assert!(summary.contains("ferris"));
+    }
+
+    fn emoji(animated: bool, role_restricted: bool) -> GuildEmojiInfo {
+        GuildEmojiInfo {
+            id: concord::discord::Id::new(1),
+            name: "ferris".to_owned(),
+            animated,
+            role_restricted,
+        }
+    }
+
+    #[test]
+    fn an_ordinary_emoji_needs_no_explanation() {
+        assert_eq!(emoji_summary(&emoji(false, false)), None);
+    }
+
+    #[test]
+    fn an_unusual_emoji_says_why() {
+        // Role restriction especially: a member who cannot use an emoji they
+        // can see listed would otherwise have no way to find out why.
+        let summary = emoji_summary(&emoji(true, true)).expect("should explain itself");
+
+        assert!(summary.contains(&t!("label-emoji-animated")));
+        assert!(summary.contains(&t!("label-emoji-restricted")));
+    }
+
+    fn entry(
+        action: AuditLogAction,
+        actor: Option<&str>,
+        target: Option<&str>,
+    ) -> AuditLogEntryInfo {
+        AuditLogEntryInfo {
+            id: concord::discord::Id::new(1),
+            actor: actor.map(str::to_owned),
+            action,
+            target: target.map(str::to_owned),
+            reason: None,
+        }
+    }
+
+    #[test]
+    fn an_audit_entry_reads_as_a_sentence() {
+        assert_eq!(
+            audit_line(&entry(
+                AuditLogAction::MemberBanAdd,
+                Some("ferris"),
+                Some("spammer")
+            )),
+            "ferris banned spammer"
+        );
+
+        // An action with no target still reads, rather than trailing off.
+        assert_eq!(
+            audit_line(&entry(AuditLogAction::ChannelCreate, Some("ferris"), None)),
+            "ferris created a channel"
+        );
+    }
+
+    #[test]
+    fn an_unnamed_action_is_still_shown() {
+        // Discord keeps adding action types. Dropping the ones this client
+        // does not know would quietly hide moderation from the log people
+        // read specifically to find out what was done.
+        let line = audit_line(&entry(AuditLogAction::Other(999), None, None));
+
+        assert!(line.contains("999"));
+        assert!(line.starts_with(&t!("label-unknown")));
     }
 }

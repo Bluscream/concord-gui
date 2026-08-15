@@ -38,6 +38,11 @@ const PERMISSION_KICK_MEMBERS: u64 = 0x0000_0000_0000_0002;
 const PERMISSION_BAN_MEMBERS: u64 = 0x0000_0000_0000_0004;
 const PERMISSION_MANAGE_ROLES: u64 = 0x0000_0000_1000_0000;
 const PERMISSION_MODERATE_MEMBERS: u64 = 0x0000_0400_0000_0000;
+const PERMISSION_CREATE_INSTANT_INVITE: u64 = 0x0000_0000_0000_0001;
+const PERMISSION_VIEW_AUDIT_LOG: u64 = 0x0000_0000_0000_0080;
+/// Named `MANAGE_GUILD_EXPRESSIONS` since Discord folded stickers and sounds
+/// in alongside emoji; the bit is the old MANAGE_EMOJIS one.
+const PERMISSION_MANAGE_GUILD_EXPRESSIONS: u64 = 0x0000_0000_4000_0000;
 
 const PERMISSIONS_ALL: u64 = u64::MAX;
 
@@ -205,6 +210,26 @@ impl DiscordState {
 
     pub fn can_manage_roles(&self, guild_id: Id<GuildMarker>) -> bool {
         self.has_guild_permission(guild_id, PERMISSION_MANAGE_ROLES)
+    }
+
+    /// Whether the guild's invite list can be read.
+    ///
+    /// Reading every invite is Manage Server, not Create Invite: someone who
+    /// may make one is not thereby allowed to see everyone else's.
+    pub fn can_manage_invites(&self, guild_id: Id<GuildMarker>) -> bool {
+        self.has_guild_permission(guild_id, PERMISSION_MANAGE_GUILD)
+    }
+
+    pub fn can_create_invites(&self, guild_id: Id<GuildMarker>) -> bool {
+        self.has_guild_permission(guild_id, PERMISSION_CREATE_INSTANT_INVITE)
+    }
+
+    pub fn can_view_audit_log(&self, guild_id: Id<GuildMarker>) -> bool {
+        self.has_guild_permission(guild_id, PERMISSION_VIEW_AUDIT_LOG)
+    }
+
+    pub fn can_manage_emoji(&self, guild_id: Id<GuildMarker>) -> bool {
+        self.has_guild_permission(guild_id, PERMISSION_MANAGE_GUILD_EXPRESSIONS)
     }
 
     pub fn can_timeout_members(&self, guild_id: Id<GuildMarker>) -> bool {

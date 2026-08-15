@@ -685,6 +685,35 @@ pub enum AppEvent {
         guild_id: Id<GuildMarker>,
         message: String,
     },
+    GuildInvitesLoaded {
+        guild_id: Id<GuildMarker>,
+        invites: Vec<crate::discord::GuildInviteInfo>,
+    },
+    GuildInvitesLoadFailed {
+        guild_id: Id<GuildMarker>,
+        message: String,
+    },
+    GuildEmojisLoaded {
+        guild_id: Id<GuildMarker>,
+        emojis: Vec<crate::discord::GuildEmojiInfo>,
+    },
+    GuildEmojisLoadFailed {
+        guild_id: Id<GuildMarker>,
+        message: String,
+    },
+    GuildAuditLogLoaded {
+        guild_id: Id<GuildMarker>,
+        entries: Vec<crate::discord::AuditLogEntryInfo>,
+    },
+    GuildAuditLogLoadFailed {
+        guild_id: Id<GuildMarker>,
+        message: String,
+    },
+    /// A new invite, so the code can be shown and copied without a refetch.
+    InviteCreated {
+        channel_id: Id<ChannelMarker>,
+        code: String,
+    },
     InviteResolved {
         preview: crate::discord::rest::InvitePreview,
     },
@@ -970,6 +999,13 @@ define_app_event_kinds! {
     CaptchaRequired: AppEvent::CaptchaRequired { .. },
     GuildBansLoaded: AppEvent::GuildBansLoaded { .. },
     GuildBansLoadFailed: AppEvent::GuildBansLoadFailed { .. },
+    GuildInvitesLoaded: AppEvent::GuildInvitesLoaded { .. },
+    GuildInvitesLoadFailed: AppEvent::GuildInvitesLoadFailed { .. },
+    GuildEmojisLoaded: AppEvent::GuildEmojisLoaded { .. },
+    GuildEmojisLoadFailed: AppEvent::GuildEmojisLoadFailed { .. },
+    GuildAuditLogLoaded: AppEvent::GuildAuditLogLoaded { .. },
+    GuildAuditLogLoadFailed: AppEvent::GuildAuditLogLoadFailed { .. },
+    InviteCreated: AppEvent::InviteCreated { .. },
     InviteResolved: AppEvent::InviteResolved { .. },
     InviteResolveFailed: AppEvent::InviteResolveFailed { .. },
     InviteAccepted: AppEvent::InviteAccepted { .. },
@@ -2018,6 +2054,13 @@ impl AppEventKind {
             // actually adds the guild.
             AppEventKind::GuildBansLoaded
             | AppEventKind::GuildBansLoadFailed
+            | AppEventKind::GuildInvitesLoaded
+            | AppEventKind::GuildInvitesLoadFailed
+            | AppEventKind::GuildEmojisLoaded
+            | AppEventKind::GuildEmojisLoadFailed
+            | AppEventKind::GuildAuditLogLoaded
+            | AppEventKind::GuildAuditLogLoadFailed
+            | AppEventKind::InviteCreated
             | AppEventKind::InviteResolved
             | AppEventKind::InviteResolveFailed
             | AppEventKind::InviteAccepted

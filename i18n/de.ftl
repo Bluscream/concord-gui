@@ -200,3 +200,22 @@ action-cancel-friend-request = Freundschaftsanfrage zurückziehen
 action-remove-friend = Freund entfernen
 action-block = Blockieren
 action-unblock = Blockierung aufheben
+
+label-invites = Einladungen
+label-emoji = Emojis
+label-audit-log = Audit-Log
+label-server-management = Server
+status-invite-created = Einladung erstellt: discord.gg/{ $code }
+status-no-invites = Keine Einladungen
+status-no-emoji = Keine eigenen Emojis
+status-no-audit-entries = Nichts aufgezeichnet
+status-invite-unlimited = unbegrenzt
+status-invite-never-expires = läuft nie ab
+action-revoke = Zurückziehen
+action-delete = Löschen
+action-reload = Neu laden
+action-create-invite = Einladung für diesen Kanal
+label-emoji-animated = animiert
+label-emoji-restricted = rollenbeschränkt
+
+label-unknown = jemand

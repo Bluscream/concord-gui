@@ -1,6 +1,7 @@
 use super::*;
 use crate::tui::keybindings::KeyBindings;
 use crate::tui::state::ActionItem;
+use crate::tui::state::ServerPanelTab;
 
 const KEY_SEQUENCE_HINT_MIN_WIDTH: u16 = 74;
 const KEY_SEQUENCE_HINT_ROWS: usize = 4;
@@ -622,6 +623,124 @@ pub(in crate::tui::ui) fn render_role_picker(
 }
 
 /// A guild's ban list, with the reason each ban was given.
+/// A guild's invites, emoji or audit log.
+///
+/// One popup with three lists rather than three popups, the same as the GUI's
+/// panel. The title says which tab is showing and how to change it, because a
+/// tab strip drawn in a terminal is easy to miss.
+pub(in crate::tui::ui) fn render_server_management(
+    frame: &mut Frame,
+    area: Rect,
+    state: &DashboardState,
+) {
+    if !state.is_active_modal_popup(ActiveModalPopupKind::ServerManagement) {
+        return;
+    }
+    let Some(panel) = state.server_management_state() else {
+        return;
+    };
+
+    let selected = state.selected_server_row().unwrap_or(0);
+    let tab = panel.tab();
+
+    let lines = if let Some(error) = panel.error() {
+        vec![Line::from(Span::styled(
+            error.to_owned(),
+            theme::current().style(theme::HighlightGroup::Error),
+        ))]
+    } else if panel.is_loading() {
+        // Distinct from an empty list, which for an audit log especially would
+        // be a misleading thing to believe.
+        vec![Line::from(Span::styled(
+            "Loading...".to_owned(),
+            theme::current().style(theme::HighlightGroup::Loading),
+        ))]
+    } else {
+        let rows: Vec<String> = match tab {
+            ServerPanelTab::Invites => panel
+                .invites()
+                .iter()
+                .map(|invite| {
+                    let uses = match invite.max_uses {
+                        Some(max) => format!("{}/{max}", invite.uses),
+                        // Discord writes "no limit" as 0; "3/0" would read as
+                        // already spent.
+                        None => format!("{} uses", invite.uses),
+                    };
+                    let expiry = match invite.max_age_seconds {
+                        Some(seconds) => format!("{}m", seconds / 60),
+                        None => "never expires".to_owned(),
+                    };
+                    format!("discord.gg/{} - {uses} - {expiry}", invite.code)
+                })
+                .collect(),
+            ServerPanelTab::Emoji => panel
+                .emojis()
+                .iter()
+                .map(|emoji| {
+                    let mut line = format!(":{}:", emoji.name);
+                    if emoji.animated {
+                        line.push_str(" - animated");
+                    }
+                    // Worth saying: a role-restricted emoji is unusable for
+                    // most members, who would otherwise wonder why.
+                    if emoji.role_restricted {
+                        line.push_str(" - role-restricted");
+                    }
+                    line
+                })
+                .collect(),
+            ServerPanelTab::AuditLog => panel
+                .audit_log()
+                .iter()
+                .map(|entry| {
+                    let actor = entry.actor.clone().unwrap_or_else(|| "someone".to_owned());
+                    let mut line = match &entry.target {
+                        Some(target) => format!("{actor} {} {target}", entry.action.label()),
+                        None => format!("{actor} {}", entry.action.label()),
+                    };
+                    if let Some(reason) = &entry.reason {
+                        line.push_str(&format!(" ({reason})"));
+                    }
+                    line
+                })
+                .collect(),
+        };
+
+        if rows.is_empty() {
+            let empty = match tab {
+                ServerPanelTab::Invites => "No invites",
+                ServerPanelTab::Emoji => "No custom emoji",
+                ServerPanelTab::AuditLog => "Nothing recorded",
+            };
+            vec![Line::from(Span::styled(
+                empty.to_owned(),
+                theme::current().style(theme::HighlightGroup::Hint),
+            ))]
+        } else {
+            action_menu_lines(&indexed_action_menu_rows(rows), selected)
+        }
+    };
+
+    // The audit log has no row action - history is a record, not something to
+    // be edited from the client that reads it - so the hint changes with it.
+    let hint = match tab {
+        ServerPanelTab::Invites => "tab to switch, r to reload, enter to revoke",
+        ServerPanelTab::Emoji => "tab to switch, r to reload, enter to delete",
+        ServerPanelTab::AuditLog => "tab to switch, r to reload",
+    };
+
+    render_action_menu(
+        frame,
+        area,
+        format!("{} ({hint})", tab.label()),
+        lines,
+        state
+            .popup_list_scroll(SelectablePopupTarget::ServerManagement)
+            .expect("the server panel has selection state"),
+    );
+}
+
 pub(in crate::tui::ui) fn render_ban_list(frame: &mut Frame, area: Rect, state: &DashboardState) {
     if !state.is_active_modal_popup(ActiveModalPopupKind::BanList) {
         return;

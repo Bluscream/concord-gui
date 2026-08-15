@@ -122,8 +122,10 @@ pub use profile::{
 pub use read::ReadStateInfo;
 pub(crate) use request_lifecycle::GuildMemberSearchSurface;
 pub use rest::{
-    ForumPostPage, GuildBanInfo, InvitePreview, MAX_BAN_DELETE_MESSAGE_SECONDS,
-    MAX_MESSAGE_STICKERS, ReactionUsersPage, friend_request_target, invite_code_from,
+    AuditLogAction, AuditLogEntryInfo, ForumPostPage, GuildBanInfo, GuildEmojiInfo,
+    GuildInviteInfo, InvitePreview, MAX_BAN_DELETE_MESSAGE_SECONDS, MAX_INVITE_MAX_AGE_SECONDS,
+    MAX_INVITE_MAX_USES, MAX_MESSAGE_STICKERS, ReactionUsersPage, clamp_invite_max_age,
+    clamp_invite_max_uses, friend_request_target, invite_code_from,
 };
 pub use state::{
     ChannelRecipientState, ChannelState, ChannelUnreadState, ChannelVisibilityStats,

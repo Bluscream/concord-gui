@@ -198,6 +198,33 @@ fn push_dashboard_effect(event: AppEvent, ctx: &mut EffectContext<'_>) {
             ctx.state.apply_guild_bans_failure(guild_id, message);
             return;
         }
+        AppEvent::GuildInvitesLoaded { guild_id, invites } => {
+            ctx.state.apply_guild_invites(guild_id, invites);
+            return;
+        }
+        AppEvent::GuildEmojisLoaded { guild_id, emojis } => {
+            ctx.state.apply_guild_emojis(guild_id, emojis);
+            return;
+        }
+        AppEvent::GuildAuditLogLoaded { guild_id, entries } => {
+            ctx.state.apply_guild_audit_log(guild_id, entries);
+            return;
+        }
+        AppEvent::GuildInvitesLoadFailed { guild_id, message }
+        | AppEvent::GuildEmojisLoadFailed { guild_id, message }
+        | AppEvent::GuildAuditLogLoadFailed { guild_id, message } => {
+            ctx.state.apply_server_management_failure(guild_id, message);
+            return;
+        }
+        // Shown rather than only logged: an invite nobody can read is an
+        // invite nobody can send.
+        AppEvent::InviteCreated { code, .. } => {
+            ctx.state.show_error_toast(
+                format!("Invite created: discord.gg/{code}"),
+                std::time::Instant::now(),
+            );
+            return;
+        }
         AppEvent::InviteResolved { preview } => {
             ctx.state.apply_resolved_invite(preview);
             return;

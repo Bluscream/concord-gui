@@ -217,3 +217,17 @@ grep -rn "AcceptInvite\|LeaveGuild\|UpdateUserProfile\|AddFriend\|BlockUser\|Rem
 
 Each hit should be next to a `request_risky` in the TUI or a `friend_action` /
 `confirm_risk` in the GUI. One that is not is a way round the warning.
+
+## Uncalled functions
+
+A feature can be fully built and completely unreachable. `create_invite_here`
+was written, tested and wired to nothing; only a release-profile dead-code
+warning caught it. Clippy in release is the check:
+
+```bash
+cargo clippy --release --features fixtures --all-targets
+cargo clippy --release -p concord-gui --features fixtures --all-targets
+```
+
+A `never used` warning on a `pub fn` in a front end means a control was never
+attached to it.

@@ -62,7 +62,7 @@ third-party Discord clients actually expect.
 | User profiles | 5 | done |
 | Video / camera | 5 | **missing** |
 | Noise suppression | 4 | done |
-| Server management | 4 | partial |
+| Server management | 4 | yes |
 | Image viewer | 4 | partial |
 | Inline images | 4 | done |
 | Multi-account | 3 | **missing** |
@@ -124,7 +124,6 @@ Upload, rename and delete guild emoji.
   An activity set elsewhere - another client, or a local app over the RPC
   socket - is absorbed from our own presence update, so the button shows what
   is really being broadcast rather than only what this client last sent.
-- **Server management** — Kick, ban, timeout and roles are done. Invites, emoji and audit log are not.
 - **Invite management** — Joining by invite works. Creating, listing and revoking invites does not.
 - **Animated emoji and avatars** — These already worked; the survey entry was
   an assumption rather than a check. GPUI decodes animated WebP and GIF, the
@@ -165,3 +164,18 @@ Worth knowing, because it is the argument for the project existing:
 Abaddon is the closest comparison overall, and remains ahead on invites,
 emoji management and the audit log.
 
+
+- **Server management** - Both clients can now list and revoke invites, make an
+  invite to the open channel, list and delete custom emoji, and read the audit
+  log. One panel with three tabs rather than three entry points, since they are
+  all "administering this server".
+
+  Two deliberate choices. The audit log has no row action: history is a record,
+  not something to edit from the client that reads it. And an unrecognised
+  audit action keeps its number rather than being dropped - Discord adds action
+  types regularly, and silently hiding them would hide moderation from the log
+  people read specifically to find out what was done.
+
+  Discord writes "no limit" as 0 for both an invite's uses and its lifetime.
+  Passing that through would render as "3/0", which reads as already spent, so
+  both are carried as `Option` and shown in words.

@@ -366,6 +366,91 @@ fn handle_command(
             }
         }
 
+        // Enough of each list to exercise the panels offline. The fixture has
+        // no real invites, emoji or history, so these are canned - but they
+        // cover the cases the rendering has to get right: an invite that never
+        // expires, one that is nearly used up, an animated emoji, a
+        // role-restricted one, and an audit action nobody has a name for.
+        AppCommand::LoadGuildInvites { guild_id } => {
+            publish_event!(AppEvent::GuildInvitesLoaded {
+                guild_id,
+                invites: vec![
+                    concord::discord::GuildInviteInfo {
+                        code: "aBc-123".to_string(),
+                        channel_id: Some(concord::discord::Id::new(111)),
+                        channel_name: Some("general".to_string()),
+                        inviter: Some("ferris".to_string()),
+                        uses: 3,
+                        max_uses: None,
+                        max_age_seconds: None,
+                        temporary: false,
+                    },
+                    concord::discord::GuildInviteInfo {
+                        code: "xYz-789".to_string(),
+                        channel_id: Some(concord::discord::Id::new(112)),
+                        channel_name: Some("welcome".to_string()),
+                        inviter: Some("turing".to_string()),
+                        uses: 9,
+                        max_uses: Some(10),
+                        max_age_seconds: Some(3600),
+                        temporary: true,
+                    },
+                ],
+            });
+        }
+        AppCommand::CreateChannelInvite { channel_id, .. } => {
+            publish_event!(AppEvent::InviteCreated {
+                channel_id,
+                code: "dEm-000".to_string(),
+            });
+        }
+        AppCommand::LoadGuildEmojis { guild_id } => {
+            publish_event!(AppEvent::GuildEmojisLoaded {
+                guild_id,
+                emojis: vec![
+                    concord::discord::GuildEmojiInfo {
+                        id: concord::discord::Id::new(8001),
+                        name: "ferris".to_string(),
+                        animated: false,
+                        role_restricted: false,
+                    },
+                    concord::discord::GuildEmojiInfo {
+                        id: concord::discord::Id::new(8002),
+                        name: "party_parrot".to_string(),
+                        animated: true,
+                        role_restricted: true,
+                    },
+                ],
+            });
+        }
+        AppCommand::LoadGuildAuditLog { guild_id } => {
+            publish_event!(AppEvent::GuildAuditLogLoaded {
+                guild_id,
+                entries: vec![
+                    concord::discord::AuditLogEntryInfo {
+                        id: concord::discord::Id::new(7001),
+                        actor: Some("ferris".to_string()),
+                        action: concord::discord::AuditLogAction::MemberBanAdd,
+                        target: Some("spammer".to_string()),
+                        reason: Some("posting invite links".to_string()),
+                    },
+                    concord::discord::AuditLogEntryInfo {
+                        id: concord::discord::Id::new(7002),
+                        actor: Some("turing".to_string()),
+                        action: concord::discord::AuditLogAction::Other(999),
+                        target: None,
+                        reason: None,
+                    },
+                ],
+            });
+        }
+        // Nothing offline can show these: the lists above are canned, so a
+        // revoke or a rename would be undone by the next load and read as the
+        // action having silently failed.
+        AppCommand::RevokeInvite { .. }
+        | AppCommand::RenameEmoji { .. }
+        | AppCommand::DeleteEmoji { .. } => {}
+
         AppCommand::LoadGuildBans { guild_id } => {
             // A short list so the panel and the unban path can be exercised
             // offline; the fixture has no real bans.

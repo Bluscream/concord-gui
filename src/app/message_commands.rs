@@ -10,7 +10,7 @@ use crate::{
         ids::{
             Id,
             marker::{
-                ChannelMarker, ForumTagMarker, GuildMarker, MessageMarker, RoleMarker,
+                ChannelMarker, EmojiMarker, ForumTagMarker, GuildMarker, MessageMarker, RoleMarker,
                 StickerMarker, UserMarker,
             },
         },
@@ -406,6 +406,110 @@ pub(super) async fn unban_member(
 /// A name that cannot be parsed is refused here rather than sent: a rejected
 /// request costs a round trip and counts towards exactly the anti-spam
 /// heuristics this client tries not to trip.
+/// Load something a server-management panel asked for.
+///
+/// One shape for all of them: fetch, publish the result, and publish the
+/// failure rather than swallowing it - a panel that stays "loading" forever
+/// tells the user nothing about why.
+macro_rules! load_guild_panel {
+    ($name:ident, $fetch:ident, $loaded:ident, $failed:ident, $field:ident, $what:literal) => {
+        pub(super) async fn $name(client: DiscordClient, guild_id: Id<GuildMarker>) {
+            match client.$fetch(guild_id).await {
+                Ok($field) => {
+                    client
+                        .publish_event(AppEvent::$loaded { guild_id, $field })
+                        .await;
+                }
+                Err(error) => {
+                    log_app_error(concat!("load ", $what, " failed"), &error);
+                    client
+                        .publish_event(AppEvent::$failed {
+                            guild_id,
+                            message: error.to_string(),
+                        })
+                        .await;
+                }
+            }
+        }
+    };
+}
+
+load_guild_panel!(
+    load_guild_invites,
+    guild_invites,
+    GuildInvitesLoaded,
+    GuildInvitesLoadFailed,
+    invites,
+    "guild invites"
+);
+load_guild_panel!(
+    load_guild_emojis,
+    guild_emojis,
+    GuildEmojisLoaded,
+    GuildEmojisLoadFailed,
+    emojis,
+    "guild emojis"
+);
+load_guild_panel!(
+    load_guild_audit_log,
+    guild_audit_log,
+    GuildAuditLogLoaded,
+    GuildAuditLogLoadFailed,
+    entries,
+    "guild audit log"
+);
+
+pub(super) async fn create_channel_invite(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    max_age_seconds: u32,
+    max_uses: u32,
+    temporary: bool,
+) {
+    match client
+        .create_channel_invite(channel_id, max_age_seconds, max_uses, temporary)
+        .await
+    {
+        Ok(code) => {
+            client
+                .publish_event(AppEvent::InviteCreated { channel_id, code })
+                .await;
+        }
+        Err(error) => {
+            report_moderation_failure(&client, "creating an invite for", "this channel", &error)
+                .await;
+        }
+    }
+}
+
+pub(super) async fn revoke_invite(client: DiscordClient, code: String) {
+    if let Err(error) = client.revoke_invite(&code).await {
+        report_moderation_failure(&client, "revoking invite", &code, &error).await;
+    }
+}
+
+pub(super) async fn rename_emoji(
+    client: DiscordClient,
+    guild_id: Id<GuildMarker>,
+    emoji_id: Id<EmojiMarker>,
+    name: String,
+) {
+    if let Err(error) = client.rename_emoji(guild_id, emoji_id, &name).await {
+        report_moderation_failure(&client, "renaming emoji to", &name, &error).await;
+    }
+}
+
+pub(super) async fn delete_emoji(
+    client: DiscordClient,
+    guild_id: Id<GuildMarker>,
+    emoji_id: Id<EmojiMarker>,
+    label: String,
+) {
+    if let Err(error) = client.delete_emoji(guild_id, emoji_id).await {
+        report_moderation_failure(&client, "deleting emoji", &label, &error).await;
+    }
+}
+
 pub(super) async fn send_friend_request(client: DiscordClient, target: String) {
     let Some((username, discriminator)) = friend_request_target(&target) else {
         client

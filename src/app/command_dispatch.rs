@@ -543,6 +543,48 @@ impl CommandDispatcher {
             AppCommand::LoadGuildBans { guild_id } => {
                 message_commands::load_guild_bans(self.client.clone(), guild_id).await;
             }
+            AppCommand::LoadGuildInvites { guild_id } => {
+                message_commands::load_guild_invites(self.client.clone(), guild_id).await;
+            }
+            AppCommand::CreateChannelInvite {
+                channel_id,
+                max_age_seconds,
+                max_uses,
+                temporary,
+            } => {
+                message_commands::create_channel_invite(
+                    self.client.clone(),
+                    channel_id,
+                    max_age_seconds,
+                    max_uses,
+                    temporary,
+                )
+                .await;
+            }
+            AppCommand::RevokeInvite { code } => {
+                message_commands::revoke_invite(self.client.clone(), code).await;
+            }
+            AppCommand::LoadGuildEmojis { guild_id } => {
+                message_commands::load_guild_emojis(self.client.clone(), guild_id).await;
+            }
+            AppCommand::RenameEmoji {
+                guild_id,
+                emoji_id,
+                name,
+            } => {
+                message_commands::rename_emoji(self.client.clone(), guild_id, emoji_id, name).await;
+            }
+            AppCommand::DeleteEmoji {
+                guild_id,
+                emoji_id,
+                label,
+            } => {
+                message_commands::delete_emoji(self.client.clone(), guild_id, emoji_id, label)
+                    .await;
+            }
+            AppCommand::LoadGuildAuditLog { guild_id } => {
+                message_commands::load_guild_audit_log(self.client.clone(), guild_id).await;
+            }
             AppCommand::UnbanMember {
                 guild_id,
                 user_id,
