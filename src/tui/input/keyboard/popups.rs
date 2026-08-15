@@ -207,6 +207,9 @@ fn dispatch_popup_key(
         ActiveModalPopupKind::StickerPicker => {
             route_fallback_key(state, key, stage, handle_sticker_picker_key)
         }
+        ActiveModalPopupKind::RolePicker => {
+            route_fallback_key(state, key, stage, handle_role_picker_key)
+        }
         ActiveModalPopupKind::ForumPostComposer => route_popup_key(
             state,
             key,
@@ -845,6 +848,32 @@ fn handle_search_popup_key(state: &mut DashboardState, key: KeyEvent) -> Option<
         }
         None => None,
     }
+}
+
+/// The role picker: toggle with enter or space, save with s, cancel with esc.
+///
+/// Toggling and saving are separate because a member usually needs more than
+/// one role changed, and each toggle sending its own request would be several
+/// round trips and several chances to race.
+fn handle_role_picker_key(state: &mut DashboardState, key: KeyEvent) -> Option<AppCommand> {
+    if let Some(action) = state
+        .key_bindings()
+        .selection_action(key, SelectionKeySet::Navigation)
+    {
+        match action {
+            SelectionAction::Next => state.move_role_selection_down(),
+            SelectionAction::Previous => state.move_role_selection_up(),
+        }
+        return None;
+    }
+
+    match key.code {
+        KeyCode::Enter | KeyCode::Char(' ') => state.toggle_selected_role(),
+        KeyCode::Char('s' | 'S') if shortcut_key(key, 's') => return state.save_role_picker(),
+        KeyCode::Esc => state.close_role_picker(),
+        _ => {}
+    }
+    None
 }
 
 /// The sticker picker: a list, plus stage and cancel.

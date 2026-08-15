@@ -246,6 +246,7 @@ pub enum SwitcherPurpose {
 /// A moderation action against a member.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModerationAction {
+    ManageRoles,
     Kick,
     Ban,
     Timeout,
@@ -431,6 +432,8 @@ pub struct Workspace {
     requested_previews: std::collections::HashSet<String>,
     /// What the open switcher will do with its selection.
     switcher_purpose: SwitcherPurpose,
+    /// Roles being edited for a member: who, and the set as edited so far.
+    pub editing_roles: Option<(Id<marker::UserMarker>, Vec<Id<marker::RoleMarker>>)>,
     /// Stickers staged for the next send. Discord accepts at most three.
     pub pending_stickers: Vec<Id<marker::StickerMarker>>,
     /// Sticker picker, open while choosing one.
@@ -547,6 +550,7 @@ impl Workspace {
             attachment_previews: std::collections::HashMap::new(),
             requested_previews: std::collections::HashSet::new(),
             switcher_purpose: SwitcherPurpose::Navigate,
+            editing_roles: None,
             pending_stickers: Vec::new(),
             sticker_picker: false,
             invite: None,
@@ -1418,7 +1422,8 @@ impl Workspace {
     /// Ordered so one press closes one thing: escape with several panels open
     /// should peel them back, not clear the screen.
     pub fn close_popup(&mut self) {
-        if self.invite.take().is_some()
+        if self.editing_roles.take().is_some()
+            || self.invite.take().is_some()
             || self.confirming.take().is_some()
             || self.prompt.take().is_some()
             || self.editing_status.take().is_some()
@@ -2882,6 +2887,12 @@ impl Workspace {
 
         let entries = [
             (
+                "mod-roles",
+                "Manage roles",
+                reason(state.can_manage_roles(guild_id)),
+                ModerationAction::ManageRoles,
+            ),
+            (
                 "mod-timeout",
                 "Time out 10m",
                 reason(state.can_timeout_members(guild_id)),
@@ -2947,6 +2958,107 @@ impl Workspace {
         Some(panel)
     }
 
+    /// Open the role picker for a member.
+    fn open_role_picker(&mut self, user_id: Id<marker::UserMarker>) {
+        let (Some(state), Selection::Guild(guild_id)) = (&self.last_state, self.nav.selection)
+        else {
+            return;
+        };
+        let assigned = state
+            .member_for_guild(guild_id, user_id)
+            .map(|member| member.role_ids.clone())
+            .unwrap_or_default();
+
+        self.editing_roles = Some((user_id, assigned));
+    }
+
+    /// Every role in the guild, ordered as Discord orders them.
+    fn guild_roles(&self) -> Vec<overlay::RoleChoice> {
+        let (Some(state), Selection::Guild(guild_id), Some((_, assigned))) = (
+            &self.last_state,
+            self.nav.selection,
+            self.editing_roles.as_ref(),
+        ) else {
+            return Vec::new();
+        };
+
+        let mut roles = state.roles_for_guild(guild_id);
+        // Highest first, matching Discord everywhere else.
+        roles.sort_by(|a, b| b.position.cmp(&a.position).then(a.name.cmp(&b.name)));
+
+        roles
+            .into_iter()
+            // @everyone carries the guild's own id, belongs to everyone
+            // implicitly, and cannot be granted or taken away.
+            .filter(|role| role.id.get() != guild_id.get())
+            .map(|role| overlay::RoleChoice {
+                name: role.name.clone(),
+                color: role.color,
+                assigned: assigned.contains(&role.id),
+                disabled_reason: (!state.can_assign_role(guild_id, role.id))
+                    .then_some("above your highest role"),
+            })
+            .collect()
+    }
+
+    /// Add or remove a role from the edited set, without sending yet.
+    fn toggle_role(&mut self, index: usize) {
+        let (Some(state), Selection::Guild(guild_id)) = (&self.last_state, self.nav.selection)
+        else {
+            return;
+        };
+
+        let mut roles = state.roles_for_guild(guild_id);
+        roles.sort_by(|a, b| b.position.cmp(&a.position).then(a.name.cmp(&b.name)));
+        let Some(role_id) = roles
+            .into_iter()
+            .filter(|role| role.id.get() != guild_id.get())
+            .nth(index)
+            .map(|role| role.id)
+        else {
+            return;
+        };
+        if !state.can_assign_role(guild_id, role_id) {
+            return;
+        }
+
+        if let Some((_, assigned)) = &mut self.editing_roles {
+            match assigned.iter().position(|id| *id == role_id) {
+                Some(position) => {
+                    assigned.remove(position);
+                }
+                None => assigned.push(role_id),
+            }
+        }
+    }
+
+    /// Send the edited role set.
+    ///
+    /// The whole set goes at once rather than one role at a time, which is
+    /// what the official client does and avoids a race between two edits.
+    fn save_roles(&mut self) {
+        let (Some(handle), Selection::Guild(guild_id), Some((user_id, role_ids))) =
+            (&self.handle, self.nav.selection, self.editing_roles.take())
+        else {
+            return;
+        };
+
+        let label = self
+            .model
+            .members
+            .iter()
+            .find(|member| member.user_id == Some(user_id))
+            .map(|member| member.name.clone())
+            .unwrap_or_else(|| user_id.get().to_string());
+
+        handle.send(AppCommand::SetMemberRoles {
+            guild_id,
+            user_id,
+            role_ids,
+            label,
+        });
+    }
+
     /// Carry out a moderation action against a member.
     fn moderate(&mut self, user_id: Id<marker::UserMarker>, action: ModerationAction) {
         let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
@@ -2961,7 +3073,16 @@ impl Workspace {
             .map(|member| member.name.clone())
             .unwrap_or_else(|| user_id.get().to_string());
 
+        // Roles open a picker instead of acting immediately: the change is a
+        // set, not a single decision.
+        if action == ModerationAction::ManageRoles {
+            self.open_role_picker(user_id);
+            return;
+        }
+
         handle.send(match action {
+            // Handled above; the picker sends its own command on save.
+            ModerationAction::ManageRoles => return,
             ModerationAction::Kick => AppCommand::KickMember {
                 guild_id,
                 user_id,
@@ -5201,6 +5322,41 @@ impl Workspace {
                     move |cx: &mut gpui::App| {
                         entity.update(cx, |workspace, cx| {
                             workspace.confirming = None;
+                            cx.notify();
+                        });
+                    }
+                },
+            )));
+        }
+
+        if self.editing_roles.is_some() {
+            let roles = self.guild_roles();
+
+            return Some(overlay::scrim().child(overlay::role_picker_view(
+                &roles,
+                {
+                    let entity = entity.clone();
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.toggle_role(index);
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.save_roles();
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.editing_roles = None;
                             cx.notify();
                         });
                     }

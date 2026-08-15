@@ -906,6 +906,7 @@ impl MemberActionKind {
             Self::Ban => "Ban",
             Self::Timeout => "Timeout",
             Self::ClearTimeout => "ClearTimeout",
+            Self::ManageRoles => "ManageRoles",
         }
     }
 }

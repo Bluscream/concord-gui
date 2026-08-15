@@ -235,28 +235,70 @@ impl DiscordState {
             return true;
         }
 
-        let highest = |user_id: Id<UserMarker>| -> i64 {
-            let Some(roles) = self.guild_details.roles.get(&guild_id) else {
-                return i64::MIN;
-            };
-            let Some(member) = self
-                .guild_details
-                .members
-                .get(&guild_id)
-                .and_then(|members| members.get(&user_id))
-            else {
-                return i64::MIN;
-            };
-            member
-                .role_ids
-                .iter()
-                .filter_map(|role_id| roles.get(role_id))
-                .map(|role| role.position)
-                .max()
-                .unwrap_or(i64::MIN)
+        self.highest_role_position(guild_id, my_id) > self.highest_role_position(guild_id, user_id)
+    }
+
+    /// The current user's highest role position in a guild.
+    ///
+    /// The owner is above every role, which is why they are not resolved from
+    /// role positions at all.
+    fn highest_role_position(&self, guild_id: Id<GuildMarker>, user_id: Id<UserMarker>) -> i64 {
+        let Some(roles) = self.guild_details.roles.get(&guild_id) else {
+            return i64::MIN;
+        };
+        let Some(member) = self
+            .guild_details
+            .members
+            .get(&guild_id)
+            .and_then(|members| members.get(&user_id))
+        else {
+            return i64::MIN;
+        };
+        member
+            .role_ids
+            .iter()
+            .filter_map(|role_id| roles.get(role_id))
+            .map(|role| role.position)
+            .max()
+            .unwrap_or(i64::MIN)
+    }
+
+    /// Whether the current user may add or remove a given role.
+    ///
+    /// Discord allows assigning only roles strictly below your own highest,
+    /// and never `@everyone`, which every member has implicitly and which
+    /// cannot be granted or taken away.
+    pub fn can_assign_role(&self, guild_id: Id<GuildMarker>, role_id: Id<RoleMarker>) -> bool {
+        if !self.can_manage_roles(guild_id) {
+            return false;
+        }
+        // @everyone carries the guild's own id as its role id.
+        if role_id.get() == guild_id.get() {
+            return false;
+        }
+
+        let Some(role) = self
+            .guild_details
+            .roles
+            .get(&guild_id)
+            .and_then(|roles| roles.get(&role_id))
+        else {
+            return false;
         };
 
-        highest(my_id) > highest(user_id)
+        let Some(my_id) = self.session.current_user_id else {
+            return false;
+        };
+        if self
+            .navigation
+            .guilds
+            .get(&guild_id)
+            .is_some_and(|guild| guild.owner_id == Some(my_id))
+        {
+            return true;
+        }
+
+        role.position < self.highest_role_position(guild_id, my_id)
     }
 
     pub fn can_view_channel(&self, channel: &ChannelState) -> bool {
@@ -798,5 +840,45 @@ mod moderation_tests {
         assert!(!state.can_kick_members(unknown));
         assert!(!state.can_ban_members(unknown));
         assert!(!state.outranks_member(unknown, user));
+    }
+}
+
+#[cfg(test)]
+mod role_assignment_tests {
+    use super::*;
+    use crate::discord::fixtures::demo_state;
+
+    #[test]
+    fn everyone_can_never_be_assigned() {
+        // @everyone carries the guild's own id and belongs to every member
+        // implicitly; offering it would be an action that cannot succeed.
+        let state = demo_state();
+        let guild_id: Id<GuildMarker> = Id::new(10);
+        let everyone: Id<RoleMarker> = Id::new(guild_id.get());
+
+        assert!(!state.can_assign_role(guild_id, everyone));
+    }
+
+    #[test]
+    fn role_assignment_is_refused_without_the_permission() {
+        // The demo account holds no MANAGE_ROLES, so every role must refuse
+        // rather than defaulting to assignable.
+        let state = demo_state();
+        let guild_id: Id<GuildMarker> = Id::new(10);
+
+        for role in state.roles_for_guild(guild_id) {
+            assert!(
+                !state.can_assign_role(guild_id, role.id),
+                "role {} must not be assignable without MANAGE_ROLES",
+                role.name
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_role_or_guild_refuses() {
+        let state = demo_state();
+        assert!(!state.can_assign_role(Id::new(10), Id::new(999_999)));
+        assert!(!state.can_assign_role(Id::new(999_999), Id::new(2)));
     }
 }

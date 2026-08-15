@@ -511,3 +511,95 @@ pub fn sticker_picker_view(
             .child(button("sticker-close", "Close", false, on_close)),
     )
 }
+
+/// One role offered by the picker.
+pub struct RoleChoice {
+    pub name: String,
+    pub color: Option<u32>,
+    pub assigned: bool,
+    /// Why this role cannot be changed, when it cannot.
+    pub disabled_reason: Option<&'static str>,
+}
+
+/// Roles for a member, toggled here and sent as a set on save.
+pub fn role_picker_view(
+    roles: &[RoleChoice],
+    on_toggle: impl Fn(usize, &mut gpui::App) + Clone + 'static,
+    on_save: impl Fn(&mut gpui::App) + 'static,
+    on_cancel: impl Fn(&mut gpui::App) + 'static,
+) -> Div {
+    let mut list = column().id("role-list").max_h(px(360.)).overflow_y_scroll();
+
+    if roles.is_empty() {
+        list = list.child(
+            gpui::div()
+                .px(px(space::LG))
+                .py(px(space::MD))
+                .text_size(px(scaled(text::SM)))
+                .text_color(rgb(active().text_subtle))
+                .child("This server has no assignable roles"),
+        );
+    }
+
+    for (index, role) in roles.iter().enumerate() {
+        let toggle = on_toggle.clone();
+        let refused = role.disabled_reason;
+
+        list = list.child(
+            row()
+                .id(("role", index))
+                .w_full()
+                .px(px(space::LG))
+                .py(px(space::XS))
+                .gap(px(space::SM))
+                .items_center()
+                .when(refused.is_none(), |entry| {
+                    entry
+                        .cursor_pointer()
+                        .hover(|style| style.bg(rgb(active().surface_hover)))
+                        .on_click(move |_event, _window, cx| toggle(index, cx))
+                })
+                .child(
+                    gpui::div()
+                        .w(px(20.))
+                        .text_size(px(scaled(text::SM)))
+                        .text_color(rgb(active().text_muted))
+                        // The marker carries the state, so scanning the column
+                        // shows what the member has without reading each line.
+                        .child(if role.assigned { "[x]" } else { "[ ]" }),
+                )
+                .child(
+                    gpui::div()
+                        .flex_1()
+                        .text_size(px(scaled(text::SM)))
+                        // Role colour, which is how they are told apart at a
+                        // glance everywhere else in Discord.
+                        .text_color(rgb(role.color.filter(|color| *color != 0).unwrap_or(
+                            if refused.is_some() {
+                                active().text_subtle
+                            } else {
+                                active().text
+                            },
+                        )))
+                        .child(role.name.clone()),
+                )
+                .children(refused.map(|reason| {
+                    gpui::div()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().text_subtle))
+                        .child(reason)
+                })),
+        );
+    }
+
+    panel("Roles", 420.).child(list).child(
+        row()
+            .w_full()
+            .px(px(space::LG))
+            .py(px(space::MD))
+            .gap(px(space::SM))
+            .justify_end()
+            .child(button("roles-cancel", "Cancel", false, on_cancel))
+            .child(button("roles-save", "Save", true, on_save)),
+    )
+}

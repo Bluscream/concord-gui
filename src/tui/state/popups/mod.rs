@@ -33,6 +33,7 @@ mod notification_inbox;
 mod options;
 mod polls;
 mod reactions;
+mod roles;
 mod search;
 mod stickers;
 mod thread_actions;
@@ -40,6 +41,7 @@ mod thread_edit;
 mod user;
 mod voice_participant_audio;
 pub(in crate::tui) use join_server::JoinServerState;
+pub(in crate::tui) use roles::RolePickerState;
 pub(in crate::tui) use stickers::StickerPickerState;
 pub(in crate::tui) use voice_participant_audio::VoiceParticipantAudioField;
 use voice_participant_audio::{
@@ -140,6 +142,7 @@ define_modal_popups! {
     VoiceParticipantAudio(VoiceParticipantAudioPopupState),
     JoinServer(JoinServerState),
     StickerPicker(StickerPickerState),
+    RolePicker(RolePickerState),
 }
 
 /// The input behavior of the topmost visible popup layer.
@@ -252,6 +255,7 @@ pub(in crate::tui) enum SelectablePopupTarget {
     SearchResults,
     SearchSuggestions,
     Stickers,
+    Roles,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1329,6 +1333,13 @@ impl PopupUiState {
     }
 
     modal_popup_accessors!(
+        role_picker,
+        role_picker_mut,
+        RolePicker,
+        RolePickerState,
+        picker
+    );
+    modal_popup_accessors!(
         sticker_picker,
         sticker_picker_mut,
         StickerPicker,
@@ -1770,6 +1781,7 @@ impl DashboardState {
             ActiveModalPopupKind::Search => self.close_search_popup(),
             ActiveModalPopupKind::JoinServer => self.close_join_server(),
             ActiveModalPopupKind::StickerPicker => self.close_sticker_picker(),
+            ActiveModalPopupKind::RolePicker => self.close_role_picker(),
             ActiveModalPopupKind::ForumPostComposer => {
                 self.close_or_cancel_forum_post_composer();
             }
@@ -2039,6 +2051,9 @@ impl DashboardState {
             ModalPopup::StickerPicker(_) => {
                 ActivePopupPolicy::selectable(kind, SelectablePopupTarget::Stickers)
             }
+            ModalPopup::RolePicker(_) => {
+                ActivePopupPolicy::selectable(kind, SelectablePopupTarget::Roles)
+            }
             ModalPopup::ForumPostComposer(_) => {
                 ActivePopupPolicy::scrollable(kind, ScrollablePopupTarget::ForumPostComposer)
             }
@@ -2108,6 +2123,10 @@ impl DashboardState {
             SelectablePopupTarget::Stickers => {
                 let selection = &self.popups.sticker_picker()?.selection;
                 (selection, self.sticker_picker_items().len())
+            }
+            SelectablePopupTarget::Roles => {
+                let selection = &self.popups.role_picker()?.selection;
+                (selection, self.role_picker_items().len())
             }
             SelectablePopupTarget::MessageActions => {
                 let selection = &self.popups.message_action_menu()?.selection;
@@ -2268,6 +2287,12 @@ impl DashboardState {
                 self.stage_selected_sticker();
                 None
             }
+            // Enter toggles rather than confirms: a member usually needs more
+            // than one role changed, and the set is sent on save.
+            SelectablePopupTarget::Roles => {
+                self.toggle_selected_role();
+                None
+            }
             SelectablePopupTarget::MessageActions => self.activate_selected_message_action(),
             SelectablePopupTarget::GuildActions => self.activate_selected_guild_action(),
             SelectablePopupTarget::ChannelActions => self.activate_selected_channel_action(),
@@ -2363,6 +2388,12 @@ impl DashboardState {
             SelectablePopupTarget::Stickers => {
                 let len = self.sticker_picker_items().len();
                 if let Some(picker) = self.popups.sticker_picker_mut() {
+                    update(&mut picker.selection, len);
+                }
+            }
+            SelectablePopupTarget::Roles => {
+                let len = self.role_picker_items().len();
+                if let Some(picker) = self.popups.role_picker_mut() {
                     update(&mut picker.selection, len);
                 }
             }

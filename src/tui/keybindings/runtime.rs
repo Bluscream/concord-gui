@@ -953,6 +953,7 @@ impl KeyBindings {
             MemberActionKind::ClearTimeout => 'T',
             MemberActionKind::Kick => 'k',
             MemberActionKind::Ban => 'b',
+            MemberActionKind::ManageRoles => 'r',
         })]
     }
 

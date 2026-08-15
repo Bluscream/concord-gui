@@ -578,3 +578,45 @@ pub(in crate::tui::ui) fn render_sticker_picker(
             .expect("the sticker picker has selection state"),
     );
 }
+
+/// The role picker: every role in the guild, with what the member has.
+pub(in crate::tui::ui) fn render_role_picker(
+    frame: &mut Frame,
+    area: Rect,
+    state: &DashboardState,
+) {
+    if !state.is_active_modal_popup(ActiveModalPopupKind::RolePicker) {
+        return;
+    }
+
+    let items = state.role_picker_items();
+    let selected = state.selected_role_index().unwrap_or(0);
+
+    let lines = if items.is_empty() {
+        vec![Line::from(Span::styled(
+            "This server has no assignable roles".to_owned(),
+            theme::current().style(theme::HighlightGroup::Hint),
+        ))]
+    } else {
+        let rows = indexed_action_menu_rows(items.iter().map(|item| {
+            // The marker carries the state, so a glance down the column shows
+            // what the member has without reading every line.
+            let marker = if item.assigned { "[x]" } else { "[ ]" };
+            match item.disabled_reason {
+                Some(reason) => format!("{marker} {} - {reason}", item.name),
+                None => format!("{marker} {}", item.name),
+            }
+        }));
+        action_menu_lines(&rows, selected)
+    };
+
+    render_action_menu(
+        frame,
+        area,
+        "Roles (space toggle, ctrl-s save)".to_owned(),
+        lines,
+        state
+            .popup_list_scroll(SelectablePopupTarget::Roles)
+            .expect("the role picker has selection state"),
+    );
+}

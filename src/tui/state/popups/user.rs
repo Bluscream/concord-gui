@@ -126,6 +126,11 @@ impl DashboardState {
             availability(self.discord.cache.can_timeout_members(guild_id)),
         ));
         items.push(MemberActionItem::new(
+            MemberActionKind::ManageRoles,
+            "Manage roles",
+            availability(self.discord.cache.can_manage_roles(guild_id)),
+        ));
+        items.push(MemberActionItem::new(
             MemberActionKind::Kick,
             "Kick from server",
             availability(self.discord.cache.can_kick_members(guild_id)),
@@ -182,6 +187,12 @@ impl DashboardState {
             MemberActionKind::ShowProfile => {
                 self.close_member_action_menu();
                 self.open_user_profile_popup(action.user_id, action.guild_id)
+            }
+            MemberActionKind::ManageRoles => {
+                let guild_id = action.guild_id?;
+                self.close_member_action_menu();
+                self.open_role_picker(guild_id, action.user_id);
+                None
             }
             MemberActionKind::Kick
             | MemberActionKind::Ban

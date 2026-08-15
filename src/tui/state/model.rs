@@ -510,6 +510,7 @@ pub enum MemberActionKind {
     Ban,
     Timeout,
     ClearTimeout,
+    ManageRoles,
 }
 
 pub type MemberActionItem = ActionItem<MemberActionKind>;
