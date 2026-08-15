@@ -9,7 +9,8 @@ Derived from the TUI's 152 keybinding actions (`src/tui/keybindings/actions.rs`)
 and its 12 builtin slash commands · reply-ping toggle · external editor · sign out · own profile · polls · attachment download ·
 external media playback · remove embeds · thread archive/follow ·
 application commands · pane show/hide · vim-style scrolling ·
-debug log viewer · open links · collapse categories · quit (`src/discord/builtin_commands.rs`). Pure
+debug log viewer · open links · collapse categories · quit ·
+pane focus cycling · pane filtering (`src/discord/builtin_commands.rs`). Pure
 input primitives (`Char`, `Ctrl`, `Key`, `ModifiedKey`) are excluded - they are
 not features.
 
@@ -35,8 +36,6 @@ called this list finished; it was not. What follows is the corrected set.
 | Feature | TUI action | Notes |
 |---|---|---|
 | Keyboard message selection | `SelectNext/Previous`, `ToggleSelected`, `ActivateSelected` | The TUI drives messages entirely from the keyboard; the GUI needs the mouse for every message action. |
-| Filter a pane | `StartFilter`, `CommitFilter`, `OpenPaneFilter` | Type to narrow the channel or member list. |
-| Focus cycling between panes | `CycleFocus*`, `Focus*Pane` | No keyboard path between panes. |
 | Confirmation prompts | `OpenDeleteConfirmation`, `OpenPinConfirmation` | Delete and pin act immediately. |
 | Voice volume | `AdjustVolume`, `UpdateVoiceParticipantPlayback` | No output or per-participant volume control. |
 | Notification levels | `OpenNotificationOptions` | Only mute/unmute; no all/mentions/nothing. |

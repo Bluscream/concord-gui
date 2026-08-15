@@ -231,6 +231,10 @@ pub struct Workspace {
     pub guild_muted: bool,
     /// Recent error-log lines, shown when the debug panel is open.
     pub debug_log: Option<Vec<String>>,
+    /// Which pane keyboard focus is on, for cycling and filtering.
+    pub focus_pane: Pane,
+    /// Filter text for the focused pane, when filtering is active.
+    pub pane_filter: Option<Composer>,
     /// Scroll position of the message list, so navigation can move it.
     pub message_scroll: gpui::ScrollHandle,
     /// Pane visibility and widths, shared with the TUI through ui_state.toml.
@@ -307,6 +311,8 @@ impl Workspace {
             voice_scope_joined: None,
             channel_muted: false,
             guild_muted: false,
+            focus_pane: Pane::Channels,
+            pane_filter: None,
             debug_log: None,
             message_scroll: gpui::ScrollHandle::new(),
             ui_state: config::load_ui_state_options_with_warnings()
@@ -598,6 +604,59 @@ impl Workspace {
         let height = self.message_scroll.bounds().size.height;
         self.message_scroll
             .set_offset(gpui::point(offset.x, offset.y + height * pages));
+    }
+
+    /// Move keyboard focus between panes.
+    fn cycle_focus(&mut self, forward: bool) {
+        // Cycling only visits panes that are actually shown; focusing a hidden
+        // pane would silently swallow keys.
+        let order = [Pane::Guilds, Pane::Channels, Pane::Members];
+        let visible: Vec<Pane> = order
+            .into_iter()
+            .filter(|pane| self.pane_visible(*pane))
+            .collect();
+
+        if visible.is_empty() {
+            return;
+        }
+
+        let current = visible
+            .iter()
+            .position(|pane| *pane == self.focus_pane)
+            .unwrap_or(0) as isize;
+        let step = if forward { 1 } else { -1 };
+        let next = (current + step).rem_euclid(visible.len() as isize) as usize;
+
+        self.focus_pane = visible[next];
+        // A filter belongs to the pane it was opened on.
+        self.pane_filter = None;
+    }
+
+    fn pane_visible(&self, pane: Pane) -> bool {
+        match pane {
+            Pane::Guilds => self.ui_state.guild_pane_visible,
+            Pane::Channels => self.ui_state.channel_pane_visible,
+            Pane::Members => self.ui_state.member_pane_visible && self.shows_members(),
+        }
+    }
+
+    /// Start or stop filtering the focused pane.
+    fn toggle_pane_filter(&mut self) {
+        self.pane_filter = match self.pane_filter {
+            Some(_) => None,
+            None => Some(Composer::default()),
+        };
+    }
+
+    /// Whether a name survives the active filter.
+    fn passes_filter(&self, name: &str) -> bool {
+        match &self.pane_filter {
+            None => true,
+            Some(filter) => {
+                let needle = filter.text().trim().to_lowercase();
+                needle.is_empty() || name.to_lowercase().contains(&needle)
+            }
+        }
     }
 
     /// Quit the application.
@@ -3006,6 +3065,24 @@ impl Workspace {
         // skipped without a lookup per row.
         let mut hidden_parent: Option<Id<marker::ChannelMarker>> = None;
 
+        if let Some(filter) = &self.pane_filter
+            && self.focus_pane == Pane::Channels
+        {
+            list = list.child(
+                gpui::div()
+                    .w_full()
+                    .px(px(space::MD))
+                    .py(px(space::XS))
+                    .text_size(px(text::XS))
+                    .text_color(rgb(active().accent))
+                    .child(if filter.text().is_empty() {
+                        "filter…".to_string()
+                    } else {
+                        format!("filter: {}", filter.text())
+                    }),
+            );
+        }
+
         for (index, channel) in self.model.channels.iter().enumerate() {
             if channel.kind == ChannelKind::Category {
                 let collapsed = channel.id.is_some_and(|id| self.category_collapsed(id));
@@ -3039,6 +3116,10 @@ impl Workspace {
             // than rendered zero-height, so keyboard order matches what is
             // visible.
             if hidden_parent.is_some() && channel.parent == hidden_parent {
+                continue;
+            }
+
+            if self.focus_pane == Pane::Channels && !self.passes_filter(&channel.name) {
                 continue;
             }
 
@@ -3192,6 +3273,13 @@ impl Workspace {
                         .text_color(rgb(active().on_accent))
                         .child("BOT"),
                 );
+            }
+
+            if self.focus_pane == Pane::Members
+                && !member.is_group
+                && !self.passes_filter(&member.name)
+            {
+                continue;
             }
 
             let entry = match member.user_id {
@@ -3728,6 +3816,20 @@ impl Render for Workspace {
                                 _ => Pane::Members,
                             };
                             this.toggle_pane(pane);
+                        } else if this.pane_filter.is_some() && !event.keystroke.modifiers.control {
+                            // While filtering, the pane owns typing so the
+                            // query does not leak into the composer.
+                            if key == "escape" {
+                                this.pane_filter = None;
+                            } else if let Some(filter) = &mut this.pane_filter
+                                && filter.handle_key(event)
+                            {
+                                this.pane_filter = None;
+                            }
+                        } else if key == "slash" && event.keystroke.modifiers.control {
+                            this.toggle_pane_filter();
+                        } else if key == "tab" {
+                            this.cycle_focus(!event.keystroke.modifiers.shift);
                         } else if key == "q"
                             && event.keystroke.modifiers.control
                             && !event.keystroke.modifiers.shift
