@@ -55,8 +55,8 @@ use streams::{
 };
 use user_settings::{parse_user_notification_settings_update, parse_user_settings_update};
 use voice::{
-    parse_call, parse_call_delete, parse_guild_voice_states, parse_voice_server_update,
-    parse_voice_state_update,
+    parse_call, parse_call_delete, parse_guild_voice_states, parse_voice_channel_effect,
+    parse_voice_server_update, parse_voice_state_update,
 };
 
 #[derive(Clone, Debug)]
@@ -165,6 +165,7 @@ fn parse_user_account_event_data(event_type: &str, data: &Value) -> Vec<AppEvent
         "RELATIONSHIP_REMOVE" => parse_relationship_remove(data).into_iter().collect(),
         "GUILD_MEMBER_REMOVE" => parse_member_remove(data).into_iter().collect(),
         "PRESENCE_UPDATE" => parse_presence_update(data),
+        "VOICE_CHANNEL_EFFECT_SEND" => parse_voice_channel_effect(data).into_iter().collect(),
         "VOICE_STATE_UPDATE" => parse_voice_state_update(data).into_iter().collect(),
         "VOICE_SERVER_UPDATE" => parse_voice_server_update(data).into_iter().collect(),
         "STREAM_CREATE" => parse_stream_create(data).into_iter().collect(),

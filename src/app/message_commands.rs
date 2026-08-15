@@ -459,6 +459,74 @@ load_guild_panel!(
     "guild audit log"
 );
 
+/// Fetch a sound list. `None` asks for the default sounds.
+pub(super) async fn load_soundboard_sounds(
+    client: DiscordClient,
+    guild_id: Option<Id<GuildMarker>>,
+) {
+    let result = match guild_id {
+        Some(guild_id) => client.guild_soundboard_sounds(guild_id).await,
+        None => client.default_soundboard_sounds().await,
+    };
+
+    match result {
+        Ok(sounds) => {
+            client
+                .publish_event(AppEvent::SoundboardSoundsLoaded { guild_id, sounds })
+                .await;
+        }
+        Err(error) => {
+            log_app_error("load soundboard sounds failed", &error);
+            client
+                .publish_event(AppEvent::SoundboardSoundsLoadFailed {
+                    guild_id,
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
+pub(super) async fn play_soundboard_sound(
+    client: DiscordClient,
+    channel_id: Id<ChannelMarker>,
+    sound_id: u64,
+    source_guild_id: Option<Id<GuildMarker>>,
+    label: String,
+) {
+    if let Err(error) = client
+        .send_soundboard_sound(channel_id, sound_id, source_guild_id)
+        .await
+    {
+        report_moderation_failure(&client, "playing", &label, &error).await;
+    }
+}
+
+pub(super) async fn rename_soundboard_sound(
+    client: DiscordClient,
+    guild_id: Id<GuildMarker>,
+    sound_id: u64,
+    name: String,
+) {
+    if let Err(error) = client
+        .rename_soundboard_sound(guild_id, sound_id, &name)
+        .await
+    {
+        report_moderation_failure(&client, "renaming sound to", &name, &error).await;
+    }
+}
+
+pub(super) async fn delete_soundboard_sound(
+    client: DiscordClient,
+    guild_id: Id<GuildMarker>,
+    sound_id: u64,
+    label: String,
+) {
+    if let Err(error) = client.delete_soundboard_sound(guild_id, sound_id).await {
+        report_moderation_failure(&client, "deleting sound", &label, &error).await;
+    }
+}
+
 pub(super) async fn create_channel_invite(
     client: DiscordClient,
     channel_id: Id<ChannelMarker>,

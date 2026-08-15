@@ -989,6 +989,9 @@ impl DiscordState {
             | AppEvent::GuildAuditLogLoaded { .. }
             | AppEvent::GuildAuditLogLoadFailed { .. }
             | AppEvent::InviteCreated { .. }
+            | AppEvent::SoundboardSoundPlayed { .. }
+            | AppEvent::SoundboardSoundsLoaded { .. }
+            | AppEvent::SoundboardSoundsLoadFailed { .. }
             | AppEvent::InviteResolved { .. }
             | AppEvent::InviteResolveFailed { .. }
             | AppEvent::InviteAccepted { .. }

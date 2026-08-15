@@ -552,6 +552,50 @@ impl CommandDispatcher {
                     .publish_event(crate::discord::AppEvent::GuildForgotten { guild_id })
                     .await;
             }
+            AppCommand::LoadSoundboardSounds { guild_id } => {
+                message_commands::load_soundboard_sounds(self.client.clone(), guild_id).await;
+            }
+            AppCommand::PlaySoundboardSound {
+                channel_id,
+                sound_id,
+                source_guild_id,
+                label,
+            } => {
+                message_commands::play_soundboard_sound(
+                    self.client.clone(),
+                    channel_id,
+                    sound_id,
+                    source_guild_id,
+                    label,
+                )
+                .await;
+            }
+            AppCommand::RenameSoundboardSound {
+                guild_id,
+                sound_id,
+                name,
+            } => {
+                message_commands::rename_soundboard_sound(
+                    self.client.clone(),
+                    guild_id,
+                    sound_id,
+                    name,
+                )
+                .await;
+            }
+            AppCommand::DeleteSoundboardSound {
+                guild_id,
+                sound_id,
+                label,
+            } => {
+                message_commands::delete_soundboard_sound(
+                    self.client.clone(),
+                    guild_id,
+                    sound_id,
+                    label,
+                )
+                .await;
+            }
             AppCommand::LoadGuildInvites { guild_id } => {
                 message_commands::load_guild_invites(self.client.clone(), guild_id).await;
             }

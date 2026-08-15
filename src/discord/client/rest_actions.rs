@@ -310,6 +310,47 @@ impl DiscordClient {
         self.rest.unban_member(guild_id, user_id).await
     }
 
+    pub async fn default_soundboard_sounds(&self) -> Result<Vec<crate::discord::SoundboardSound>> {
+        self.rest.default_soundboard_sounds().await
+    }
+
+    pub async fn guild_soundboard_sounds(
+        &self,
+        guild_id: Id<GuildMarker>,
+    ) -> Result<Vec<crate::discord::SoundboardSound>> {
+        self.rest.guild_soundboard_sounds(guild_id).await
+    }
+
+    pub async fn send_soundboard_sound(
+        &self,
+        channel_id: Id<crate::discord::ids::marker::ChannelMarker>,
+        sound_id: u64,
+        source_guild_id: Option<Id<GuildMarker>>,
+    ) -> Result<()> {
+        self.rest
+            .send_soundboard_sound(channel_id, sound_id, source_guild_id)
+            .await
+    }
+
+    pub async fn rename_soundboard_sound(
+        &self,
+        guild_id: Id<GuildMarker>,
+        sound_id: u64,
+        name: &str,
+    ) -> Result<()> {
+        self.rest
+            .rename_soundboard_sound(guild_id, sound_id, name)
+            .await
+    }
+
+    pub async fn delete_soundboard_sound(
+        &self,
+        guild_id: Id<GuildMarker>,
+        sound_id: u64,
+    ) -> Result<()> {
+        self.rest.delete_soundboard_sound(guild_id, sound_id).await
+    }
+
     pub async fn guild_invites(
         &self,
         guild_id: Id<GuildMarker>,

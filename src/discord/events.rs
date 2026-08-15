@@ -689,6 +689,26 @@ pub enum AppEvent {
     GuildForgotten {
         guild_id: Id<GuildMarker>,
     },
+    /// Somebody played a soundboard sound in a voice channel we are in.
+    ///
+    /// Discord sends the same event for emoji reactions in voice, which carry
+    /// no sound - those arrive with no `sound_id` and are not turned into this.
+    SoundboardSoundPlayed {
+        channel_id: Id<ChannelMarker>,
+        user_id: Id<UserMarker>,
+        sound_id: u64,
+        /// 0 to 1, as the sender configured it.
+        volume: f64,
+    },
+    SoundboardSoundsLoaded {
+        /// `None` for the default sounds, which belong to no guild.
+        guild_id: Option<Id<GuildMarker>>,
+        sounds: Vec<crate::discord::SoundboardSound>,
+    },
+    SoundboardSoundsLoadFailed {
+        guild_id: Option<Id<GuildMarker>>,
+        message: String,
+    },
     GuildInvitesLoaded {
         guild_id: Id<GuildMarker>,
         invites: Vec<crate::discord::GuildInviteInfo>,
@@ -1004,6 +1024,9 @@ define_app_event_kinds! {
     GuildBansLoaded: AppEvent::GuildBansLoaded { .. },
     GuildBansLoadFailed: AppEvent::GuildBansLoadFailed { .. },
     GuildForgotten: AppEvent::GuildForgotten { .. },
+    SoundboardSoundPlayed: AppEvent::SoundboardSoundPlayed { .. },
+    SoundboardSoundsLoaded: AppEvent::SoundboardSoundsLoaded { .. },
+    SoundboardSoundsLoadFailed: AppEvent::SoundboardSoundsLoadFailed { .. },
     GuildInvitesLoaded: AppEvent::GuildInvitesLoaded { .. },
     GuildInvitesLoadFailed: AppEvent::GuildInvitesLoadFailed { .. },
     GuildEmojisLoaded: AppEvent::GuildEmojisLoaded { .. },
@@ -2062,6 +2085,11 @@ impl AppEventKind {
             // actually adds the guild.
             AppEventKind::GuildBansLoaded
             | AppEventKind::GuildBansLoadFailed
+            // Sounds belong to the picker that asked for them, and a sound
+            // somebody played is an effect rather than state.
+            | AppEventKind::SoundboardSoundPlayed
+            | AppEventKind::SoundboardSoundsLoaded
+            | AppEventKind::SoundboardSoundsLoadFailed
             | AppEventKind::GuildInvitesLoaded
             | AppEventKind::GuildInvitesLoadFailed
             | AppEventKind::GuildEmojisLoaded

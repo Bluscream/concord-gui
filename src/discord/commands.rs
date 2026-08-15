@@ -538,6 +538,28 @@ pub enum AppCommand {
         guild_id: Id<GuildMarker>,
         label: String,
     },
+    /// Fetch a sound list. `None` asks for the default sounds.
+    LoadSoundboardSounds {
+        guild_id: Option<Id<GuildMarker>>,
+    },
+    /// Play a sound into the voice channel we are in.
+    PlaySoundboardSound {
+        channel_id: Id<ChannelMarker>,
+        sound_id: u64,
+        /// The guild the sound came from, for a guild sound played elsewhere.
+        source_guild_id: Option<Id<GuildMarker>>,
+        label: String,
+    },
+    RenameSoundboardSound {
+        guild_id: Id<GuildMarker>,
+        sound_id: u64,
+        name: String,
+    },
+    DeleteSoundboardSound {
+        guild_id: Id<GuildMarker>,
+        sound_id: u64,
+        label: String,
+    },
     LoadGuildInvites {
         guild_id: Id<GuildMarker>,
     },
