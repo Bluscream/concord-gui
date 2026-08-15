@@ -1375,3 +1375,66 @@ fn activities_reach_the_member_list_and_profile() {
             .any(|line| line.contains("Custom Status"))
     );
 }
+
+#[test]
+fn no_icon_glyph_needs_a_font_we_do_not_ship() {
+    // Astral-plane emoji draw as empty boxes with the shipped fonts, which is
+    // what four voice buttons did before anyone noticed. Blocks U+2600-U+27BF
+    // and U+2B00-U+2BFF often carry an emoji presentation for the same reason.
+    //
+    // Checked over source rather than at runtime: a glyph that fails to render
+    // looks like a layout quirk, not an error, so nothing would ever raise it.
+    const SOURCES: [(&str, &str); 3] = [
+        ("workspace.rs", include_str!("../ui/workspace.rs")),
+        ("messages.rs", include_str!("../ui/messages.rs")),
+        ("chrome.rs", include_str!("../ui/chrome.rs")),
+    ];
+
+    for (name, source) in SOURCES {
+        for (index, _) in source.match_indices("\\u{") {
+            let rest = &source[index + 3..];
+            let Some(end) = rest.find('}') else { continue };
+            let Ok(code) = u32::from_str_radix(&rest[..end], 16) else {
+                continue;
+            };
+
+            assert!(
+                code <= 0xFFFF,
+                "{name} uses U+{code:04X}, which is outside the Basic \
+                 Multilingual Plane and will draw as an empty box"
+            );
+            // Not a blanket range: most of Dingbats and Miscellaneous
+            // Symbols are ordinary text glyphs. These are the BMP codepoints
+            // Unicode gives Emoji_Presentation=Yes, which are the ones a font
+            // will draw in colour - or not at all.
+            const EMOJI_PRESENTATION: [std::ops::RangeInclusive<u32>; 20] = [
+                0x231A..=0x231B,
+                0x23E9..=0x23EC,
+                0x23F0..=0x23F0,
+                0x23F3..=0x23F3,
+                0x25FD..=0x25FE,
+                0x2614..=0x2615,
+                0x2648..=0x2653,
+                0x267F..=0x267F,
+                0x2693..=0x2693,
+                0x26A1..=0x26A1,
+                0x26AA..=0x26AB,
+                0x26BD..=0x26BE,
+                0x26C4..=0x26C5,
+                0x26D4..=0x26D4,
+                0x2705..=0x2705,
+                0x270A..=0x270B,
+                0x2728..=0x2728,
+                0x274C..=0x274C,
+                0x2B1B..=0x2B1C,
+                0x2B50..=0x2B55,
+            ];
+
+            assert!(
+                !EMOJI_PRESENTATION.iter().any(|range| range.contains(&code)),
+                "{name} uses U+{code:04X}, which Unicode marks as \
+                 emoji-presentation and a font will draw in colour or not at all"
+            );
+        }
+    }
+}

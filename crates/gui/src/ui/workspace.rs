@@ -5109,23 +5109,26 @@ impl Workspace {
                     let muted = self.guild_muted;
                     header
                         .child(
-                            gpui::div()
-                                .id("guild-mute")
-                                .px(px(space::SM))
-                                .rounded(px(layout::RADIUS))
-                                .cursor_pointer()
-                                .text_size(px(scaled(text::XS)))
-                                .text_color(rgb(if muted {
-                                    active().danger
+                            // Geometric, not a bell: every bell glyph is
+                            // astral-plane and would draw as an empty box.
+                            // The crossed circle means "off" here as it does
+                            // on the voice controls.
+                            icon_button(
+                                "guild-mute",
+                                if muted { "\u{2298}" } else { "\u{25CE}" },
+                                if muted {
+                                    t!("action-unmute-server")
                                 } else {
-                                    active().text_subtle
-                                }))
-                                .hover(|style| style.bg(rgb(active().surface_hover)))
-                                .child(if muted { "unmute" } else { "mute" })
-                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    t!("action-mute-server")
+                                },
+                                muted,
+                            )
+                            .on_click(cx.listener(
+                                |this, _event, _window, cx| {
                                     this.toggle_guild_muted();
                                     cx.notify();
-                                })),
+                                },
+                            )),
                         )
                         // Only where the account can ban: unlike the per-member
                         // actions, an empty ban list is indistinguishable from
@@ -5138,36 +5141,34 @@ impl Workspace {
                             }),
                             |header| {
                                 header.child(
-                                    gpui::div()
-                                        .id("guild-bans")
-                                        .px(px(space::SM))
-                                        .rounded(px(layout::RADIUS))
-                                        .cursor_pointer()
-                                        .text_size(px(scaled(text::XS)))
-                                        .text_color(rgb(active().text_subtle))
-                                        .hover(|style| style.text_color(rgb(active().text)))
-                                        .child("bans")
-                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                    icon_button(
+                                        "guild-bans",
+                                        "\u{2717}",
+                                        t!("action-view-bans"),
+                                        false,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _event, _window, cx| {
                                             this.open_ban_list();
                                             cx.notify();
-                                        })),
+                                        },
+                                    )),
                                 )
                             },
                         )
                         .child(
-                            gpui::div()
-                                .id("guild-leave")
-                                .px(px(space::SM))
-                                .rounded(px(layout::RADIUS))
-                                .cursor_pointer()
-                                .text_size(px(scaled(text::XS)))
-                                .text_color(rgb(active().text_subtle))
-                                .hover(|style| style.text_color(rgb(active().danger)))
-                                .child("leave")
-                                .on_click(cx.listener(|this, _event, _window, cx| {
+                            icon_button(
+                                "guild-leave",
+                                "\u{2192}",
+                                t!("action-leave-server"),
+                                false,
+                            )
+                            .on_click(cx.listener(
+                                |this, _event, _window, cx| {
                                     this.leave_guild();
                                     cx.notify();
-                                })),
+                                },
+                            )),
                         )
                 },
             );
@@ -6161,40 +6162,34 @@ impl Workspace {
                             )
                     })
                     .child(
-                        gpui::div()
-                            .id("channel-pins")
-                            .px(px(space::SM))
-                            .py(px(space::XS))
-                            .rounded(px(layout::RADIUS))
-                            .cursor_pointer()
-                            .text_size(px(scaled(text::XS)))
-                            .text_color(rgb(active().text_muted))
-                            .hover(|style| style.bg(rgb(active().surface_hover)))
-                            .child("pins")
-                            .on_click(cx.listener(|this, _event, _window, cx| {
+                        icon_button("channel-pins", "\u{27A6}", t!("action-pins"), false).on_click(
+                            cx.listener(|this, _event, _window, cx| {
                                 this.open_pins();
                                 cx.notify();
-                            })),
+                            }),
+                        ),
                     )
                     .child(
-                        gpui::div()
-                            .id("channel-mute")
-                            .px(px(space::SM))
-                            .py(px(space::XS))
-                            .rounded(px(layout::RADIUS))
-                            .cursor_pointer()
-                            .text_size(px(scaled(text::XS)))
-                            .text_color(rgb(if self.channel_muted {
-                                active().danger
+                        icon_button(
+                            "channel-mute",
+                            if self.channel_muted {
+                                "\u{2298}"
                             } else {
-                                active().text_muted
-                            }))
-                            .hover(|style| style.bg(rgb(active().surface_hover)))
-                            .child(if self.channel_muted { "unmute" } else { "mute" })
-                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                "\u{25CE}"
+                            },
+                            if self.channel_muted {
+                                t!("action-unmute-channel")
+                            } else {
+                                t!("action-mute-channel")
+                            },
+                            self.channel_muted,
+                        )
+                        .on_click(cx.listener(
+                            |this, _event, _window, cx| {
                                 this.toggle_channel_muted();
                                 cx.notify();
-                            })),
+                            },
+                        )),
                     )
                     .when(self.can_call(), |header| {
                         let call_channel = self.nav.channel;
@@ -6277,15 +6272,7 @@ impl Workspace {
                     .gap(px(space::SM))
                     .items_center()
                     .child(
-                        gpui::div()
-                            .id("sticker-open")
-                            .px(px(space::SM))
-                            .rounded(px(layout::RADIUS))
-                            .cursor_pointer()
-                            .text_size(px(scaled(text::XS)))
-                            .text_color(rgb(active().text_subtle))
-                            .hover(|style| style.text_color(rgb(active().text)))
-                            .child("sticker")
+                        icon_button("sticker-open", "\u{229A}", t!("action-sticker"), false)
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.open_sticker_picker();
                                 cx.notify();

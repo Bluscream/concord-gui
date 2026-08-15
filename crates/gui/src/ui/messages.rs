@@ -15,7 +15,10 @@ use crate::model::markdown::{self, Kind};
 use concord::discord::custom_emoji_image_url;
 
 use crate::model::message::{MessageRow, format_bytes};
+use concord::t;
+
 use crate::theme::{active, layout, scaled, space, text};
+use crate::ui::chrome::Tooltip;
 
 /// Decoded image attachments, keyed by URL.
 pub type Previews = std::collections::HashMap<String, std::sync::Arc<gpui::Image>>;
@@ -271,37 +274,80 @@ fn action_bar(
         .border_1()
         .border_color(rgb(active().border));
 
-    let button = |label: &'static str, action: MessageAction, danger: bool| {
+    // Glyphs are Basic Multilingual Plane only: the obvious emoji for most of
+    // these - pencil, wastebasket, pushpin - are astral-plane and draw as
+    // empty boxes with the shipped fonts. The name lives in the tooltip.
+    let button = |glyph: &'static str, tooltip: String, action: MessageAction, danger: bool| {
         let handler = on_action.clone();
+        let tooltip: gpui::SharedString = tooltip.into();
         gpui::div()
             .id(("action", index * 8 + action.slot()))
             .px(px(6.))
             .py(px(2.))
             .rounded(px(3.))
             .cursor_pointer()
-            .text_size(px(scaled(text::XS)))
+            .text_size(px(scaled(text::SM)))
             .text_color(rgb(if danger {
                 active().danger
             } else {
                 active().text_muted
             }))
             .hover(|style| style.bg(rgb(active().surface_hover)))
-            .child(label)
+            .child(glyph)
+            .tooltip({
+                let tooltip = tooltip.clone();
+                move |_window, cx| cx.new(|_| Tooltip::new(tooltip.clone())).into()
+            })
             .on_click(move |_event, _window, cx| handler(index, action, cx))
     };
 
     if has_thread {
-        bar = bar.child(button("thread", MessageAction::OpenThread, false));
+        bar = bar.child(button(
+            "\u{2261}",
+            t!("action-open-thread"),
+            MessageAction::OpenThread,
+            false,
+        ));
     }
 
     bar = bar
-        .child(button("reply", MessageAction::Reply, false))
-        .child(button("forward", MessageAction::Forward, false))
-        .child(button("react", MessageAction::React, false))
-        .child(button("copy", MessageAction::CopyText, false))
-        .child(button("link", MessageAction::CopyLink, false))
         .child(button(
-            if pinned { "unpin" } else { "pin" },
+            "\u{21A9}",
+            t!("action-reply"),
+            MessageAction::Reply,
+            false,
+        ))
+        .child(button(
+            "\u{21AA}",
+            t!("action-forward"),
+            MessageAction::Forward,
+            false,
+        ))
+        .child(button(
+            "\u{229A}",
+            t!("action-react"),
+            MessageAction::React,
+            false,
+        ))
+        .child(button(
+            "\u{2398}",
+            t!("action-copy-text"),
+            MessageAction::CopyText,
+            false,
+        ))
+        .child(button(
+            "\u{26AD}",
+            t!("action-copy-link"),
+            MessageAction::CopyLink,
+            false,
+        ))
+        .child(button(
+            "\u{27A6}",
+            if pinned {
+                t!("action-unpin")
+            } else {
+                t!("action-pin")
+            },
             MessageAction::TogglePin,
             false,
         ));
@@ -310,13 +356,28 @@ fn action_bar(
     // them otherwise would invite a request the server will reject.
     if own {
         bar = bar
-            .child(button("edit", MessageAction::Edit, false))
-            .child(button("delete", MessageAction::Delete, true));
+            .child(button(
+                "\u{270E}",
+                t!("action-edit"),
+                MessageAction::Edit,
+                false,
+            ))
+            .child(button(
+                "\u{2715}",
+                t!("action-delete"),
+                MessageAction::Delete,
+                true,
+            ));
 
         // Only where there is an embed to strip: Discord rejects the request
         // otherwise, and an inert button invites a click that fails.
         if has_embeds {
-            bar = bar.child(button("unembed", MessageAction::RemoveEmbeds, false));
+            bar = bar.child(button(
+                "\u{2327}",
+                t!("action-remove-embeds"),
+                MessageAction::RemoveEmbeds,
+                false,
+            ));
         }
     }
 

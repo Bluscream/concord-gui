@@ -72,3 +72,18 @@ status-no-stickers = Dieser Server hat keine Sticker
 status-no-bans = Niemand ist von diesem Server gebannt
 status-no-mentions = Keine neuen Erwähnungen
 status-already-joined = Du bist bereits auf diesem Server
+
+# Kanal- und Server-Kopfzeilen
+action-pins = Angeheftete Nachrichten
+action-view-bans = Banns anzeigen
+action-mute-channel = Kanal stummschalten
+action-unmute-channel = Kanal-Stummschaltung aufheben
+action-mute-server = Server stummschalten
+action-unmute-server = Server-Stummschaltung aufheben
+action-leave-server = Server verlassen
+
+# Nachrichten-Werkzeugleiste
+action-open-thread = Thread öffnen
+action-copy-link = Link kopieren
+action-remove-embeds = Einbettungen entfernen
+action-jump-to-replied = Zur beantworteten Nachricht springen

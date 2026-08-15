@@ -74,3 +74,18 @@ status-no-stickers = This server has no stickers
 status-no-bans = Nobody is banned from this server
 status-no-mentions = No recent mentions
 status-already-joined = You are already in this server
+
+# Channel and guild headers
+action-pins = Pinned messages
+action-view-bans = View bans
+action-mute-channel = Mute channel
+action-unmute-channel = Unmute channel
+action-mute-server = Mute server
+action-unmute-server = Unmute server
+action-leave-server = Leave server
+
+# Message toolbar
+action-open-thread = Open thread
+action-copy-link = Copy link
+action-remove-embeds = Remove embeds
+action-jump-to-replied = Jump to the replied message
