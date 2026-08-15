@@ -453,6 +453,7 @@ pub fn demo_state() -> DiscordState {
         author: "turing".into(),
         content: Some("what's the plan for today?".into()),
         sticker_names: Vec::new(),
+        stickers: Vec::new(),
         mentions: Vec::new(),
     });
     general.push(reply);

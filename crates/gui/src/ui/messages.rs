@@ -476,6 +476,40 @@ fn message_body(
         }
     }
 
+    // Stickers, before attachments. A sticker-only message used to render as
+    // completely blank, since the core carried names but no ids and nothing
+    // drew them.
+    for (position, (name, url)) in message.stickers.iter().enumerate() {
+        match url {
+            Some(url) if options.show_images => {
+                body = body.child(
+                    gpui::img(gpui::SharedUri::from(url.clone()))
+                        // Discord renders stickers at 160px; larger would
+                        // dominate the log for what is a single reaction.
+                        .w(px(160.))
+                        .h(px(160.))
+                        .rounded(px(layout::RADIUS)),
+                );
+            }
+            // Either previews are off, or the sticker is a Lottie animation
+            // this client cannot play. Named rather than dropped, so the
+            // message is not silently empty.
+            _ => {
+                body = body.child(
+                    gpui::div()
+                        .id(("sticker", index * 8 + position))
+                        .px(px(space::SM))
+                        .py(px(space::XS))
+                        .rounded(px(layout::RADIUS))
+                        .bg(rgb(active().surface_hover))
+                        .text_size(px(scaled(text::SM)))
+                        .text_color(rgb(active().text_muted))
+                        .child(format!("sticker: {name}")),
+                );
+            }
+        }
+    }
+
     for (position, attachment) in message.attachments.iter().enumerate() {
         // Images render inline rather than only as a chip, from bytes the core
         // fetched. Going through the core rather than GPUI's URL loader means

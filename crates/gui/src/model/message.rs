@@ -121,6 +121,10 @@ pub struct MessageRow {
     /// the reply context be clicked through to its target.
     pub reply_to: Option<(String, String, Option<Id<marker::MessageMarker>>)>,
     pub attachments: Vec<AttachmentRow>,
+    /// Stickers, as (name, image URL). The URL is absent for Lottie, which is
+    /// a vector animation this client cannot play - the name is shown instead
+    /// of a broken image.
+    pub stickers: Vec<(String, Option<String>)>,
     /// `(emoji, count, me_reacted)`.
     pub reactions: Vec<(String, u64, bool)>,
     pub embed_count: usize,
@@ -209,6 +213,11 @@ pub fn project_messages(
                         .and_then(|reference| reference.message_id),
                 )
             }),
+            stickers: message
+                .stickers
+                .iter()
+                .map(|sticker| (sticker.name.clone(), sticker.image_url()))
+                .collect(),
             attachments: message
                 .attachments
                 .iter()

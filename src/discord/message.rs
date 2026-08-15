@@ -241,10 +241,75 @@ impl Default for MessageKind {
     }
 }
 
+/// A sticker on a message.
+///
+/// The id is what makes it renderable: a name alone leaves a sticker-only
+/// message looking completely empty, which is how it looked before this.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StickerInfo {
+    pub id: Id<crate::discord::ids::marker::StickerMarker>,
+    pub name: String,
+    pub format: StickerFormat,
+}
+
+/// Discord's sticker `format_type`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum StickerFormat {
+    #[default]
+    Png,
+    Apng,
+    /// Vector animation. Not renderable as an image, so clients that cannot
+    /// play it fall back to the sticker's name rather than a broken picture.
+    Lottie,
+    Gif,
+}
+
+impl StickerFormat {
+    pub fn from_wire(value: u64) -> Self {
+        match value {
+            2 => Self::Apng,
+            3 => Self::Lottie,
+            4 => Self::Gif,
+            // 1 is PNG, and an unknown future value is most safely treated as
+            // a still image: a wrong extension fails to load, which is the
+            // same outcome as not trying.
+            _ => Self::Png,
+        }
+    }
+
+    /// Whether this can be shown as an image at all.
+    pub const fn is_image(self) -> bool {
+        !matches!(self, Self::Lottie)
+    }
+
+    pub const fn extension(self) -> &'static str {
+        match self {
+            Self::Png | Self::Apng => "png",
+            Self::Lottie => "json",
+            Self::Gif => "gif",
+        }
+    }
+}
+
+impl StickerInfo {
+    /// CDN URL for the sticker image.
+    pub fn image_url(&self) -> Option<String> {
+        self.format.is_image().then(|| {
+            format!(
+                "https://media.discordapp.net/stickers/{}.{}",
+                self.id.get(),
+                self.format.extension()
+            )
+        })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MessageSnapshotInfo {
     pub content: Option<String>,
     pub sticker_names: Vec<String>,
+    /// The same stickers with their ids, so they can be rendered.
+    pub stickers: Vec<StickerInfo>,
     pub mentions: Vec<MentionInfo>,
     pub attachments: Vec<AttachmentInfo>,
     pub embeds: Vec<EmbedInfo>,
@@ -259,6 +324,7 @@ impl MessageSnapshotInfo {
         Self {
             content: None,
             sticker_names: Vec::new(),
+            stickers: Vec::new(),
             mentions: Vec::new(),
             attachments: Vec::new(),
             embeds: Vec::new(),
@@ -274,6 +340,8 @@ pub struct ReplyInfo {
     pub author: String,
     pub content: Option<String>,
     pub sticker_names: Vec<String>,
+    /// The same stickers with their ids, so they can be rendered.
+    pub stickers: Vec<StickerInfo>,
     pub mentions: Vec<MentionInfo>,
 }
 
@@ -286,6 +354,7 @@ impl ReplyInfo {
             author: author.into(),
             content: None,
             sticker_names: Vec::new(),
+            stickers: Vec::new(),
             mentions: Vec::new(),
         }
     }
@@ -431,6 +500,8 @@ pub struct MessageInfo {
     pub reactions: Vec<ReactionInfo>,
     pub content: Option<String>,
     pub sticker_names: Vec<String>,
+    /// The same stickers with their ids, so they can be rendered.
+    pub stickers: Vec<StickerInfo>,
     pub mentions: Vec<MentionInfo>,
     pub mention_everyone: bool,
     pub mention_roles: Vec<Id<RoleMarker>>,
@@ -464,6 +535,7 @@ impl Default for MessageInfo {
             reactions: Vec::new(),
             content: None,
             sticker_names: Vec::new(),
+            stickers: Vec::new(),
             mentions: Vec::new(),
             mention_everyone: false,
             mention_roles: Vec::new(),

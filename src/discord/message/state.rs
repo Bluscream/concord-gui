@@ -38,6 +38,7 @@ pub struct MessageState {
     pub reactions: Vec<ReactionInfo>,
     pub content: Option<String>,
     pub sticker_names: Vec<String>,
+    pub stickers: Vec<crate::discord::StickerInfo>,
     pub mentions: Vec<MentionInfo>,
     pub mention_everyone: bool,
     pub mention_roles: Vec<Id<RoleMarker>>,
@@ -69,6 +70,7 @@ impl Default for MessageState {
             reactions: Vec::new(),
             content: None,
             sticker_names: Vec::new(),
+            stickers: Vec::new(),
             mentions: Vec::new(),
             mention_everyone: false,
             mention_roles: Vec::new(),
@@ -99,6 +101,7 @@ impl MessageState {
         self.poll = None;
         self.content = None;
         self.sticker_names.clear();
+        self.stickers.clear();
         self.mentions.clear();
         self.attachments.clear();
         self.embeds.clear();
@@ -1344,6 +1347,7 @@ impl DiscordState {
         };
         MessageState {
             id: message.message_id,
+            stickers: message.stickers.clone(),
             nonce: message.nonce,
             guild_id,
             channel_id: message.channel_id,

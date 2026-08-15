@@ -87,6 +87,7 @@ impl DashboardState {
                     author: message.author.clone(),
                     content: message.content.clone(),
                     sticker_names: message.sticker_names.clone(),
+                    stickers: message.stickers.clone(),
                     mentions: message.mentions.clone(),
                 })
         });

@@ -57,6 +57,7 @@ pub(crate) fn parse_message_info(data: &Value) -> Option<MessageInfo> {
         .map(str::to_owned);
     let interaction = parse_message_interaction_info(data);
     let sticker_names = parse_sticker_names(data.get("sticker_items"));
+    let stickers = parse_stickers(data.get("sticker_items"));
     let mentions = parse_mentions(data.get("mentions"));
     let mention_everyone = data
         .get("mention_everyone")
@@ -104,6 +105,7 @@ pub(crate) fn parse_message_info(data: &Value) -> Option<MessageInfo> {
         reactions: parse_reactions(data.get("reactions")),
         content,
         sticker_names,
+        stickers,
         mentions,
         mention_everyone,
         mention_roles,
@@ -159,6 +161,34 @@ pub(super) fn parse_attachments(value: Option<&Value>) -> Vec<AttachmentInfo> {
     value
         .and_then(Value::as_array)
         .map(|items| items.iter().filter_map(parse_attachment).collect())
+        .unwrap_or_default()
+}
+
+/// Stickers with their ids and formats, which is what makes them renderable.
+pub(super) fn parse_stickers(value: Option<&Value>) -> Vec<crate::discord::StickerInfo> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    // An id is required: without one there is nothing to
+                    // fetch, and a nameless sticker is not worth a row.
+                    let id = item.get("id").and_then(parse_id)?;
+                    Some(crate::discord::StickerInfo {
+                        id,
+                        name: item
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("sticker")
+                            .to_owned(),
+                        format: crate::discord::StickerFormat::from_wire(
+                            item.get("format_type").and_then(Value::as_u64).unwrap_or(1),
+                        ),
+                    })
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -364,6 +394,7 @@ fn parse_reply_info(value: &Value) -> Option<ReplyInfo> {
         author: author_name,
         content,
         sticker_names,
+        stickers: parse_stickers(value.get("sticker_items")),
         mentions,
     })
 }
@@ -624,6 +655,7 @@ fn parse_message_snapshot(
         .and_then(Value::as_str)
         .map(str::to_owned);
     let sticker_names = parse_sticker_names(message.get("sticker_items"));
+    let stickers = parse_stickers(message.get("sticker_items"));
     let attachments = parse_attachments(message.get("attachments"));
     let embeds = parse_embeds(message.get("embeds"));
     let mentions = parse_mentions(message.get("mentions"));
@@ -642,6 +674,7 @@ fn parse_message_snapshot(
         Some(MessageSnapshotInfo {
             content,
             sticker_names,
+            stickers,
             mentions,
             attachments,
             embeds,
@@ -707,6 +740,9 @@ pub(super) fn parse_message_update(data: &Value) -> Option<AppEvent> {
     let sticker_names = data
         .get("sticker_items")
         .map(|value| parse_sticker_names(Some(value)));
+    let stickers = data
+        .get("sticker_items")
+        .map(|value| parse_stickers(Some(value)));
     let attachments = if data.get("attachments").is_some() {
         AttachmentUpdate::Replace(parse_attachments(data.get("attachments")))
     } else {
@@ -738,6 +774,7 @@ pub(super) fn parse_message_update(data: &Value) -> Option<AppEvent> {
                 poll,
                 content,
                 sticker_names,
+                stickers,
                 mentions,
                 mention_everyone,
                 mention_roles,
