@@ -499,9 +499,7 @@ impl DiscordState {
         thread: &ThreadGatewayInfo,
         created: bool,
     ) {
-        let parent_to_ack = if created
-            && thread.channel.owner_id == self.session.current_user_id
-        {
+        let parent_to_ack = if created && thread.channel.owner_id == self.session.current_user_id {
             thread.channel.parent_id.filter(|parent_id| {
                 self.navigation
                     .channels

@@ -102,6 +102,38 @@ fn guild_create_parser_preserves_complete_onboarding_payload() {
 }
 
 #[test]
+fn guild_create_parser_preserves_initial_presence_activities() {
+    let event = parse_guild_create(&json!({
+        "id": "10",
+        "name": "guild",
+        "channels": [],
+        "members": [],
+        "roles": [],
+        "emojis": [],
+        "presences": [{
+            "user": { "id": "20" },
+            "status": "online",
+            "activities": [{
+                "type": 2,
+                "name": "Spotify",
+                "details": "A song"
+            }]
+        }]
+    }))
+    .expect("guild should parse");
+
+    let AppEvent::GuildCreate { presences, .. } = event else {
+        panic!("expected guild create event");
+    };
+    assert_eq!(presences.len(), 1);
+    assert_eq!(presences[0].user_id, Id::new(20));
+    assert_eq!(presences[0].status, PresenceStatus::Online);
+    assert_eq!(presences[0].activities.len(), 1);
+    assert_eq!(presences[0].activities[0].kind, ActivityKind::Listening);
+    assert_eq!(presences[0].activities[0].name, "Spotify");
+}
+
+#[test]
 fn onboarding_dispatches_preserve_payload() {
     let events = parse_user_account_event(
         &json!({
@@ -1922,6 +1954,21 @@ fn message_update_parser_distinguishes_absent_and_empty_attachments() {
             ));
         }
     }
+}
+
+#[test]
+fn message_update_parser_preserves_pin_state() {
+    let event = parse_message_update(&json!({
+        "id": "20",
+        "channel_id": "10",
+        "pinned": true
+    }))
+    .expect("message update should parse");
+    let AppEvent::MessageUpdateDispatch { update } = event else {
+        panic!("expected message update event");
+    };
+
+    assert_eq!(update.fields.pinned, Some(true));
 }
 
 #[test]

@@ -1,5 +1,7 @@
 use super::*;
-use crate::discord::{GuildMemberListEntry, GuildVerificationLevel, VoiceScope};
+use crate::discord::{
+    GuildMemberListEntry, GuildVerificationLevel, PresenceEventFields, VoiceScope,
+};
 use chrono::Utc;
 use serde_json::json;
 
@@ -335,25 +337,40 @@ fn reidentified_gateway_session_invalidates_cached_member_list_ranges() {
 }
 
 #[test]
-fn tracks_members_and_presences() {
+fn tracks_members_and_initial_presence_activities() {
     let guild_id = Id::new(1);
     let alice = Id::new(10);
     let bob = Id::new(20);
     let mut state = DiscordState::default();
 
+    let activity = ActivityInfo::test(ActivityKind::Listening, "Spotify");
     state.apply_event(&guild_create_event(GuildCreateFixture {
         member_count: Some(100),
         members: vec![member_info(alice, "alice"), member_info(bob, "bob")],
-        presences: vec![(alice, PresenceStatus::Online)],
+        presences: vec![PresenceEventFields {
+            user_id: alice,
+            status: PresenceStatus::Online,
+            activities: vec![activity.clone()],
+        }],
         ..GuildCreateFixture::new(guild_id)
     }));
 
     let members = state.members_for_guild(guild_id);
     assert_eq!(state.guild(guild_id).unwrap().member_count, Some(100));
     assert_eq!(members.len(), 2);
-    let alice_state = members.iter().find(|m| m.user_id == alice).unwrap();
+    let alice_state = members
+        .iter()
+        .find(|member| member.user_id == alice)
+        .expect("Alice should be cached");
     assert_eq!(alice_state.status, PresenceStatus::Online);
-    let bob_state = members.iter().find(|m| m.user_id == bob).unwrap();
+    assert_eq!(
+        state.user_activities_for_guild(Some(guild_id), alice),
+        std::slice::from_ref(&activity)
+    );
+    let bob_state = members
+        .iter()
+        .find(|member| member.user_id == bob)
+        .expect("Bob should be cached");
     assert_eq!(bob_state.status, PresenceStatus::Unknown);
 
     state.apply_event(&AppEvent::PresenceUpdate {

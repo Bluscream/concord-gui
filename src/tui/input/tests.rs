@@ -32,9 +32,9 @@ use crate::{
         CustomEmojiInfo, DownloadAttachmentSource, EmbedInfo, GuildFolder, GuildMemberListItem,
         GuildMemberListOperation, GuildMemberListUpdateInfo, GuildNotificationSettingsInfo,
         MemberInfo, MessageInfo, MessageReferenceInfo, MessageSnapshotInfo,
-        MicrophoneSensitivityDb, NotificationLevel, PollAnswerInfo, PollInfo, PresenceStatus,
-        ReactionEmoji, ReactionUserInfo, ReadStateInfo, RoleInfo, UserGuildSettingsInfo,
-        UserSettingsInfo, VoiceConnectionStatus, VoiceVolumePercent,
+        MicrophoneSensitivityDb, NotificationLevel, PollAnswerInfo, PollInfo, PresenceEventFields,
+        PresenceStatus, ReactionEmoji, ReactionUserInfo, ReadStateInfo, RoleInfo,
+        UserGuildSettingsInfo, UserSettingsInfo, VoiceConnectionStatus, VoiceVolumePercent,
     },
     tui::state::{
         ChannelPaneEntry, DashboardState, FocusPane, GuildPaneEntry, MessageActionKind,
@@ -428,7 +428,11 @@ fn state_with_members(count: u64) -> DashboardState {
         .map(|id| MemberInfo::test(Id::new(id), format!("member {id}")))
         .collect();
     let presences = (1..=count)
-        .map(|id| (Id::new(id), PresenceStatus::Online))
+        .map(|id| PresenceEventFields {
+            user_id: Id::new(id),
+            status: PresenceStatus::Online,
+            activities: Vec::new(),
+        })
         .collect();
 
     state.push_event(guild_create_event(GuildCreateFixture {

@@ -27,9 +27,10 @@ use crate::discord::{
     GuildMemberListOperation, GuildMemberListUpdateInfo, GuildNotificationSettingsInfo,
     MessageInfo, MessageKind, MessageReferenceInfo, MessageSearchPage, MessageSnapshotInfo,
     MessageState, MessageUpdateDispatchInfo, MessageUpdateEventFields, NotificationLevel,
-    PermissionOverwriteInfo, PermissionOverwriteKind, PremiumTier, PresenceStatus, ReactionEmoji,
-    ReactionInfo, ReactionUserInfo, ReplyInfo, RoleInfo, SnapshotRevision, UserGuildSettingsInfo,
-    UserProfileInfo, UserSettingsInfo, VoiceConnectionStatus, VoiceStateInfo,
+    PermissionOverwriteInfo, PermissionOverwriteKind, PremiumTier, PresenceEventFields,
+    PresenceStatus, ReactionEmoji, ReactionInfo, ReactionUserInfo, ReplyInfo, RoleInfo,
+    SnapshotRevision, UserGuildSettingsInfo, UserProfileInfo, UserSettingsInfo,
+    VoiceConnectionStatus, VoiceStateInfo,
 };
 
 macro_rules! assert_send_message_eq {

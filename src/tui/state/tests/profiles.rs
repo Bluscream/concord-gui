@@ -128,7 +128,11 @@ fn user_profile_popup_status_resolves_from_the_best_available_source() {
     let mut guild_member = DashboardState::new();
     guild_member.push_event(guild_create_event(GuildCreateFixture {
         members: vec![member_info(user_id, "neo")],
-        presences: vec![(user_id, PresenceStatus::DoNotDisturb)],
+        presences: vec![PresenceEventFields {
+            user_id,
+            status: PresenceStatus::DoNotDisturb,
+            activities: Vec::new(),
+        }],
         ..GuildCreateFixture::new(guild_id)
     }));
     guild_member.open_user_profile_popup(user_id, Some(guild_id));

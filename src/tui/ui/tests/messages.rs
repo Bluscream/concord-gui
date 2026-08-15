@@ -151,7 +151,11 @@ fn message_viewport_author_uses_resolved_role_color() {
             role_ids: vec![role_id],
             ..MemberInfo::test(author_id, "neo")
         }],
-        presences: vec![(author_id, PresenceStatus::Online)],
+        presences: vec![PresenceEventFields {
+            user_id: author_id,
+            status: PresenceStatus::Online,
+            activities: Vec::new(),
+        }],
         roles: vec![RoleInfo {
             color: Some(0x3366CC),
             position: 10,
@@ -261,7 +265,11 @@ fn history_message_author_uses_channel_guild_for_role_color() {
             role_ids: vec![role_id],
             ..MemberInfo::test(author_id, "neo")
         }],
-        presences: vec![(author_id, PresenceStatus::Online)],
+        presences: vec![PresenceEventFields {
+            user_id: author_id,
+            status: PresenceStatus::Online,
+            activities: Vec::new(),
+        }],
         roles: vec![RoleInfo {
             color: Some(0x3366CC),
             position: 10,

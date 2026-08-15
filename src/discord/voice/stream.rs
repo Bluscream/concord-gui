@@ -681,11 +681,33 @@ async fn connect_stream_gateway(
                             }))
                             .await;
                         child_tasks
-                            .replace_keepalive(tokio::spawn(gateway::run_voice_udp_keepalive(
+                            .replace_udp_ping(tokio::spawn(gateway::run_voice_udp_ping(
                                 Arc::clone(socket),
                             )))
                             .await;
                         current_description = Some(description);
+                    }
+                    VOICE_OP_SESSION_UPDATE => {
+                        let Some(description) = current_description.as_mut() else {
+                            break Err(StreamConnectionFailure::reconnect(
+                                "stream session update arrived before session description",
+                            ));
+                        };
+                        gateway::apply_voice_session_update(&value, description)?;
+                        if description
+                            .video_codec
+                            .as_deref()
+                            .is_some_and(|codec| !codec.eq_ignore_ascii_case("H264"))
+                        {
+                            break Err(StreamConnectionFailure::reconnect(format!(
+                                "stream selected unsupported video codec: {}",
+                                description.video_codec.as_deref().unwrap_or("none")
+                            )));
+                        }
+                        logging::debug(
+                            "stream",
+                            format!("stream session updated: {description:?}"),
+                        );
                     }
                     VOICE_OP_VIDEO => {
                         if let Some(source) =
@@ -2170,6 +2192,9 @@ async fn run_stream_media(
                     received.map_err(|error| format!("stream UDP receive failed: {error}"))?;
                 let packet_arrival = media_started_at.elapsed();
                 let packet = &packet[..received];
+                if gateway::parse_udp_ping_response(packet).is_some() {
+                    continue;
+                }
                 if looks_like_rtcp_packet(packet) {
                     let decrypted = match decryptor.decrypt_rtcp_feedback(packet) {
                         Ok(decrypted) => decrypted,
@@ -3726,19 +3751,19 @@ mod tests {
     #[tokio::test]
     async fn dropping_stream_child_tasks_aborts_every_child() {
         let (heartbeat, heartbeat_started, heartbeat_dropped) = cancellable_test_task();
-        let (keepalive, keepalive_started, keepalive_dropped) = cancellable_test_task();
+        let (udp_ping, udp_ping_started, udp_ping_dropped) = cancellable_test_task();
         let (media, media_started, media_dropped) = cancellable_test_task();
         let mut child_tasks = GatewayChildTasks::default();
         child_tasks.replace_heartbeat(heartbeat).await;
-        child_tasks.replace_keepalive(keepalive).await;
+        child_tasks.replace_udp_ping(udp_ping).await;
         child_tasks.replace_media(media).await;
 
         heartbeat_started.await.expect("heartbeat test task starts");
-        keepalive_started.await.expect("keepalive test task starts");
+        udp_ping_started.await.expect("UDP ping test task starts");
         media_started.await.expect("media test task starts");
         drop(child_tasks);
 
-        for dropped in [heartbeat_dropped, keepalive_dropped, media_dropped] {
+        for dropped in [heartbeat_dropped, udp_ping_dropped, media_dropped] {
             timeout(Duration::from_secs(1), dropped)
                 .await
                 .expect("stream child task is aborted promptly")

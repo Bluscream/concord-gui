@@ -51,6 +51,7 @@ pub struct MessageUpdateEventFields {
     pub mention_everyone: Option<bool>,
     pub mention_roles: Option<Vec<Id<RoleMarker>>>,
     pub flags: Option<u64>,
+    pub pinned: Option<bool>,
     pub attachments: AttachmentUpdate,
     pub embeds: Option<Vec<EmbedInfo>>,
     pub edited_timestamp: Option<String>,
@@ -75,6 +76,7 @@ impl Default for MessageUpdateEventFields {
             mention_everyone: None,
             mention_roles: None,
             flags: None,
+            pinned: None,
             attachments: AttachmentUpdate::Unchanged,
             embeds: None,
             edited_timestamp: None,
@@ -273,7 +275,7 @@ pub enum AppEvent {
         thread_snapshot_complete: bool,
         current_user_thread_members: Vec<ThreadMemberInfo>,
         members: Vec<MemberInfo>,
-        presences: Vec<(Id<UserMarker>, PresenceStatus)>,
+        presences: Vec<PresenceEventFields>,
         roles: Option<Vec<RoleInfo>>,
         emojis: Vec<CustomEmojiInfo>,
     },
@@ -1068,8 +1070,8 @@ pub(crate) mod test_builders {
     }
 
     use crate::discord::{
-        ChannelInfo, CustomEmojiInfo, GuildBoostTier, GuildOnboardingInfo, MemberInfo,
-        PresenceStatus, RoleInfo, ThreadMemberInfo,
+        ChannelInfo, CustomEmojiInfo, GuildBoostTier, GuildOnboardingInfo, MemberInfo, RoleInfo,
+        ThreadMemberInfo,
     };
 
     // Single construction seam for `AppEvent::GuildCreate` so a new field on the
@@ -1089,7 +1091,7 @@ pub(crate) mod test_builders {
         pub(crate) thread_snapshot_complete: bool,
         pub(crate) current_user_thread_members: Vec<ThreadMemberInfo>,
         pub(crate) members: Vec<MemberInfo>,
-        pub(crate) presences: Vec<(Id<UserMarker>, PresenceStatus)>,
+        pub(crate) presences: Vec<PresenceEventFields>,
         pub(crate) roles: Vec<RoleInfo>,
         pub(crate) emojis: Vec<CustomEmojiInfo>,
     }

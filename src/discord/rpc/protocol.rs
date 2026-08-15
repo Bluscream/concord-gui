@@ -3,8 +3,6 @@ use serde_json::{Value, json};
 use crate::discord::ActivityInfo;
 use crate::discord::gateway::parse_activity;
 
-/// Every command other than `SET_ACTIVITY` is accepted and ignored so clients
-/// keep working.
 pub(super) enum Command {
     SetActivity {
         pid: i64,
@@ -12,42 +10,94 @@ pub(super) enum Command {
         echo: Value,
         nonce: Option<String>,
     },
-    Other {
-        cmd: String,
-        nonce: Option<String>,
-    },
 }
 
-pub(super) fn parse_command(payload: &[u8], client_id: &str) -> Option<Command> {
-    let value: Value = serde_json::from_slice(payload).ok()?;
-    let cmd = value.get("cmd").and_then(Value::as_str)?.to_owned();
-    let nonce = value
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct CommandError {
+    pub cmd: Option<String>,
+    pub nonce: Option<String>,
+    pub code: u16,
+    pub message: &'static str,
+}
+
+impl CommandError {
+    fn invalid_payload(cmd: Option<String>, nonce: Option<String>) -> Self {
+        Self {
+            cmd,
+            nonce,
+            code: 4000,
+            message: "Invalid payload",
+        }
+    }
+
+    fn invalid_command(cmd: String, nonce: Option<String>) -> Self {
+        Self {
+            cmd: Some(cmd),
+            nonce,
+            code: 4002,
+            message: "Invalid command",
+        }
+    }
+}
+
+pub(super) fn parse_command(payload: &[u8], client_id: &str) -> Result<Command, CommandError> {
+    let value: Value =
+        serde_json::from_slice(payload).map_err(|_| CommandError::invalid_payload(None, None))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| CommandError::invalid_payload(None, None))?;
+    let cmd = object
+        .get("cmd")
+        .and_then(Value::as_str)
+        .filter(|cmd| !cmd.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| CommandError::invalid_payload(None, command_nonce(object)))?;
+    let nonce = match object.get("nonce") {
+        Some(Value::String(nonce)) => Some(nonce.clone()),
+        Some(Value::Null) | None => None,
+        Some(_) => {
+            return Err(CommandError::invalid_payload(Some(cmd), None));
+        }
+    };
+
+    if cmd != "SET_ACTIVITY" {
+        return Err(CommandError::invalid_command(cmd, nonce));
+    }
+    let args = object
+        .get("args")
+        .and_then(Value::as_object)
+        .ok_or_else(|| CommandError::invalid_payload(Some(cmd.clone()), nonce.clone()))?;
+    let pid = args
+        .get("pid")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| CommandError::invalid_payload(Some(cmd.clone()), nonce.clone()))?;
+    let raw_activity = args
+        .get("activity")
+        .cloned()
+        .ok_or_else(|| CommandError::invalid_payload(Some(cmd.clone()), nonce.clone()))?;
+    let activity = match &raw_activity {
+        Value::Null => None,
+        Value::Object(_) => Some(Box::new(
+            build_activity(&raw_activity, client_id)
+                .ok_or_else(|| CommandError::invalid_payload(Some(cmd), nonce.clone()))?,
+        )),
+        _ => {
+            return Err(CommandError::invalid_payload(Some(cmd), nonce));
+        }
+    };
+    Ok(Command::SetActivity {
+        pid,
+        activity,
+        echo: raw_activity,
+        nonce,
+    })
+}
+
+fn command_nonce(object: &serde_json::Map<String, Value>) -> Option<String> {
+    object
         .get("nonce")
         .and_then(Value::as_str)
-        .map(str::to_owned);
-
-    if cmd == "SET_ACTIVITY" {
-        let args = value.get("args");
-        let pid = args
-            .and_then(|args| args.get("pid"))
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
-        let raw_activity = args
-            .and_then(|args| args.get("activity"))
-            .cloned()
-            .unwrap_or(Value::Null);
-        let activity = Some(&raw_activity)
-            .filter(|activity| !activity.is_null())
-            .and_then(|activity| build_activity(activity, client_id))
-            .map(Box::new);
-        return Some(Command::SetActivity {
-            pid,
-            activity,
-            echo: raw_activity,
-            nonce,
-        });
-    }
-    Some(Command::Other { cmd, nonce })
+        .map(str::to_owned)
 }
 
 /// The RPC payload carries no app name (Discord derives it from `client_id`),
@@ -83,6 +133,20 @@ pub(super) fn build_command_ack(cmd: &str, nonce: Option<&str>, data: Value) -> 
         "evt": Value::Null,
         "nonce": nonce,
         "data": data,
+    })
+    .to_string()
+    .into_bytes()
+}
+
+pub(super) fn build_command_error(error: &CommandError) -> Vec<u8> {
+    json!({
+        "cmd": error.cmd,
+        "evt": "ERROR",
+        "nonce": error.nonce,
+        "data": {
+            "code": error.code,
+            "message": error.message,
+        },
     })
     .to_string()
     .into_bytes()
@@ -160,10 +224,7 @@ mod tests {
             activity,
             echo,
             nonce,
-        } = command
-        else {
-            panic!("expected SET_ACTIVITY");
-        };
+        } = command;
         assert_eq!(pid, 4321);
         assert_eq!(nonce.as_deref(), Some("n1"));
         assert_eq!(echo["details"].as_str(), Some("Editing main.rs"));
@@ -188,9 +249,7 @@ mod tests {
         })
         .to_string();
         let command = parse_command(payload.as_bytes(), "999").expect("command parses");
-        let Command::SetActivity { activity, .. } = command else {
-            panic!("expected SET_ACTIVITY");
-        };
+        let Command::SetActivity { activity, .. } = command;
         let activity = activity.expect("activity present");
         assert_eq!(
             activity.timestamps.and_then(|t| t.start),
@@ -204,9 +263,7 @@ mod tests {
         })
         .to_string();
         let command = parse_command(payload.as_bytes(), "999").expect("command parses");
-        let Command::SetActivity { activity, .. } = command else {
-            panic!("expected SET_ACTIVITY");
-        };
+        let Command::SetActivity { activity, .. } = command;
         assert_eq!(
             activity
                 .expect("activity present")
@@ -245,9 +302,7 @@ mod tests {
         .to_string();
 
         let command = parse_command(payload.as_bytes(), "999").expect("command parses");
-        let Command::SetActivity { activity, .. } = command else {
-            panic!("expected SET_ACTIVITY");
-        };
+        let Command::SetActivity { activity, .. } = command;
         let activity = activity.expect("activity present");
         assert_eq!(activity.kind, ActivityKind::Hang);
         assert_eq!(
@@ -282,9 +337,7 @@ mod tests {
         .to_string();
 
         let command = parse_command(payload.as_bytes(), "999").expect("command parses");
-        let Command::SetActivity { activity, .. } = command else {
-            panic!("expected SET_ACTIVITY");
-        };
+        let Command::SetActivity { activity, .. } = command;
         assert!(activity.is_none());
     }
 

@@ -15,8 +15,9 @@ use crate::discord::{
     AppEvent, AttachmentInfo, ChannelInfo, CustomEmojiInfo, EmbedInfo, GuildFolder,
     GuildMemberListItem, GuildMemberListOperation, GuildMemberListUpdateInfo, GuildOnboardingInfo,
     MemberInfo, MessageInfo, MessageKind, MessageReferenceInfo, MessageSnapshotInfo, MessageState,
-    PermissionOverwriteInfo, PermissionOverwriteKind, PollAnswerInfo, PollInfo, PresenceStatus,
-    ReactionEmoji, ReactionInfo, ReadStateInfo, RoleInfo, ThreadMetadataInfo, VoiceStateInfo,
+    PermissionOverwriteInfo, PermissionOverwriteKind, PollAnswerInfo, PollInfo,
+    PresenceEventFields, PresenceStatus, ReactionEmoji, ReactionInfo, ReadStateInfo, RoleInfo,
+    ThreadMetadataInfo, VoiceStateInfo,
 };
 
 pub(super) const PERM_ADD_REACTIONS: u64 = 0x0000_0000_0000_0040;
@@ -461,11 +462,31 @@ pub(super) fn state_with_writable_channel_and_members() -> DashboardState {
                 member_with_username(Id::new(23), "Alias", "Alias123"),
             ],
             presences: vec![
-                (me, PresenceStatus::Online),
-                (Id::new(20), PresenceStatus::Online),
-                (Id::new(21), PresenceStatus::Online),
-                (Id::new(22), PresenceStatus::Online),
-                (Id::new(23), PresenceStatus::Online),
+                PresenceEventFields {
+                    user_id: me,
+                    status: PresenceStatus::Online,
+                    activities: Vec::new(),
+                },
+                PresenceEventFields {
+                    user_id: Id::new(20),
+                    status: PresenceStatus::Online,
+                    activities: Vec::new(),
+                },
+                PresenceEventFields {
+                    user_id: Id::new(21),
+                    status: PresenceStatus::Online,
+                    activities: Vec::new(),
+                },
+                PresenceEventFields {
+                    user_id: Id::new(22),
+                    status: PresenceStatus::Online,
+                    activities: Vec::new(),
+                },
+                PresenceEventFields {
+                    user_id: Id::new(23),
+                    status: PresenceStatus::Online,
+                    activities: Vec::new(),
+                },
             ],
             roles: vec![role_info(
                 Id::new(guild.get()),
@@ -537,7 +558,11 @@ pub(super) fn state_with_members(count: u64) -> DashboardState {
         .map(|id| member_info(Id::new(id), format!("member {id}")))
         .collect();
     let presences = (1..=count)
-        .map(|id| (Id::new(id), PresenceStatus::Online))
+        .map(|id| PresenceEventFields {
+            user_id: Id::new(id),
+            status: PresenceStatus::Online,
+            activities: Vec::new(),
+        })
         .collect();
 
     state.push_event(crate::discord::test_builders::guild_create_event(
@@ -584,10 +609,26 @@ pub(super) fn state_with_grouped_members() -> DashboardState {
             channels: vec![text_channel_info(guild_id, channel_id, "general")],
             members,
             presences: vec![
-                (Id::new(1), PresenceStatus::Online),
-                (Id::new(2), PresenceStatus::Online),
-                (Id::new(3), PresenceStatus::Offline),
-                (Id::new(4), PresenceStatus::Offline),
+                PresenceEventFields {
+                    user_id: Id::new(1),
+                    status: PresenceStatus::Online,
+                    activities: Vec::new(),
+                },
+                PresenceEventFields {
+                    user_id: Id::new(2),
+                    status: PresenceStatus::Online,
+                    activities: Vec::new(),
+                },
+                PresenceEventFields {
+                    user_id: Id::new(3),
+                    status: PresenceStatus::Offline,
+                    activities: Vec::new(),
+                },
+                PresenceEventFields {
+                    user_id: Id::new(4),
+                    status: PresenceStatus::Offline,
+                    activities: Vec::new(),
+                },
             ],
             roles: vec![RoleInfo {
                 position: 1,

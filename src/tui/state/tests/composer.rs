@@ -340,8 +340,16 @@ fn state_with_command_mentions(command: ApplicationCommandInfo) -> DashboardStat
             member_with_username(Id::new(20), "Sally", "salamander"),
         ],
         presences: vec![
-            (me, PresenceStatus::Online),
-            (Id::new(20), PresenceStatus::Online),
+            PresenceEventFields {
+                user_id: me,
+                status: PresenceStatus::Online,
+                activities: Vec::new(),
+            },
+            PresenceEventFields {
+                user_id: Id::new(20),
+                status: PresenceStatus::Online,
+                activities: Vec::new(),
+            },
         ],
         roles: vec![
             role_info(Id::new(guild.get()), "@everyone", 0x400 | 0x800),

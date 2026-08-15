@@ -594,17 +594,23 @@ impl DiscordState {
             AppEvent::RichPresenceDetected { .. } => {}
             AppEvent::MessageHistoryLoadFailed { .. } => {}
             AppEvent::MessageSearchLoadFailed { .. } => {}
-            AppEvent::MessageUpdateDispatch { update } => self.update_message(
-                update.channel_id,
-                update.message_id,
-                MessageUpdateFields {
-                    body: update.fields.clone(),
-                    pinned: None,
-                    reactions: None,
-                    retain_body: self
-                        .should_retain_message_update_body(update.channel_id, update.message_id),
-                },
-            ),
+            AppEvent::MessageUpdateDispatch { update } => {
+                self.update_message(
+                    update.channel_id,
+                    update.message_id,
+                    MessageUpdateFields {
+                        body: update.fields.clone(),
+                        reactions: None,
+                        retain_body: self.should_retain_message_update_body(
+                            update.channel_id,
+                            update.message_id,
+                        ),
+                    },
+                );
+                if let Some(pinned) = update.fields.pinned {
+                    self.set_cached_message_pinned(update.channel_id, update.message_id, pinned);
+                }
+            }
             AppEvent::CurrentUserReactionAdd {
                 channel_id,
                 message_id,
@@ -1360,24 +1366,11 @@ impl DiscordState {
             self.upsert_guild_member(*guild_id, member);
         }
         self.reset_member_list_from_guild_snapshot(*guild_id, *member_count);
-        let Self {
-            guild_details,
-            presence,
-            ..
-        } = self;
-        let members = Arc::make_mut(guild_details)
-            .members
-            .entry(*guild_id)
-            .or_default();
-        let presence = Arc::make_mut(presence);
-        for (user_id, status) in presences {
-            presence
-                .guild_user_presences
-                .insert((*guild_id, *user_id), *status);
-            presence.user_presences.insert(*user_id, *status);
-            if let Some(member) = members.get_mut(user_id) {
-                member.status = *status;
-            }
+        for presence in presences {
+            self.apply_event(&AppEvent::PresenceUpdate {
+                guild_id: Some(*guild_id),
+                presence: presence.clone(),
+            });
         }
         if let Some(roles) = roles {
             self.guild_details_mut()

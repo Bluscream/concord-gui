@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashSet, VecDeque},
+    collections::{BTreeSet, HashMap, HashSet, VecDeque},
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -151,6 +151,7 @@ const GATEWAY_SEND_LIMIT: usize = 120;
 const GATEWAY_SEND_WINDOW: Duration = Duration::from_secs(60);
 const GATEWAY_SHUTDOWN_LEAVE_TIMEOUT: Duration = Duration::from_millis(1_500);
 const GUILD_MEMBER_REQUEST_RESPONSE_TTL: Duration = Duration::from_secs(2 * 60);
+const GUILD_MEMBER_REQUEST_INTERVAL: Duration = Duration::from_secs(30);
 const MAX_PENDING_GUILD_MEMBER_REQUESTS: usize = 512;
 const MAX_SENT_GUILD_MEMBER_REQUESTS: usize = 512;
 const MAX_GATEWAY_RETRY_DELAY: Duration = Duration::from_secs(30 * 60);
@@ -319,6 +320,7 @@ struct GuildMemberRequestScheduler {
     pending: VecDeque<PendingGuildMemberRequest>,
     in_flight: Option<ScheduledGuildMemberRequest>,
     awaiting_response: VecDeque<SentGuildMemberRequest>,
+    next_guild_request_at: HashMap<Id<GuildMarker>, Instant>,
     next_nonce: u64,
 }
 
@@ -339,6 +341,7 @@ impl Default for GuildMemberRequestScheduler {
             pending: VecDeque::new(),
             in_flight: None,
             awaiting_response: VecDeque::new(),
+            next_guild_request_at: HashMap::new(),
             next_nonce: 1,
         }
     }
@@ -513,10 +516,9 @@ impl GuildMemberRequestScheduler {
         if self.pending.len() >= MAX_PENDING_GUILD_MEMBER_REQUESTS {
             return false;
         }
-        self.pending.push_back(PendingGuildMemberRequest {
-            request,
-            send_at: now,
-        });
+        let send_at = self.guild_request_at(request.guild_id, now);
+        self.pending
+            .push_back(PendingGuildMemberRequest { request, send_at });
         true
     }
 
@@ -524,13 +526,18 @@ impl GuildMemberRequestScheduler {
         // Hydration requests resolve concrete users already visible in the UI,
         // so losing them is worse than briefly exceeding the search queue's
         // soft memory bound. IDs are deduplicated and grouped into 100-member
-        // payloads here. The shared Gateway writer enforces the connection-wide
-        // send budget, while RATE_LIMITED dispatches provide any request-specific
-        // delay that Discord requires.
-        self.pending.push_back(PendingGuildMemberRequest {
-            request,
-            send_at: now,
-        });
+        // payloads here, then the scheduler spaces every payload for the guild.
+        let send_at = self.guild_request_at(request.guild_id, now);
+        self.pending
+            .push_back(PendingGuildMemberRequest { request, send_at });
+    }
+
+    fn guild_request_at(&self, guild_id: Id<GuildMarker>, requested_at: Instant) -> Instant {
+        self.next_guild_request_at
+            .get(&guild_id)
+            .copied()
+            .unwrap_or(requested_at)
+            .max(requested_at)
     }
 
     fn next_nonce(&mut self) -> String {
@@ -575,8 +582,9 @@ impl GuildMemberRequestScheduler {
             .in_flight
             .take()
             .expect("sent guild member request exists");
+        let guild_id = completed.request.guild_id;
+        self.delay_guild_until(guild_id, sent_at + GUILD_MEMBER_REQUEST_INTERVAL);
         if let Some(retry_at) = completed.retry_at {
-            let guild_id = completed.request.guild_id;
             self.pending.push_front(PendingGuildMemberRequest {
                 request: completed.request,
                 send_at: retry_at,
@@ -697,6 +705,11 @@ impl GuildMemberRequestScheduler {
     }
 
     fn delay_guild_until(&mut self, guild_id: Id<GuildMarker>, earliest: Instant) {
+        let earliest = *self
+            .next_guild_request_at
+            .entry(guild_id)
+            .and_modify(|current| *current = (*current).max(earliest))
+            .or_insert(earliest);
         for pending in self
             .pending
             .iter_mut()
@@ -747,8 +760,9 @@ impl GuildMemberRequestScheduler {
         self.prune_awaiting(now);
         self.cancel_in_flight(now);
         self.recover_awaiting(now);
+        self.next_guild_request_at.clear();
         for pending in &mut self.pending {
-            pending.send_at = pending.send_at.max(now);
+            pending.send_at = now;
         }
     }
 }
@@ -1689,9 +1703,9 @@ fn close_code_outcome(code: u16) -> ConnectionOutcome {
     // Retrying the same IDENTIFY would hide the real problem behind Loading...
     // and can loop forever for codes such as 4004.
     match code {
-        4004 | 4010..=4014 => ConnectionOutcome::Fatal,
-        4007 | 4009 => ConnectionOutcome::Reidentify,
-        4000..=4003 | 4005 | 4008 => ConnectionOutcome::Resume,
+        4004 | 4010..=4016 => ConnectionOutcome::Fatal,
+        4003 | 4007 | 4009 => ConnectionOutcome::Reidentify,
+        4000..=4002 | 4005 | 4008 => ConnectionOutcome::Resume,
         _ => ConnectionOutcome::Reidentify,
     }
 }

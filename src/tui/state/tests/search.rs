@@ -224,8 +224,16 @@ fn member_search_filters_loaded_members_and_opens_profile() {
             member_with_username(bob, "Bob B", "bob"),
         ],
         presences: vec![
-            (alice, PresenceStatus::Online),
-            (bob, PresenceStatus::Offline),
+            PresenceEventFields {
+                user_id: alice,
+                status: PresenceStatus::Online,
+                activities: Vec::new(),
+            },
+            PresenceEventFields {
+                user_id: bob,
+                status: PresenceStatus::Offline,
+                activities: Vec::new(),
+            },
         ],
         ..GuildCreateFixture::new(guild_id)
     }));

@@ -7,7 +7,7 @@ use super::RTP_VERSION;
 #[derive(Default)]
 pub(super) struct GatewayChildTasks {
     heartbeat: Option<GatewayChildTask>,
-    keepalive: Option<GatewayChildTask>,
+    udp_ping: Option<GatewayChildTask>,
     media: Option<GatewayChildTask>,
 }
 
@@ -52,9 +52,9 @@ impl GatewayChildTasks {
         .await;
     }
 
-    pub(super) async fn replace_keepalive(&mut self, task: JoinHandle<()>) {
+    pub(super) async fn replace_udp_ping(&mut self, task: JoinHandle<()>) {
         Self::replace(
-            &mut self.keepalive,
+            &mut self.udp_ping,
             GatewayChildTask {
                 task,
                 graceful_stop: None,
@@ -105,7 +105,7 @@ impl GatewayChildTasks {
     pub(super) async fn shutdown(&mut self) {
         let mut tasks = [
             self.heartbeat.take(),
-            self.keepalive.take(),
+            self.udp_ping.take(),
             self.media.take(),
         ];
         for task in tasks.iter_mut().flatten() {
@@ -119,7 +119,7 @@ impl GatewayChildTasks {
     fn abort_all(&mut self) {
         for task in [
             self.heartbeat.take(),
-            self.keepalive.take(),
+            self.udp_ping.take(),
             self.media.take(),
         ]
         .into_iter()

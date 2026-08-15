@@ -887,7 +887,11 @@ fn member_pane_keeps_normal_style_for_speaking_voice_members() {
             ..MemberInfo::test(alice, "Alice")
         }],
         member_count: Some(1),
-        presences: vec![(alice, PresenceStatus::Online)],
+        presences: vec![PresenceEventFields {
+            user_id: alice,
+            status: PresenceStatus::Online,
+            activities: Vec::new(),
+        }],
         ..GuildCreateFixture::new(guild_id)
     }));
     state.confirm_selected_guild();

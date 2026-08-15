@@ -71,17 +71,10 @@ pub(super) fn parse_guild_create(data: &Value) -> Option<AppEvent> {
         .unwrap_or_default();
     let member_count = data.get("member_count").and_then(Value::as_u64);
 
-    // Activities reach state via PresenceUpdate events, not GuildCreate.
     let presences = data
         .get("presences")
         .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(parse_presence_entry)
-                .map(|presence| (presence.user_id, presence.status))
-                .collect()
-        })
+        .map(|items| items.iter().filter_map(parse_presence_entry).collect())
         .unwrap_or_default();
 
     let roles = data

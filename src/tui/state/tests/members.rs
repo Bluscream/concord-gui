@@ -144,7 +144,11 @@ fn member_role_color_picks_the_winning_coloured_role() {
 
         state.push_event(guild_create_event(GuildCreateFixture {
             members: vec![member_with_roles(user_id, "alice", role_ids.clone())],
-            presences: vec![(user_id, PresenceStatus::Online)],
+            presences: vec![PresenceEventFields {
+                user_id,
+                status: PresenceStatus::Online,
+                activities: Vec::new(),
+            }],
             roles,
             ..GuildCreateFixture::new(guild_id)
         }));
@@ -311,7 +315,11 @@ fn member_panel_title_shows_online_and_total_when_counts_available() {
     state.push_event(guild_create_event(GuildCreateFixture {
         member_count: Some(100),
         members: vec![member_info(Id::new(10), "alice")],
-        presences: vec![(Id::new(10), PresenceStatus::Online)],
+        presences: vec![PresenceEventFields {
+            user_id: Id::new(10),
+            status: PresenceStatus::Online,
+            activities: Vec::new(),
+        }],
         ..GuildCreateFixture::new(guild_id)
     }));
     state.confirm_selected_guild();

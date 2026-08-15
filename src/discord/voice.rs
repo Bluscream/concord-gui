@@ -155,8 +155,8 @@ const VOICE_CONNECTION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const VOICE_CONNECTION_STABLE_INTERVAL: Duration = Duration::from_secs(10);
 const UDP_DISCOVERY_PACKET_LEN: usize = 74;
 const UDP_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
-const UDP_KEEPALIVE_PACKET_LEN: usize = 8;
-const UDP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
+const UDP_PING_PACKET_LEN: usize = 8;
+const UDP_PING_INTERVAL: Duration = Duration::from_secs(5);
 const RTP_HEADER_MIN_LEN: usize = 12;
 const RTP_VERSION: u8 = 2;
 const DISCORD_VOICE_PAYLOAD_TYPE: u8 = 0x78;
@@ -293,6 +293,7 @@ const VOICE_OP_RESUMED: u8 = 9;
 const VOICE_OP_CLIENTS_CONNECT: u8 = 11;
 const VOICE_OP_VIDEO: u8 = 12;
 const VOICE_OP_CLIENT_DISCONNECT: u8 = 13;
+const VOICE_OP_SESSION_UPDATE: u8 = 14;
 const VOICE_OP_MEDIA_SINK_WANTS: u8 = 15;
 const VOICE_OP_CLIENT_FLAGS: u8 = 18;
 const VOICE_OP_CLIENT_PLATFORM: u8 = 20;
@@ -694,20 +695,26 @@ struct DiscoveredVoiceAddress {
 
 #[derive(Clone, Eq, PartialEq)]
 struct VoiceSessionDescription {
+    audio_codec: String,
     mode: String,
     secret_key: Vec<u8>,
     dave_protocol_version: Option<u64>,
     video_codec: Option<String>,
+    media_session_id: String,
+    keyframe_interval: Option<u64>,
 }
 
 impl fmt::Debug for VoiceSessionDescription {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("VoiceSessionDescription")
+            .field("audio_codec", &self.audio_codec)
             .field("mode", &self.mode)
             .field("secret_key", &"<redacted>")
             .field("secret_key_len", &self.secret_key.len())
             .field("dave_protocol_version", &self.dave_protocol_version)
             .field("video_codec", &self.video_codec)
+            .field("media_session_id", &self.media_session_id)
+            .field("keyframe_interval", &self.keyframe_interval)
             .finish()
     }
 }
@@ -753,7 +760,7 @@ impl ManagedTask {
 
 struct VoiceChildTasks {
     heartbeat: ManagedTask,
-    udp_keepalive: ManagedTask,
+    udp_ping: ManagedTask,
     udp_receive: ManagedTask,
     #[cfg(feature = "voice-playback")]
     udp_transmit: Option<JoinHandle<()>>,
@@ -813,7 +820,7 @@ impl Default for VoiceChildTasks {
     fn default() -> Self {
         Self {
             heartbeat: ManagedTask::new("voice heartbeat task"),
-            udp_keepalive: ManagedTask::new("voice UDP keepalive task"),
+            udp_ping: ManagedTask::new("voice UDP ping task"),
             udp_receive: ManagedTask::new("voice UDP receive task"),
             #[cfg(feature = "voice-playback")]
             udp_transmit: None,
@@ -1003,8 +1010,8 @@ impl VoiceChildTasks {
         self.udp_receive.replace(task);
     }
 
-    fn replace_udp_keepalive(&mut self, task: JoinHandle<()>) {
-        self.udp_keepalive.replace(task);
+    fn replace_udp_ping(&mut self, task: JoinHandle<()>) {
+        self.udp_ping.replace(task);
     }
 
     #[cfg(feature = "voice-playback")]
@@ -1075,7 +1082,7 @@ impl VoiceChildTasks {
 
     fn abort_all(&mut self) {
         self.heartbeat.abort();
-        self.udp_keepalive.abort();
+        self.udp_ping.abort();
         self.udp_receive.abort();
         #[cfg(feature = "voice-playback")]
         if let Some(task) = self.udp_transmit.take() {

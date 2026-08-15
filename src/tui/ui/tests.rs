@@ -62,10 +62,10 @@ use crate::{
         GuildMemberListUpdateInfo, GuildMemberState, GuildNotificationSettingsInfo, MemberInfo,
         MentionInfo, MessageAttachmentUpload, MessageInfo, MessageInteractionInfo, MessageKind,
         MessageSearchPage, MessageSearchQuery, MessageSnapshotInfo, MessageState, MutualGuildInfo,
-        NotificationLevel, PollAnswerInfo, PollInfo, PresenceStatus, ReactionEmoji, ReactionInfo,
-        ReactionUserInfo, ReadStateInfo, ReplyInfo, RoleInfo, ThreadMetadataInfo,
-        UserGuildSettingsInfo, UserProfileInfo, UserSettingsInfo, VoiceConnectionStatus,
-        VoiceStateInfo,
+        NotificationLevel, PollAnswerInfo, PollInfo, PresenceEventFields, PresenceStatus,
+        ReactionEmoji, ReactionInfo, ReactionUserInfo, ReadStateInfo, ReplyInfo, RoleInfo,
+        ThreadMetadataInfo, UserGuildSettingsInfo, UserProfileInfo, UserSettingsInfo,
+        VoiceConnectionStatus, VoiceStateInfo,
     },
     tui::{
         message::format::{
@@ -528,7 +528,11 @@ fn state_with_member(user_id: u64, display_name: &str) -> DashboardState {
     let mut state = DashboardState::new();
     state.push_event(guild_create_event(GuildCreateFixture {
         members: vec![member_info(user_id, display_name)],
-        presences: vec![(Id::new(user_id), PresenceStatus::Online)],
+        presences: vec![PresenceEventFields {
+            user_id: Id::new(user_id),
+            status: PresenceStatus::Online,
+            activities: Vec::new(),
+        }],
         ..GuildCreateFixture::new(guild_id)
     }));
     state.push_event(guild_member_list_event(

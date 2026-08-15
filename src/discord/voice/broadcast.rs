@@ -28,7 +28,7 @@ use super::{
     DISCORD_STREAM_VIDEO_RTX_PAYLOAD_TYPE, DISCORD_VOICE_PAYLOAD_TYPE, DiscoveredVoiceAddress,
     RTP_AEAD_NONCE_SUFFIX_BYTES, RTP_AEAD_TAG_BYTES, RTP_HEADER_EXTENSION_BYTES,
     RTP_HEADER_MIN_LEN, RTP_VERSION, StreamBroadcastRequest, StreamCreateInfo, StreamServerInfo,
-    VOICE_OP_READY, VOICE_OP_SESSION_DESCRIPTION, VOICE_OP_SPEAKING,
+    VOICE_OP_READY, VOICE_OP_SESSION_DESCRIPTION, VOICE_OP_SESSION_UPDATE, VOICE_OP_SPEAKING,
     VOICE_WEBSOCKET_CONNECT_TIMEOUT, VoiceConnectionEnd, VoiceDaveState, VoiceRuntimeEvent,
     VoiceScope, VoiceSessionDescription, VoiceStatusPublisher, capture,
     dave::VoiceDaveOutboundPayload,
@@ -867,7 +867,7 @@ async fn connect_stream_broadcast(
                         });
                         child_tasks.install_media_gracefully(media_task, media_stop_tx);
                         child_tasks
-                            .replace_keepalive(tokio::spawn(gateway::run_voice_udp_keepalive(
+                            .replace_udp_ping(tokio::spawn(gateway::run_voice_udp_ping(
                                 Arc::clone(
                                     udp_socket
                                         .as_ref()
@@ -876,6 +876,28 @@ async fn connect_stream_broadcast(
                             )))
                             .await;
                         current_description = Some(description);
+                    }
+                    VOICE_OP_SESSION_UPDATE => {
+                        let Some(description) = current_description.as_mut() else {
+                            break Err(BroadcastConnectionFailure::reconnect(
+                                "broadcast session update arrived before session description",
+                            ));
+                        };
+                        gateway::apply_voice_session_update(&value, description)?;
+                        if description
+                            .video_codec
+                            .as_deref()
+                            .is_some_and(|codec| !codec.eq_ignore_ascii_case("H264"))
+                        {
+                            break Err(BroadcastConnectionFailure::stop(format!(
+                                "stream selected unsupported video codec: {}",
+                                description.video_codec.as_deref().unwrap_or("none")
+                            )));
+                        }
+                        logging::debug(
+                            "stream",
+                            format!("broadcast session updated: {description:?}"),
+                        );
                     }
                     other => {
                         if !gateway_control
@@ -1468,7 +1490,7 @@ impl BroadcastVideoTransport {
         socket: &UdpSocket,
         packet: &[u8],
     ) -> Result<bool, String> {
-        if gateway::parse_udp_keepalive_response(packet).is_some() {
+        if gateway::parse_udp_ping_response(packet).is_some() {
             return Ok(false);
         }
         if !looks_like_rtcp_packet(packet) {
@@ -2423,10 +2445,13 @@ mod tests {
 
     fn voice_description() -> VoiceSessionDescription {
         VoiceSessionDescription {
+            audio_codec: "opus".to_owned(),
             mode: AEAD_XCHACHA20_POLY1305_RTPSIZE.to_owned(),
             secret_key: vec![9; 32],
             dave_protocol_version: None,
             video_codec: Some("H264".to_owned()),
+            media_session_id: "media-session".to_owned(),
+            keyframe_interval: Some(1_000),
         }
     }
 

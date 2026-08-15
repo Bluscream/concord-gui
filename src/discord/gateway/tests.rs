@@ -1,7 +1,8 @@
 use super::{
-    ConnectionOutcome, GATEWAY_SEND_LIMIT, GATEWAY_SEND_WINDOW, GATEWAY_URL, GatewayCommand,
-    GatewayHandshake, GatewayPresence, GatewaySendWindow, GatewaySender, GatewaySessionResources,
-    GatewayZlibDecoder, GuildMemberRequestKind, GuildMemberRequestScheduler, HeartbeatAckState,
+    ConnectionOutcome, GATEWAY_SEND_LIMIT, GATEWAY_SEND_WINDOW, GATEWAY_URL,
+    GUILD_MEMBER_REQUEST_INTERVAL, GatewayCommand, GatewayHandshake, GatewayPresence,
+    GatewaySendWindow, GatewaySender, GatewaySessionResources, GatewayZlibDecoder,
+    GuildMemberRequestKind, GuildMemberRequestScheduler, HeartbeatAckState,
     MAX_PENDING_GUILD_MEMBER_REQUESTS, SessionState, SubscriptionDeduper,
     USER_ACCOUNT_CAPABILITIES, build_identify_payload, build_resume_payload, close_code_outcome,
     create_stream_payload, delete_stream_payload, direct_message_subscribe_payload,
@@ -168,14 +169,15 @@ fn guild_member_rate_limit_delays_targeted_requests_until_retry_after() {
         .expect("the correlated request should retry when Discord allows it");
     scheduler.complete_send(retry_at);
     scheduler
-        .start_due(retry_at)
-        .expect("other targeted requests should not gain an extra 30-second delay");
+        .start_due(retry_at + GUILD_MEMBER_REQUEST_INTERVAL)
+        .expect("the next guild request should follow the per-guild interval");
 }
 
 #[test]
-fn targeted_member_requests_are_due_immediately_without_a_fixed_guild_cooldown() {
+fn guild_member_requests_are_paced_per_guild_within_a_session() {
     let now = Instant::now();
     let guild_id = Id::new(99);
+    let other_guild_id = Id::new(100);
     let mut scheduler = GuildMemberRequestScheduler::default();
     assert!(scheduler.enqueue_search(
         guild_id,
@@ -186,20 +188,29 @@ fn targeted_member_requests_are_due_immediately_without_a_fixed_guild_cooldown()
         now,
     ));
     scheduler.enqueue_by_ids(guild_id, (1..=101).map(Id::new).collect(), false, now);
+    scheduler.enqueue_by_ids(other_guild_id, vec![Id::new(200)], false, now);
 
-    assert_eq!(scheduler.pending.len(), 3);
-    assert!(
-        scheduler
-            .pending
-            .iter()
-            .all(|pending| pending.send_at == now)
-    );
-    for _ in 0..3 {
-        scheduler
-            .start_due(now)
-            .expect("each targeted request should be ready without a guild cooldown");
-        scheduler.complete_send(now);
-    }
+    scheduler
+        .start_due(now)
+        .expect("the first guild request should be ready immediately");
+    scheduler.complete_send(now);
+    let second = scheduler
+        .start_due(now)
+        .expect("a different guild can use its own request window");
+    let second: serde_json::Value =
+        serde_json::from_str(&second).expect("member request should be JSON");
+    assert_eq!(second["d"]["guild_id"], json!(["100"]));
+    scheduler.complete_send(now);
+
+    let next_guild_request_at = now + GUILD_MEMBER_REQUEST_INTERVAL;
+    scheduler
+        .start_due(next_guild_request_at)
+        .expect("the next request for the first guild should follow the interval");
+    scheduler.complete_send(next_guild_request_at);
+    scheduler
+        .start_due(next_guild_request_at + GUILD_MEMBER_REQUEST_INTERVAL)
+        .expect("each remaining request should keep the same spacing");
+    scheduler.complete_send(next_guild_request_at + GUILD_MEMBER_REQUEST_INTERVAL);
     assert!(scheduler.pending.is_empty());
 }
 
@@ -244,7 +255,10 @@ fn guild_member_requests_survive_resume_and_reidentify() {
         .front()
         .expect("a written request without a response should retry after reconnect");
     assert_eq!(written_retry.request.nonce, "member-request");
-    assert_eq!(written_retry.send_at, written_disconnect_at);
+    assert_eq!(
+        written_retry.send_at,
+        resumed_at + GUILD_MEMBER_REQUEST_INTERVAL
+    );
 
     scheduler.acknowledge("member-request");
     assert!(
@@ -863,10 +877,11 @@ fn presence_update_payload_preserves_unknown_activity_type() {
 }
 
 #[test]
-fn fatal_gateway_close_codes_do_not_retry_identify() {
-    for code in [4004, 4010, 4011, 4012, 4013, 4014] {
+fn gateway_close_codes_choose_the_documented_recovery() {
+    for code in [4004, 4010, 4011, 4012, 4013, 4014, 4015, 4016] {
         assert_eq!(close_code_outcome(code), ConnectionOutcome::Fatal, "{code}");
     }
+    assert_eq!(close_code_outcome(4003), ConnectionOutcome::Reidentify);
     assert_eq!(close_code_outcome(4007), ConnectionOutcome::Reidentify);
     assert_eq!(close_code_outcome(4009), ConnectionOutcome::Reidentify);
     assert_eq!(close_code_outcome(4000), ConnectionOutcome::Resume);

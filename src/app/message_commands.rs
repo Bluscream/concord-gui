@@ -489,6 +489,7 @@ fn message_update_event(message: MessageInfo) -> AppEvent {
                 mention_everyone: Some(message.mention_everyone),
                 mention_roles: Some(message.mention_roles),
                 flags: Some(message.flags),
+                pinned: Some(message.pinned),
                 attachments: AttachmentUpdate::Replace(message.attachments),
                 embeds: Some(message.embeds),
                 edited_timestamp: message.edited_timestamp,

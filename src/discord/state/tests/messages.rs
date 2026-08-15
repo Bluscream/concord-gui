@@ -251,6 +251,45 @@ fn message_update_refreshes_cached_poll_results() {
 }
 
 #[test]
+fn message_update_applies_pin_state_to_the_cached_message() {
+    let channel_id: Id<ChannelMarker> = Id::new(10);
+    let message_id = Id::new(20);
+    let mut state = DiscordState::default();
+
+    state.apply_event(&message_create_event(MessageCreateFixture {
+        guild_id: None,
+        channel_id,
+        message_id,
+        author_id: Id::new(99),
+        content: Some("Pinned from another client".to_owned()),
+        ..MessageCreateFixture::test_fixture_default()
+    }));
+    state.apply_event(&message_update_event(
+        channel_id,
+        message_id,
+        MessageUpdateEventFields {
+            pinned: Some(true),
+            ..MessageUpdateEventFields::default()
+        },
+    ));
+
+    assert!(state.messages_for_channel(channel_id)[0].pinned);
+    assert_eq!(state.pinned_messages_for_channel(channel_id).len(), 1);
+
+    state.apply_event(&message_update_event(
+        channel_id,
+        message_id,
+        MessageUpdateEventFields {
+            pinned: Some(false),
+            ..MessageUpdateEventFields::default()
+        },
+    ));
+
+    assert!(!state.messages_for_channel(channel_id)[0].pinned);
+    assert!(state.pinned_messages_for_channel(channel_id).is_empty());
+}
+
+#[test]
 fn current_user_poll_vote_update_refreshes_cached_poll_counts() {
     let channel_id: Id<ChannelMarker> = Id::new(10);
     let message_id = Id::new(20);
