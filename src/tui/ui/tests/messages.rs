@@ -1411,7 +1411,7 @@ fn thread_created_message_uses_cached_thread_message_when_last_id_missing() {
 }
 
 #[test]
-fn thread_created_message_keeps_archived_and_locked_metadata() {
+fn thread_created_message_shows_archived_and_locked_after_the_title() {
     let mut message = message_with_content(Some("release notes".to_owned()));
     message.message_kind = MessageKind::new(18);
     message.id =
@@ -1429,7 +1429,11 @@ fn thread_created_message_keeps_archived_and_locked_metadata() {
 
     let lines = format_message_content_lines(&message, &state, 200);
 
-    assert!(line_texts(&lines)[5].contains("archived · locked"));
+    assert!(
+        line_texts(&lines)
+            .iter()
+            .any(|line| line.contains("release notes (archived) (locked)"))
+    );
 }
 
 #[test]

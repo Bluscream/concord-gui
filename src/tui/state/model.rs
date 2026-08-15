@@ -507,8 +507,6 @@ pub enum MemberActionKind {
 
 pub type MemberActionItem = ActionItem<MemberActionKind>;
 
-const FORUM_POST_CARD_HEIGHT: usize = 7;
-
 /// A forum tag applied to a post, resolved into display-ready form. At most one
 /// emoji field is set: a unicode character, or a custom emoji's CDN image url.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -558,22 +556,6 @@ pub struct ChannelThreadItem {
     pub comment_count: Option<u64>,
     pub new_message_count: usize,
     pub last_activity_message_id: Option<Id<MessageMarker>>,
-}
-
-impl ChannelThreadItem {
-    pub fn rendered_height(&self) -> usize {
-        self.card_height() + usize::from(self.section_label.is_some())
-    }
-
-    /// Card body height. The tags row is dropped entirely when the post has no
-    /// tags, so an untagged post (and every regular thread) is one row shorter.
-    pub fn card_height(&self) -> usize {
-        FORUM_POST_CARD_HEIGHT - usize::from(self.applied_tags.is_empty())
-    }
-
-    pub(super) fn rendered_height_for(has_tags: bool, has_section_label: bool) -> usize {
-        FORUM_POST_CARD_HEIGHT - usize::from(!has_tags) + usize::from(has_section_label)
-    }
 }
 
 #[cfg(test)]

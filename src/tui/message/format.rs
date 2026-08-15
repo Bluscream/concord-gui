@@ -54,6 +54,13 @@ use crate::tui::{
 const EDITED_MARKER: &str = " (edited)";
 pub(in crate::tui) const EMOJI_REACTION_IMAGE_WIDTH: u16 = 2;
 
+pub(in crate::tui) fn wrap_plain_text_at_words(value: &str, width: usize) -> Vec<String> {
+    wrap_text_with_metadata(value, &[], &[], width)
+        .into_iter()
+        .map(|line| line.text.trim().to_owned())
+        .collect()
+}
+
 #[derive(Clone)]
 pub(in crate::tui) struct MessageContentLine {
     pub(in crate::tui) text: String,

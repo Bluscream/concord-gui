@@ -265,7 +265,8 @@ fn visible_thread_card_image_preview_targets(
         ) {
             targets.push(target);
         }
-        rendered_row = rendered_row.saturating_add(post.card_height());
+        rendered_row =
+            rendered_row.saturating_add(thread_card::thread_card_height(post, card_width, true));
     }
 
     targets
@@ -812,10 +813,7 @@ pub(in crate::tui) fn visible_emoji_image_targets(state: &DashboardState) -> Vec
     // Thread cards render preview reactions outside `visible_messages()`, so
     // collect their URLs here for the shared emoji image cache.
     for post in state.visible_thread_card_items() {
-        for reaction in &post.preview_reactions {
-            if reaction.count == 0 {
-                continue;
-            }
+        for reaction in thread_card::thread_card_visible_reactions(&post) {
             if let Some(url) = reaction.emoji.custom_image_url()
                 && seen.insert(url.clone())
             {

@@ -1,12 +1,43 @@
 use super::message::list::message_author_style;
 use super::*;
+use crate::tui::message::format::wrap_plain_text_at_words;
 use crate::tui::ui::emoji_overlay::{EmojiSlot, overlay_emoji_slots};
 use crate::tui::ui::loading_indicator::AsciiLoadingIndicator;
 
 const THREAD_CARD_IMAGE_GAP: usize = 2;
 const THREAD_CARD_IMAGE_MAX_WIDTH: usize = 20;
+const THREAD_CARD_IMAGE_MAX_HEIGHT: u16 = 4;
 const THREAD_CARD_IMAGE_MIN_WIDTH: usize = 10;
 const THREAD_CARD_IMAGE_MIN_TEXT_WIDTH: usize = 24;
+const THREAD_CARD_REACTION_LIMIT: usize = 3;
+
+#[derive(Clone, Copy)]
+enum ThreadCardTitlePart {
+    Title,
+    Pinned,
+    State,
+}
+
+struct ThreadCardTitleRow {
+    parts: Vec<(ThreadCardTitlePart, String)>,
+    width: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ThreadCardLayout {
+    card_height: usize,
+    tag_row: Option<usize>,
+    metadata_row: usize,
+}
+
+pub(in crate::tui) struct ThreadCardHeightInput<'a> {
+    pub(in crate::tui) label: &'a str,
+    pub(in crate::tui) pinned: bool,
+    pub(in crate::tui) archived: bool,
+    pub(in crate::tui) locked: bool,
+    pub(in crate::tui) has_tags: bool,
+    pub(in crate::tui) has_preview_image: bool,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::tui) struct ThreadCardImageSlot {
@@ -55,7 +86,12 @@ pub(super) fn thread_card_viewport_lines_with_custom_emoji_images(
         ))];
     }
 
-    let mut lines = Vec::with_capacity(posts.iter().map(ChannelThreadItem::rendered_height).sum());
+    let mut lines = Vec::with_capacity(
+        posts
+            .iter()
+            .map(|post| thread_card_rendered_height(post, width, show_images))
+            .sum(),
+    );
     for (index, post) in posts.iter().enumerate() {
         if let Some(label) = post.section_label.as_deref() {
             lines.push(thread_card_section_header_line(label, width));
@@ -86,36 +122,42 @@ pub(in crate::tui) fn thread_card_lines(
     let card_width = width.saturating_sub(marker.width()).max(4);
     let inner_width = card_width.saturating_sub(4).max(1);
     let text_width = thread_card_text_width(post, inner_width, width, show_images);
+    let title_rows = thread_card_title_rows(post, text_width);
+    let layout = thread_card_layout_for_title_rows(
+        title_rows.len(),
+        !post.applied_tags.is_empty(),
+        thread_card_image_slot(post, width, show_images).is_some(),
+    );
     let border_style = thread_card_accent_style(selected);
     let border = theme::current().border_set(theme::BorderSurface::Forum);
 
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled(
-                marker,
-                if selected {
-                    theme::current().style(theme::HighlightGroup::ForumSelectedBorder)
-                } else {
-                    Style::default()
-                },
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            marker,
+            if selected {
+                theme::current().style(theme::HighlightGroup::ForumSelectedBorder)
+            } else {
+                Style::default()
+            },
+        ),
+        Span::styled(
+            format!(
+                "{}{}{}",
+                border.top_left,
+                border.horizontal_top.repeat(card_width.saturating_sub(2)),
+                border.top_right
             ),
-            Span::styled(
-                format!(
-                    "{}{}{}",
-                    border.top_left,
-                    border.horizontal_top.repeat(card_width.saturating_sub(2)),
-                    border.top_right
-                ),
-                border_style,
-            ),
-        ]),
+            border_style,
+        ),
+    ])];
+    lines.extend(title_rows.into_iter().map(|row| {
         thread_card_inner_line(
             "  ",
-            thread_card_title_spans(post, text_width),
+            thread_card_title_row_spans(row),
             inner_width,
             selected,
-        ),
-    ];
+        )
+    }));
     lines.push(thread_card_inner_line(
         "  ",
         Vec::new(),
@@ -133,6 +175,14 @@ pub(in crate::tui) fn thread_card_lines(
         lines.push(thread_card_inner_line(
             "  ",
             thread_card_tag_spans(post, text_width),
+            inner_width,
+            selected,
+        ));
+    }
+    while lines.len() < layout.metadata_row {
+        lines.push(thread_card_inner_line(
+            "  ",
+            Vec::new(),
             inner_width,
             selected,
         ));
@@ -178,28 +228,79 @@ fn thread_card_section_header_line(label: &str, width: usize) -> Line<'static> {
     ))
 }
 
-fn thread_card_title_spans(post: &ChannelThreadItem, inner_width: usize) -> Vec<Span<'static>> {
-    let title_style = theme::current().style(theme::HighlightGroup::Heading);
-    if !post.pinned {
-        return vec![Span::styled(
-            truncate_display_width(&post.label, inner_width),
-            title_style,
-        )];
+fn thread_card_title_rows(post: &ChannelThreadItem, width: usize) -> Vec<ThreadCardTitleRow> {
+    thread_card_title_rows_for(&post.label, post.pinned, post.archived, post.locked, width)
+}
+
+fn thread_card_title_rows_for(
+    label: &str,
+    pinned: bool,
+    archived: bool,
+    locked: bool,
+    width: usize,
+) -> Vec<ThreadCardTitleRow> {
+    let width = width.max(1);
+    let mut rows = wrap_plain_text_at_words(label, width)
+        .into_iter()
+        .map(|text| ThreadCardTitleRow {
+            width: text.width(),
+            parts: vec![(ThreadCardTitlePart::Title, text)],
+        })
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        rows.push(ThreadCardTitleRow {
+            parts: Vec::new(),
+            width: 0,
+        });
     }
 
-    let badge = " PINNED";
-    let badge_width = badge.width();
-    let title_width = inner_width.saturating_sub(badge_width).max(1);
-    vec![
-        Span::styled(
-            truncate_display_width(&post.label, title_width),
-            title_style,
-        ),
-        Span::styled(
-            badge,
-            theme::current().style(theme::HighlightGroup::ForumPinnedBadge),
-        ),
-    ]
+    let badges = [
+        pinned.then_some((ThreadCardTitlePart::Pinned, "PINNED")),
+        archived.then_some((ThreadCardTitlePart::State, "(archived)")),
+        locked.then_some((ThreadCardTitlePart::State, "(locked)")),
+    ];
+    for (part, label) in badges.into_iter().flatten() {
+        let badge_width = label.width();
+        let current = rows.last_mut().expect("title has at least one row");
+        let separator_width = usize::from(current.width > 0);
+        if current.width > 0
+            && current
+                .width
+                .saturating_add(separator_width)
+                .saturating_add(badge_width)
+                > width
+        {
+            rows.push(ThreadCardTitleRow {
+                parts: vec![(part, truncate_display_width(label, width))],
+                width: badge_width.min(width),
+            });
+            continue;
+        }
+
+        let value = if separator_width == 0 {
+            label.to_owned()
+        } else {
+            format!(" {label}")
+        };
+        current.width = current.width.saturating_add(value.width());
+        current.parts.push((part, value));
+    }
+    rows
+}
+
+fn thread_card_title_row_spans(row: ThreadCardTitleRow) -> Vec<Span<'static>> {
+    let theme = theme::current();
+    row.parts
+        .into_iter()
+        .map(|(part, value)| {
+            let style = match part {
+                ThreadCardTitlePart::Title => theme.style(theme::HighlightGroup::Heading),
+                ThreadCardTitlePart::Pinned => theme.style(theme::HighlightGroup::ForumPinnedBadge),
+                ThreadCardTitlePart::State => theme.style(theme::HighlightGroup::ForumSecondary),
+            };
+            Span::styled(value, style)
+        })
+        .collect()
 }
 
 fn thread_card_tag_spans(post: &ChannelThreadItem, inner_width: usize) -> Vec<Span<'static>> {
@@ -294,7 +395,15 @@ pub(in crate::tui) fn thread_card_image_slot(
     width: usize,
     show_images: bool,
 ) -> Option<ThreadCardImageSlot> {
-    if !show_images || post.preview_image.is_none() {
+    thread_card_image_slot_for(post.preview_image.is_some(), width, show_images)
+}
+
+fn thread_card_image_slot_for(
+    has_preview_image: bool,
+    width: usize,
+    show_images: bool,
+) -> Option<ThreadCardImageSlot> {
+    if !show_images || !has_preview_image {
         return None;
     }
     let inner_width = thread_card_inner_width_for_reactions(width);
@@ -311,8 +420,88 @@ pub(in crate::tui) fn thread_card_image_slot(
     Some(ThreadCardImageSlot {
         column: u16::try_from(column).unwrap_or(u16::MAX),
         width: u16::try_from(preview_width).unwrap_or(u16::MAX),
-        height: u16::try_from(post.card_height().saturating_sub(2)).unwrap_or(u16::MAX),
+        height: THREAD_CARD_IMAGE_MAX_HEIGHT,
     })
+}
+
+fn thread_card_layout_for_title_rows(
+    title_rows: usize,
+    has_tags: bool,
+    has_image_slot: bool,
+) -> ThreadCardLayout {
+    let content_rows = title_rows.max(1) + 1 + 1 + usize::from(has_tags);
+    let body_rows = if has_image_slot {
+        content_rows.max(usize::from(THREAD_CARD_IMAGE_MAX_HEIGHT))
+    } else {
+        content_rows
+    };
+    let metadata_row = 1usize.saturating_add(body_rows);
+    ThreadCardLayout {
+        card_height: metadata_row.saturating_add(2),
+        tag_row: has_tags.then_some(title_rows.max(1).saturating_add(3)),
+        metadata_row,
+    }
+}
+
+fn thread_card_layout(
+    post: &ChannelThreadItem,
+    width: usize,
+    show_images: bool,
+) -> ThreadCardLayout {
+    let inner_width = thread_card_inner_width_for_reactions(width);
+    let text_width = thread_card_text_width(post, inner_width, width, show_images);
+    thread_card_layout_for_title_rows(
+        thread_card_title_rows(post, text_width).len(),
+        !post.applied_tags.is_empty(),
+        thread_card_image_slot(post, width, show_images).is_some(),
+    )
+}
+
+pub(in crate::tui) fn thread_card_height_for(
+    input: ThreadCardHeightInput<'_>,
+    width: usize,
+    show_images: bool,
+) -> usize {
+    let inner_width = thread_card_inner_width_for_reactions(width);
+    let image_slot = thread_card_image_slot_for(input.has_preview_image, width, show_images);
+    let text_width = image_slot
+        .map(|slot| {
+            inner_width
+                .saturating_sub(usize::from(slot.width))
+                .saturating_sub(THREAD_CARD_IMAGE_GAP)
+                .max(1)
+        })
+        .unwrap_or(inner_width);
+    thread_card_layout_for_title_rows(
+        thread_card_title_rows_for(
+            input.label,
+            input.pinned,
+            input.archived,
+            input.locked,
+            text_width,
+        )
+        .len(),
+        input.has_tags,
+        image_slot.is_some(),
+    )
+    .card_height
+}
+
+pub(in crate::tui) fn thread_card_height(
+    post: &ChannelThreadItem,
+    width: usize,
+    show_images: bool,
+) -> usize {
+    thread_card_layout(post, width, show_images).card_height
+}
+
+pub(in crate::tui) fn thread_card_rendered_height(
+    post: &ChannelThreadItem,
+    width: usize,
+    show_images: bool,
+) -> usize {
+    thread_card_height(post, width, show_images)
+        .saturating_add(usize::from(post.section_label.is_some()))
 }
 
 pub(in crate::tui) fn thread_card_image_preview_area(
@@ -386,8 +575,11 @@ fn thread_card_metadata_spans(
             theme.style(theme::HighlightGroup::UnreadNotice),
         );
     }
+    let reactions = thread_card_visible_reactions(post)
+        .cloned()
+        .collect::<Vec<_>>();
     if let Some(layout) =
-        thread_card_reaction_layout_for_width(&post.preview_reactions, width, show_custom_emoji)
+        thread_card_reaction_layout_for_width(&reactions, width, show_custom_emoji)
     {
         push_forum_metadata_reaction_part(
             &mut spans,
@@ -406,25 +598,6 @@ fn thread_card_metadata_spans(
             muted_style,
         );
     }
-    if post.archived {
-        push_forum_metadata_part(
-            &mut spans,
-            &mut used_width,
-            width,
-            "archived".to_owned(),
-            muted_style,
-        );
-    }
-    if post.locked {
-        push_forum_metadata_part(
-            &mut spans,
-            &mut used_width,
-            width,
-            "locked".to_owned(),
-            muted_style,
-        );
-    }
-
     if spans.is_empty() {
         vec![Span::styled("No activity yet", muted_style)]
     } else {
@@ -550,16 +723,24 @@ fn thread_card_reaction_layout(
 ) -> Option<(usize, ReactionLayout)> {
     let start_col = thread_card_reaction_start_col(post);
     let available_width = width.saturating_sub(start_col).max(1);
-    let layout = lay_out_reaction_chips_with_custom_emoji_images(
-        &post.preview_reactions,
-        available_width,
-        true,
-    );
+    let reactions = thread_card_visible_reactions(post)
+        .cloned()
+        .collect::<Vec<_>>();
+    let layout = lay_out_reaction_chips_with_custom_emoji_images(&reactions, available_width, true);
     if layout.lines.first().is_some_and(|line| !line.is_empty()) {
         Some((start_col, layout))
     } else {
         None
     }
+}
+
+pub(in crate::tui) fn thread_card_visible_reactions(
+    post: &ChannelThreadItem,
+) -> impl Iterator<Item = &ReactionInfo> {
+    post.preview_reactions
+        .iter()
+        .filter(|reaction| reaction.count > 0)
+        .take(THREAD_CARD_REACTION_LIMIT)
 }
 
 pub(super) fn render_thread_card_reaction_emojis(
@@ -644,8 +825,7 @@ fn thread_card_tag_image_slots(
     slots
 }
 
-/// Overlays custom tag-emoji images on each visible card's tags row, which sits
-/// at `card_height() - 3` from the card top (it only exists for tagged posts).
+/// Overlays custom tag-emoji images on each visible card's tags row.
 pub(super) fn render_thread_card_tag_emojis(
     frame: &mut Frame,
     list: Rect,
@@ -666,12 +846,13 @@ pub(super) fn render_thread_card_tag_emojis(
         if post.section_label.is_some() {
             rendered_row = rendered_row.saturating_add(1);
         }
-        if post.applied_tags.is_empty() {
-            rendered_row = rendered_row.saturating_add(post.card_height());
+        let layout = thread_card_layout(post, width, show_images);
+        let Some(tag_row) = layout.tag_row else {
+            rendered_row = rendered_row.saturating_add(layout.card_height);
             continue;
-        }
+        };
         let inner_width = thread_card_text_width(post, full_inner_width, width, show_images);
-        let row = rendered_row.saturating_add(post.card_height().saturating_sub(3));
+        let row = rendered_row.saturating_add(tag_row);
         if row >= list_height {
             break;
         }
@@ -686,7 +867,7 @@ pub(super) fn render_thread_card_tag_emojis(
                 url,
             });
         }
-        rendered_row = rendered_row.saturating_add(post.card_height());
+        rendered_row = rendered_row.saturating_add(layout.card_height);
     }
     overlay_emoji_slots(
         frame,
@@ -710,11 +891,12 @@ pub(super) fn thread_card_tag_rows_for_test(
         if post.section_label.is_some() {
             rendered_row = rendered_row.saturating_add(1);
         }
-        if post.applied_tags.is_empty() {
-            rendered_row = rendered_row.saturating_add(post.card_height());
+        let layout = thread_card_layout(post, width, true);
+        let Some(tag_row) = layout.tag_row else {
+            rendered_row = rendered_row.saturating_add(layout.card_height);
             continue;
-        }
-        let row = rendered_row.saturating_add(post.card_height().saturating_sub(3));
+        };
+        let row = rendered_row.saturating_add(tag_row);
         if row >= list_height {
             break;
         }
@@ -723,7 +905,7 @@ pub(super) fn thread_card_tag_rows_for_test(
             .map(|(col, _)| col)
             .collect();
         result.push((row, cols));
-        rendered_row = rendered_row.saturating_add(post.card_height());
+        rendered_row = rendered_row.saturating_add(layout.card_height);
     }
     result
 }
@@ -746,9 +928,8 @@ fn thread_card_reaction_render_layouts(
         if post.section_label.is_some() {
             rendered_row = rendered_row.saturating_add(1);
         }
-        // Reactions render on the metadata line, which is the second-to-last
-        // card row (its offset shifts up by one when the tags row is absent).
-        let row = rendered_row.saturating_add(post.card_height().saturating_sub(2));
+        let layout = thread_card_layout(post, width, show_images);
+        let row = rendered_row.saturating_add(layout.metadata_row);
         if row >= list_height {
             break;
         }
@@ -756,7 +937,7 @@ fn thread_card_reaction_render_layouts(
         if let Some((reaction_start_col, layout)) = thread_card_reaction_layout(post, inner_width) {
             layouts.push((row, reaction_start_col, layout));
         }
-        rendered_row = rendered_row.saturating_add(post.card_height());
+        rendered_row = rendered_row.saturating_add(layout.card_height);
     }
     layouts
 }

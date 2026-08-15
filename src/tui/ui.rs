@@ -157,7 +157,9 @@ pub fn sync_view_heights(area: Rect, state: &mut DashboardState) {
             .saturating_sub(channel_header_rows)
             .saturating_sub(channel_filter_row),
     );
-    state.set_message_view_height(message_list_area(areas.messages, state).height as usize);
+    let message_list = message_list_area(areas.messages, state);
+    state.set_message_view_width(message_list.width as usize);
+    state.set_message_view_height(message_list.height as usize);
     state.set_member_view_height(visible_panel_content_height(
         areas.members,
         "Members",

@@ -134,6 +134,7 @@ pub(super) struct MessageViewportState {
     /// is not pinned to the original anchor position.
     pub(super) pending_unread_anchor_scroll: bool,
     pub(super) message_view_height: usize,
+    pub(super) message_view_width: usize,
     pub(super) message_content_width: usize,
     pub(super) message_preview_width: u16,
     pub(super) message_max_preview_height: u16,
@@ -156,6 +157,7 @@ impl Default for MessageViewportState {
             unread_divider_last_acked_id: None,
             pending_unread_anchor_scroll: false,
             message_view_height: 1,
+            message_view_width: usize::MAX,
             message_content_width: usize::MAX,
             message_preview_width: 0,
             message_max_preview_height: 0,
@@ -333,6 +335,11 @@ impl DashboardState {
 
     pub fn set_message_view_height(&mut self, height: usize) {
         self.messages.message_view_height = height;
+        self.clamp_message_viewport();
+    }
+
+    pub fn set_message_view_width(&mut self, width: usize) {
+        self.messages.message_view_width = width;
         self.clamp_message_viewport();
     }
 
