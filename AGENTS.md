@@ -166,10 +166,16 @@ goes and changeable without leaving the input.
 
 Worth knowing before starting:
 
-- The core is single-session today: one `DiscordState`, one gateway, one token.
-  Merging needs state keyed by account plus a merge layer above it, and that
-  layer belongs in `src/discord/` so both front ends get it - a merge done in
-  the GUI would have to be written twice and would drift.
+- **Where the merge lives.** Not in the GUI, and not tangled into the core
+  either: a layer of its own, above `src/discord/` and below both front ends.
+  The core stays single-session and unaware - one `DiscordState` per account,
+  exactly as today - and the merge tier owns fanning commands out to the right
+  session and folding several sessions' state into one view.
+
+  That keeps three things true: the core does not grow multi-account
+  complexity it does not need, the TUI gets merged accounts for free rather
+  than needing its own implementation, and a single-account session is just
+  the merge tier with one account in it.
 - The merge keys are the obvious ones: recipient user id for DMs, guild id for
   guilds. Everything else - unread counts, read state, typing, notifications -
   has to merge or dedupe on top of those.
