@@ -72,6 +72,8 @@ pub(super) fn effect_forces_redraw(event: &AppEvent) -> bool {
             | AppEvent::AttachmentDownloadCompleted { .. }
             | AppEvent::AttachmentDownloadFailed { .. }
             | AppEvent::GatewayError { .. }
+            | AppEvent::GuildBansLoaded { .. }
+            | AppEvent::GuildBansLoadFailed { .. }
             | AppEvent::InviteResolved { .. }
             | AppEvent::InviteResolveFailed { .. }
             | AppEvent::InviteAccepted { .. }
@@ -188,6 +190,14 @@ fn push_dashboard_effect(event: AppEvent, ctx: &mut EffectContext<'_>) {
     // Invite results belong to the join-server prompt, which is the only
     // thing that can act on them.
     match event {
+        AppEvent::GuildBansLoaded { guild_id, bans } => {
+            ctx.state.apply_guild_bans(guild_id, bans);
+            return;
+        }
+        AppEvent::GuildBansLoadFailed { guild_id, message } => {
+            ctx.state.apply_guild_bans_failure(guild_id, message);
+            return;
+        }
         AppEvent::InviteResolved { preview } => {
             ctx.state.apply_resolved_invite(preview);
             return;

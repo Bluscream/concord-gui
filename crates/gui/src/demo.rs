@@ -366,6 +366,26 @@ fn handle_command(
             }
         }
 
+        AppCommand::LoadGuildBans { guild_id } => {
+            // A short list so the panel and the unban path can be exercised
+            // offline; the fixture has no real bans.
+            publish_event!(AppEvent::GuildBansLoaded {
+                guild_id,
+                bans: vec![
+                    concord::discord::GuildBanInfo {
+                        user_id: concord::discord::Id::new(9001),
+                        username: "spammer".to_string(),
+                        reason: Some("posting invite links".to_string()),
+                    },
+                    concord::discord::GuildBanInfo {
+                        user_id: concord::discord::Id::new(9002),
+                        username: "raider".to_string(),
+                        reason: None,
+                    },
+                ],
+            });
+        }
+
         AppCommand::ResolveInvite { code } => {
             // Answered with a plausible server so the flow can be exercised
             // offline; the code is echoed back so the caller can match it.

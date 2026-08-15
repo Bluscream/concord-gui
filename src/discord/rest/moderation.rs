@@ -3,6 +3,7 @@
 //! Endpoints cross-checked against Abaddon, which is the only surveyed
 //! third-party client with working moderation.
 
+use serde::Deserialize;
 use serde_json::json;
 
 use crate::Result;
@@ -15,6 +16,28 @@ use super::DiscordRest;
 
 /// Discord's cap on how much of a banned user's history can be purged.
 pub const MAX_BAN_DELETE_MESSAGE_SECONDS: u32 = 604_800;
+
+/// One entry in a guild's ban list.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GuildBanInfo {
+    pub user_id: Id<UserMarker>,
+    pub username: String,
+    /// The moderator's stated reason, when one was given.
+    pub reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct BanBody {
+    user: Option<BanUser>,
+    reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct BanUser {
+    id: Option<Id<UserMarker>>,
+    username: Option<String>,
+    global_name: Option<String>,
+}
 
 impl DiscordRest {
     /// Remove a member from a guild. They can rejoin with a new invite.
@@ -59,6 +82,39 @@ impl DiscordRest {
             "ban member",
         )
         .await
+    }
+
+    /// The guild's ban list.
+    ///
+    /// Without this a ban is a one-way door: `unban_member` needs a user id,
+    /// and nothing else in the client knows who is banned.
+    pub async fn guild_bans(&self, guild_id: Id<GuildMarker>) -> Result<Vec<GuildBanInfo>> {
+        let bans: Vec<BanBody> = self
+            .send_json(
+                self.raw_http.get(format!(
+                    "https://discord.com/api/v9/guilds/{}/bans",
+                    guild_id.get()
+                )),
+                "guild bans",
+            )
+            .await?;
+
+        Ok(bans
+            .into_iter()
+            .filter_map(|ban| {
+                let user = ban.user?;
+                Some(GuildBanInfo {
+                    // An entry without a user id cannot be unbanned, so it is
+                    // dropped rather than shown as an un-actionable row.
+                    user_id: user.id?,
+                    username: user
+                        .global_name
+                        .or(user.username)
+                        .unwrap_or_else(|| "unknown".to_owned()),
+                    reason: ban.reason,
+                })
+            })
+            .collect())
     }
 
     pub async fn unban_member(

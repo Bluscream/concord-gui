@@ -854,6 +854,7 @@ impl GuildActionKind {
             Self::MarkAsRead => "MarkAsRead",
             Self::ToggleMute => "ToggleMute",
             Self::JoinServer => "JoinServer",
+            Self::ViewBans => "ViewBans",
             Self::LeaveServer => "LeaveServer",
             Self::FolderSettings => "FolderSettings",
         }

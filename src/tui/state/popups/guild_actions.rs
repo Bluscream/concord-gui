@@ -91,6 +91,12 @@ impl DashboardState {
                     ActionAvailability::Enabled,
                 ),
                 GuildActionItem::new(
+                    GuildActionKind::ViewBans,
+                    "View bans",
+                    (!self.discord.cache.can_ban_members(state.id))
+                        .then(|| "you do not have permission".to_owned()),
+                ),
+                GuildActionItem::new(
                     GuildActionKind::LeaveServer,
                     "Leave server",
                     ActionAvailability::Enabled,
@@ -197,6 +203,11 @@ impl DashboardState {
                         self.close_guild_action_menu();
                         self.open_join_server();
                         None
+                    }
+                    GuildActionKind::ViewBans => {
+                        let guild_id = self.selected_guild_id()?;
+                        self.close_guild_action_menu();
+                        self.open_ban_list(guild_id)
                     }
                     GuildActionKind::LeaveServer => {
                         self.close_guild_action_menu();

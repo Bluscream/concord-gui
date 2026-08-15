@@ -540,6 +540,9 @@ impl CommandDispatcher {
                 )
                 .await;
             }
+            AppCommand::LoadGuildBans { guild_id } => {
+                message_commands::load_guild_bans(self.client.clone(), guild_id).await;
+            }
             AppCommand::UnbanMember {
                 guild_id,
                 user_id,

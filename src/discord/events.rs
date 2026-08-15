@@ -677,6 +677,14 @@ pub enum AppEvent {
     CaptchaRequired {
         action: String,
     },
+    GuildBansLoaded {
+        guild_id: Id<GuildMarker>,
+        bans: Vec<crate::discord::GuildBanInfo>,
+    },
+    GuildBansLoadFailed {
+        guild_id: Id<GuildMarker>,
+        message: String,
+    },
     InviteResolved {
         preview: crate::discord::rest::InvitePreview,
     },
@@ -960,6 +968,8 @@ define_app_event_kinds! {
     UserGuildSettingsUpdate: AppEvent::UserGuildSettingsUpdate { .. },
     GatewayError: AppEvent::GatewayError { .. },
     CaptchaRequired: AppEvent::CaptchaRequired { .. },
+    GuildBansLoaded: AppEvent::GuildBansLoaded { .. },
+    GuildBansLoadFailed: AppEvent::GuildBansLoadFailed { .. },
     InviteResolved: AppEvent::InviteResolved { .. },
     InviteResolveFailed: AppEvent::InviteResolveFailed { .. },
     InviteAccepted: AppEvent::InviteAccepted { .. },
@@ -2006,7 +2016,9 @@ impl AppEventKind {
             // Invites carry no state of their own: resolving one changes
             // nothing, and accepting one is followed by the GuildCreate that
             // actually adds the guild.
-            AppEventKind::InviteResolved
+            AppEventKind::GuildBansLoaded
+            | AppEventKind::GuildBansLoadFailed
+            | AppEventKind::InviteResolved
             | AppEventKind::InviteResolveFailed
             | AppEventKind::InviteAccepted
             | AppEventKind::InviteAcceptFailed

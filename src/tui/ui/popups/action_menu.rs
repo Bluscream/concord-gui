@@ -620,3 +620,50 @@ pub(in crate::tui::ui) fn render_role_picker(
             .expect("the role picker has selection state"),
     );
 }
+
+/// A guild's ban list, with the reason each ban was given.
+pub(in crate::tui::ui) fn render_ban_list(frame: &mut Frame, area: Rect, state: &DashboardState) {
+    if !state.is_active_modal_popup(ActiveModalPopupKind::BanList) {
+        return;
+    }
+    let Some(bans) = state.ban_list_state() else {
+        return;
+    };
+
+    let selected = state.selected_ban_index().unwrap_or(0);
+
+    let lines = if let Some(error) = bans.error() {
+        vec![Line::from(Span::styled(
+            error.to_owned(),
+            theme::current().style(theme::HighlightGroup::Error),
+        ))]
+    } else if bans.is_loading() {
+        // Distinct from an empty list: a slow fetch must not read as "nobody
+        // is banned", which would be a dangerous thing to believe.
+        vec![Line::from(Span::styled(
+            "Loading bans...".to_owned(),
+            theme::current().style(theme::HighlightGroup::Loading),
+        ))]
+    } else if bans.bans().is_empty() {
+        vec![Line::from(Span::styled(
+            "Nobody is banned from this server".to_owned(),
+            theme::current().style(theme::HighlightGroup::Hint),
+        ))]
+    } else {
+        let rows = indexed_action_menu_rows(bans.bans().iter().map(|ban| match &ban.reason {
+            Some(reason) => format!("{} - {reason}", ban.username),
+            None => ban.username.clone(),
+        }));
+        action_menu_lines(&rows, selected)
+    };
+
+    render_action_menu(
+        frame,
+        area,
+        "Bans (enter to unban)".to_owned(),
+        lines,
+        state
+            .popup_list_scroll(SelectablePopupTarget::Bans)
+            .expect("the ban list has selection state"),
+    );
+}

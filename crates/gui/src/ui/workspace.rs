@@ -243,6 +243,16 @@ pub enum SwitcherPurpose {
     },
 }
 
+/// A guild's ban list, as shown.
+pub struct BanListView {
+    pub guild_id: Id<marker::GuildMarker>,
+    pub bans: Vec<concord::discord::GuildBanInfo>,
+    /// Set while the fetch is outstanding. Distinct from an empty list: a slow
+    /// fetch must not read as "nobody is banned".
+    pub loading: bool,
+    pub error: Option<String>,
+}
+
 /// A moderation action against a member.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModerationAction {
@@ -432,6 +442,8 @@ pub struct Workspace {
     requested_previews: std::collections::HashSet<String>,
     /// What the open switcher will do with its selection.
     switcher_purpose: SwitcherPurpose,
+    /// The guild's bans, once asked for. `None` while the panel is closed.
+    pub bans: Option<BanListView>,
     /// Roles being edited for a member: who, and the set as edited so far.
     pub editing_roles: Option<(Id<marker::UserMarker>, Vec<Id<marker::RoleMarker>>)>,
     /// Stickers staged for the next send. Discord accepts at most three.
@@ -550,6 +562,7 @@ impl Workspace {
             attachment_previews: std::collections::HashMap::new(),
             requested_previews: std::collections::HashSet::new(),
             switcher_purpose: SwitcherPurpose::Navigate,
+            bans: None,
             editing_roles: None,
             pending_stickers: Vec::new(),
             sticker_picker: false,
@@ -1422,7 +1435,8 @@ impl Workspace {
     /// Ordered so one press closes one thing: escape with several panels open
     /// should peel them back, not clear the screen.
     pub fn close_popup(&mut self) {
-        if self.editing_roles.take().is_some()
+        if self.bans.take().is_some()
+            || self.editing_roles.take().is_some()
             || self.invite.take().is_some()
             || self.confirming.take().is_some()
             || self.prompt.take().is_some()
@@ -2958,6 +2972,42 @@ impl Workspace {
         Some(panel)
     }
 
+    /// Open the guild's ban list.
+    pub fn open_ban_list(&mut self) {
+        let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
+            return;
+        };
+
+        self.bans = Some(BanListView {
+            guild_id,
+            bans: Vec::new(),
+            loading: true,
+            error: None,
+        });
+        handle.send(AppCommand::LoadGuildBans { guild_id });
+    }
+
+    /// Lift a ban, removing the row straight away.
+    ///
+    /// The list is a snapshot; leaving a lifted ban on screen invites a second
+    /// unban for someone already unbanned.
+    fn unban(&mut self, index: usize) {
+        let (Some(handle), Some(view)) = (&self.handle, self.bans.as_mut()) else {
+            return;
+        };
+        if index >= view.bans.len() {
+            return;
+        }
+
+        let guild_id = view.guild_id;
+        let ban = view.bans.remove(index);
+        handle.send(AppCommand::UnbanMember {
+            guild_id,
+            user_id: ban.user_id,
+            label: ban.username,
+        });
+    }
+
     /// Open the role picker for a member.
     fn open_role_picker(&mut self, user_id: Id<marker::UserMarker>) {
         let (Some(state), Selection::Guild(guild_id)) = (&self.last_state, self.nav.selection)
@@ -4486,6 +4536,23 @@ impl Workspace {
 
             // Login cannot continue in this client: solving a captcha needs a
             // browser. Said plainly rather than leaving the attempt hanging.
+            AppEvent::GuildBansLoaded { guild_id, bans } => {
+                if let Some(view) = &mut self.bans
+                    && view.guild_id == *guild_id
+                {
+                    view.loading = false;
+                    view.error = None;
+                    view.bans = bans.clone();
+                }
+            }
+            AppEvent::GuildBansLoadFailed { guild_id, message } => {
+                if let Some(view) = &mut self.bans
+                    && view.guild_id == *guild_id
+                {
+                    view.loading = false;
+                    view.error = Some(message.clone());
+                }
+            }
             AppEvent::InviteResolved { preview } => {
                 if let Some(invite) = &mut self.invite
                     && invite.code == preview.code
@@ -5322,6 +5389,50 @@ impl Workspace {
                     move |cx: &mut gpui::App| {
                         entity.update(cx, |workspace, cx| {
                             workspace.confirming = None;
+                            cx.notify();
+                        });
+                    }
+                },
+            )));
+        }
+
+        if let Some(view) = &self.bans {
+            let rows: Vec<_> = view
+                .bans
+                .iter()
+                .map(|ban| overlay::BanRow {
+                    username: ban.username.clone(),
+                    reason: ban.reason.clone(),
+                })
+                .collect();
+
+            let status = view.error.clone().or_else(|| {
+                if view.loading {
+                    Some("Loading bans...".to_string())
+                } else if view.bans.is_empty() {
+                    Some("Nobody is banned from this server".to_string())
+                } else {
+                    None
+                }
+            });
+
+            return Some(overlay::scrim().child(overlay::ban_list_view(
+                &rows,
+                status.as_deref(),
+                {
+                    let entity = entity.clone();
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.unban(index);
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.bans = None;
                             cx.notify();
                         });
                     }

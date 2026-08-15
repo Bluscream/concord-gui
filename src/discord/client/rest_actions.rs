@@ -295,6 +295,13 @@ impl DiscordClient {
             .await
     }
 
+    pub async fn guild_bans(
+        &self,
+        guild_id: Id<GuildMarker>,
+    ) -> Result<Vec<crate::discord::GuildBanInfo>> {
+        self.rest.guild_bans(guild_id).await
+    }
+
     pub async fn unban_member(
         &self,
         guild_id: Id<GuildMarker>,

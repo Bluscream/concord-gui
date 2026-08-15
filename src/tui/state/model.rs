@@ -443,6 +443,7 @@ pub enum GuildActionKind {
     ToggleMute,
     LeaveServer,
     JoinServer,
+    ViewBans,
     FolderSettings,
 }
 

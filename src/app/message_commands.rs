@@ -370,6 +370,25 @@ pub(super) async fn ban_member(
     }
 }
 
+pub(super) async fn load_guild_bans(client: DiscordClient, guild_id: Id<GuildMarker>) {
+    match client.guild_bans(guild_id).await {
+        Ok(bans) => {
+            client
+                .publish_event(AppEvent::GuildBansLoaded { guild_id, bans })
+                .await;
+        }
+        Err(error) => {
+            log_app_error("load guild bans failed", &error);
+            client
+                .publish_event(AppEvent::GuildBansLoadFailed {
+                    guild_id,
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
 pub(super) async fn unban_member(
     client: DiscordClient,
     guild_id: Id<GuildMarker>,

@@ -33,7 +33,7 @@ mod invites;
 
 pub use invites::{InvitePreview, invite_code_from};
 pub use messages::MAX_MESSAGE_STICKERS;
-pub use moderation::MAX_BAN_DELETE_MESSAGE_SECONDS;
+pub use moderation::{GuildBanInfo, MAX_BAN_DELETE_MESSAGE_SECONDS};
 mod messages;
 mod moderation;
 mod notification_settings;

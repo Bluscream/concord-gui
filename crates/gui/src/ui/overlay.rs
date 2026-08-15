@@ -603,3 +603,81 @@ pub fn role_picker_view(
             .child(button("roles-save", "Save", true, on_save)),
     )
 }
+
+/// One row in the ban list.
+pub struct BanRow {
+    pub username: String,
+    pub reason: Option<String>,
+}
+
+/// A guild's bans, with the option to lift one.
+pub fn ban_list_view(
+    bans: &[BanRow],
+    status: Option<&str>,
+    on_unban: impl Fn(usize, &mut gpui::App) + Clone + 'static,
+    on_close: impl Fn(&mut gpui::App) + 'static,
+) -> Div {
+    let mut list = column().id("ban-list").max_h(px(360.)).overflow_y_scroll();
+
+    if let Some(status) = status {
+        list = list.child(
+            gpui::div()
+                .px(px(space::LG))
+                .py(px(space::MD))
+                .text_size(px(scaled(text::SM)))
+                .text_color(rgb(active().text_subtle))
+                .child(status.to_owned()),
+        );
+    }
+
+    for (index, ban) in bans.iter().enumerate() {
+        let unban = on_unban.clone();
+
+        list = list.child(
+            row()
+                .w_full()
+                .px(px(space::LG))
+                .py(px(space::SM))
+                .gap(px(space::SM))
+                .items_center()
+                .child(
+                    column()
+                        .flex_1()
+                        .child(
+                            gpui::div()
+                                .text_size(px(scaled(text::SM)))
+                                .text_color(rgb(active().text))
+                                .child(ban.username.clone()),
+                        )
+                        .children(ban.reason.clone().map(|reason| {
+                            gpui::div()
+                                .text_size(px(scaled(text::XS)))
+                                .text_color(rgb(active().text_subtle))
+                                .child(reason)
+                        })),
+                )
+                .child(
+                    gpui::div()
+                        .id(("unban", index))
+                        .px(px(space::SM))
+                        .py(px(space::XS))
+                        .rounded(px(layout::RADIUS))
+                        .cursor_pointer()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().accent))
+                        .hover(|style| style.bg(rgb(active().surface_hover)))
+                        .child("unban")
+                        .on_click(move |_event, _window, cx| unban(index, cx)),
+                ),
+        );
+    }
+
+    panel("Bans", 460.).child(list).child(
+        row()
+            .w_full()
+            .px(px(space::LG))
+            .py(px(space::MD))
+            .justify_end()
+            .child(button("bans-close", "Close", false, on_close)),
+    )
+}

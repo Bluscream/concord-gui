@@ -976,7 +976,9 @@ impl DiscordState {
             } => {
                 self.set_thread_mute(*channel_id, *muted, mute_end_time.clone());
             }
-            AppEvent::InviteResolved { .. }
+            AppEvent::GuildBansLoaded { .. }
+            | AppEvent::GuildBansLoadFailed { .. }
+            | AppEvent::InviteResolved { .. }
             | AppEvent::InviteResolveFailed { .. }
             | AppEvent::InviteAccepted { .. }
             | AppEvent::InviteAcceptFailed { .. }

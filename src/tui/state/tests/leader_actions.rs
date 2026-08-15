@@ -279,17 +279,25 @@ fn guild_action_menu_lists_disabled_mark_server_read_when_guild_is_read() {
 
     assert!(state.is_guild_action_menu_active());
     let actions = state.selected_guild_action_items();
-    assert_eq!(actions.len(), 4);
-    assert_eq!(actions[0].kind, GuildActionKind::MarkAsRead);
-    assert_eq!(actions[0].label, "Mark server as read");
-    assert!(!actions[0].is_enabled());
-    assert_eq!(actions[0].disabled_reason(), Some("no unread messages"));
-    assert_eq!(actions[1].kind, GuildActionKind::ToggleMute);
-    assert_eq!(actions[1].label, "Mute server");
-    assert_eq!(actions[2].kind, GuildActionKind::JoinServer);
-    assert_eq!(actions[2].label, "Join a server");
-    assert_eq!(actions[3].kind, GuildActionKind::LeaveServer);
-    assert_eq!(actions[3].label, "Leave server");
+    // Looked up by kind rather than by row. Positional assertions here broke
+    // three separate times as rows were added above them, which taught
+    // nothing each time.
+    let find = |kind: GuildActionKind| {
+        actions
+            .iter()
+            .find(|action| action.kind == kind)
+            .unwrap_or_else(|| panic!("{kind:?} should be offered"))
+    };
+
+    let mark_read = find(GuildActionKind::MarkAsRead);
+    assert_eq!(mark_read.label, "Mark server as read");
+    assert!(!mark_read.is_enabled());
+    assert_eq!(mark_read.disabled_reason(), Some("no unread messages"));
+
+    assert_eq!(find(GuildActionKind::ToggleMute).label, "Mute server");
+    assert_eq!(find(GuildActionKind::JoinServer).label, "Join a server");
+    assert_eq!(find(GuildActionKind::ViewBans).label, "View bans");
+    assert_eq!(find(GuildActionKind::LeaveServer).label, "Leave server");
     assert_eq!(state.activate_selected_guild_action(), None);
 }
 
@@ -461,8 +469,13 @@ fn guild_action_menu_leave_server_opens_confirmation() {
     state.focus_pane(FocusPane::Guilds);
     state.move_down();
     state.open_selected_guild_actions();
-    // Leaving moved down a row when joining was added above it.
-    state.select_guild_action_row(3);
+    // Found by kind, so adding a row above no longer breaks this.
+    let row = state
+        .selected_guild_action_items()
+        .iter()
+        .position(|action| action.kind == GuildActionKind::LeaveServer)
+        .expect("leaving should be offered");
+    state.select_guild_action_row(row);
 
     assert_eq!(state.activate_selected_guild_action(), None);
 

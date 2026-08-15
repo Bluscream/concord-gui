@@ -22,6 +22,7 @@ use crate::tui::keybindings::{
 use crate::tui::text_input::TextInputState;
 
 mod attachment_viewer;
+mod bans;
 mod channel_actions;
 mod channel_switcher;
 mod diagnostics;
@@ -40,6 +41,7 @@ mod thread_actions;
 mod thread_edit;
 mod user;
 mod voice_participant_audio;
+pub(in crate::tui) use bans::BanListState;
 pub(in crate::tui) use join_server::JoinServerState;
 pub(in crate::tui) use roles::RolePickerState;
 pub(in crate::tui) use stickers::StickerPickerState;
@@ -143,6 +145,7 @@ define_modal_popups! {
     JoinServer(JoinServerState),
     StickerPicker(StickerPickerState),
     RolePicker(RolePickerState),
+    BanList(BanListState),
 }
 
 /// The input behavior of the topmost visible popup layer.
@@ -256,6 +259,7 @@ pub(in crate::tui) enum SelectablePopupTarget {
     SearchSuggestions,
     Stickers,
     Roles,
+    Bans,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1332,6 +1336,7 @@ impl PopupUiState {
         self.key_sequence = None;
     }
 
+    modal_popup_accessors!(ban_list, ban_list_mut, BanList, BanListState, state);
     modal_popup_accessors!(
         role_picker,
         role_picker_mut,
@@ -1782,6 +1787,7 @@ impl DashboardState {
             ActiveModalPopupKind::JoinServer => self.close_join_server(),
             ActiveModalPopupKind::StickerPicker => self.close_sticker_picker(),
             ActiveModalPopupKind::RolePicker => self.close_role_picker(),
+            ActiveModalPopupKind::BanList => self.close_ban_list(),
             ActiveModalPopupKind::ForumPostComposer => {
                 self.close_or_cancel_forum_post_composer();
             }
@@ -2054,6 +2060,9 @@ impl DashboardState {
             ModalPopup::RolePicker(_) => {
                 ActivePopupPolicy::selectable(kind, SelectablePopupTarget::Roles)
             }
+            ModalPopup::BanList(_) => {
+                ActivePopupPolicy::selectable(kind, SelectablePopupTarget::Bans)
+            }
             ModalPopup::ForumPostComposer(_) => {
                 ActivePopupPolicy::scrollable(kind, ScrollablePopupTarget::ForumPostComposer)
             }
@@ -2127,6 +2136,10 @@ impl DashboardState {
             SelectablePopupTarget::Roles => {
                 let selection = &self.popups.role_picker()?.selection;
                 (selection, self.role_picker_items().len())
+            }
+            SelectablePopupTarget::Bans => {
+                let state = self.popups.ban_list()?;
+                (&state.selection, state.bans.len())
             }
             SelectablePopupTarget::MessageActions => {
                 let selection = &self.popups.message_action_menu()?.selection;
@@ -2293,6 +2306,7 @@ impl DashboardState {
                 self.toggle_selected_role();
                 None
             }
+            SelectablePopupTarget::Bans => self.unban_selected(),
             SelectablePopupTarget::MessageActions => self.activate_selected_message_action(),
             SelectablePopupTarget::GuildActions => self.activate_selected_guild_action(),
             SelectablePopupTarget::ChannelActions => self.activate_selected_channel_action(),
@@ -2395,6 +2409,12 @@ impl DashboardState {
                 let len = self.role_picker_items().len();
                 if let Some(picker) = self.popups.role_picker_mut() {
                     update(&mut picker.selection, len);
+                }
+            }
+            SelectablePopupTarget::Bans => {
+                if let Some(state) = self.popups.ban_list_mut() {
+                    let len = state.bans.len();
+                    update(&mut state.selection, len);
                 }
             }
             SelectablePopupTarget::MessageActions => {

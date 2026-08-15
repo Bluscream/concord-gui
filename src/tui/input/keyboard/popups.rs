@@ -210,6 +210,7 @@ fn dispatch_popup_key(
         ActiveModalPopupKind::RolePicker => {
             route_fallback_key(state, key, stage, handle_role_picker_key)
         }
+        ActiveModalPopupKind::BanList => route_fallback_key(state, key, stage, handle_ban_list_key),
         ActiveModalPopupKind::ForumPostComposer => route_popup_key(
             state,
             key,
@@ -848,6 +849,27 @@ fn handle_search_popup_key(state: &mut DashboardState, key: KeyEvent) -> Option<
         }
         None => None,
     }
+}
+
+/// The ban list: enter lifts the highlighted ban, esc closes.
+fn handle_ban_list_key(state: &mut DashboardState, key: KeyEvent) -> Option<AppCommand> {
+    if let Some(action) = state
+        .key_bindings()
+        .selection_action(key, SelectionKeySet::Navigation)
+    {
+        match action {
+            SelectionAction::Next => state.move_ban_selection_down(),
+            SelectionAction::Previous => state.move_ban_selection_up(),
+        }
+        return None;
+    }
+
+    match key.code {
+        KeyCode::Enter => return state.unban_selected(),
+        KeyCode::Esc => state.close_ban_list(),
+        _ => {}
+    }
+    None
 }
 
 /// The role picker: toggle with enter or space, save with s, cancel with esc.

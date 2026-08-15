@@ -526,6 +526,10 @@ pub enum AppCommand {
         delete_message_seconds: u32,
         label: String,
     },
+    /// Fetch a guild's ban list, so bans can be reviewed and lifted.
+    LoadGuildBans {
+        guild_id: Id<GuildMarker>,
+    },
     UnbanMember {
         guild_id: Id<GuildMarker>,
         user_id: Id<UserMarker>,
