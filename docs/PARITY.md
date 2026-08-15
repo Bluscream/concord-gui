@@ -167,6 +167,8 @@ alone, and had to be retrofitted into the TUI afterwards.
 | Invites (join a server) | `+` in the guild rail | Guild actions, `j` |
 | Message forwarding | Message toolbar | Message actions, `f` |
 | Sticker rendering | Inline image | Existing name display |
+| Sticker sending | Composer control, image grid | Leader-s, name list |
+| Moderation (kick/ban/timeout) | Profile panel | Member actions, `k`/`b`/`t` |
 
 Joining mattered most: a client could leave a guild but never join one, so
 the official client was still required for the most basic thing after reading
@@ -185,9 +187,18 @@ each means building from the transport layer up, the way invites were:
 
 | Feature | What it needs |
 |---|---|
-| Sticker sending | `sticker_ids` on send, plus a picker sourced from guild stickers |
 | Per-guild identities | Profile REST exists; needs per-guild plumbing |
-| Moderation (kick/ban/roles) | Guild REST routes, permission checks, and UI in both clients |
+| Role assignment UI | `SetMemberRoles` is wired; neither client offers a picker |
+| Ban list / unban | `UnbanMember` is wired; nothing lists existing bans |
 
-Moderation is the one place Abaddon is genuinely ahead, and the strongest
-argument for that client over this one.
+### On using the references
+
+`.references/` holds 114 surveyed clients, and they are worth reading before
+writing a request. Moderation endpoints came from Abaddon - the only one with
+it working - including its note that the official client does not use the
+single-role endpoints, which is why `set_member_roles` sends the whole set.
+The sticker payload was confirmed twice over, against a native client's send
+path and against the Spacebar server's own schema.
+
+Guessing at a payload and discovering it from a rejection is slower than
+reading an implementation that already works.
