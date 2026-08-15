@@ -5066,6 +5066,33 @@ impl Workspace {
                                     cx.notify();
                                 })),
                         )
+                        // Only where the account can ban: unlike the per-member
+                        // actions, an empty ban list is indistinguishable from
+                        // no permission, so hiding is honest here where
+                        // disabling would mislead.
+                        .when(
+                            self.last_state.as_ref().is_some_and(|state| {
+                                matches!(self.nav.selection, Selection::Guild(guild_id)
+                                    if state.can_ban_members(guild_id))
+                            }),
+                            |header| {
+                                header.child(
+                                    gpui::div()
+                                        .id("guild-bans")
+                                        .px(px(space::SM))
+                                        .rounded(px(layout::RADIUS))
+                                        .cursor_pointer()
+                                        .text_size(px(scaled(text::XS)))
+                                        .text_color(rgb(active().text_subtle))
+                                        .hover(|style| style.text_color(rgb(active().text)))
+                                        .child("bans")
+                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                            this.open_ban_list();
+                                            cx.notify();
+                                        })),
+                                )
+                            },
+                        )
                         .child(
                             gpui::div()
                                 .id("guild-leave")
@@ -6413,7 +6440,14 @@ impl Render for Workspace {
                                     "1" => Some(LoginAction::PickPassword),
                                     "2" => Some(LoginAction::PickToken),
                                     "3" => Some(LoginAction::PickQr),
-                                    "4" | "d" => Some(LoginAction::PickDemo),
+                                    // Gated with the button: without fixtures
+                                    // there is no demo to enter, and the key
+                                    // would start a real login with the
+                                    // literal token "test", which Discord
+                                    // rejects with a bare 4004.
+                                    "4" | "d" if cfg!(feature = "fixtures") => {
+                                        Some(LoginAction::PickDemo)
+                                    }
                                     _ => None,
                                 };
                                 if let Some(a) = action {
