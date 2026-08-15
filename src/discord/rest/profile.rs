@@ -120,14 +120,30 @@ impl DiscordRest {
             )
             .await?;
         }
+        // Pronouns, avatar and bio all live on the same guild profile route,
+        // so they go in one request rather than three.
+        let mut profile_body = serde_json::Map::new();
         if let Some(pronouns) = &update.pronouns {
+            profile_body.insert("pronouns".to_owned(), Value::String(pronouns.clone()));
+        }
+        if let Some(bio) = &update.bio {
+            profile_body.insert("bio".to_owned(), nullable_text_value(bio));
+        }
+        if let Some(avatar) = &update.avatar {
+            profile_body.insert(
+                "avatar".to_owned(),
+                Value::String(profile_avatar_data_uri(avatar).await?),
+            );
+        }
+
+        if !profile_body.is_empty() {
             self.send_unit(
                 self.raw_http
                     .patch(format!(
                         "https://discord.com/api/v9/guilds/{}/profile/@me",
                         update.guild_id.get()
                     ))
-                    .json(&json!({ "pronouns": pronouns })),
+                    .json(&Value::Object(profile_body)),
                 "guild profile update",
             )
             .await?;
@@ -231,6 +247,12 @@ impl UserProfileResponse {
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
             .map(str::to_owned);
+        let guild_bio = body
+            .get("guild_member_profile")
+            .and_then(|profile| profile.get("bio"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
         let mutual_guilds = body
             .get("mutual_guilds")
             .and_then(Value::as_array)
@@ -285,6 +307,7 @@ impl UserProfileResponse {
                 bio,
                 pronouns,
                 guild_pronouns,
+                guild_bio,
                 mutual_guilds,
                 mutual_friends_count,
                 friend_status: FriendStatus::None,

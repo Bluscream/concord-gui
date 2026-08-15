@@ -248,13 +248,13 @@ impl DashboardState {
         guild_id: Option<Id<GuildMarker>>,
     ) -> Option<AppCommand> {
         self.popups
-            .set_modal(ModalPopup::UserProfile(UserProfilePopupState {
+            .set_modal(ModalPopup::UserProfile(Box::new(UserProfilePopupState {
                 user_id,
                 guild_id,
                 load_error: None,
                 settings: UserProfileSettingsState::default(),
                 scroll: Default::default(),
-            }));
+            })));
         Some(AppCommand::LoadUserProfile { user_id, guild_id })
     }
 
@@ -447,6 +447,15 @@ impl DashboardState {
                 .clone()
                 .or_else(|| profile.and_then(|profile| profile.guild_pronouns.clone()))
                 .unwrap_or_default(),
+            UserProfileSettingsField::GuildBio => popup
+                .settings
+                .guild_bio
+                .clone()
+                .or_else(|| profile.and_then(|profile| profile.guild_bio.clone()))
+                .unwrap_or_default(),
+            UserProfileSettingsField::GuildAvatarPath => {
+                popup.settings.guild_avatar_path.clone().unwrap_or_default()
+            }
             UserProfileSettingsField::Save
             | UserProfileSettingsField::Cancel
             | UserProfileSettingsField::SignOut => String::new(),
@@ -804,7 +813,9 @@ impl DashboardState {
         }
         popup.settings.saving = true;
         popup.settings.status = Some("Saving profile changes...".to_owned());
-        Some(AppCommand::UpdateUserProfile { update })
+        Some(AppCommand::UpdateUserProfile {
+            update: Box::new(update),
+        })
     }
 
     pub fn sign_out_command(&mut self) -> Option<AppCommand> {
@@ -1022,6 +1033,11 @@ fn pending_user_profile_update(
             settings.guild_pronouns.as_ref(),
             profile.and_then(|profile| profile.guild_pronouns.as_deref()),
         ),
+        bio: changed_text(
+            settings.guild_bio.as_ref(),
+            profile.and_then(|profile| profile.guild_bio.as_deref()),
+        ),
+        avatar: settings.pending_guild_avatar_upload(),
     });
 
     UserProfileUpdate {

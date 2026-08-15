@@ -124,7 +124,7 @@ define_modal_popups! {
     GuildLeaveConfirmation(GuildLeaveConfirmationState),
     Options(OptionsPopupState),
     AttachmentViewer(AttachmentViewerState),
-    UserProfile(UserProfilePopupState),
+    UserProfile(Box<UserProfilePopupState>),
     EmojiReactionPicker(EmojiReactionPickerState),
     PollVotePicker(PollVotePickerState),
     ReactionUsers(ReactionUsersPopupState),
@@ -754,6 +754,8 @@ pub enum UserProfileSettingsField {
     GlobalAvatarPath,
     GuildNickname,
     GuildPronouns,
+    GuildBio,
+    GuildAvatarPath,
     Save,
     Cancel,
     SignOut,
@@ -777,6 +779,12 @@ pub(super) struct UserProfileSettingsState {
     pub(super) activity_picker: Option<SelectablePopupState>,
     pub(super) guild_nickname: Option<String>,
     pub(super) guild_pronouns: Option<String>,
+    /// A separate identity for this guild: its own bio and avatar, distinct
+    /// from the global ones.
+    pub(super) guild_bio: Option<String>,
+    pub(super) guild_avatar_path: Option<String>,
+    pub(super) guild_avatar_upload: Option<ProfileAvatarUpload>,
+    pub(super) guild_avatar_preview_key: Option<String>,
     pub(super) saving: bool,
     pub(super) status: Option<String>,
 }
@@ -794,9 +802,11 @@ impl UserProfileSettingsState {
         UserProfileSettingsField::Cancel,
         UserProfileSettingsField::SignOut,
     ];
-    const GUILD_FIELDS: [UserProfileSettingsField; 2] = [
+    const GUILD_FIELDS: [UserProfileSettingsField; 4] = [
         UserProfileSettingsField::GuildNickname,
         UserProfileSettingsField::GuildPronouns,
+        UserProfileSettingsField::GuildBio,
+        UserProfileSettingsField::GuildAvatarPath,
     ];
     const GUILD_ACTIONS: [UserProfileSettingsField; 3] = [
         UserProfileSettingsField::Save,
@@ -867,6 +877,15 @@ impl UserProfileSettingsState {
             }
             UserProfileSettingsField::GuildNickname => self.guild_nickname = Some(value),
             UserProfileSettingsField::GuildPronouns => self.guild_pronouns = Some(value),
+            UserProfileSettingsField::GuildBio => self.guild_bio = Some(value),
+            UserProfileSettingsField::GuildAvatarPath => {
+                let trimmed = value.trim();
+                let upload = (!trimmed.is_empty())
+                    .then(|| ProfileAvatarUpload::from_path(PathBuf::from(trimmed)));
+                self.guild_avatar_preview_key = upload.as_ref().map(profile_avatar_preview_key);
+                self.guild_avatar_path = Some(value);
+                self.guild_avatar_upload = None;
+            }
             UserProfileSettingsField::Save
             | UserProfileSettingsField::Cancel
             | UserProfileSettingsField::SignOut => {}
@@ -882,6 +901,19 @@ impl UserProfileSettingsState {
     pub(super) fn pending_global_avatar_upload(&self) -> Option<ProfileAvatarUpload> {
         self.global_avatar_upload.clone().or_else(|| {
             self.global_avatar_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .map(ProfileAvatarUpload::from_path)
+        })
+    }
+
+    /// The guild avatar staged for upload, resolved the same way as the
+    /// global one so a typed path and a pasted file behave alike.
+    pub(super) fn pending_guild_avatar_upload(&self) -> Option<ProfileAvatarUpload> {
+        self.guild_avatar_upload.clone().or_else(|| {
+            self.guild_avatar_path
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())

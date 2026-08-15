@@ -780,6 +780,9 @@ pub fn add_profile(
             role_ids_present: guild.is_some(),
             avatar_url: None,
             bio: Some(bio.to_string()),
+            // A distinct per-guild bio, so demo mode shows that the two are
+            // separate rather than the same text twice.
+            guild_bio: guild.map(|_| format!("{bio} (in this server)")),
             pronouns: pronouns.map(str::to_string),
             guild_pronouns: None,
             mutual_guilds: vec![crate::discord::MutualGuildInfo {

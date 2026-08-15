@@ -198,7 +198,7 @@ fn profile_settings_save_dispatches_dirty_global_fields() {
     assert_eq!(
         state.save_user_profile_settings_command(),
         Some(AppCommand::UpdateUserProfile {
-            update: UserProfileUpdate {
+            update: Box::new(UserProfileUpdate {
                 user_id: Id::new(10),
                 guild_id: None,
                 global: GlobalUserProfileUpdate {
@@ -207,7 +207,7 @@ fn profile_settings_save_dispatches_dirty_global_fields() {
                     avatar: None,
                 },
                 guild: None,
-            },
+            }),
         })
     );
 }
@@ -347,7 +347,7 @@ fn profile_settings_save_dispatches_pasted_avatar_upload() {
     assert_eq!(
         state.save_user_profile_settings_command(),
         Some(AppCommand::UpdateUserProfile {
-            update: UserProfileUpdate {
+            update: Box::new(UserProfileUpdate {
                 user_id,
                 guild_id: None,
                 global: GlobalUserProfileUpdate {
@@ -359,7 +359,7 @@ fn profile_settings_save_dispatches_pasted_avatar_upload() {
                     )),
                 },
                 guild: None,
-            },
+            }),
         })
     );
 }
@@ -533,7 +533,7 @@ fn profile_settings_save_dispatches_guild_fields() {
     assert_eq!(
         state.save_user_profile_settings_command(),
         Some(AppCommand::UpdateUserProfile {
-            update: UserProfileUpdate {
+            update: Box::new(UserProfileUpdate {
                 user_id,
                 guild_id: Some(guild_id),
                 global: GlobalUserProfileUpdate::default(),
@@ -541,8 +541,10 @@ fn profile_settings_save_dispatches_guild_fields() {
                     guild_id,
                     nickname: Some("server neo".to_owned()),
                     pronouns: None,
+                    bio: None,
+                    avatar: None,
                 }),
-            },
+            }),
         })
     );
 }

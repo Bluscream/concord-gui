@@ -76,6 +76,8 @@ pub struct UserProfileInfo {
     pub bio: Option<String>,
     pub pronouns: Option<String>,
     pub guild_pronouns: Option<String>,
+    /// Bio set for this guild specifically, distinct from the global one.
+    pub guild_bio: Option<String>,
     pub mutual_guilds: Vec<MutualGuildInfo>,
     pub mutual_friends_count: u32,
     pub friend_status: FriendStatus,
@@ -106,6 +108,7 @@ impl UserProfileInfo {
             bio: None,
             pronouns: None,
             guild_pronouns: None,
+            guild_bio: None,
             mutual_guilds: Vec::new(),
             mutual_friends_count: 0,
             friend_status: FriendStatus::None,

@@ -463,6 +463,8 @@ fn user_profile_settings_popup_text(
                     &[
                         (UserProfileSettingsField::GuildNickname, "Server nickname"),
                         (UserProfileSettingsField::GuildPronouns, "Server pronouns"),
+                        (UserProfileSettingsField::GuildBio, "Server bio"),
+                        (UserProfileSettingsField::GuildAvatarPath, "Server avatar"),
                     ],
                 );
             }

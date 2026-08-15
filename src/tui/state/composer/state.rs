@@ -2149,16 +2149,20 @@ impl DashboardState {
                 };
 
                 BuiltinCommandSubmit::Ready(AppCommand::UpdateUserProfile {
-                    update: UserProfileUpdate {
+                    update: Box::new(UserProfileUpdate {
                         user_id,
                         guild_id: Some(guild_id),
                         global: GlobalUserProfileUpdate::default(),
                         guild: Some(GuildUserProfileUpdate {
                             guild_id,
                             nickname: Some(nickname),
+                            // /nick changes only the nickname; the rest of the
+                            // guild identity is left as it is.
                             pronouns: None,
+                            bio: None,
+                            avatar: None,
                         }),
-                    },
+                    }),
                 })
             }
             BuiltinSlashCommandParse::Ready(BuiltinSlashCommandSubmit::Unsupported { message }) => {

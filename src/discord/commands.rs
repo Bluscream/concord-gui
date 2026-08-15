@@ -169,11 +169,18 @@ pub struct GuildUserProfileUpdate {
     pub guild_id: Id<GuildMarker>,
     pub nickname: Option<String>,
     pub pronouns: Option<String>,
+    /// A separate avatar for this guild. Distinct from the global one, which
+    /// is the point of a per-guild identity.
+    pub avatar: Option<ProfileAvatarUpload>,
+    pub bio: Option<String>,
 }
 
 impl GuildUserProfileUpdate {
     pub fn is_empty(&self) -> bool {
-        self.nickname.is_none() && self.pronouns.is_none()
+        self.nickname.is_none()
+            && self.pronouns.is_none()
+            && self.avatar.is_none()
+            && self.bio.is_none()
     }
 }
 
@@ -728,7 +735,10 @@ pub enum AppCommand {
         guild_id: Option<Id<GuildMarker>>,
     },
     UpdateUserProfile {
-        update: UserProfileUpdate,
+        // Boxed: this is by far the largest variant - two profile halves, each
+        // with an avatar upload - and unboxed it sets the size of every
+        // AppCommand and of the dispatch enums that carry one.
+        update: Box<UserProfileUpdate>,
     },
     UpdateCurrentUserStatus {
         status: PresenceStatus,

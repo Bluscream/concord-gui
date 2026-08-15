@@ -652,6 +652,7 @@ impl CommandDispatcher {
                 user_commands::load_profile(self.client.clone(), user_id, guild_id).await;
             }
             AppCommand::UpdateUserProfile { update } => {
+                let update = *update;
                 user_commands::update_profile(self.client.clone(), update).await;
             }
             AppCommand::UpdateCurrentUserStatus { status } => {
