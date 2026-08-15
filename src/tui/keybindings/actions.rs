@@ -104,6 +104,7 @@ define_ui_actions! {
     ShowReactionUsers => ("show reacted users", &[], None),
     OpenPollVotePicker => ("choose poll votes", &[], None),
     GoToReferencedMessage => ("go to referenced message", &[], None),
+    ForwardMessage => ("forward message", &[], None),
     ToggleGuildPane => ("toggle Servers", &[&[Leader, Char('1')]], None),
     ToggleChannelPane => ("toggle Channels", &[&[Leader, Char('2')]], None),
     ToggleMemberPane => ("toggle Members", &[&[Leader, Char('4')]], None),
@@ -177,6 +178,7 @@ define_message_action_bindings! {
     ShowReactionUsers => (ShowReactionUsers, "ShowReactionUsers"),
     OpenPollVotePicker => (OpenPollVotePicker, "OpenPollVotePicker"),
     GoToReferencedMessage => (GoToReferencedMessage, "GoToReferencedMessage"),
+    Forward => (ForwardMessage, "ForwardMessage"),
 }
 
 impl UiAction {

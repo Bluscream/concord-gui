@@ -1189,7 +1189,7 @@ fn every_ui_action_is_handled_or_explicitly_declined() {
     // should be noticed here as well as by the compiler.
     assert_eq!(
         UiAction::ALL.len(),
-        55,
+        56,
         "UiAction changed upstream; revisit the keymap dispatcher"
     );
 }

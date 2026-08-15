@@ -1003,6 +1003,7 @@ impl KeyBindings {
             MessageActionKind::OpenThread => 't',
             MessageActionKind::ShowReactionUsers => 'u',
             MessageActionKind::OpenPollVotePicker => 'c',
+            MessageActionKind::Forward => 'f',
         })]
     }
 

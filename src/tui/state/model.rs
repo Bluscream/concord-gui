@@ -79,6 +79,7 @@ pub enum MessageActionKind {
     ShowReactionUsers,
     OpenPollVotePicker,
     GoToReferencedMessage,
+    Forward,
 }
 
 impl MessageActionKind {
@@ -86,6 +87,8 @@ impl MessageActionKind {
         match self {
             Self::OpenReactionPicker => Some(DiscordAction::AddReaction),
             Self::Reply => Some(DiscordAction::SendMessage),
+            // A forward is a send, so it is gated by the same permission.
+            Self::Forward => Some(DiscordAction::SendMessage),
             Self::OpenDeleteConfirmation => Some(DiscordAction::DeleteMessage),
             Self::Edit => Some(DiscordAction::EditMessage),
             Self::RemoveEmbeds => Some(DiscordAction::RemoveMessageEmbeds),

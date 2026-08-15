@@ -1,9 +1,13 @@
 use std::collections::HashSet;
 
+use crate::discord::next_message_nonce;
 use crate::discord::{ChannelState, ChannelUnreadState};
 use crate::tui::text_input::TextInputState;
 use crate::{
-    discord::ids::{Id, marker::GuildMarker},
+    discord::ids::{
+        Id,
+        marker::{ChannelMarker, GuildMarker, MessageMarker},
+    },
     tui::fuzzy::{FuzzyMatchQuality, FuzzyScore, fuzzy_name_match_score},
 };
 
@@ -26,15 +30,33 @@ pub(in crate::tui::state) struct ChannelSwitcherState {
     selection: SelectablePopupState,
     base_items: Vec<ChannelSwitcherItem>,
     query_items: Option<Vec<ChannelSwitcherItem>>,
+    purpose: ChannelSwitcherPurpose,
+}
+
+/// What the switcher will do with the channel it is given.
+///
+/// Forwarding needs exactly the picker this already is - every channel across
+/// every guild, ranked by the same matcher - so it reuses it rather than
+/// growing a second picker that would rank the same query differently.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::tui::state) enum ChannelSwitcherPurpose {
+    #[default]
+    Navigate,
+    Forward {
+        message_id: Id<MessageMarker>,
+        source_channel_id: Id<ChannelMarker>,
+        source_guild_id: Option<Id<GuildMarker>>,
+    },
 }
 
 impl ChannelSwitcherState {
-    fn new(base_items: Vec<ChannelSwitcherItem>) -> Self {
+    fn new(base_items: Vec<ChannelSwitcherItem>, purpose: ChannelSwitcherPurpose) -> Self {
         Self {
             query: TextInputState::default(),
             selection: SelectablePopupState::default(),
             base_items,
             query_items: None,
+            purpose,
         }
     }
 
@@ -63,11 +85,33 @@ impl ChannelSwitcherState {
 
 impl DashboardState {
     pub fn open_channel_switcher(&mut self) {
+        self.open_channel_switcher_for(ChannelSwitcherPurpose::Navigate);
+    }
+
+    /// Open the switcher to pick a channel for something other than navigating.
+    pub fn open_channel_switcher_for(&mut self, purpose: ChannelSwitcherPurpose) {
         let items = self.all_channel_switcher_items();
         self.popups
             .set_modal(ModalPopup::ChannelSwitcher(ChannelSwitcherState::new(
-                items,
+                items, purpose,
             )));
+    }
+
+    /// Begin forwarding the selected message: pick the destination.
+    pub fn start_message_forward(&mut self) -> bool {
+        let Some((message_id, source_channel_id, source_guild_id)) = self
+            .selected_message_state()
+            .map(|message| (message.id, message.channel_id, message.guild_id))
+        else {
+            return false;
+        };
+
+        self.open_channel_switcher_for(ChannelSwitcherPurpose::Forward {
+            message_id,
+            source_channel_id,
+            source_guild_id,
+        });
+        true
     }
 
     pub fn close_channel_switcher(&mut self) {
@@ -148,6 +192,27 @@ impl DashboardState {
             let selected = switcher.selection.selected_for_len(switcher.visible_len());
             switcher.visible_items().get(selected)?.clone()
         };
+
+        // Forwarding consumes the selection rather than navigating to it: the
+        // point is to send the message elsewhere, not to go there.
+        if let Some(ChannelSwitcherPurpose::Forward {
+            message_id,
+            source_channel_id,
+            source_guild_id,
+        }) = self
+            .popups
+            .channel_switcher()
+            .map(|switcher| switcher.purpose)
+        {
+            self.close_channel_switcher();
+            return Some(AppCommand::ForwardMessage {
+                source_channel_id,
+                source_guild_id,
+                message_id,
+                target_channel_id: item.channel_id,
+                nonce: next_message_nonce(),
+            });
+        }
 
         let Some(channel) = self.discord.cache.channel(item.channel_id) else {
             self.close_channel_switcher();

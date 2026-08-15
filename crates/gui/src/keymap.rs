@@ -138,6 +138,7 @@ pub fn apply(workspace: &mut Workspace, action: UiAction, cx: &mut Context<Works
         UiAction::ShowMessageProfile => workspace.act_on_selection(MessageAction::OpenProfile),
         UiAction::ShowReactionUsers => workspace.show_first_reaction_users(),
         UiAction::GoToReferencedMessage => workspace.act_on_selection(MessageAction::JumpToReplied),
+        UiAction::ForwardMessage => workspace.act_on_selection(MessageAction::Forward),
         UiAction::RemoveMessageEmbeds => workspace.act_on_selection(MessageAction::RemoveEmbeds),
         UiAction::ViewMessageAttachment => {
             workspace.act_on_selection(MessageAction::DownloadAttachment(0))
