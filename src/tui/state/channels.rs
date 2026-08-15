@@ -13,7 +13,7 @@ use crate::discord::{
 };
 
 use super::{
-    ActiveGuildScope, DashboardState, ForumPostImagePreview, MessagePaneSource, ThreadReturnTarget,
+    ActiveGuildScope, DashboardState, MessagePaneSource, ThreadCardImagePreview, ThreadReturnTarget,
 };
 use super::{
     channel_tree,
@@ -51,7 +51,8 @@ impl DashboardState {
             .into_iter()
             .filter(|post_id| !active_post_ids_set.contains(post_id))
             .collect::<Vec<_>>();
-        let mut items = self.forum_post_section_items(&active_post_ids, channel.id, "Active posts");
+        let mut items =
+            self.thread_card_section_items(&active_post_ids, channel.id, "Active posts");
         items.extend(self.archived_forum_post_section_items(
             &archived_post_ids,
             channel.id,
@@ -320,29 +321,29 @@ impl DashboardState {
         channel_id: Id<ChannelMarker>,
     ) -> Vec<ChannelThreadItem> {
         let active_ids = self.discord.cache.active_thread_ids_for_parent(channel_id);
-        self.forum_post_section_items(&active_ids, channel_id, "Active threads")
+        self.thread_card_section_items(&active_ids, channel_id, "Active threads")
     }
 
-    fn forum_post_section_items(
+    fn thread_card_section_items(
         &self,
-        post_ids: &[Id<ChannelMarker>],
-        forum_channel_id: Id<ChannelMarker>,
+        thread_ids: &[Id<ChannelMarker>],
+        parent_channel_id: Id<ChannelMarker>,
         section_label: &str,
     ) -> Vec<ChannelThreadItem> {
         // Discord displays pinned posts first, then orders the remaining active
         // posts by recent activity. The last message snowflake is updated by
         // Gateway events and gives this view a stable local ordering.
-        let (mut pinned, mut rest): (Vec<_>, Vec<_>) = post_ids
+        let (mut pinned, mut rest): (Vec<_>, Vec<_>) = thread_ids
             .iter()
-            .filter_map(|post_id| self.discord.cache.channel(*post_id))
-            .filter(|post| {
-                post.is_thread()
-                    && post.parent_id == Some(forum_channel_id)
-                    && self.discord.cache.can_view_channel(post)
+            .filter_map(|thread_id| self.discord.cache.channel(*thread_id))
+            .filter(|thread| {
+                thread.is_thread()
+                    && thread.parent_id == Some(parent_channel_id)
+                    && self.discord.cache.can_view_channel(thread)
             })
-            .partition(|post| post.thread_pinned().unwrap_or(false));
-        let by_last_message = |post: &&ChannelState| {
-            std::cmp::Reverse(post.last_message_id.map(|id| id.get()).unwrap_or(0))
+            .partition(|thread| thread.thread_pinned().unwrap_or(false));
+        let by_last_message = |thread: &&ChannelState| {
+            std::cmp::Reverse(thread.last_message_id.map(|id| id.get()).unwrap_or(0))
         };
         pinned.sort_by_key(by_last_message);
         rest.sort_by_key(by_last_message);
@@ -351,8 +352,12 @@ impl DashboardState {
             .into_iter()
             .chain(rest)
             .enumerate()
-            .map(|(index, post)| {
-                self.forum_thread_item(post, (index == 0).then(|| section_label.to_owned()), false)
+            .map(|(index, thread)| {
+                self.thread_card_item(
+                    thread,
+                    (index == 0).then(|| section_label.to_owned()),
+                    false,
+                )
             })
             .collect()
     }
@@ -377,12 +382,12 @@ impl DashboardState {
             })
             .enumerate()
             .map(|(index, post)| {
-                self.forum_thread_item(post, (index == 0).then(|| section_label.to_owned()), true)
+                self.thread_card_item(post, (index == 0).then(|| section_label.to_owned()), true)
             })
             .collect()
     }
 
-    pub(super) fn forum_thread_item(
+    pub(super) fn thread_card_item(
         &self,
         channel: &ChannelState,
         section_label: Option<String>,
@@ -462,7 +467,7 @@ impl DashboardState {
                     .attachments_in_display_order()
                     .find(|attachment| attachment.inline_preview_url().is_some())
                     .cloned()
-                    .map(|attachment| ForumPostImagePreview {
+                    .map(|attachment| ThreadCardImagePreview {
                         message_id: message.id,
                         attachment,
                     })

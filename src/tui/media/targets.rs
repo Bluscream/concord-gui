@@ -14,7 +14,7 @@ use super::super::{
     state::{
         ActiveModalPopupKind, DashboardState, MAX_MENTION_PICKER_VISIBLE, SelectablePopupTarget,
     },
-    ui::{ImagePreviewLayout, forum},
+    ui::{ImagePreviewLayout, thread_card},
 };
 
 /// Wide-enough wrap width for the prefetch walk. URL emission is
@@ -53,7 +53,7 @@ enum YoutubeThumbnailSize {
 #[derive(Clone)]
 pub(in crate::tui) struct ImagePreviewTarget {
     pub(in crate::tui) viewer: bool,
-    pub(in crate::tui) forum_post: bool,
+    pub(in crate::tui) thread_card: bool,
     pub(in crate::tui) message_index: usize,
     pub(in crate::tui) preview_index: usize,
     pub(in crate::tui) preview_x_offset_columns: u16,
@@ -158,7 +158,7 @@ pub(in crate::tui) fn visible_image_preview_targets_from_plan(
         }
         return vec![ImagePreviewTarget {
             viewer: true,
-            forum_post: false,
+            thread_card: false,
             message_index: 0,
             preview_index,
             preview_x_offset_columns: 0,
@@ -179,8 +179,8 @@ pub(in crate::tui) fn visible_image_preview_targets_from_plan(
         return Vec::new();
     }
 
-    if state.message_pane_uses_forum_posts() {
-        return visible_forum_post_image_preview_targets(state, layout);
+    if state.message_pane_uses_thread_cards() {
+        return visible_thread_card_image_preview_targets(state, layout);
     }
 
     let mut targets = Vec::new();
@@ -207,7 +207,7 @@ pub(in crate::tui) fn visible_image_preview_targets_from_plan(
             if cell.width > 0 && cell.height > 0 && visible_top < visible_bottom {
                 targets.push(ImagePreviewTarget {
                     viewer: false,
-                    forum_post: false,
+                    thread_card: false,
                     message_index,
                     preview_index: cell.preview_index,
                     preview_x_offset_columns: cell.x_offset_columns,
@@ -230,7 +230,7 @@ pub(in crate::tui) fn visible_image_preview_targets_from_plan(
     targets
 }
 
-fn visible_forum_post_image_preview_targets(
+fn visible_thread_card_image_preview_targets(
     state: &DashboardState,
     layout: ImagePreviewLayout,
 ) -> Vec<ImagePreviewTarget> {
@@ -256,7 +256,7 @@ fn visible_forum_post_image_preview_targets(
             rendered_row = rendered_row.saturating_add(post.card_height());
             continue;
         };
-        let Some(slot) = forum::forum_post_image_slot(post, card_width, true) else {
+        let Some(slot) = thread_card::thread_card_image_slot(post, card_width, true) else {
             rendered_row = rendered_row.saturating_add(post.card_height());
             continue;
         };
@@ -285,7 +285,7 @@ fn visible_forum_post_image_preview_targets(
         if preview_top < visible_bottom {
             targets.push(ImagePreviewTarget {
                 viewer: false,
-                forum_post: true,
+                thread_card: true,
                 message_index: post_index,
                 preview_index: 0,
                 preview_x_offset_columns: slot

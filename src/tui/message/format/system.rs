@@ -12,7 +12,7 @@ use crate::tui::message::time as message_time;
 use crate::tui::state::{DashboardState, apply_discord_foreground, normal_text_style};
 use crate::tui::text::{truncate_display_width, truncate_text};
 use crate::tui::theme;
-use crate::tui::ui::forum::forum_post_card_lines;
+use crate::tui::ui::thread_card::compact_thread_card_lines;
 
 use super::polls::format_poll_result_lines;
 use super::{
@@ -140,13 +140,13 @@ fn format_thread_created_lines(
         width,
     )];
 
-    // Reuse the forum-post card UI for the thread box. The card owns a two-column
+    // Reuse the shared thread-card UI for the thread box. The card owns a two-column
     // marker gutter, so cap the body at 72 columns (the historical thread-box
     // maximum) and add the gutter back to keep the same on-screen width.
     let card_width = width.saturating_sub(2).clamp(4, 72).saturating_add(2);
     if let Some(item) = state.thread_card_item_for_message(message) {
         lines.extend(
-            forum_post_card_lines(&item, false, card_width, state.show_custom_emoji())
+            compact_thread_card_lines(&item, false, card_width, state.show_custom_emoji())
                 .into_iter()
                 .map(MessageContentLine::from_line),
         );

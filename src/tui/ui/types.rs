@@ -15,7 +15,7 @@ pub(super) const MAX_REACTION_USERS_VISIBLE_LINES: usize = 14;
 
 pub struct ImagePreview<'a> {
     pub viewer: bool,
-    pub forum_post: bool,
+    pub thread_card: bool,
     pub message_index: usize,
     pub preview_x_offset_columns: u16,
     pub preview_y_offset_rows: usize,

@@ -530,11 +530,11 @@ impl AppliedForumTag {
     }
 }
 
-/// The first image attachment shown in a forum card. Keeping the source
+/// The first image attachment shown in a thread card. Keeping the source
 /// attachment here lets the shared media runtime choose its normal proxy and
 /// quality settings instead of adding a second image-loading path.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ForumPostImagePreview {
+pub struct ThreadCardImagePreview {
     pub message_id: Id<MessageMarker>,
     pub attachment: AttachmentInfo,
 }
@@ -552,7 +552,7 @@ pub struct ChannelThreadItem {
     pub preview_author_color: Option<u32>,
     pub preview_content: Option<String>,
     pub preview_loading: bool,
-    pub preview_image: Option<ForumPostImagePreview>,
+    pub preview_image: Option<ThreadCardImagePreview>,
     pub applied_tags: Vec<AppliedForumTag>,
     pub preview_reactions: Vec<ReactionInfo>,
     pub comment_count: Option<u64>,

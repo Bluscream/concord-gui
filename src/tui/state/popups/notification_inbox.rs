@@ -1049,7 +1049,7 @@ impl DashboardState {
             .into_iter()
             .take(MAX_INBOX_MESSAGES_PER_CHANNEL)
             .filter_map(|thread| {
-                let post = self.forum_thread_item(thread, None, false);
+                let post = self.thread_card_item(thread, None, false);
                 Some(NotificationInboxMessage {
                     channel_id: thread.id,
                     message_id: Id::new(thread.id.get()),

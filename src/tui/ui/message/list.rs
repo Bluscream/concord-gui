@@ -1,8 +1,8 @@
-use super::super::forum;
 use super::super::panes::{
     active_composer_picker_area, render_composer, render_composer_command_picker,
     render_composer_emoji_picker, render_composer_mention_picker,
 };
+use super::super::thread_card;
 use super::super::*;
 use crate::tui::media;
 use crate::tui::message::{
@@ -91,41 +91,45 @@ pub(in crate::tui::ui) fn render_messages(
         let posts = state.visible_thread_card_items();
         let selected = state.focused_thread_card_selection();
         let is_loading = state.selected_forum_posts_loading();
-        let forum_viewport_len =
-            forum::forum_post_scrollbar_visible_count(message_areas.list.height);
-        let forum_total_rows = state.message_total_rendered_rows(content_width, 0, 0);
-        let forum_scrollbar_visible =
-            vertical_scrollbar_visible(message_areas.list, forum_viewport_len, forum_total_rows);
-        let forum_card_width =
-            selected_message_card_width(message_areas.list.width as usize, forum_scrollbar_visible);
+        let thread_viewport_len =
+            thread_card::thread_card_scrollbar_visible_count(message_areas.list.height);
+        let thread_total_rows = state.message_total_rendered_rows(content_width, 0, 0);
+        let thread_scrollbar_visible =
+            vertical_scrollbar_visible(message_areas.list, thread_viewport_len, thread_total_rows);
+        let thread_card_width = selected_message_card_width(
+            message_areas.list.width as usize,
+            thread_scrollbar_visible,
+        );
         frame.render_widget(
-            Paragraph::new(forum::forum_post_viewport_lines_with_custom_emoji_images(
-                &posts,
-                selected,
-                forum_card_width,
-                is_loading,
-                state.animation_frame(),
-                state.show_custom_emoji(),
-                state.show_images(),
-            ))
+            Paragraph::new(
+                thread_card::thread_card_viewport_lines_with_custom_emoji_images(
+                    &posts,
+                    selected,
+                    thread_card_width,
+                    is_loading,
+                    state.animation_frame(),
+                    state.show_custom_emoji(),
+                    state.show_images(),
+                ),
+            )
             .style(theme::current().style(theme::HighlightGroup::Normal)),
             message_areas.list,
         );
         if state.show_custom_emoji() {
-            forum::render_forum_post_reaction_emojis(
+            thread_card::render_thread_card_reaction_emojis(
                 frame,
                 message_areas.list,
                 &posts,
-                forum_card_width,
+                thread_card_width,
                 media.emoji_images,
                 media_occlusion_areas,
                 state.show_images(),
             );
-            forum::render_forum_post_tag_emojis(
+            thread_card::render_thread_card_tag_emojis(
                 frame,
                 message_areas.list,
                 &posts,
-                forum_card_width,
+                thread_card_width,
                 media.emoji_images,
                 media_occlusion_areas,
                 state.show_images(),
@@ -134,9 +138,9 @@ pub(in crate::tui::ui) fn render_messages(
         for image_preview in media
             .image_previews
             .into_iter()
-            .filter(|preview| preview.forum_post)
+            .filter(|preview| preview.thread_card)
         {
-            let Some(mut preview_area) = forum::forum_post_image_preview_area(
+            let Some(mut preview_area) = thread_card::thread_card_image_preview_area(
                 message_areas.list,
                 image_preview.preview_y_offset_rows as isize,
                 image_preview.preview_x_offset_columns,
@@ -157,8 +161,8 @@ pub(in crate::tui::ui) fn render_messages(
             frame,
             message_areas.list,
             state.message_scroll_row_position(content_width, 0, 0),
-            forum_viewport_len,
-            forum_total_rows,
+            thread_viewport_len,
+            thread_total_rows,
         );
         render_typing_footer(frame, message_areas.typing, state);
         render_composer(frame, message_areas.composer, state, media.emoji_images);
@@ -252,7 +256,7 @@ pub(in crate::tui::ui) fn render_messages(
         avatar_offset,
     );
     for image_preview in media.image_previews.into_iter() {
-        if image_preview.forum_post {
+        if image_preview.thread_card {
             continue;
         }
         let Some(row_plan) = render_plan.row(image_preview.message_index) else {

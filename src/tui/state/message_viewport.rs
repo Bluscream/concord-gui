@@ -1275,7 +1275,7 @@ impl DashboardState {
         }
         if let Some(channel) = self.started_thread_channel(message) {
             let archived = channel.thread_archived().unwrap_or(false);
-            return Some(self.forum_thread_item(channel, None, archived));
+            return Some(self.thread_card_item(channel, None, archived));
         }
 
         let summary = self.thread_summary_for_message(message);

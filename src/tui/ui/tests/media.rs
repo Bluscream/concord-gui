@@ -279,7 +279,7 @@ fn inline_image_preview_renders_when_not_occluded() {
 fn loading_image_preview_at_message_offset(preview_y_offset_rows: usize) -> ImagePreview<'static> {
     ImagePreview {
         viewer: false,
-        forum_post: false,
+        thread_card: false,
         message_index: 0,
         preview_x_offset_columns: 0,
         preview_y_offset_rows,

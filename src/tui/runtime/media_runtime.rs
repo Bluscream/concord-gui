@@ -300,8 +300,8 @@ impl DashboardMediaRuntime {
                 );
                 continue;
             }
-            if target.forum_post {
-                let Some(mut preview_area) = ui::forum::forum_post_image_preview_area(
+            if target.thread_card {
+                let Some(mut preview_area) = ui::thread_card::thread_card_image_preview_area(
                     list,
                     target.preview_y_offset_rows as isize,
                     target.preview_x_offset_columns,
@@ -445,8 +445,8 @@ fn clip_image_preview_targets_for_occlusions(
             continue;
         }
 
-        if target.forum_post {
-            let Some(area) = ui::forum::forum_post_image_preview_area(
+        if target.thread_card {
+            let Some(area) = ui::thread_card::thread_card_image_preview_area(
                 list,
                 target.preview_y_offset_rows as isize,
                 target.preview_x_offset_columns,
@@ -894,7 +894,7 @@ mod tests {
     fn image_preview_target() -> ImagePreviewTarget {
         ImagePreviewTarget {
             viewer: false,
-            forum_post: false,
+            thread_card: false,
             message_index: 0,
             preview_index: 0,
             preview_x_offset_columns: 0,

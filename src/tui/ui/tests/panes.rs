@@ -1160,7 +1160,7 @@ fn forum_post_lines_render_title_author_and_preview() {
     let custom =
         theme::Theme::default().with_border_type(theme::BorderSurface::Forum, BorderType::Thick);
     let lines = theme::with_test_theme(custom, || {
-        forum_post_viewport_lines(&[post], Some(0), 80, false)
+        thread_card_viewport_lines(&[post], Some(0), 80, false)
     });
     let texts = line_texts_from_ratatui(&lines);
 
@@ -1231,7 +1231,7 @@ fn forum_post_lines_show_loading_until_starter_data_arrives() {
         ..ChannelThreadItem::test(Id::new(30))
     };
 
-    let texts = line_texts_from_ratatui(&forum_post_viewport_lines(&[post], None, 80, false));
+    let texts = line_texts_from_ratatui(&thread_card_viewport_lines(&[post], None, 80, false));
 
     assert!(texts[3].contains("neo: Loading preview..."));
     assert!(
@@ -1247,7 +1247,7 @@ fn forum_post_lines_reserve_a_right_column_for_image_attachments() {
         label: "x".repeat(100),
         preview_author: Some("neo".to_owned()),
         preview_content: Some("y".repeat(100)),
-        preview_image: Some(ForumPostImagePreview {
+        preview_image: Some(ThreadCardImagePreview {
             message_id: Id::new(30),
             attachment: AttachmentInfo {
                 content_type: Some("image/png".to_owned()),
@@ -1258,10 +1258,10 @@ fn forum_post_lines_reserve_a_right_column_for_image_attachments() {
         }),
         ..ChannelThreadItem::test(Id::new(30))
     };
-    let slot = crate::tui::ui::forum::forum_post_image_slot(&post, 80, true)
+    let slot = crate::tui::ui::thread_card::thread_card_image_slot(&post, 80, true)
         .expect("wide forum card should reserve an image slot");
 
-    let lines = forum_post_viewport_lines(&[post], None, 80, false);
+    let lines = thread_card_viewport_lines(&[post], None, 80, false);
 
     let text_width = usize::from(slot.column).saturating_sub(6);
     assert_eq!(lines[1].spans[2].content.width(), text_width);
@@ -1293,14 +1293,14 @@ fn forum_post_tag_line_renders_unicode_emoji_and_reserves_custom_image_slot() {
         ..ChannelThreadItem::test(Id::new(30))
     };
 
-    let lines = forum_post_viewport_lines(std::slice::from_ref(&post), Some(0), 80, false);
+    let lines = thread_card_viewport_lines(std::slice::from_ref(&post), Some(0), 80, false);
     let texts = line_texts_from_ratatui(&lines);
 
     let tag_text = &texts[4];
     assert!(tag_text.contains("🔥 fire"));
     assert!(tag_text.contains("bug"));
 
-    let rows = forum_post_tag_rows_for_test(&[post], 80, 20);
+    let rows = thread_card_tag_rows_for_test(&[post], 80, 20);
     assert_eq!(rows.len(), 1);
     let (row, cols) = &rows[0];
     assert_eq!(*row, 4);
@@ -1321,7 +1321,7 @@ fn forum_post_lines_can_reserve_scrollbar_column() {
         ..ChannelThreadItem::test(Id::new(30))
     };
 
-    let lines = forum_post_viewport_lines(
+    let lines = thread_card_viewport_lines(
         &[post],
         Some(0),
         selected_message_card_width(80, true),

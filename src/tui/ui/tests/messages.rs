@@ -238,7 +238,7 @@ fn forum_post_reaction_summary_reserves_custom_emoji_image_slot() {
     }];
 
     assert_eq!(
-        forum_post_reaction_summary(&reactions, 80).as_deref(),
+        thread_card_reaction_summary(&reactions, 80).as_deref(),
         Some("[   1]")
     );
 }
@@ -1353,12 +1353,13 @@ fn thread_created_message_renders_forum_post_card_shape() {
         .thread_card_item_for_message(&message)
         .expect("kind-18 message yields a thread card item");
     let card_width = 200usize.saturating_sub(2).clamp(4, 72).saturating_add(2);
-    let expected_card = line_texts_from_ratatui(&crate::tui::ui::forum::forum_post_card_lines(
-        &item,
-        false,
-        card_width,
-        state.show_custom_emoji(),
-    ));
+    let expected_card =
+        line_texts_from_ratatui(&crate::tui::ui::thread_card::compact_thread_card_lines(
+            &item,
+            false,
+            card_width,
+            state.show_custom_emoji(),
+        ));
 
     let lines = format_message_content_lines(&message, &state, 200);
     let texts: Vec<String> = line_texts(&lines).into_iter().map(str::to_owned).collect();
