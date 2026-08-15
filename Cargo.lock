@@ -1422,6 +1422,7 @@ dependencies = [
  "gpui_http_client",
  "notify-rust",
  "reqwest",
+ "serde_json",
  "tokio",
  "tracing",
 ]

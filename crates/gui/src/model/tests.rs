@@ -739,25 +739,28 @@ fn replies_carry_their_target_id_for_jumping() {
 fn slash_picker_only_opens_for_a_bare_command() {
     use crate::ui::slash::SlashPicker;
 
-    assert!(SlashPicker::for_input("/sh").is_some(), "a prefix matches");
     assert!(
-        SlashPicker::for_input("/").is_some(),
+        SlashPicker::for_input("/sh", &[]).is_some(),
+        "a prefix matches"
+    );
+    assert!(
+        SlashPicker::for_input("/", &[]).is_some(),
         "a lone slash lists all"
     );
 
     // A slash mid-message is ordinary text, and a command with arguments
     // should show the composer rather than a menu.
-    assert!(SlashPicker::for_input("and/or").is_none());
-    assert!(SlashPicker::for_input("/me waves").is_none());
-    assert!(SlashPicker::for_input("plain text").is_none());
-    assert!(SlashPicker::for_input("/zzzznotacommand").is_none());
+    assert!(SlashPicker::for_input("and/or", &[]).is_none());
+    assert!(SlashPicker::for_input("/me waves", &[]).is_none());
+    assert!(SlashPicker::for_input("plain text", &[]).is_none());
+    assert!(SlashPicker::for_input("/zzzznotacommand", &[]).is_none());
 }
 
 #[test]
 fn slash_completion_returns_the_cores_replacement() {
     use crate::ui::slash::SlashPicker;
 
-    let picker = SlashPicker::for_input("/shr").expect("shrug should match");
+    let picker = SlashPicker::for_input("/shr", &[]).expect("shrug should match");
     let completion = picker.completion().expect("a highlighted match");
 
     // The replacement comes from the core, so the GUI and TUI expand the same
@@ -769,7 +772,7 @@ fn slash_completion_returns_the_cores_replacement() {
 fn slash_selection_wraps() {
     use crate::ui::slash::SlashPicker;
 
-    let mut picker = SlashPicker::for_input("/").expect("all commands");
+    let mut picker = SlashPicker::for_input("/", &[]).expect("all commands");
     let count = picker.matches.len();
     assert!(count > 1);
 
@@ -880,4 +883,56 @@ fn voting_updates_counts_and_withdraws_the_previous_choice() {
     assert!(!poll.answers[0].mine, "the first choice was withdrawn");
     assert_eq!(poll.answers[0].votes, 7, "and its count went back down");
     assert!(poll.answers[1].mine);
+}
+
+#[test]
+fn slash_picker_offers_builtins_before_application_commands() {
+    use crate::ui::slash::{Entry, SlashPicker};
+    use concord::discord::ApplicationCommandInfo;
+
+    let app = ApplicationCommandInfo {
+        id: concord::discord::Id::new(1),
+        application_id: concord::discord::Id::new(2),
+        version: "1".into(),
+        name: "shipit".into(),
+        application_name: Some("Deploybot".into()),
+        description: "Ship the build".into(),
+        options: Vec::new(),
+        raw: serde_json::Value::Null,
+    };
+
+    let picker = SlashPicker::for_input("/sh", std::slice::from_ref(&app))
+        .expect("both sources should match");
+
+    // Builtins always work; an application command depends on a bot being
+    // present, so it must not displace one.
+    assert!(matches!(picker.matches.first(), Some(Entry::Builtin(_))));
+    assert!(
+        picker.matches.iter().any(|entry| entry.name() == "shipit"),
+        "the bot command should still be offered"
+    );
+}
+
+#[test]
+fn application_commands_complete_with_a_trailing_space() {
+    use crate::ui::slash::SlashPicker;
+    use concord::discord::ApplicationCommandInfo;
+
+    let app = ApplicationCommandInfo {
+        id: concord::discord::Id::new(1),
+        application_id: concord::discord::Id::new(2),
+        version: "1".into(),
+        name: "weather".into(),
+        application_name: None,
+        description: "Forecast".into(),
+        options: Vec::new(),
+        raw: serde_json::Value::Null,
+    };
+
+    let picker = SlashPicker::for_input("/weat", std::slice::from_ref(&app)).unwrap();
+    let completion = picker.completion().expect("a match");
+
+    // The trailing space matters: arguments follow the name, and without it
+    // the next keystroke would run into the command.
+    assert_eq!(completion, "/weather ");
 }

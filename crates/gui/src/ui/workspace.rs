@@ -7,12 +7,14 @@
 
 use concord::config::{self, AppOptions, CredentialStoreMode};
 use concord::discord::{
-    AppCommand, AppEvent, AttachmentDownloadId, BuiltinSlashCommandParse,
-    BuiltinSlashCommandSubmit, DownloadAttachmentSource, ForumPostArchiveState,
-    GlobalUserProfileUpdate, GuildUserProfileUpdate, Id, MAX_UPLOAD_ATTACHMENT_COUNT,
-    MediaPlaybackSource, MediaPlaybackTarget, MessageAttachmentUpload, MessageSearchQuery,
-    MuteDuration, ReactionEmoji, ReplyReference, StreamCaptureTargetsRequestId, UserProfileUpdate,
-    VoiceScope, marker, next_message_nonce, parse_builtin_slash_command,
+    AppCommand, AppEvent, ApplicationCommandInfo, ApplicationCommandInvocation,
+    AttachmentDownloadId, BuiltinSlashCommandParse, BuiltinSlashCommandSubmit,
+    DownloadAttachmentSource, ForumPostArchiveState, GlobalUserProfileUpdate,
+    GuildUserProfileUpdate, Id, MAX_UPLOAD_ATTACHMENT_COUNT, MediaPlaybackSource,
+    MediaPlaybackTarget, MessageAttachmentUpload, MessageSearchQuery, MuteDuration, ReactionEmoji,
+    ReplyReference, StreamCaptureTargetsRequestId, UserProfileUpdate, VoiceScope,
+    application_command_content_is_complete, marker, next_message_nonce,
+    parse_builtin_slash_command,
     password_auth::{MfaMethod, PasswordAuthEvent},
     qr_auth::QrEvent,
 };
@@ -217,6 +219,8 @@ pub struct Workspace {
     pub channel_muted: bool,
     /// Whether the open guild is muted.
     pub guild_muted: bool,
+    /// Slash commands published by bots in the open guild.
+    pub app_commands: Vec<ApplicationCommandInfo>,
     /// The authenticated user, once READY reports it.
     pub current_user: Option<Id<marker::UserMarker>>,
     /// Slash-command autocomplete, present while typing a bare command.
@@ -287,6 +291,7 @@ impl Workspace {
             voice_scope_joined: None,
             channel_muted: false,
             guild_muted: false,
+            app_commands: Vec::new(),
             current_user: None,
             slash: None,
             inbox: None,
@@ -416,13 +421,13 @@ impl Workspace {
 
     /// Refresh slash autocomplete after the composer changes.
     fn refresh_slash(&mut self) {
-        self.slash = SlashPicker::for_input(self.composer.text());
+        self.slash = SlashPicker::for_input(self.composer.text(), &self.app_commands);
     }
 
     /// Accept the highlighted completion.
     fn accept_slash(&mut self) {
         if let Some(replacement) = self.slash.as_ref().and_then(|picker| picker.completion()) {
-            self.composer.set_text(replacement);
+            self.composer.set_text(&replacement);
         }
         self.slash = None;
     }
@@ -488,9 +493,75 @@ impl Workspace {
                 self.model.status_line = message;
                 true
             }
-            // Still being typed, or not a command at all - send as written.
-            BuiltinSlashCommandParse::Incomplete | BuiltinSlashCommandParse::NotBuiltin => false,
+            // Not a builtin: it may still be a bot's command.
+            BuiltinSlashCommandParse::Incomplete | BuiltinSlashCommandParse::NotBuiltin => {
+                self.dispatch_application_command(content, channel_id)
+            }
         }
+    }
+
+    /// Run a bot-provided slash command, if the content names one.
+    fn dispatch_application_command(
+        &mut self,
+        content: &str,
+        channel_id: Id<marker::ChannelMarker>,
+    ) -> bool {
+        let name = content
+            .strip_prefix('/')
+            .and_then(|rest| rest.split_whitespace().next())
+            .map(str::to_string);
+        let Some(name) = name else {
+            return false;
+        };
+
+        let Some(command) = self
+            .app_commands
+            .iter()
+            .find(|candidate| candidate.name == name)
+            .cloned()
+        else {
+            return false;
+        };
+
+        // Incomplete arguments are left in the composer rather than sent: the
+        // server would reject them, and clearing the input would lose what the
+        // user typed.
+        if !application_command_content_is_complete(content, &command) {
+            self.composer.set_text(content);
+            self.model.status_line = format!("/{name} needs more arguments", name = command.name);
+            return true;
+        }
+
+        let Some(handle) = &self.handle else {
+            return true;
+        };
+
+        handle.send(AppCommand::RunApplicationCommand {
+            invocation: ApplicationCommandInvocation {
+                guild_id: match self.nav.selection {
+                    Selection::Guild(id) => Some(id),
+                    Selection::DirectMessages => None,
+                },
+                channel_id,
+                command_identity: Some(command.identity()),
+                command_name: command.name.clone(),
+                content: content.to_string(),
+            },
+        });
+        true
+    }
+
+    /// Fetch the slash commands available in the open guild.
+    fn load_app_commands(&mut self) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        handle.send(AppCommand::LoadApplicationCommands {
+            guild_id: match self.nav.selection {
+                Selection::Guild(id) => Some(id),
+                Selection::DirectMessages => None,
+            },
+        });
     }
 
     /// Send the composer's contents to the open channel.
@@ -2575,6 +2646,9 @@ impl Workspace {
         };
         self.nav.channel = None;
         self.messages.clear();
+        // Commands are per guild, so the previous guild's set must not linger.
+        self.app_commands.clear();
+        self.load_app_commands();
 
         if let (Some(handle), Some(guild_id)) = (&self.handle, guild_id) {
             handle.send(AppCommand::SetSelectedGuild {
@@ -2652,6 +2726,9 @@ impl Workspace {
                 );
             }
             AppEvent::InboxMentionsLoadFailed { .. } => self.inbox = None,
+            AppEvent::ApplicationCommandsLoaded { commands, .. } => {
+                self.app_commands = commands;
+            }
             AppEvent::PinnedMessagesLoaded { messages, .. } => {
                 self.pins = Some(
                     messages

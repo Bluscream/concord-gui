@@ -7,7 +7,8 @@ the parts we do not want.
 
 Derived from the TUI's 152 keybinding actions (`src/tui/keybindings/actions.rs`)
 and its 12 builtin slash commands · reply-ping toggle · external editor · sign out · own profile · polls · attachment download ·
-external media playback · remove embeds · thread archive/follow (`src/discord/builtin_commands.rs`). Pure
+external media playback · remove embeds · thread archive/follow ·
+application commands (`src/discord/builtin_commands.rs`). Pure
 input primitives (`Char`, `Ctrl`, `Key`, `ModifiedKey`) are excluded - they are
 not features.
 
@@ -30,7 +31,6 @@ Ordered roughly by how much a daily driver misses them.
 
 | Feature | TUI action | Notes |
 |---|---|---|
-| Application commands | `RunApplicationCommand` | Server-side slash commands. |
 | Pane show/hide, resize, zoom | `Toggle*Pane`, `Resize*`, `ToggleZoom` | Layout is fixed. |
 | Vim-style navigation | `HalfPageUp/Down`, `JumpTop/Bottom` | |
 | Debug log viewer | `OpenDebugLog` | |
