@@ -1,3 +1,9 @@
+//! Notification and voice sounds.
+//!
+//! Shared rather than living in a front end: both clients want the same sound
+//! for the same event, and the generated fallbacks are the only sound most
+//! users will ever hear, so they must not diverge.
+
 #[cfg(feature = "voice-playback")]
 use std::path::Path;
 #[cfg(feature = "voice-playback")]
@@ -47,7 +53,7 @@ struct NotificationOutputStream {
 }
 
 #[cfg(feature = "voice-playback")]
-pub(super) fn play_voice_sound(
+pub fn play_voice_sound(
     kind: VoiceSoundKind,
     custom_path: Option<&Path>,
 ) -> std::result::Result<(), String> {
@@ -59,9 +65,7 @@ pub(super) fn play_voice_sound(
 }
 
 #[cfg(feature = "voice-playback")]
-pub(super) fn play_notification_sound(
-    custom_path: Option<&Path>,
-) -> std::result::Result<(), String> {
+pub fn play_notification_sound(custom_path: Option<&Path>) -> std::result::Result<(), String> {
     let audio = match custom_path {
         Some(path) => load_notification_wav(path)?,
         None => generated_notification_sound(),
@@ -70,7 +74,7 @@ pub(super) fn play_notification_sound(
 }
 
 #[cfg(feature = "voice-playback")]
-pub(super) fn play_push_to_talk_sound(pressed: bool) -> std::result::Result<(), String> {
+pub fn play_push_to_talk_sound(pressed: bool) -> std::result::Result<(), String> {
     play_notification_audio(generated_push_to_talk_sound(pressed))
 }
 

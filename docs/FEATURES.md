@@ -53,7 +53,7 @@ third-party Discord clients actually expect.
 | Guild folders | 9 | done |
 | QR login | 9 | done |
 | Animated emoji | 9 | partial |
-| Sounds | 9 | partial |
+| Sounds | 9 | yes |
 | Slash commands | 8 | done |
 | Typing indicators | 8 | done |
 | Screenshare | 7 | partial |
@@ -125,7 +125,11 @@ Upload, rename and delete guild emoji.
   core builds animated URLs for both, and Discord's `a_` hash prefix selects
   the GIF. What was genuinely missing - and Abaddon offers - is a way to turn
   animation *off*, which now exists and matters on a Raspberry Pi.
-- **Sounds** — The core plays voice join/leave sounds. There is no general notification sound.
+- **Sounds** - Message and voice sounds now play in both clients. They used to
+  live in the TUI's runtime, so the GUI was silent; the playback module moved
+  to `src/sound` and both front ends call it. Sounds have their own switch
+  rather than following the desktop-notification one, because wanting the
+  popup without the noise is common.
 - **Screenshare** — Compile-verified only - blocked by a zbus/tokio incompatibility reaching us through GPUI's own dependencies.
 - **Image viewer** — Images render inline. There is no full-size viewer with zoom.
 - **Friends list** — Relationships are parsed and cached; neither client offers management.

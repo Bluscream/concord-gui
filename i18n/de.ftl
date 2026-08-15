@@ -168,3 +168,7 @@ status-no-search-results = Keine Ergebnisse
 
 toggle-animate-images = Emojis und Avatare animieren
 hint-animate-images = Auf langsamer Hardware ausschalten
+
+toggle-notification-sounds = Benachrichtigungstöne
+hint-notification-sounds = Unabhängig vom Hinweisfenster
+settings-voice = Sprache & Audio

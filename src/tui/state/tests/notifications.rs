@@ -581,9 +581,18 @@ fn notification_sound_for_event_respects_notification_opt_out() {
             ..GuildNotificationSettingsInfo::test(Some(Id::new(1)))
         },
     ]));
-    state.options.notification_options.desktop_notifications = false;
     let event = notification_message_event(channel_id, "hello");
 
+    // The popup and the sound are separate switches: wanting one without the
+    // other is common, so neither opt-out silences the other.
+    state.options.notification_options.desktop_notifications = false;
     assert!(state.desktop_notification_for_event(&event).is_none());
+    assert!(state.notification_sound_for_event(&event));
+
+    state.options.notification_options.notification_sounds = false;
+    assert!(!state.notification_sound_for_event(&event));
+
+    state.options.notification_options.desktop_notifications = true;
+    assert!(state.desktop_notification_for_event(&event).is_some());
     assert!(!state.notification_sound_for_event(&event));
 }

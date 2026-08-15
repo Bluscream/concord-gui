@@ -733,25 +733,33 @@ pub fn ban_list_view(
 /// exists to make it an informed one. "Don't ask again" is offered because a
 /// warning that cannot be dismissed becomes noise, and noise gets clicked
 /// through without reading.
+///
+/// The six strings travel together because they are all translated and all
+/// belong to the same warning; passing them as one value keeps the signature
+/// readable and the call site from depending on their order.
+pub struct RiskWarning<'a> {
+    pub title: &'a str,
+    pub body: &'a str,
+    pub dont_ask_label: &'a str,
+    pub dont_ask: bool,
+    pub continue_label: &'a str,
+    pub cancel_label: &'a str,
+}
+
 pub fn risk_warning_view(
-    title: &str,
-    body: &str,
-    dont_ask_label: &str,
-    dont_ask: bool,
-    continue_label: &str,
-    cancel_label: &str,
+    warning: RiskWarning<'_>,
     on_toggle: impl Fn(&mut gpui::App) + 'static,
     on_continue: impl Fn(&mut gpui::App) + 'static,
     on_cancel: impl Fn(&mut gpui::App) + 'static,
 ) -> Div {
-    panel(title, 460.)
+    panel(warning.title, 460.)
         .child(
             gpui::div()
                 .px(px(space::LG))
                 .py(px(space::MD))
                 .text_size(px(scaled(text::SM)))
                 .text_color(rgb(active().text_muted))
-                .child(body.to_owned()),
+                .child(warning.body.to_owned()),
         )
         .child(
             row()
@@ -772,7 +780,7 @@ pub fn risk_warning_view(
                         .flex()
                         .items_center()
                         .justify_center()
-                        .when(dont_ask, |box_| {
+                        .when(warning.dont_ask, |box_| {
                             box_.bg(rgb(active().accent)).child(
                                 gpui::div()
                                     .text_size(px(scaled(text::XS)))
@@ -787,7 +795,7 @@ pub fn risk_warning_view(
                     gpui::div()
                         .text_size(px(scaled(text::XS)))
                         .text_color(rgb(active().text_subtle))
-                        .child(dont_ask_label.to_owned()),
+                        .child(warning.dont_ask_label.to_owned()),
                 )
                 .on_click(move |_event, _window, cx| on_toggle(cx)),
         )
@@ -798,10 +806,15 @@ pub fn risk_warning_view(
                 .py(px(space::MD))
                 .gap(px(space::SM))
                 .justify_end()
-                .child(button("warning-cancel", cancel_label, false, on_cancel))
+                .child(button(
+                    "warning-cancel",
+                    warning.cancel_label,
+                    false,
+                    on_cancel,
+                ))
                 .child(button(
                     "warning-continue",
-                    continue_label,
+                    warning.continue_label,
                     true,
                     on_continue,
                 )),

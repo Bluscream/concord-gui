@@ -704,6 +704,7 @@ fn options_save_and_load_round_trip() {
         },
         notifications: NotificationOptions {
             desktop_notifications: false,
+            notification_sounds: false,
             notification_icon: Some("/tmp/icon.svg".to_string()),
             notification_sound: Some(std::path::PathBuf::from("/tmp/message.wav")),
             voice_join_sound: Some(std::path::PathBuf::from("/tmp/join.wav")),

@@ -5,6 +5,9 @@ pub mod error;
 pub mod i18n;
 pub mod logging;
 mod support;
+
+/// Notification and voice sounds, shared by both front ends.
+pub use support::notification_audio as sound;
 pub mod tui;
 
 pub use app::App;

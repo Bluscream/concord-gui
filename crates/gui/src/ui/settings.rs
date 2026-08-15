@@ -17,6 +17,7 @@ pub enum Toggle {
     ShowAvatars,
     ShowCustomEmoji,
     AnimateImages,
+    NotificationSounds,
     MediaPlayback,
     CircularAvatars,
     DesktopNotifications,
@@ -31,6 +32,7 @@ impl Toggle {
             Toggle::ShowAvatars => "toggle-show-avatars",
             Toggle::ShowCustomEmoji => "toggle-show-custom-emoji",
             Toggle::AnimateImages => "toggle-animate-images",
+            Toggle::NotificationSounds => "toggle-notification-sounds",
             Toggle::MediaPlayback => "toggle-media-playback",
             Toggle::CircularAvatars => "toggle-circular-avatars",
             Toggle::DesktopNotifications => "toggle-desktop-notifications",
@@ -46,6 +48,7 @@ impl Toggle {
             Toggle::NoiseSuppression => "hint-noise-suppression",
             Toggle::MediaPlayback => "hint-media-playback",
             Toggle::AnimateImages => "hint-animate-images",
+            Toggle::NotificationSounds => "hint-notification-sounds",
             _ => return None,
         };
         Some(concord::t!(key))
@@ -57,6 +60,7 @@ impl Toggle {
             Toggle::ShowAvatars => 2,
             Toggle::ShowCustomEmoji => 3,
             Toggle::AnimateImages => 9,
+            Toggle::NotificationSounds => 10,
             Toggle::MediaPlayback => 8,
             Toggle::CircularAvatars => 4,
             Toggle::DesktopNotifications => 5,
@@ -385,8 +389,19 @@ impl Render for SettingsWindow {
                                     cx.notify();
                                 }),
                             ))
+                            .child(toggle_row(
+                                Toggle::NotificationSounds,
+                                options.notifications.notification_sounds,
+                                theme,
+                                cx.listener(|this, _, _, cx| {
+                                    this.options.notifications.notification_sounds =
+                                        !this.options.notifications.notification_sounds;
+                                    this.save_options(cx);
+                                    cx.notify();
+                                }),
+                            ))
                             // --- Section 5: Voice & Audio ---
-                            .child(section_title("Voice & Audio", theme))
+                            .child(section_title(concord::t!("settings-voice"), theme))
                             .child(toggle_row(
                                 Toggle::NoiseSuppression,
                                 options.voice.noise_suppression,

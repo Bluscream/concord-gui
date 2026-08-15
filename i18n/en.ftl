@@ -170,3 +170,7 @@ status-no-search-results = No results
 
 toggle-animate-images = Animate emoji and avatars
 hint-animate-images = Turn off on slow hardware
+
+toggle-notification-sounds = Notification sounds
+hint-notification-sounds = Separate from the popup
+settings-voice = Voice & Audio

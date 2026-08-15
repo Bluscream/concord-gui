@@ -72,6 +72,11 @@ pub enum CredentialStoreMode {
 #[serde(default)]
 pub struct NotificationOptions {
     pub desktop_notifications: bool,
+    /// Sounds are separate from desktop notifications: wanting the popup
+    /// without the noise is common, and the reverse is what a muted machine
+    /// already gives you.
+    #[serde(default = "default_true")]
+    pub notification_sounds: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notification_icon: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -679,6 +684,7 @@ impl Default for NotificationOptions {
     fn default() -> Self {
         Self {
             desktop_notifications: true,
+            notification_sounds: true,
             notification_icon: None,
             notification_sound: None,
             voice_join_sound: None,

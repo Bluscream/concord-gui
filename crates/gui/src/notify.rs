@@ -67,6 +67,29 @@ pub fn notification_for(
 }
 
 /// Deliver a notification, swallowing any backend failure.
+/// Play the notification sound alongside the desktop notification.
+///
+/// Deliberately driven by the same eligibility decision as [`notification_for`]
+/// rather than a rule of its own: a sound for a channel the user muted is
+/// worse than no sound, and the core already knows which those are.
+///
+/// Best-effort like delivery - a machine with no sound device must not stall
+/// the client, so playback happens off the UI thread and failures are dropped.
+pub fn play_sound(custom_path: Option<std::path::PathBuf>) {
+    std::thread::spawn(move || {
+        #[cfg(feature = "media")]
+        {
+            let _ = concord::sound::play_notification_sound(custom_path.as_deref());
+        }
+        #[cfg(not(feature = "media"))]
+        {
+            // Without the playback feature there is no sound to make, and a
+            // terminal bell would go to a terminal the user is not looking at.
+            let _ = custom_path;
+        }
+    });
+}
+
 pub fn deliver(notification: &Notification) {
     if let Err(error) = notify_rust::Notification::new()
         .summary(&notification.title)

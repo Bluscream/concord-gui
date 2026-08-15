@@ -256,10 +256,9 @@ fn dispatch_notification_sound(notification_options: NotificationOptions) {
 #[cfg(feature = "voice-playback")]
 pub(in crate::tui) fn dispatch_push_to_talk_sound(pressed: bool) {
     tokio::spawn(async move {
-        let result = tokio::task::spawn_blocking(move || {
-            super::notification_audio::play_push_to_talk_sound(pressed)
-        })
-        .await;
+        let result =
+            tokio::task::spawn_blocking(move || crate::sound::play_push_to_talk_sound(pressed))
+                .await;
         match result {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
@@ -319,7 +318,7 @@ fn play_voice_sound(
     let custom_path = voice_sound_path(kind, &notification_options);
     #[cfg(feature = "voice-playback")]
     {
-        super::notification_audio::play_voice_sound(kind, custom_path)
+        crate::sound::play_voice_sound(kind, custom_path)
     }
     #[cfg(not(feature = "voice-playback"))]
     {
@@ -336,7 +335,7 @@ fn play_notification_sound(
     let custom_path = notification_options.notification_sound.as_deref();
     #[cfg(feature = "voice-playback")]
     {
-        super::notification_audio::play_notification_sound(custom_path)
+        crate::sound::play_notification_sound(custom_path)
     }
     #[cfg(not(feature = "voice-playback"))]
     {

@@ -301,14 +301,24 @@ impl DashboardState {
     }
 
     fn display_option_items_for_notifications(&self) -> Vec<DisplayOptionItem> {
-        vec![DisplayOptionItem {
-            label: "Desktop notifications",
-            enabled: self.options.notification_options.desktop_notifications,
-            value: None,
-            gauge: None,
-            effective: self.options.notification_options.desktop_notifications,
-            description: "Show OS notifications for Discord messages that pass notification settings.",
-        }]
+        vec![
+            DisplayOptionItem {
+                label: "Desktop notifications",
+                enabled: self.options.notification_options.desktop_notifications,
+                value: None,
+                gauge: None,
+                effective: self.options.notification_options.desktop_notifications,
+                description: "Show OS notifications for Discord messages that pass notification settings.",
+            },
+            DisplayOptionItem {
+                label: "Notification sounds",
+                enabled: self.options.notification_options.notification_sounds,
+                value: None,
+                gauge: None,
+                effective: self.options.notification_options.notification_sounds,
+                description: "Play a sound for the same messages. Separate from the popup, so either can be had without the other.",
+            },
+        ]
     }
 
     fn display_option_items_for_voice(&self) -> Vec<DisplayOptionItem> {
@@ -507,6 +517,10 @@ impl DashboardState {
             (OptionsCategory::Notifications, 0) => {
                 self.options.notification_options.desktop_notifications =
                     !self.options.notification_options.desktop_notifications
+            }
+            (OptionsCategory::Notifications, 1) => {
+                self.options.notification_options.notification_sounds =
+                    !self.options.notification_options.notification_sounds
             }
             _ => return,
         }

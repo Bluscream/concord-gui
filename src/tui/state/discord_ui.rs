@@ -305,7 +305,7 @@ impl DashboardState {
         let AppEvent::MessageCreate { message } = event else {
             return false;
         };
-        self.desktop_notifications_enabled()
+        self.notification_sounds_enabled()
             && !self.message_notification_suppressed(message)
             && self
                 .discord

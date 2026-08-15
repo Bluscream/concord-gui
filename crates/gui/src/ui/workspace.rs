@@ -2004,6 +2004,11 @@ impl Workspace {
                                 )
                             {
                                 notify::deliver(&notification);
+                                if workspace.options.notifications.notification_sounds {
+                                    notify::play_sound(
+                                        workspace.options.notifications.notification_sound.clone(),
+                                    );
+                                }
                             }
                             workspace.absorb(*event);
                         }
@@ -5738,12 +5743,14 @@ impl Workspace {
         if let Some((action, dont_ask)) = &self.risk {
             let dont_ask = *dont_ask;
             return Some(overlay::scrim().child(overlay::risk_warning_view(
-                &t!("warning-title"),
-                &action.body(),
-                &t!("warning-dont-ask-again"),
-                dont_ask,
-                &t!("warning-continue"),
-                &t!("action-cancel"),
+                overlay::RiskWarning {
+                    title: &t!("warning-title"),
+                    body: &action.body(),
+                    dont_ask_label: &t!("warning-dont-ask-again"),
+                    dont_ask,
+                    continue_label: &t!("warning-continue"),
+                    cancel_label: &t!("action-cancel"),
+                },
                 {
                     let entity = entity.clone();
                     move |cx: &mut gpui::App| {

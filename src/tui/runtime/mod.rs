@@ -31,7 +31,6 @@ use super::{
 pub(super) mod effects;
 pub(super) mod events;
 mod media_runtime;
-pub(super) mod notification_audio;
 mod placement;
 mod redraw_gate;
 mod scheduler;

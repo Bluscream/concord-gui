@@ -338,6 +338,12 @@ impl DashboardState {
         self.options.notification_options.desktop_notifications
     }
 
+    /// Sounds have their own switch, so the popup and the noise can be chosen
+    /// independently.
+    pub fn notification_sounds_enabled(&self) -> bool {
+        self.options.notification_options.notification_sounds
+    }
+
     pub fn desktop_notification_icon(&self) -> Option<String> {
         self.options.notification_options.notification_icon.clone()
     }
