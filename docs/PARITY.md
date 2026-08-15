@@ -202,3 +202,18 @@ path and against the Spacebar server's own schema.
 
 Guessing at a payload and discovering it from a rejection is slower than
 reading an implementation that already works.
+
+## Risk warnings
+
+Both clients warn before the actions Discord's anti-spam checks watch, from the
+same list and in the same words. The kinds live in `src/risk.rs`; anything that
+sends one of the watched commands should go through them.
+
+```bash
+# Every command that should be behind a warning, and where it is sent from.
+grep -rn "AcceptInvite\|LeaveGuild\|UpdateUserProfile\|AddFriend\|BlockUser\|RemoveRelationship\|SendFriendRequest" \
+  src/tui crates/gui/src --include=*.rs | grep -v test
+```
+
+Each hit should be next to a `request_risky` in the TUI or a `friend_action` /
+`confirm_risk` in the GUI. One that is not is a way round the warning.

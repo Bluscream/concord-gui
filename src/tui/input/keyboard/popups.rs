@@ -160,6 +160,22 @@ fn dispatch_popup_key(
             DashboardState::confirm_long_message_upload,
             DashboardState::close_active_popup,
         ),
+        // Its own route rather than the plain confirmation one, because the
+        // opt-out is a third choice: it can be ticked and then cancelled, and
+        // "not this time" is not the same as "keep asking".
+        ActiveModalPopupKind::RiskWarning => match stage {
+            PopupKeyStage::Fixed if shortcut_key(key, 'd') => {
+                state.toggle_risk_dont_ask();
+                PopupKeyDispatch::Handled(None)
+            }
+            _ => route_confirmation_key(
+                state,
+                key,
+                stage,
+                DashboardState::confirm_risk_warning,
+                DashboardState::close_active_popup,
+            ),
+        },
         ActiveModalPopupKind::GuildLeaveConfirmation => route_confirmation_key(
             state,
             key,

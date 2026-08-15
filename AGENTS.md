@@ -100,6 +100,13 @@ The same applies to permissions: where Discord will refuse an action, show it
 with the reason rather than hiding it. A control that explains itself teaches;
 a control that vanishes confuses.
 
+The list of risky actions, their wording and their opt-outs live in
+`src/risk.rs`, shared by both clients, so a warning added for one is worded the
+same in the other. Each risk has its own switch: a shared one would silence
+warnings the user never read, which is the one way "don't ask again" can do
+harm. A warning stacks over whatever is open rather than replacing it - a form
+that vanished behind a warning would come back empty.
+
 ### 6. Third-party clients and the spam filter
 
 Discord's anti-spam heuristics treat third-party clients more harshly than the

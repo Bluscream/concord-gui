@@ -246,8 +246,10 @@ fn pasted_file_path_sets_profile_avatar_field() {
         ),
         "avatar.png"
     );
+    // Saving a profile now goes through the risk warning first.
+    assert!(state.save_user_profile_settings_command().is_none());
     assert!(matches!(
-        state.save_user_profile_settings_command(),
+        state.confirm_risk_warning(),
         Some(AppCommand::UpdateUserProfile { update })
             if update
                 .global

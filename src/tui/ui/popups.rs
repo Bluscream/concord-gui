@@ -229,8 +229,9 @@ pub(super) use confirmation::{
     guild_leave_confirmation_popup_area_for_state, long_message_confirmation_popup_area_for_state,
     message_confirmation_popup_area_for_state, quit_confirmation_popup_area,
     render_guild_leave_confirmation, render_long_message_confirmation, render_message_confirmation,
-    render_notification_inbox_mark_all_confirmation, render_quit_confirmation,
-    render_thread_delete_confirmation, thread_delete_confirmation_popup_area_for_state,
+    render_notification_inbox_mark_all_confirmation, render_quit_confirmation, render_risk_warning,
+    render_thread_delete_confirmation, risk_warning_popup_area_for_state,
+    thread_delete_confirmation_popup_area_for_state,
 };
 #[cfg(test)]
 pub(super) use confirmation::{
@@ -503,6 +504,7 @@ fn active_modal_popup_area(frame_area: Rect, state: &DashboardState) -> Option<R
         ActiveModalPopupKind::GuildLeaveConfirmation => {
             guild_leave_confirmation_popup_area_for_state(frame_area, state)
         }
+        ActiveModalPopupKind::RiskWarning => risk_warning_popup_area_for_state(frame_area, state),
         ActiveModalPopupKind::ThreadDeleteConfirmation => {
             thread_delete_confirmation_popup_area_for_state(frame_area, state)
         }

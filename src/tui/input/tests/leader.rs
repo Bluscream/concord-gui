@@ -1019,6 +1019,11 @@ fn leader_server_actions_leave_opens_confirmation_then_leaves() {
             .is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::GuildLeaveConfirmation)
     );
 
+    // Confirming which server raises the second gate, which explains that
+    // leaving servers at all is what the anti-spam checks watch.
+    assert_eq!(handle_key(&mut state, char_key('y')), None);
+    assert!(state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::RiskWarning));
+
     let command = handle_key(&mut state, char_key('y'));
 
     assert_eq!(
@@ -1028,6 +1033,32 @@ fn leader_server_actions_leave_opens_confirmation_then_leaves() {
             label: "guild".to_owned(),
         })
     );
+}
+
+#[test]
+fn a_risk_warning_can_be_turned_off_and_stays_off() {
+    // The point of the opt-out: read once, then never again. A warning that
+    // cannot be dismissed becomes noise, and noise gets confirmed unread.
+    let mut state = state_with_channel_tree();
+    state.focus_pane(FocusPane::Guilds);
+
+    handle_key(&mut state, char_key(' '));
+    handle_key(&mut state, char_key('a'));
+    handle_key(&mut state, char_key('l'));
+    handle_key(&mut state, char_key('y'));
+
+    assert!(state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::RiskWarning));
+    handle_key(&mut state, char_key('d'));
+    assert!(handle_key(&mut state, char_key('y')).is_some());
+
+    // Second time round, the same action goes straight through.
+    handle_key(&mut state, char_key(' '));
+    handle_key(&mut state, char_key('a'));
+    handle_key(&mut state, char_key('l'));
+    let command = handle_key(&mut state, char_key('y'));
+
+    assert!(!state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::RiskWarning));
+    assert!(matches!(command, Some(AppCommand::LeaveGuild { .. })));
 }
 
 #[test]

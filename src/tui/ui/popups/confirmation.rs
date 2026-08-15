@@ -78,6 +78,29 @@ pub(in crate::tui::ui) fn render_guild_leave_confirmation(
     render_modal_paragraph(frame, popup, "Leave server?", lines);
 }
 
+pub(in crate::tui::ui) fn render_risk_warning(
+    frame: &mut Frame,
+    area: Rect,
+    state: &DashboardState,
+) {
+    if !state.is_active_modal_popup(ActiveModalPopupKind::RiskWarning) {
+        return;
+    }
+
+    let Some(warning) = state.risk_warning() else {
+        return;
+    };
+
+    let lines = risk_warning_lines(
+        &warning.explanation(),
+        warning.dont_ask(),
+        RISK_WARNING_WIDTH,
+        state.active_confirmation_button(),
+    );
+    let popup = risk_warning_popup_area(area, lines.len());
+    render_modal_paragraph(frame, popup, "Are you sure?", lines);
+}
+
 pub(in crate::tui::ui) fn render_thread_delete_confirmation(
     frame: &mut Frame,
     area: Rect,
@@ -175,6 +198,28 @@ pub(in crate::tui::ui) fn guild_leave_confirmation_popup_area_for_state(
     Some(guild_leave_confirmation_popup_area(area, lines.len()))
 }
 
+pub(in crate::tui::ui) fn risk_warning_popup_area(area: Rect, line_count: usize) -> Rect {
+    centered_rect(
+        area,
+        RISK_WARNING_WIDTH as u16 + 4,
+        (line_count as u16).saturating_add(2),
+    )
+}
+
+pub(in crate::tui::ui) fn risk_warning_popup_area_for_state(
+    area: Rect,
+    state: &DashboardState,
+) -> Option<Rect> {
+    let warning = state.risk_warning()?;
+    let lines = risk_warning_lines(
+        &warning.explanation(),
+        warning.dont_ask(),
+        RISK_WARNING_WIDTH,
+        state.active_confirmation_button(),
+    );
+    Some(risk_warning_popup_area(area, lines.len()))
+}
+
 pub(in crate::tui::ui) fn thread_delete_confirmation_popup_area(
     area: Rect,
     line_count: usize,
@@ -267,6 +312,34 @@ fn guild_leave_confirmation_lines(
         Line::from(Span::raw(String::new())),
     ];
     lines.extend(confirmation_button_lines(active));
+    lines
+}
+
+/// Wide enough that an explanation reads as prose rather than a column of
+/// fragments - the point of the warning is that it gets read.
+const RISK_WARNING_WIDTH: usize = 64;
+
+fn risk_warning_lines(
+    explanation: &str,
+    dont_ask: bool,
+    width: usize,
+    active: ConfirmationButton,
+) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = wrap_text_lines(explanation, width.max(1))
+        .into_iter()
+        .map(|line| Line::from(Span::raw(line)))
+        .collect();
+    lines.push(Line::from(Span::raw(String::new())));
+    // The marker carries the state, the way the role picker's does, so the
+    // choice is readable without colour.
+    lines.push(Line::from(Span::raw(format!(
+        "[{}] d  do not ask again",
+        if dont_ask { "x" } else { " " }
+    ))));
+    lines.push(Line::from(Span::raw(String::new())));
+    lines.extend(confirmation_button_lines_with_labels(
+        active, "continue", "cancel",
+    ));
     lines
 }
 

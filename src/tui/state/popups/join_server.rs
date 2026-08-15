@@ -6,6 +6,7 @@
 //! and shown before anything is joined.
 
 use crate::discord::{AppCommand, InvitePreview, invite_code_from};
+use crate::risk::RiskKind;
 use crate::tui::text_input::{TextEditAction, TextInputState};
 
 use super::super::DashboardState;
@@ -111,7 +112,12 @@ impl DashboardState {
                 return None;
             }
             self.close_join_server();
-            return Some(AppCommand::AcceptInvite { code: preview.code });
+            // Joining is the action most likely to get a third-party client
+            // flagged, so it is explained before it happens.
+            return self.request_risky(
+                RiskKind::JoinGuild,
+                AppCommand::AcceptInvite { code: preview.code },
+            );
         }
 
         // Parsed by the core so both clients accept the same forms.

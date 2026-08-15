@@ -12,6 +12,22 @@ use crate::tui::state::UserProfileSettingsField;
 use crate::tui::state::popups::{MemberActionMenuState, ModalPopup};
 use crate::tui::text_input::TextEditAction;
 
+/// Carry out something that now raises a risk warning first.
+///
+/// The warning is part of the path rather than an extra step these tests can
+/// skip: asserting through it is what proves it is actually there.
+fn past_the_risk_warning(
+    state: &mut DashboardState,
+    immediate: Option<AppCommand>,
+) -> Option<AppCommand> {
+    assert!(
+        immediate.is_none(),
+        "the action should be held by a warning, not sent straight away"
+    );
+    assert!(state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::RiskWarning));
+    state.confirm_risk_warning()
+}
+
 #[test]
 fn opening_profile_uses_cache_for_same_guild() {
     let user_id: Id<UserMarker> = Id::new(10);
@@ -199,7 +215,10 @@ fn profile_settings_save_dispatches_dirty_global_fields() {
     let _ = state.start_or_commit_user_profile_edit();
 
     assert_eq!(
-        state.save_user_profile_settings_command(),
+        {
+            let held = state.save_user_profile_settings_command();
+            past_the_risk_warning(&mut state, held)
+        },
         Some(AppCommand::UpdateUserProfile {
             update: Box::new(UserProfileUpdate {
                 user_id: Id::new(10),
@@ -348,7 +367,10 @@ fn profile_settings_save_dispatches_pasted_avatar_upload() {
     );
 
     assert_eq!(
-        state.save_user_profile_settings_command(),
+        {
+            let held = state.save_user_profile_settings_command();
+            past_the_risk_warning(&mut state, held)
+        },
         Some(AppCommand::UpdateUserProfile {
             update: Box::new(UserProfileUpdate {
                 user_id,
@@ -534,7 +556,10 @@ fn profile_settings_save_dispatches_guild_fields() {
     let _ = state.start_or_commit_user_profile_edit();
 
     assert_eq!(
-        state.save_user_profile_settings_command(),
+        {
+            let held = state.save_user_profile_settings_command();
+            past_the_risk_warning(&mut state, held)
+        },
         Some(AppCommand::UpdateUserProfile {
             update: Box::new(UserProfileUpdate {
                 user_id,
@@ -590,7 +615,8 @@ fn profile_reload_failure_after_save_clears_saving_state() {
     let _ = state.start_or_commit_user_profile_edit();
     state.push_user_profile_edit_char('x');
     let _ = state.start_or_commit_user_profile_edit();
-    assert!(state.save_user_profile_settings_command().is_some());
+    let held = state.save_user_profile_settings_command();
+    assert!(past_the_risk_warning(&mut state, held).is_some());
     assert!(state.user_profile_settings_saving());
 
     state.push_event(user_profile_load_failed_event(

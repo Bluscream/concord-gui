@@ -669,7 +669,7 @@ impl DashboardState {
         }
     }
 
-    fn mark_options_changed(&mut self) {
+    pub(super) fn mark_options_changed(&mut self) {
         self.clear_message_row_content_metrics_cache();
         self.options.config_save_pending = true;
     }

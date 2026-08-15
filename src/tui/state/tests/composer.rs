@@ -315,7 +315,14 @@ fn submit_composer_text(input: &str) -> Option<AppCommand> {
     for value in input.chars() {
         state.push_composer_char(value);
     }
-    state.submit_composer()
+    let command = state.submit_composer();
+    // A slash command that reaches one of the watched actions is held by a
+    // warning first, the same as the menu path. Confirming it here keeps these
+    // tests about what the command is, not about the gate in front of it.
+    match command {
+        Some(command) => Some(command),
+        None => state.confirm_risk_warning(),
+    }
 }
 
 fn state_with_command_mentions(command: ApplicationCommandInfo) -> DashboardState {
@@ -2766,5 +2773,28 @@ fn foreign_emoji_fall_back_to_links_without_nitro_when_enabled() {
                 sticker_ids: Vec::new(),
             })
         );
+    }
+}
+
+#[test]
+fn slash_commands_cannot_go_round_the_risk_warning() {
+    // The menus warn before these; a slash command reaching the same action
+    // without one would be a way round the protection rather than a shortcut.
+    for input in ["/nick Neo", "/friend someone"] {
+        let mut state = state_with_writable_channel();
+        state.start_composer();
+        for value in input.chars() {
+            state.push_composer_char(value);
+        }
+
+        assert!(
+            state.submit_composer().is_none(),
+            "{input:?} should be held by a warning"
+        );
+        assert!(
+            state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::RiskWarning),
+            "{input:?} should raise a warning"
+        );
+        assert!(state.confirm_risk_warning().is_some());
     }
 }

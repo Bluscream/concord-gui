@@ -379,11 +379,11 @@ impl RiskAction {
     }
 
     fn suppressed(&self, options: &AppOptions) -> bool {
-        self.kind().suppressed(options)
+        self.kind().suppressed(&options.warnings)
     }
 
     fn suppress(&self, options: &mut AppOptions) {
-        self.kind().suppress(options);
+        self.kind().suppress(&mut options.warnings);
     }
 }
 

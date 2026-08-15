@@ -257,13 +257,16 @@ impl DashboardState {
                     .unwrap_or_else(|| user_id.get().to_string());
                 self.close_member_action_menu();
 
-                Some(match item.kind {
+                let command = match item.kind {
                     MemberActionKind::AddFriend => AppCommand::AddFriend { user_id, label },
                     MemberActionKind::Block => AppCommand::BlockUser { user_id, label },
                     // Unfriending, cancelling, declining and unblocking are
                     // one endpoint; the menu label already said which.
                     _ => AppCommand::RemoveRelationship { user_id, label },
-                })
+                };
+                // Managing the friends list is one of the actions Discord's
+                // anti-spam checks watch, so it is explained first.
+                self.request_risky(crate::risk::RiskKind::FriendAction, command)
             }
             MemberActionKind::Kick
             | MemberActionKind::Ban
@@ -895,9 +898,14 @@ impl DashboardState {
         }
         popup.settings.saving = true;
         popup.settings.status = Some("Saving profile changes...".to_owned());
-        Some(AppCommand::UpdateUserProfile {
-            update: Box::new(update),
-        })
+        // Editing a profile while connected through a third-party client is
+        // one of the watched actions, so it is explained before it is sent.
+        self.request_risky(
+            crate::risk::RiskKind::ProfileEdit,
+            AppCommand::UpdateUserProfile {
+                update: Box::new(update),
+            },
+        )
     }
 
     pub fn sign_out_command(&mut self) -> Option<AppCommand> {

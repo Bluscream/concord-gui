@@ -288,10 +288,16 @@ impl DashboardState {
 
     pub fn confirm_guild_leave(&mut self) -> Option<AppCommand> {
         let confirmation = self.popups.take_guild_leave_confirmation()?;
-        Some(AppCommand::LeaveGuild {
-            guild_id: confirmation.guild_id,
-            label: confirmation.name,
-        })
+        // A second gate, and deliberately so: the first asks whether to leave
+        // this server, this one explains that leaving servers at all is what
+        // the anti-spam checks watch. Once read, it can be turned off.
+        self.request_risky(
+            crate::risk::RiskKind::LeaveGuild,
+            AppCommand::LeaveGuild {
+                guild_id: confirmation.guild_id,
+                label: confirmation.name,
+            },
+        )
     }
 
     pub fn guild_leave_confirmation_name(&self) -> Option<String> {

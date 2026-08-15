@@ -12,7 +12,7 @@
 //! Lives in the core so both front ends warn about the same things in the same
 //! words, and a translator has one set of strings to work with.
 
-use crate::config::AppOptions;
+use crate::config::WarningOptions;
 
 /// What kind of risk a warning is about.
 ///
@@ -48,22 +48,22 @@ impl RiskKind {
     }
 
     /// Whether the user has already asked not to be warned about this.
-    pub fn suppressed(self, options: &AppOptions) -> bool {
+    pub fn suppressed(self, options: &WarningOptions) -> bool {
         match self {
-            Self::JoinGuild => options.warnings.suppress_join_guild,
-            Self::LeaveGuild => options.warnings.suppress_leave_guild,
-            Self::ProfileEdit => options.warnings.suppress_profile_edit,
-            Self::FriendAction => options.warnings.suppress_friend_action,
+            Self::JoinGuild => options.suppress_join_guild,
+            Self::LeaveGuild => options.suppress_leave_guild,
+            Self::ProfileEdit => options.suppress_profile_edit,
+            Self::FriendAction => options.suppress_friend_action,
         }
     }
 
     /// Stop warning about this.
-    pub fn suppress(self, options: &mut AppOptions) {
+    pub fn suppress(self, options: &mut WarningOptions) {
         match self {
-            Self::JoinGuild => options.warnings.suppress_join_guild = true,
-            Self::LeaveGuild => options.warnings.suppress_leave_guild = true,
-            Self::ProfileEdit => options.warnings.suppress_profile_edit = true,
-            Self::FriendAction => options.warnings.suppress_friend_action = true,
+            Self::JoinGuild => options.suppress_join_guild = true,
+            Self::LeaveGuild => options.suppress_leave_guild = true,
+            Self::ProfileEdit => options.suppress_profile_edit = true,
+            Self::FriendAction => options.suppress_friend_action = true,
         }
     }
 }
@@ -77,7 +77,7 @@ mod tests {
         // A shared flag would silence warnings the user never read, which is
         // the one way "don't ask again" can do harm.
         for kind in RiskKind::ALL {
-            let mut options = AppOptions::default();
+            let mut options = WarningOptions::default();
             kind.suppress(&mut options);
 
             for other in RiskKind::ALL {
@@ -92,7 +92,7 @@ mod tests {
 
     #[test]
     fn nothing_is_suppressed_to_begin_with() {
-        let options = AppOptions::default();
+        let options = WarningOptions::default();
         for kind in RiskKind::ALL {
             assert!(!kind.suppressed(&options));
         }

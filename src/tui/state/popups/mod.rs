@@ -13,6 +13,7 @@ use crate::discord::{
     VoiceParticipantPlaybackSettings, VoiceScope,
 };
 use crate::discord::{PresenceStatus, ProfileAvatarUpload};
+use crate::risk::RiskKind;
 
 use crate::discord::ReactionUserInfo;
 use crate::tui::keybindings::{
@@ -34,6 +35,7 @@ mod notification_inbox;
 mod options;
 mod polls;
 mod reactions;
+mod risk;
 mod roles;
 mod search;
 mod stickers;
@@ -146,6 +148,7 @@ define_modal_popups! {
     StickerPicker(StickerPickerState),
     RolePicker(RolePickerState),
     BanList(BanListState),
+    RiskWarning(RiskWarningState),
 }
 
 /// The input behavior of the topmost visible popup layer.
@@ -657,6 +660,25 @@ impl MessageConfirmationKind {
             Self::Pin { pinned: false } => "Unpin this message?".to_owned(),
         }
     }
+}
+
+/// An action Discord's anti-spam checks watch, waiting to be confirmed.
+///
+/// Carries the command already built, so the explanation does not have to
+/// reconstruct what was about to happen. Never a refusal - the account is the
+/// user's - and the opt-out is offered because a warning that cannot be
+/// dismissed becomes noise, and noise gets confirmed without being read.
+#[derive(Debug)]
+pub struct RiskWarningState {
+    pub(super) kind: RiskKind,
+    pub(super) command: AppCommand,
+    pub(super) dont_ask: bool,
+    /// The popup this warning went up in front of.
+    ///
+    /// Stacked rather than replaced: a profile form that vanished behind the
+    /// warning would come back empty, and the form is still what the user is
+    /// working in. Put back whichever way the warning is answered.
+    pub(super) previous: Option<Box<ModalPopup>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1331,6 +1353,15 @@ impl PopupUiState {
         self.key_sequence = None;
     }
 
+    /// Take the open modal, leaving nothing behind.
+    ///
+    /// Only the risk warning uses this: it goes up in front of whatever is
+    /// open rather than replacing it, and puts it back afterwards.
+    pub(super) fn take_modal(&mut self) -> Option<ModalPopup> {
+        self.key_sequence = None;
+        self.modal.take()
+    }
+
     pub(super) fn clear_modal(&mut self) {
         self.modal = None;
         self.key_sequence = None;
@@ -1428,6 +1459,24 @@ impl PopupUiState {
 
     pub(super) fn take_guild_leave_confirmation(&mut self) -> Option<GuildLeaveConfirmationState> {
         take_modal_state!(self, GuildLeaveConfirmation, confirmation)
+    }
+
+    pub(super) fn risk_warning(&self) -> Option<&RiskWarningState> {
+        match &self.modal {
+            Some(ModalPopup::RiskWarning(warning)) => Some(warning),
+            _ => None,
+        }
+    }
+
+    pub(super) fn risk_warning_mut(&mut self) -> Option<&mut RiskWarningState> {
+        match &mut self.modal {
+            Some(ModalPopup::RiskWarning(warning)) => Some(warning),
+            _ => None,
+        }
+    }
+
+    pub(super) fn take_risk_warning(&mut self) -> Option<RiskWarningState> {
+        take_modal_state!(self, RiskWarning, warning)
     }
 
     pub(super) fn thread_delete_confirmation(&self) -> Option<&ThreadDeleteConfirmationState> {
@@ -1761,6 +1810,7 @@ impl DashboardState {
             ActiveModalPopupKind::GuildLeaveConfirmation => {
                 self.close_guild_leave_confirmation();
             }
+            ActiveModalPopupKind::RiskWarning => self.close_risk_warning(),
             ActiveModalPopupKind::Options if self.is_capturing_push_to_talk_shortcut() => {
                 self.cancel_push_to_talk_shortcut_capture();
             }
@@ -2082,6 +2132,7 @@ impl DashboardState {
             ModalPopup::MessageConfirmation(_)
             | ModalPopup::QuitConfirmation
             | ModalPopup::GuildLeaveConfirmation(_)
+            | ModalPopup::RiskWarning(_)
             | ModalPopup::ThreadDeleteConfirmation(_) => ActivePopupPolicy::confirmation(kind),
             ModalPopup::AttachmentViewer(_) | ModalPopup::DebugLog => {
                 ActivePopupPolicy::routed(kind, ActivePopupInteraction::NoNavigation)

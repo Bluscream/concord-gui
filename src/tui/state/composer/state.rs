@@ -1093,6 +1093,19 @@ impl DashboardState {
             } => self.stage_pending_message(*channel_id, *nonce, content, None, &[]),
             _ => {}
         }
+
+        // A slash command reaches the same watched actions the menus do, so it
+        // goes through the same warning rather than round it.
+        match &command {
+            AppCommand::SendFriendRequest { .. } => {
+                return self.request_risky(crate::risk::RiskKind::FriendAction, command);
+            }
+            AppCommand::UpdateUserProfile { .. } => {
+                return self.request_risky(crate::risk::RiskKind::ProfileEdit, command);
+            }
+            _ => {}
+        }
+
         Some(command)
     }
 

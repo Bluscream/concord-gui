@@ -2,6 +2,22 @@ use super::*;
 use crate::discord::AppCommand;
 use crate::discord::test_builders::{ForumPostsLoadedFixture, forum_posts_loaded_event};
 
+/// Carry out something that now raises a risk warning first.
+///
+/// The warning is part of the path rather than an extra step these tests can
+/// skip: asserting through it is what proves it is actually there.
+fn past_the_risk_warning(
+    state: &mut DashboardState,
+    immediate: Option<AppCommand>,
+) -> Option<AppCommand> {
+    assert!(
+        immediate.is_none(),
+        "the action should be held by a warning, not sent straight away"
+    );
+    assert!(state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::RiskWarning));
+    state.confirm_risk_warning()
+}
+
 #[test]
 fn leader_message_action_copy_closes_action_popup() {
     let mut state = state_with_messages(1);
@@ -432,7 +448,10 @@ fn guild_leave_confirmation_targets_the_active_guild_or_the_cursor() {
         Some("guild 1".to_owned())
     );
     assert_eq!(
-        active.confirm_guild_leave(),
+        {
+            let held = active.confirm_guild_leave();
+            past_the_risk_warning(&mut active, held)
+        },
         Some(AppCommand::LeaveGuild {
             guild_id: Id::new(1),
             label: "guild 1".to_owned(),
@@ -455,7 +474,10 @@ fn guild_leave_confirmation_targets_the_active_guild_or_the_cursor() {
             .is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::GuildLeaveConfirmation)
     );
     assert_eq!(
-        cursor_only.confirm_guild_leave(),
+        {
+            let held = cursor_only.confirm_guild_leave();
+            past_the_risk_warning(&mut cursor_only, held)
+        },
         Some(AppCommand::LeaveGuild {
             guild_id: Id::new(1),
             label: "guild 1".to_owned(),
@@ -485,7 +507,10 @@ fn guild_action_menu_leave_server_opens_confirmation() {
             .is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::GuildLeaveConfirmation)
     );
     assert_eq!(
-        state.confirm_guild_leave(),
+        {
+            let held = state.confirm_guild_leave();
+            past_the_risk_warning(&mut state, held)
+        },
         Some(AppCommand::LeaveGuild {
             guild_id: Id::new(1),
             label: "guild 1".to_owned(),
@@ -636,8 +661,10 @@ fn joining_a_server_previews_the_invite_before_accepting() {
             .is_some_and(|join| join.is_joinable())
     );
 
-    // Only now does submitting join.
-    let command = state.submit_join_server();
+    // Only now does submitting join - through the warning, since joining is
+    // the action most likely to get a third-party client flagged.
+    let held = state.submit_join_server();
+    let command = past_the_risk_warning(&mut state, held);
     assert!(
         matches!(command, Some(AppCommand::AcceptInvite { ref code }) if code == "aBc-123"),
         "second submit must accept the resolved invite"
