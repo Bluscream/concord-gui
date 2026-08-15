@@ -13,6 +13,7 @@
 // See docs/REWRITE.md for the phased plan and what remains.
 
 mod demo;
+mod editor;
 mod http;
 mod model;
 mod notify;

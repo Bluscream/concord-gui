@@ -335,6 +335,46 @@ impl Workspace {
         );
     }
 
+    /// Hand the draft to an external editor and take back what it returns.
+    ///
+    /// The editor blocks until it exits, so it runs on the shared runtime
+    /// rather than GPUI's thread - editing in place would freeze the window
+    /// for as long as the editor was open.
+    fn compose_externally(&mut self, cx: &mut Context<Self>) {
+        let draft = self.composer.text().to_string();
+        let entity = cx.entity();
+
+        let spawned = crate::runtime::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || crate::editor::edit(&draft)).await;
+            (entity, result)
+        });
+
+        let Some(task) = spawned else {
+            self.model.status_line = "Could not start the editor".to_string();
+            return;
+        };
+
+        cx.spawn(async move |_workspace, cx| {
+            let Ok((entity, result)) = task.await else {
+                return;
+            };
+
+            let _ = cx.update(|cx| {
+                entity.update(cx, |workspace, cx| {
+                    match result {
+                        Ok(Ok(edited)) => workspace.composer.set_text(&edited),
+                        Ok(Err(error)) => workspace.model.status_line = error.message(),
+                        // The blocking task panicked or was cancelled; the
+                        // draft is untouched either way.
+                        Err(_) => {}
+                    }
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
     /// Refresh slash autocomplete after the composer changes.
     fn refresh_slash(&mut self) {
         self.slash = SlashPicker::for_input(self.composer.text());
@@ -3173,6 +3213,11 @@ impl Render for Workspace {
                             this.mark_all_read();
                         } else if key == "o" && event.keystroke.modifiers.control {
                             this.attach_files(cx);
+                        } else if key == "e"
+                            && event.keystroke.modifiers.control
+                            && event.keystroke.modifiers.shift
+                        {
+                            this.compose_externally(cx);
                         } else if key == "i" && event.keystroke.modifiers.control {
                             this.open_inbox();
                         } else if key == "f" && event.keystroke.modifiers.control {
