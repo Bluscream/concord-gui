@@ -23,7 +23,11 @@ use super::{
 };
 
 const REMOTE_AUTH_URL: &str = "wss://remote-auth-gateway.discord.gg/?v=2";
-const TICKET_EXCHANGE_URL: &str = "https://discord.com/api/v10/users/@me/remote-auth/login";
+// v9 like every other request this client makes. Abaddon, acheron and endcord
+// all use v9 here; only TriCord uses v10, and a lone version bump is exactly
+// the kind of inconsistency that separates a third-party client from the web
+// client it claims to be.
+const TICKET_EXCHANGE_URL: &str = "https://discord.com/api/v9/users/@me/remote-auth/login";
 const QR_QUIET_ZONE_MODULES: usize = 4;
 const MAX_REMOTE_AUTH_RECONNECT_ATTEMPTS: u8 = 3;
 
