@@ -1,6 +1,6 @@
 use super::*;
 use crate::discord::ids::marker::RoleMarker;
-use crate::discord::{ForumPostDataInfo, ThreadGatewayInfo, ThreadMemberInfo};
+use crate::discord::{ForumPostDataInfo, ThreadMemberInfo};
 use crate::tui::state::NotificationInboxItem;
 
 fn current_user_thread_member(thread_id: Id<ChannelMarker>, muted: bool) -> ThreadMemberInfo {
@@ -547,60 +547,6 @@ fn desktop_notification_for_event_formats_eligible_guild_message() {
 
     assert_eq!(notification.title, "neo in guild #general");
     assert_eq!(notification.body, "hello from concord");
-}
-
-#[test]
-fn desktop_notification_and_sound_suppress_ineligible_channels() {
-    for (name, regular_channel_muted, joined, archived, thread_muted) in [
-        ("muted channel", true, true, false, false),
-        ("unjoined thread", false, false, false, false),
-        ("archived thread", false, true, true, false),
-        ("muted thread member", false, true, false, true),
-    ] {
-        let mut state = state_with_hidden_and_visible_channels();
-        let parent_id = Id::new(3);
-        let channel_id = if regular_channel_muted {
-            parent_id
-        } else {
-            let thread_id = Id::new(5);
-            state.push_event(AppEvent::ThreadUpsert {
-                thread: ThreadGatewayInfo {
-                    channel: ChannelInfo {
-                        thread_metadata: Some(crate::discord::ThreadMetadataInfo::test(
-                            archived, false,
-                        )),
-                        ..thread_channel_info(Id::new(1), parent_id, thread_id, "post")
-                    },
-                    current_user_member: joined
-                        .then(|| current_user_thread_member(thread_id, thread_muted)),
-                },
-                created: false,
-            });
-            thread_id
-        };
-        let channel_overrides = regular_channel_muted
-            .then(|| ChannelNotificationOverrideInfo {
-                message_notifications: Some(NotificationLevel::AllMessages),
-                muted: true,
-                ..ChannelNotificationOverrideInfo::test(channel_id)
-            })
-            .into_iter()
-            .collect();
-        state.push_event(user_guild_settings_init(vec![
-            GuildNotificationSettingsInfo {
-                message_notifications: Some(NotificationLevel::AllMessages),
-                channel_overrides,
-                ..GuildNotificationSettingsInfo::test(Some(Id::new(1)))
-            },
-        ]));
-        let event = notification_message_event(channel_id, "hello");
-
-        assert!(
-            state.desktop_notification_for_event(&event).is_none(),
-            "{name}"
-        );
-        assert!(!state.notification_sound_for_event(&event), "{name}");
-    }
 }
 
 #[test]

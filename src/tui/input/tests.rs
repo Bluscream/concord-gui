@@ -33,8 +33,8 @@ use crate::{
         GuildMemberListOperation, GuildMemberListUpdateInfo, GuildNotificationSettingsInfo,
         MemberInfo, MessageInfo, MessageReferenceInfo, MessageSnapshotInfo,
         MicrophoneSensitivityDb, NotificationLevel, PollAnswerInfo, PollInfo, PresenceStatus,
-        ReactionEmoji, ReactionUserInfo, ReadStateInfo, RoleInfo, ThreadGatewayInfo,
-        UserGuildSettingsInfo, UserSettingsInfo, VoiceConnectionStatus, VoiceVolumePercent,
+        ReactionEmoji, ReactionUserInfo, ReadStateInfo, RoleInfo, UserGuildSettingsInfo,
+        UserSettingsInfo, VoiceConnectionStatus, VoiceVolumePercent,
     },
     tui::state::{
         ChannelPaneEntry, DashboardState, FocusPane, GuildPaneEntry, MessageActionKind,
@@ -181,10 +181,6 @@ fn channel_row_point(row: u16) -> (u16, u16) {
 
 fn composer_point() -> (u16, u16) {
     (50, 16)
-}
-
-fn message_row_point(row: u16) -> (u16, u16) {
-    (50, 2 + row)
 }
 
 fn message_action_row_point(item_count: u16, row: u16) -> (u16, u16) {

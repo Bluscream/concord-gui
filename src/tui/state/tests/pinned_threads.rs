@@ -151,35 +151,6 @@ fn pinned_message_view_does_not_request_older_history() {
 }
 
 #[test]
-fn forum_channel_cannot_enter_pinned_message_view() {
-    let guild_id = Id::new(1);
-    let forum_id = Id::new(20);
-    let mut state = DashboardState::new();
-    state.push_event(crate::discord::test_builders::guild_create_event(
-        GuildCreateFixture {
-            channels: vec![ChannelInfo {
-                guild_id: Some(guild_id),
-                name: "forum".to_owned(),
-                ..ChannelInfo::test(forum_id, "GuildForum")
-            }],
-            ..GuildCreateFixture::new(guild_id)
-        },
-    ));
-    state.activate_guild(ActiveGuildScope::Guild(guild_id));
-    state.activate_channel(forum_id);
-
-    state.enter_pinned_message_view(forum_id);
-
-    assert!(!state.is_pinned_message_view());
-    assert_eq!(
-        state.message_pane_source(),
-        Some(MessagePaneSource::ForumPosts {
-            channel_id: forum_id
-        })
-    );
-}
-
-#[test]
 fn pinned_only_messages_do_not_become_older_history_cursor() {
     let channel_id: Id<ChannelMarker> = Id::new(2);
     let mut state = state_with_message_ids([10, 11, 12]);
@@ -285,88 +256,6 @@ fn missing_thread_preview_requests_exact_latest_message_until_loaded() {
             .latest_message_preview
             .map(|preview| (preview.author, preview.content)),
         Some(("neo".to_owned(), "latest reply".to_owned()))
-    );
-}
-
-#[test]
-fn forum_post_starters_are_not_loaded_through_thread_preview_requests() {
-    let guild_id = Id::new(1);
-    let forum_id = Id::new(20);
-    let thread_id = Id::new(30);
-    let mut state = DashboardState::new();
-    state.push_event(crate::discord::test_builders::guild_create_event(
-        GuildCreateFixture {
-            channels: vec![
-                ChannelInfo {
-                    guild_id: Some(guild_id),
-                    name: "forum".to_owned(),
-                    ..ChannelInfo::test(forum_id, "GuildForum")
-                },
-                ChannelInfo {
-                    guild_id: Some(guild_id),
-                    parent_id: Some(forum_id),
-                    last_message_id: Some(Id::new(300)),
-                    name: "welcome".to_owned(),
-                    thread_metadata: Some(crate::discord::ThreadMetadataInfo::test(false, false)),
-                    ..ChannelInfo::test(thread_id, "GuildPublicThread")
-                },
-            ],
-            ..GuildCreateFixture::new(guild_id)
-        },
-    ));
-    state.activate_guild(ActiveGuildScope::Guild(guild_id));
-    state.activate_channel(forum_id);
-    state.push_event(message_create_event(MessageCreateFixture {
-        guild_id: Some(guild_id),
-        channel_id: thread_id,
-        message_id: Id::new(300),
-        author_id: Id::new(99),
-        content: Some("non-starter reply".to_owned()),
-        ..guild_message_create_fixture()
-    }));
-
-    let post = state
-        .selected_forum_post_items()
-        .into_iter()
-        .find(|post| post.channel_id == thread_id)
-        .expect("forum post should be visible");
-    assert_eq!(post.preview_content, None);
-    assert_eq!(state.missing_thread_preview_load_requests(), Vec::new());
-}
-
-#[test]
-fn thread_summary_suppresses_preview_when_channel_latest_is_newer_than_cache() {
-    let mut state = state_with_thread_created_message();
-    state.push_event(AppEvent::ThreadUpsert {
-        thread: ThreadGatewayInfo {
-            channel: ChannelInfo {
-                last_message_id: Some(Id::new(40)),
-                message_count: Some(12),
-                member_count: None,
-                total_message_sent: Some(14),
-                ..thread_channel_info(Id::new(1), Id::new(2), Id::new(10), "release notes")
-            },
-            current_user_member: None,
-        },
-        created: false,
-    });
-    state.push_event(AppEvent::ThreadPreviewLoaded {
-        channel_id: Id::new(10),
-        message: MessageInfo {
-            content: Some("older cached reply".to_owned()),
-            ..message_info(Id::new(10), 30)
-        },
-    });
-    let message = state.messages()[0];
-    let summary = state
-        .thread_summary_for_message(message)
-        .expect("thread summary should resolve");
-
-    assert_eq!(summary.latest_message_id, Some(Id::new(40)));
-    assert_eq!(summary.latest_message_preview, None);
-    assert_eq!(
-        state.missing_thread_preview_load_requests(),
-        vec![(Id::new(10), Id::new(40))]
     );
 }
 

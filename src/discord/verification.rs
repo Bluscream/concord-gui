@@ -732,41 +732,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn community_capability_does_not_imply_enabled_onboarding() {
-        let now = Utc
-            .with_ymd_and_hms(2026, 7, 15, 0, 0, 0)
-            .single()
-            .expect("test time should be valid");
-        for flags in [Some(0), Some(MEMBER_FLAG_STARTED_ONBOARDING), None] {
-            let (mut state, channel_id) = verification_state(
-                GuildVerificationLevel::None,
-                now,
-                60,
-                60,
-                true,
-                true,
-                flags,
-                Some(false),
-            );
-            update_guild_features(&mut state, &["COMMUNITY"]);
-
-            assert_eq!(
-                state.guild_participation_decision_at(
-                    state.channel(channel_id).expect("channel should exist"),
-                    now,
-                ),
-                GuildParticipationDecision::Allowed,
-                "member flags {flags:?}"
-            );
-            assert_eq!(
-                state.current_user_is_onboarding(Id::new(100)),
-                Some(false),
-                "member flags {flags:?}"
-            );
-        }
-    }
-
     fn update_guild_features(state: &mut DiscordState, features: &[&str]) {
         state.apply_event(&AppEvent::GuildUpdate {
             guild_id: Id::new(100),

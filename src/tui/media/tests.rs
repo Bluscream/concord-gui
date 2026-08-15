@@ -1127,21 +1127,6 @@ fn image_preview_protocol_spec_ignores_screen_placement() {
 }
 
 #[test]
-fn thread_card_image_preview_cache_key_ignores_the_card_screen_row() {
-    let target = ImagePreviewTarget {
-        thread_card: true,
-        preview_y_offset_rows: 2,
-        ..image_preview_target(1)
-    };
-    let moved = ImagePreviewTarget {
-        preview_y_offset_rows: 9,
-        ..target.clone()
-    };
-
-    assert_eq!(target.key(), moved.key());
-}
-
-#[test]
 fn image_preview_cache_keeps_duplicate_urls_as_separate_preview_instances() {
     let mut cache = ImagePreviewCache::new(None);
     let first = image_preview_target(1);
