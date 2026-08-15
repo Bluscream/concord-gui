@@ -227,6 +227,8 @@ pub struct Workspace {
     pub channel_muted: bool,
     /// Whether the open guild is muted.
     pub guild_muted: bool,
+    /// Recent error-log lines, shown when the debug panel is open.
+    pub debug_log: Option<Vec<String>>,
     /// Scroll position of the message list, so navigation can move it.
     pub message_scroll: gpui::ScrollHandle,
     /// Pane visibility and widths, shared with the TUI through ui_state.toml.
@@ -303,6 +305,7 @@ impl Workspace {
             voice_scope_joined: None,
             channel_muted: false,
             guild_muted: false,
+            debug_log: None,
             message_scroll: gpui::ScrollHandle::new(),
             ui_state: config::load_ui_state_options_with_warnings()
                 .map(|(options, _)| options)
@@ -565,6 +568,23 @@ impl Workspace {
             },
         });
         true
+    }
+
+    /// Show or hide the debug log.
+    ///
+    /// Reads the in-memory error ring rather than the file: the file needs
+    /// debug logging enabled, while errors are always retained, so the panel
+    /// has something useful to show in a default build.
+    fn toggle_debug_log(&mut self) {
+        self.debug_log = match self.debug_log {
+            Some(_) => None,
+            None => Some(
+                concord::logging::error_entries()
+                    .iter()
+                    .map(|entry| entry.line())
+                    .collect(),
+            ),
+        };
     }
 
     /// Move the message viewport by a fraction of its height.
@@ -3622,6 +3642,11 @@ impl Render for Workspace {
                                 _ => Pane::Members,
                             };
                             this.toggle_pane(pane);
+                        } else if key == "l"
+                            && event.keystroke.modifiers.control
+                            && event.keystroke.modifiers.shift
+                        {
+                            this.toggle_debug_log();
                         } else if key == "i" && event.keystroke.modifiers.control {
                             this.open_inbox();
                         } else if key == "f" && event.keystroke.modifiers.control {

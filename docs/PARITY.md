@@ -8,7 +8,8 @@ the parts we do not want.
 Derived from the TUI's 152 keybinding actions (`src/tui/keybindings/actions.rs`)
 and its 12 builtin slash commands · reply-ping toggle · external editor · sign out · own profile · polls · attachment download ·
 external media playback · remove embeds · thread archive/follow ·
-application commands · pane show/hide · vim-style scrolling (`src/discord/builtin_commands.rs`). Pure
+application commands · pane show/hide · vim-style scrolling ·
+debug log viewer (`src/discord/builtin_commands.rs`). Pure
 input primitives (`Char`, `Ctrl`, `Key`, `ModifiedKey`) are excluded - they are
 not features.
 
@@ -27,11 +28,25 @@ commands
 
 ### Missing
 
-Ordered roughly by how much a daily driver misses them.
+Re-derived by auditing all 152 TUI actions, excluding 26 input primitives
+(`Char`, `Ctrl`, `Key`, focus plumbing) that are not features. An earlier pass
+called this list finished; it was not. What follows is the corrected set.
 
 | Feature | TUI action | Notes |
 |---|---|---|
-| Debug log viewer | `OpenDebugLog` | |
+| Open links from messages | `OpenUrl`, `OpenMessageUrl` | URLs render styled but do nothing when clicked. The most-missed of these. |
+| Keyboard message selection | `SelectNext/Previous`, `ToggleSelected`, `ActivateSelected` | The TUI drives messages entirely from the keyboard; the GUI needs the mouse for every message action. |
+| Collapse channel categories | `OpenCategory` | `ui_state.collapsed_channel_categories` already persists it. |
+| Filter a pane | `StartFilter`, `CommitFilter`, `OpenPaneFilter` | Type to narrow the channel or member list. |
+| Focus cycling between panes | `CycleFocus*`, `Focus*Pane` | No keyboard path between panes. |
+| Confirmation prompts | `OpenDeleteConfirmation`, `OpenPinConfirmation` | Delete and pin act immediately. |
+| Voice volume | `AdjustVolume`, `UpdateVoiceParticipantPlayback` | No output or per-participant volume control. |
+| Notification levels | `OpenNotificationOptions` | Only mute/unmute; no all/mentions/nothing. |
+| Pane resize | `ResizePaneLeft/Right` | Widths persist in `ui_state` but cannot be changed. |
+| Zoom | `ToggleZoom`, `ZoomIn/Out` | |
+| Open thread from a message | `OpenThread` | Threads are reachable from the sidebar only. |
+| Composer options | `OpenComposerOptions` | |
+| Quit | `Quit` | Window close only. |
 
 ### Not possible against this core
 
