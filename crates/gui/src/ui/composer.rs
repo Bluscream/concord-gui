@@ -296,6 +296,10 @@ impl Composer {
         let shift = keystroke.modifiers.shift;
 
         match keystroke.key.as_str() {
+            // Escape drops a selection without touching the text, which is
+            // what every other text field does. Only when there is one, so
+            // escape still reaches whatever else is listening otherwise.
+            "escape" if self.selection().is_some() => self.clear_selection(),
             // Shift-Enter inserts a newline; plain Enter sends.
             "enter" if shift => self.newline(),
             "enter" => return !self.is_empty(),

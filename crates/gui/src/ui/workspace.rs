@@ -357,6 +357,10 @@ pub struct Workspace {
     pub downloads: Vec<(AttachmentDownloadId, String, Option<f32>)>,
     /// Autocomplete choices offered by a bot for the argument being typed.
     pub command_choices: Vec<String>,
+    /// Custom status as last set, shown in the status bar.
+    pub custom_status: String,
+    /// Custom status being typed, when the editor is open.
+    pub editing_status: Option<Composer>,
     /// Folder being renamed, with the new name as typed.
     pub renaming_folder: Option<(u64, Composer)>,
     /// Key of the avatar preview being awaited, if any.
@@ -434,6 +438,8 @@ impl Workspace {
             audio_devices: None,
             audio_sources_request: 0,
             inbox_history_request: 0,
+            custom_status: String::new(),
+            editing_status: None,
             pending_sends: std::collections::HashMap::new(),
             downloads: Vec::new(),
             command_choices: Vec::new(),
@@ -1046,6 +1052,18 @@ impl Workspace {
             channel_id,
             message_id,
         });
+    }
+
+    /// Apply the typed custom status.
+    fn submit_custom_status(&mut self) {
+        let Some(text) = self.editing_status.take() else {
+            return;
+        };
+        let text = text.text().trim().to_string();
+        // An empty string is meaningful here - it clears the status - so it is
+        // sent rather than treated as a cancel.
+        self.custom_status = text.clone();
+        self.set_custom_activity(text);
     }
 
     /// Apply the typed folder name.
@@ -2754,7 +2772,9 @@ impl Workspace {
                             .hover(|s| s.bg(rgb(active().surface_hover)))
                             .child("🖥")
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.open_stream_picker();
+                                // Toggles: while broadcasting this stops it,
+                                // which is what a lit button should do.
+                                this.toggle_stream();
                                 cx.notify();
                             })),
                     )
@@ -2774,6 +2794,32 @@ impl Workspace {
                             .child("🎚")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.open_audio_devices();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        gpui::div()
+                            .id("card-mic-permission")
+                            .flex_1()
+                            .h(px(28.))
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(layout::RADIUS))
+                            .bg(rgb(if self.allow_microphone_transmit {
+                                active().surface_sunken
+                            } else {
+                                active().danger
+                            }))
+                            .text_size(px(12.))
+                            .text_color(rgb(active().text))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgb(active().surface_hover)))
+                            // Distinct from mute: this decides whether the
+                            // capture device is opened at all.
+                            .child("🎙")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let allowed = !this.allow_microphone_transmit;
+                                this.set_microphone_allowed(allowed);
                                 cx.notify();
                             })),
                     ),
@@ -4168,7 +4214,51 @@ impl Workspace {
             .border_color(rgb(active().border))
             .text_size(px(scaled(text::BASE)))
             .text_color(rgb(active().text))
-            .child(guild_name);
+            .gap(px(space::SM))
+            .child(gpui::div().flex_1().child(guild_name))
+            // Guild-level controls, shown only for a real guild: neither mute
+            // nor leave means anything for the DM pseudo-guild.
+            .when(
+                matches!(self.nav.selection, Selection::Guild(_)),
+                |header| {
+                    let muted = self.guild_muted;
+                    header
+                        .child(
+                            gpui::div()
+                                .id("guild-mute")
+                                .px(px(space::SM))
+                                .rounded(px(layout::RADIUS))
+                                .cursor_pointer()
+                                .text_size(px(scaled(text::XS)))
+                                .text_color(rgb(if muted {
+                                    active().danger
+                                } else {
+                                    active().text_subtle
+                                }))
+                                .hover(|style| style.bg(rgb(active().surface_hover)))
+                                .child(if muted { "unmute" } else { "mute" })
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.toggle_guild_muted();
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            gpui::div()
+                                .id("guild-leave")
+                                .px(px(space::SM))
+                                .rounded(px(layout::RADIUS))
+                                .cursor_pointer()
+                                .text_size(px(scaled(text::XS)))
+                                .text_color(rgb(active().text_subtle))
+                                .hover(|style| style.text_color(rgb(active().danger)))
+                                .child("leave")
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.leave_guild();
+                                    cx.notify();
+                                })),
+                        )
+                },
+            );
 
         let mut list = column()
             .id("channel-list")
@@ -4463,8 +4553,36 @@ impl Workspace {
             )));
         }
 
+        if let Some(text) = &self.editing_status {
+            return Some(overlay::scrim().child(overlay::text_prompt_view(
+                "Custom status",
+                "What are you up to?",
+                text.text(),
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.submit_custom_status();
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.editing_status = None;
+                            cx.notify();
+                        });
+                    }
+                },
+            )));
+        }
+
         if let Some((_, name)) = &self.renaming_folder {
-            return Some(overlay::scrim().child(overlay::rename_folder_view(
+            return Some(overlay::scrim().child(overlay::text_prompt_view(
+                "Rename folder",
+                "Type a name",
                 name.text(),
                 {
                     let entity = entity.clone();
@@ -5036,6 +5154,24 @@ impl Workspace {
                         }))
                 }),
             )
+            .child(
+                gpui::div()
+                    .id("custom-status")
+                    .px(px(space::SM))
+                    .rounded(px(layout::RADIUS))
+                    .cursor_pointer()
+                    .text_color(rgb(active().text_subtle))
+                    .hover(|style| style.text_color(rgb(active().text)))
+                    .child(if self.custom_status.is_empty() {
+                        "set status".to_string()
+                    } else {
+                        self.custom_status.clone()
+                    })
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.editing_status = Some(Composer::default());
+                        cx.notify();
+                    })),
+            )
             .child(presence_dot(if self.model.connected {
                 Presence::Online
             } else {
@@ -5286,6 +5422,23 @@ impl Render for Workspace {
                                 || event.keystroke.modifiers.platform)
                         {
                             this.open_switcher();
+                        } else if this.editing_status.is_some() {
+                            match key {
+                                "escape" => this.editing_status = None,
+                                "enter" => this.submit_custom_status(),
+                                _ => {
+                                    let pasted = (key == "v"
+                                        && (event.keystroke.modifiers.control
+                                            || event.keystroke.modifiers.platform))
+                                        .then(|| {
+                                            cx.read_from_clipboard().and_then(|item| item.text())
+                                        })
+                                        .flatten();
+                                    if let Some(text) = &mut this.editing_status {
+                                        text.handle_key_with_clipboard(event, pasted);
+                                    }
+                                }
+                            }
                         } else if this.renaming_folder.is_some() {
                             match key {
                                 "escape" => this.renaming_folder = None,

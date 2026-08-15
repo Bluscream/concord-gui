@@ -319,13 +319,15 @@ pub fn audio_devices_view(
     )
 }
 
-/// Rename dialog for a guild folder.
-pub fn rename_folder_view(
+/// Single-line text prompt: a title, the text as typed, and save/cancel.
+pub fn text_prompt_view(
+    title: &str,
+    placeholder: &str,
     current: &str,
     on_submit: impl Fn(&mut gpui::App) + 'static,
     on_cancel: impl Fn(&mut gpui::App) + 'static,
 ) -> Div {
-    panel("Rename folder", 380.)
+    panel(title, 380.)
         .child(
             gpui::div()
                 .px(px(space::LG))
@@ -337,7 +339,7 @@ pub fn rename_folder_view(
                     active().text
                 }))
                 .child(if current.is_empty() {
-                    "Type a name".to_string()
+                    placeholder.to_string()
                 } else {
                     current.to_string()
                 }),
@@ -349,7 +351,7 @@ pub fn rename_folder_view(
                 .py(px(space::MD))
                 .gap(px(space::SM))
                 .justify_end()
-                .child(button("folder-cancel", "Cancel", false, on_cancel))
-                .child(button("folder-save", "Save", false, on_submit)),
+                .child(button("prompt-cancel", "Cancel", false, on_cancel))
+                .child(button("prompt-save", "Save", false, on_submit)),
         )
 }
