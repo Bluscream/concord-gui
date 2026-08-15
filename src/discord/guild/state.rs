@@ -116,6 +116,18 @@ impl DiscordState {
         self.navigation.custom_emojis.values().flatten()
     }
 
+    /// Stickers this account can send in a guild without Nitro.
+    ///
+    /// Only the guild's own: sending another guild's sticker requires Nitro,
+    /// so offering them would mean listing things that fail to send.
+    pub fn stickers_for_guild(&self, guild_id: Id<GuildMarker>) -> &[crate::discord::StickerInfo] {
+        self.navigation
+            .guild_stickers
+            .get(&guild_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
     pub fn custom_emojis_for_guild(&self, guild_id: Id<GuildMarker>) -> &[CustomEmojiInfo] {
         self.navigation
             .custom_emojis

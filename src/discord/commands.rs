@@ -9,7 +9,7 @@ use crate::discord::ids::{
     Id,
     marker::{
         ChannelMarker, EmojiMarker, ForumTagMarker, GuildMarker, MessageMarker, RoleMarker,
-        UserMarker,
+        StickerMarker, UserMarker,
     },
 };
 
@@ -647,6 +647,9 @@ pub enum AppCommand {
         content: String,
         reply_to: Option<ReplyReference>,
         attachments: Vec<MessageAttachmentUpload>,
+        /// Stickers to send with it. Discord accepts at most three, and a
+        /// sticker-only message is allowed to have no content.
+        sticker_ids: Vec<Id<StickerMarker>>,
     },
     CreateForumPost {
         post: ForumPostCreate,

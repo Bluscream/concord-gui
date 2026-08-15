@@ -105,6 +105,7 @@ define_ui_actions! {
     OpenPollVotePicker => ("choose poll votes", &[], None),
     GoToReferencedMessage => ("go to referenced message", &[], None),
     ForwardMessage => ("forward message", &[], None),
+    OpenStickerPicker => ("Stickers", &[&[Leader, Char('s')]], None),
     ToggleGuildPane => ("toggle Servers", &[&[Leader, Char('1')]], None),
     ToggleChannelPane => ("toggle Channels", &[&[Leader, Char('2')]], None),
     ToggleMemberPane => ("toggle Members", &[&[Leader, Char('4')]], None),

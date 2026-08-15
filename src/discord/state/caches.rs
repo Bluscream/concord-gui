@@ -28,6 +28,8 @@ pub(in crate::discord) struct NavigationIndex {
     pub(in crate::discord) channels: BTreeMap<Id<ChannelMarker>, ChannelState>,
     pub(in crate::discord) thread_creators: BTreeMap<Id<ChannelMarker>, ThreadCreatorState>,
     pub(in crate::discord) custom_emojis: BTreeMap<Id<GuildMarker>, Vec<CustomEmojiInfo>>,
+    pub(in crate::discord) guild_stickers:
+        BTreeMap<Id<GuildMarker>, Vec<crate::discord::StickerInfo>>,
     /// User's `guild_folders` setting in display order. Empty until READY
     /// delivers it. The dashboard falls back to a flat guild list.
     pub(in crate::discord) guild_folders: Vec<GuildFolder>,

@@ -11,9 +11,9 @@ use concord::discord::{
     ApplicationCommandInfo, ApplicationCommandInvocation, AttachmentDownloadId,
     BuiltinSlashCommandParse, BuiltinSlashCommandSubmit, DownloadAttachmentSource,
     ForumPostArchiveState, ForumPostCreate, GlobalUserProfileUpdate, GuildUserProfileUpdate, Id,
-    InvitePreview, MAX_UPLOAD_ATTACHMENT_COUNT, MediaPlaybackSource, MediaPlaybackTarget,
-    MessageAttachmentUpload, MessageHistoryAfterMode, MessageSearchQuery, MuteDuration,
-    PresenceStatus, ProfileAvatarUpload, ReactionEmoji, ReplyReference,
+    InvitePreview, MAX_MESSAGE_STICKERS, MAX_UPLOAD_ATTACHMENT_COUNT, MediaPlaybackSource,
+    MediaPlaybackTarget, MessageAttachmentUpload, MessageHistoryAfterMode, MessageSearchQuery,
+    MuteDuration, PresenceStatus, ProfileAvatarUpload, ReactionEmoji, ReplyReference,
     StreamCaptureTargetsRequestId, UserProfileUpdate, VoiceConnectionStatus,
     VoiceParticipantPlaybackSettings, VoiceParticipantVolumePercent, VoiceScope,
     VoiceVolumePercent, application_command_content_is_complete, invite_code_from, marker,
@@ -431,6 +431,10 @@ pub struct Workspace {
     requested_previews: std::collections::HashSet<String>,
     /// What the open switcher will do with its selection.
     switcher_purpose: SwitcherPurpose,
+    /// Stickers staged for the next send. Discord accepts at most three.
+    pub pending_stickers: Vec<Id<marker::StickerMarker>>,
+    /// Sticker picker, open while choosing one.
+    pub sticker_picker: bool,
     /// Invite being previewed, once resolved or while resolving.
     pub invite: Option<InviteState>,
     /// Custom status as last set, shown in the status bar.
@@ -543,6 +547,8 @@ impl Workspace {
             attachment_previews: std::collections::HashMap::new(),
             requested_previews: std::collections::HashSet::new(),
             switcher_purpose: SwitcherPurpose::Navigate,
+            pending_stickers: Vec::new(),
+            sticker_picker: false,
             invite: None,
             custom_status: String::new(),
             editing_status: None,
@@ -727,6 +733,9 @@ impl Workspace {
                         content,
                         reply_to: None,
                         attachments: Vec::new(),
+                        // A slash command's text is its own payload; staged
+                        // stickers belong to the composer's own send.
+                        sticker_ids: Vec::new(),
                     });
                 }
                 true
@@ -1212,6 +1221,66 @@ impl Workspace {
         self.update_guild_folder(folder_id, Some(name), None);
     }
 
+    /// Stickers the open guild offers, as (name, image URL).
+    ///
+    /// Only the guild's own: sending another guild's sticker needs Nitro, so
+    /// listing them would offer things that fail to send.
+    fn guild_stickers(&self) -> Vec<(String, Option<String>)> {
+        let (Some(state), Selection::Guild(guild_id)) = (&self.last_state, self.nav.selection)
+        else {
+            return Vec::new();
+        };
+
+        state
+            .stickers_for_guild(guild_id)
+            .iter()
+            .map(|sticker| (sticker.name.clone(), sticker.image_url()))
+            .collect()
+    }
+
+    /// Open the sticker picker, fetching previews for what it will show.
+    pub fn open_sticker_picker(&mut self) {
+        self.sticker_picker = true;
+
+        // Requested here rather than on render: the picker needs the images,
+        // and the ordinary preview sweep only covers what is in the log.
+        let urls: Vec<_> = self
+            .guild_stickers()
+            .into_iter()
+            .filter_map(|(_, url)| url)
+            .filter(|url| self.requested_previews.insert(url.clone()))
+            .collect();
+
+        for url in urls {
+            if let Some(handle) = &self.handle {
+                handle.send(AppCommand::LoadAttachmentPreview { url });
+            }
+        }
+    }
+
+    /// Stage a sticker for the next send.
+    fn stage_sticker(&mut self, index: usize) {
+        let (Some(state), Selection::Guild(guild_id)) = (&self.last_state, self.nav.selection)
+        else {
+            return;
+        };
+        let Some(sticker) = state.stickers_for_guild(guild_id).get(index) else {
+            return;
+        };
+        let sticker_id = sticker.id;
+
+        // Discord accepts at most three, and refuses the whole message if more
+        // are sent, so the cap is enforced here rather than by the server.
+        if self.pending_stickers.len() >= MAX_MESSAGE_STICKERS {
+            self.model.status_line = format!("At most {MAX_MESSAGE_STICKERS} stickers per message");
+            return;
+        }
+        if !self.pending_stickers.contains(&sticker_id) {
+            self.pending_stickers.push(sticker_id);
+        }
+        self.sticker_picker = false;
+    }
+
     /// Look up an invite the user pasted.
     pub fn resolve_invite(&mut self, input: &str) {
         let Some(handle) = &self.handle else {
@@ -1616,6 +1685,7 @@ impl Workspace {
                 content,
                 reply_to,
                 attachments: std::mem::take(&mut self.attachments),
+                sticker_ids: std::mem::take(&mut self.pending_stickers),
             });
         }
         self.attachment_error = None;
@@ -5134,6 +5204,39 @@ impl Workspace {
             )));
         }
 
+        if self.sticker_picker {
+            let choices: Vec<_> = self
+                .guild_stickers()
+                .into_iter()
+                .map(|(name, url)| overlay::StickerChoice {
+                    name,
+                    image: url.and_then(|url| self.attachment_previews.get(&url).cloned()),
+                })
+                .collect();
+
+            return Some(overlay::scrim().child(overlay::sticker_picker_view(
+                &choices,
+                {
+                    let entity = entity.clone();
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.stage_sticker(index);
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.sticker_picker = false;
+                            cx.notify();
+                        });
+                    }
+                },
+            )));
+        }
+
         if let Some(invite) = &self.invite {
             let row = overlay::InviteRow {
                 guild_name: invite
@@ -5752,6 +5855,51 @@ impl Workspace {
         // push the input down rather than covering the text being typed.
         column()
             .w_full()
+            // Staged stickers, with the picker's own entry point. Shown for the
+            // same reason as staged files: without it, choosing a sticker
+            // produces no visible change and cannot be undone before sending.
+            .child(
+                row()
+                    .w_full()
+                    .px(px(space::MD))
+                    .py(px(space::XS))
+                    .gap(px(space::SM))
+                    .items_center()
+                    .child(
+                        gpui::div()
+                            .id("sticker-open")
+                            .px(px(space::SM))
+                            .rounded(px(layout::RADIUS))
+                            .cursor_pointer()
+                            .text_size(px(scaled(text::XS)))
+                            .text_color(rgb(active().text_subtle))
+                            .hover(|style| style.text_color(rgb(active().text)))
+                            .child("sticker")
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.open_sticker_picker();
+                                cx.notify();
+                            })),
+                    )
+                    .children(self.pending_stickers.iter().enumerate().map(|(slot, _)| {
+                        gpui::div()
+                            .id(("staged-sticker", slot))
+                            .px(px(space::SM))
+                            .py(px(space::XS))
+                            .rounded(px(layout::RADIUS))
+                            .bg(rgb(active().surface_hover))
+                            .cursor_pointer()
+                            .text_size(px(scaled(text::XS)))
+                            .text_color(rgb(active().text))
+                            .hover(|style| style.bg(rgb(active().surface_active)))
+                            .child("sticker x")
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                if slot < this.pending_stickers.len() {
+                                    this.pending_stickers.remove(slot);
+                                }
+                                cx.notify();
+                            }))
+                    })),
+            )
             // Staged files. Without this, attaching produced no visible change
             // at all and there was no way to remove one before sending.
             .children((!self.attachments.is_empty()).then(|| {

@@ -277,6 +277,7 @@ fn message_pane_shortcuts_reuse_message_actions() {
                 mention_author: true,
             }),
             attachments: Vec::new(),
+            sticker_ids: Vec::new(),
         })
     );
 

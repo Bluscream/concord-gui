@@ -97,6 +97,7 @@ fn keymap_nested_leader_m_r_replies_to_message() {
                 mention_author: true,
             }),
             attachments: Vec::new(),
+            sticker_ids: Vec::new(),
         })
     );
 }

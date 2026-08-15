@@ -209,7 +209,7 @@ fn popup_visible_item_counts(
 pub(super) use action_menu::{
     action_menu_area, key_sequence_hint_area_for_state, render_channel_action_menu,
     render_guild_action_menu, render_key_sequence_hint, render_member_action_menu,
-    render_message_action_menu, render_thread_action_menu,
+    render_message_action_menu, render_sticker_picker, render_thread_action_menu,
 };
 #[cfg(test)]
 pub(super) use action_menu::{
@@ -313,7 +313,10 @@ pub(super) fn active_selectable_popup_layout(
 ) -> Option<SelectablePopupLayout> {
     let snapshot = state.active_selectable_popup_snapshot()?;
     Some(match snapshot.target {
-        SelectablePopupTarget::MessageActions
+        // A sticker list is a menu of names, so it lays out like the action
+        // menus rather than like a document.
+        SelectablePopupTarget::Stickers
+        | SelectablePopupTarget::MessageActions
         | SelectablePopupTarget::GuildActions
         | SelectablePopupTarget::ChannelActions
         | SelectablePopupTarget::MemberActions
@@ -449,6 +452,10 @@ pub(super) fn background_media_occlusion_areas(
 fn active_modal_popup_area(frame_area: Rect, state: &DashboardState) -> Option<Rect> {
     let kind = state.active_modal_popup_kind()?;
     match kind {
+        ActiveModalPopupKind::StickerPicker => {
+            let count = state.sticker_picker_items().len();
+            Some(action_menu_area(frame_area, count.max(1)))
+        }
         ActiveModalPopupKind::JoinServer => Some(join_server::join_server_popup_area(
             frame_area,
             // Matches the renderer's own minimum, so the hit area and the

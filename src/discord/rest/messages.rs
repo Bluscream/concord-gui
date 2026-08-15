@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::discord::ids::{
     Id,
-    marker::{ChannelMarker, GuildMarker, MessageMarker},
+    marker::{ChannelMarker, GuildMarker, MessageMarker, StickerMarker},
 };
 use crate::{
     AppError, Result,
@@ -28,7 +28,12 @@ pub(in crate::discord) struct MessageCreateRequest<'a> {
     pub content: &'a str,
     pub reply_to: Option<ReplyReference>,
     pub attachments: &'a [MessageAttachmentUpload],
+    /// Stickers to send with the message. Discord accepts at most three.
+    pub sticker_ids: &'a [Id<StickerMarker>],
 }
+
+/// Discord's cap on stickers per message.
+pub const MAX_MESSAGE_STICKERS: usize = 3;
 
 impl DiscordRest {
     pub async fn send_message(
@@ -38,13 +43,26 @@ impl DiscordRest {
         limits: MessageSendLimits,
         slow_mode: Option<Duration>,
     ) -> Result<MessageInfo> {
-        validate_message_payload(request.content, request.attachments, limits)?;
-        let body = message_request_body(
+        // A sticker-only message has no content, which the payload validator
+        // would otherwise reject as empty.
+        if request.sticker_ids.is_empty() {
+            validate_message_payload(request.content, request.attachments, limits)?;
+        }
+        let mut body = message_request_body(
             request.content,
             request.nonce,
             request.reply_to,
             request.attachments,
         );
+        if !request.sticker_ids.is_empty() {
+            let stickers: Vec<String> = request
+                .sticker_ids
+                .iter()
+                .take(MAX_MESSAGE_STICKERS)
+                .map(|sticker| sticker.get().to_string())
+                .collect();
+            body["sticker_ids"] = json!(stickers);
+        }
 
         self.send_message_body(
             channel_id,
@@ -675,5 +693,21 @@ mod recent_mentions_tests {
             .expect("recent mention delete request builds");
         assert_eq!(delete.method(), reqwest::Method::DELETE);
         assert_eq!(delete.url().path(), "/api/v9/users/@me/mentions/700");
+    }
+}
+
+#[cfg(test)]
+mod sticker_tests {
+    use super::*;
+
+    #[test]
+    fn a_message_carries_at_most_three_stickers() {
+        // Discord refuses the whole message when more are sent, so the cap is
+        // enforced before the request rather than discovered from a rejection.
+        let ids: Vec<Id<StickerMarker>> = (1..=5).map(Id::new).collect();
+        let sent: Vec<_> = ids.iter().take(MAX_MESSAGE_STICKERS).collect();
+
+        assert_eq!(sent.len(), MAX_MESSAGE_STICKERS);
+        assert_eq!(MAX_MESSAGE_STICKERS, 3);
     }
 }

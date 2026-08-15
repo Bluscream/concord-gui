@@ -36,7 +36,12 @@ pub(super) fn handle_composer_key(state: &mut DashboardState, key: KeyEvent) -> 
             None
         }
         ComposerAction::RemoveLastAttachment => {
-            state.pop_pending_composer_attachment();
+            // Stickers first: they are staged after attachments in practice,
+            // so removing the most recent thing means removing a sticker if
+            // one is staged.
+            if !state.pop_pending_sticker() {
+                state.pop_pending_composer_attachment();
+            }
             None
         }
         ComposerAction::EditText(action) => {

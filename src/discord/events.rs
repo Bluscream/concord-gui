@@ -300,6 +300,9 @@ pub enum AppEvent {
         presences: Vec<(Id<UserMarker>, PresenceStatus)>,
         roles: Option<Vec<RoleInfo>>,
         emojis: Vec<CustomEmojiInfo>,
+        /// The guild's own stickers, which are the ones this account can send
+        /// there without Nitro.
+        stickers: Vec<crate::discord::StickerInfo>,
     },
     GuildUpdate {
         guild_id: Id<GuildMarker>,
@@ -1142,6 +1145,7 @@ pub(crate) mod test_builders {
 
     pub(crate) fn guild_create_event(event: GuildCreateFixture) -> AppEvent {
         AppEvent::GuildCreate {
+            stickers: Vec::new(),
             guild_id: event.guild_id,
             name: event.name,
             member_count: event.member_count,

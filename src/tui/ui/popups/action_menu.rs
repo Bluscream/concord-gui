@@ -530,3 +530,51 @@ fn thread_action_menu_lines(
     );
     action_menu_lines(&rows, selected)
 }
+
+/// The sticker picker: the open guild's own stickers.
+///
+/// Names rather than images: a terminal cannot show a sticker inline without
+/// the image protocol, and a name is what makes one selectable anyway.
+pub(in crate::tui::ui) fn render_sticker_picker(
+    frame: &mut Frame,
+    area: Rect,
+    state: &DashboardState,
+) {
+    if !state.is_active_modal_popup(ActiveModalPopupKind::StickerPicker) {
+        return;
+    }
+
+    let items = state.sticker_picker_items();
+    let selected = state.selected_sticker_index().unwrap_or(0);
+
+    let lines = if items.is_empty() {
+        // Only the guild's own stickers are sendable without Nitro, so a
+        // guild with none has nothing to offer here.
+        vec![Line::from(Span::styled(
+            "This server has no stickers".to_owned(),
+            theme::current().style(theme::HighlightGroup::Hint),
+        ))]
+    } else {
+        let rows = indexed_action_menu_rows(items.iter().map(|sticker| sticker.name.clone()));
+        action_menu_lines(&rows, selected)
+    };
+
+    let staged = state.pending_sticker_count();
+    let title = if staged == 0 {
+        "Stickers".to_owned()
+    } else {
+        // The count matters: Discord caps a message at three, and the picker
+        // is where someone finds out they are at the limit.
+        format!("Stickers ({staged} staged)")
+    };
+
+    render_action_menu(
+        frame,
+        area,
+        title,
+        lines,
+        state
+            .popup_list_scroll(SelectablePopupTarget::Stickers)
+            .expect("the sticker picker has selection state"),
+    );
+}

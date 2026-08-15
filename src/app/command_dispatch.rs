@@ -370,6 +370,7 @@ impl CommandDispatcher {
                 content,
                 reply_to,
                 attachments,
+                sticker_ids,
             } => {
                 message_commands::send_message(
                     self.client.clone(),
@@ -378,6 +379,7 @@ impl CommandDispatcher {
                     content,
                     reply_to,
                     attachments,
+                    sticker_ids,
                 )
                 .await;
             }

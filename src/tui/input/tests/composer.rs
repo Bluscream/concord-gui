@@ -744,6 +744,7 @@ fn paste_file_uri_list_can_submit_attachment_only_message() {
                 "uri path.txt".to_owned(),
                 6,
             )],
+            sticker_ids: Vec::new(),
         })
     );
     remove_temp_upload_file(&path);
@@ -835,6 +836,7 @@ fn enter_submits_multiline_composer() {
             content: "h\ni".to_owned(),
             reply_to: None,
             attachments: Vec::new(),
+            sticker_ids: Vec::new(),
         })
     );
 }
@@ -878,6 +880,7 @@ fn enter_submits_no_match_emoji_query_without_hidden_picker() {
             content: ":qq".to_owned(),
             reply_to: None,
             attachments: Vec::new(),
+            sticker_ids: Vec::new(),
         })
     );
 }
@@ -991,6 +994,7 @@ fn direct_reply_shortcut_opens_composer() {
                 mention_author: true,
             }),
             attachments: Vec::new(),
+            sticker_ids: Vec::new(),
         })
     );
 }
@@ -1017,6 +1021,7 @@ fn canceling_reply_composer_clears_reply_target() {
             content: "n".to_owned(),
             reply_to: None,
             attachments: Vec::new(),
+            sticker_ids: Vec::new(),
         })
     );
 }

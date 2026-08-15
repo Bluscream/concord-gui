@@ -1273,6 +1273,7 @@ fn submit_builtin_text_slash_commands_as_messages() {
                 content: expected.to_owned(),
                 reply_to: None,
                 attachments: Vec::new(),
+                sticker_ids: Vec::new(),
             }),
             "{input:?} should send transformed content",
         );
@@ -1815,6 +1816,7 @@ fn confirm_inserts_display_name_and_submit_expands_to_wire_format() {
             content: "<@20> hi".to_owned(),
             reply_to: None,
             attachments: Vec::new(),
+            sticker_ids: Vec::new(),
         })
     );
 }
@@ -1843,6 +1845,7 @@ fn confirm_mention_in_middle_keeps_trailing_text() {
             content: "hello <@20> world".to_owned(),
             reply_to: None,
             attachments: Vec::new(),
+            sticker_ids: Vec::new(),
         })
     );
 }
@@ -1879,6 +1882,7 @@ fn role_and_channel_mentions_expand_to_wire_format() {
                 content: wire.to_owned(),
                 reply_to: None,
                 attachments: Vec::new(),
+                sticker_ids: Vec::new(),
             })
         );
     }
@@ -1909,6 +1913,7 @@ fn role_mention_picker_avoids_duplicate_everyone_prefix() {
             content: "@everyone".to_owned(),
             reply_to: None,
             attachments: Vec::new(),
+            sticker_ids: Vec::new(),
         })
     );
 }
@@ -2291,6 +2296,7 @@ fn custom_emoji_submit_keeps_readable_text_and_sends_wire_format() {
             content: "<a:party_time:50>".to_owned(),
             reply_to: None,
             attachments: Vec::new(),
+            sticker_ids: Vec::new(),
         })
     );
 
@@ -2316,6 +2322,7 @@ fn custom_emoji_submit_keeps_readable_text_and_sends_wire_format() {
             content: "<:wave:60>".to_owned(),
             reply_to: None,
             attachments: Vec::new(),
+            sticker_ids: Vec::new(),
         })
     );
 }
@@ -2351,6 +2358,7 @@ fn animated_current_guild_emoji_sends_link_without_nitro_when_enabled() {
             content: "[party_time](https://cdn.discordapp.com/emojis/50.webp?animated=true&size=48&name=party_time&lossless=true)".to_owned(),
             reply_to: None,
             attachments: Vec::new(),
+            sticker_ids: Vec::new(),
         })
     );
 }
@@ -2378,6 +2386,7 @@ fn nitro_foreign_custom_emojis_require_channel_permission() {
             content: "<:wave_foreign:60>".to_owned(),
             reply_to: None,
             attachments: Vec::new(),
+            sticker_ids: Vec::new(),
         })
     );
 
@@ -2410,6 +2419,7 @@ fn nitro_foreign_custom_emojis_require_channel_permission() {
             content: "<a:dance_foreign:61>".to_owned(),
             reply_to: None,
             attachments: Vec::new(),
+            sticker_ids: Vec::new(),
         })
     );
 
@@ -2462,6 +2472,7 @@ fn submit_expands_mention_and_following_custom_emoji_without_stale_ranges() {
             content: "<@20> <a:party_time:50>".to_owned(),
             reply_to: None,
             attachments: Vec::new(),
+            sticker_ids: Vec::new(),
         })
     );
 }
@@ -2508,6 +2519,7 @@ fn submit_expands_emoji_shortcodes_and_leaves_other_markup_literal() {
                 content: expected.to_owned(),
                 reply_to: None,
                 attachments: Vec::new(),
+                sticker_ids: Vec::new(),
             }),
             "empty emoji shortcode spans should preserve {input:?}",
         );
@@ -2679,6 +2691,7 @@ fn composer_sends_to_opened_thread_channel() {
             content: "hi".to_owned(),
             reply_to: None,
             attachments: Vec::new(),
+            sticker_ids: Vec::new(),
         })
     );
 }
@@ -2750,6 +2763,7 @@ fn foreign_emoji_fall_back_to_links_without_nitro_when_enabled() {
                 content: format!("[{shortcode}]({url})"),
                 reply_to: None,
                 attachments: Vec::new(),
+                sticker_ids: Vec::new(),
             })
         );
     }

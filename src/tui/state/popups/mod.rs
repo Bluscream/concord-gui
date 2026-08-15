@@ -34,11 +34,13 @@ mod options;
 mod polls;
 mod reactions;
 mod search;
+mod stickers;
 mod thread_actions;
 mod thread_edit;
 mod user;
 mod voice_participant_audio;
 pub(in crate::tui) use join_server::JoinServerState;
+pub(in crate::tui) use stickers::StickerPickerState;
 pub(in crate::tui) use voice_participant_audio::VoiceParticipantAudioField;
 use voice_participant_audio::{
     VOICE_PARTICIPANT_AUDIO_FIELD_COUNT, VoiceParticipantAudioPopupState,
@@ -137,6 +139,7 @@ define_modal_popups! {
     ThreadDeleteConfirmation(ThreadDeleteConfirmationState),
     VoiceParticipantAudio(VoiceParticipantAudioPopupState),
     JoinServer(JoinServerState),
+    StickerPicker(StickerPickerState),
 }
 
 /// The input behavior of the topmost visible popup layer.
@@ -248,6 +251,7 @@ pub(in crate::tui) enum SelectablePopupTarget {
     VoiceParticipantAudio,
     SearchResults,
     SearchSuggestions,
+    Stickers,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1293,6 +1297,13 @@ impl PopupUiState {
     }
 
     modal_popup_accessors!(
+        sticker_picker,
+        sticker_picker_mut,
+        StickerPicker,
+        StickerPickerState,
+        picker
+    );
+    modal_popup_accessors!(
         join_server,
         join_server_mut,
         JoinServer,
@@ -1726,6 +1737,7 @@ impl DashboardState {
             ActiveModalPopupKind::NotificationInbox => self.close_notification_inbox(),
             ActiveModalPopupKind::Search => self.close_search_popup(),
             ActiveModalPopupKind::JoinServer => self.close_join_server(),
+            ActiveModalPopupKind::StickerPicker => self.close_sticker_picker(),
             ActiveModalPopupKind::ForumPostComposer => {
                 self.close_or_cancel_forum_post_composer();
             }
@@ -1992,6 +2004,9 @@ impl DashboardState {
             ModalPopup::JoinServer(_) => {
                 ActivePopupPolicy::text_entry(kind, ActivePopupInteraction::NoNavigation)
             }
+            ModalPopup::StickerPicker(_) => {
+                ActivePopupPolicy::selectable(kind, SelectablePopupTarget::Stickers)
+            }
             ModalPopup::ForumPostComposer(_) => {
                 ActivePopupPolicy::scrollable(kind, ScrollablePopupTarget::ForumPostComposer)
             }
@@ -2058,6 +2073,10 @@ impl DashboardState {
         target: SelectablePopupTarget,
     ) -> Option<(&SelectablePopupState, usize)> {
         Some(match target {
+            SelectablePopupTarget::Stickers => {
+                let selection = &self.popups.sticker_picker()?.selection;
+                (selection, self.sticker_picker_items().len())
+            }
             SelectablePopupTarget::MessageActions => {
                 let selection = &self.popups.message_action_menu()?.selection;
                 (selection, self.selected_message_action_items().len())
@@ -2211,6 +2230,12 @@ impl DashboardState {
             return None;
         }
         match target {
+            SelectablePopupTarget::Stickers => {
+                // Staged rather than sent: a sticker can accompany text, and
+                // sending on selection would make that impossible.
+                self.stage_selected_sticker();
+                None
+            }
             SelectablePopupTarget::MessageActions => self.activate_selected_message_action(),
             SelectablePopupTarget::GuildActions => self.activate_selected_guild_action(),
             SelectablePopupTarget::ChannelActions => self.activate_selected_channel_action(),
@@ -2303,6 +2328,12 @@ impl DashboardState {
         update: impl FnOnce(&mut SelectablePopupState, usize),
     ) {
         match target {
+            SelectablePopupTarget::Stickers => {
+                let len = self.sticker_picker_items().len();
+                if let Some(picker) = self.popups.sticker_picker_mut() {
+                    update(&mut picker.selection, len);
+                }
+            }
             SelectablePopupTarget::MessageActions => {
                 let len = self.selected_message_action_items().len();
                 if let Some(menu) = self.popups.message_action_menu_mut() {

@@ -10,7 +10,7 @@ use crate::AppError;
 use crate::discord::ActionBlockReason;
 use crate::discord::ids::{
     Id,
-    marker::{ChannelMarker, MessageMarker},
+    marker::{ChannelMarker, MessageMarker, StickerMarker},
 };
 use crate::discord::{
     APPLICATION_COMMAND_CHANNEL_KIND, APPLICATION_COMMAND_MENTIONABLE_KIND,
@@ -75,6 +75,8 @@ pub(in crate::tui::state) struct ComposerUiState {
     composer_scroll: VerticalScrollState,
     pub(in crate::tui::state) pending_composer_attachments: Vec<MessageAttachmentUpload>,
     pub(in crate::tui::state) pending_composer_attachment_previews: Vec<LocalUploadPreviewState>,
+    /// Stickers staged for the next send. Discord accepts at most three.
+    pub(in crate::tui::state) pending_stickers: Vec<Id<StickerMarker>>,
     pub(in crate::tui::state) pending_composer_attachment_preview_generation: u64,
     pub(in crate::tui::state) composer_active: bool,
     pub(in crate::tui::state) reply_target_message_id: Option<Id<MessageMarker>>,
@@ -1080,6 +1082,7 @@ impl DashboardState {
                 nonce,
                 content,
                 reply_to,
+                sticker_ids: _,
                 attachments,
             } => self.stage_pending_message(*channel_id, *nonce, content, *reply_to, attachments),
             AppCommand::SendTtsMessage {
@@ -1121,6 +1124,7 @@ impl DashboardState {
             content,
             reply_to,
             attachments,
+            sticker_ids: std::mem::take(&mut self.composer.pending_stickers),
         }
     }
 
@@ -2123,6 +2127,9 @@ impl DashboardState {
                         content,
                         reply_to: None,
                         attachments: Vec::new(),
+                        // A slash command's text is its own payload; stickers
+                        // are staged separately and do not belong here.
+                        sticker_ids: Vec::new(),
                     })
                 }
             }

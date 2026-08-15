@@ -442,3 +442,72 @@ pub fn invite_view(
             .children(joinable.then(|| button("invite-join", "Join", true, on_accept))),
     )
 }
+
+/// One sticker offered by the picker.
+pub struct StickerChoice {
+    pub name: String,
+    /// `None` for formats that cannot be shown as an image, which are listed
+    /// by name rather than hidden.
+    pub image: Option<std::sync::Arc<gpui::Image>>,
+}
+
+/// Guild stickers, to send with the next message.
+pub fn sticker_picker_view(
+    stickers: &[StickerChoice],
+    on_pick: impl Fn(usize, &mut gpui::App) + Clone + 'static,
+    on_close: impl Fn(&mut gpui::App) + 'static,
+) -> Div {
+    let mut body = row()
+        .id("sticker-grid")
+        .p(px(space::MD))
+        .gap(px(space::SM))
+        .flex_wrap()
+        .max_h(px(360.))
+        .overflow_y_scroll();
+
+    if stickers.is_empty() {
+        body = body.child(
+            gpui::div()
+                .text_size(px(scaled(text::SM)))
+                .text_color(rgb(active().text_subtle))
+                // Only the guild's own stickers are sendable without Nitro,
+                // so a guild with none has nothing to offer here.
+                .child("This server has no stickers"),
+        );
+    }
+
+    for (index, sticker) in stickers.iter().enumerate() {
+        let pick = on_pick.clone();
+
+        body = body.child(
+            gpui::div()
+                .id(("sticker", index))
+                .w(px(88.))
+                .p(px(space::XS))
+                .rounded(px(layout::RADIUS))
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(active().surface_hover)))
+                .child(match &sticker.image {
+                    Some(image) => gpui::img(image.clone())
+                        .w(px(80.))
+                        .h(px(80.))
+                        .into_any_element(),
+                    None => gpui::div()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().text_muted))
+                        .child(sticker.name.clone())
+                        .into_any_element(),
+                })
+                .on_click(move |_event, _window, cx| pick(index, cx)),
+        );
+    }
+
+    panel("Stickers", 420.).child(body).child(
+        row()
+            .w_full()
+            .px(px(space::LG))
+            .py(px(space::MD))
+            .justify_end()
+            .child(button("sticker-close", "Close", false, on_close)),
+    )
+}

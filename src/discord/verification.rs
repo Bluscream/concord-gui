@@ -851,6 +851,7 @@ mod tests {
             presences: Vec::new(),
             roles: Some(Vec::new()),
             emojis: Vec::new(),
+            stickers: Vec::new(),
         });
         (state, channel_id)
     }

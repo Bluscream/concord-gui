@@ -204,6 +204,9 @@ fn dispatch_popup_key(
         ActiveModalPopupKind::JoinServer => {
             route_fallback_key(state, key, stage, handle_join_server_key)
         }
+        ActiveModalPopupKind::StickerPicker => {
+            route_fallback_key(state, key, stage, handle_sticker_picker_key)
+        }
         ActiveModalPopupKind::ForumPostComposer => route_popup_key(
             state,
             key,
@@ -842,6 +845,23 @@ fn handle_search_popup_key(state: &mut DashboardState, key: KeyEvent) -> Option<
         }
         None => None,
     }
+}
+
+/// The sticker picker: a list, plus stage and cancel.
+fn handle_sticker_picker_key(state: &mut DashboardState, key: KeyEvent) -> Option<AppCommand> {
+    match state
+        .key_bindings()
+        .selection_action(key, SelectionKeySet::Navigation)
+    {
+        Some(SelectionAction::Next) => state.move_sticker_selection_down(),
+        Some(SelectionAction::Previous) => state.move_sticker_selection_up(),
+        None => match key.code {
+            KeyCode::Enter => state.stage_selected_sticker(),
+            KeyCode::Esc => state.close_sticker_picker(),
+            _ => {}
+        },
+    }
+    None
 }
 
 /// The join-server prompt: one field, plus submit and cancel.

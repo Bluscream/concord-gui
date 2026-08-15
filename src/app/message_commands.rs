@@ -9,7 +9,8 @@ use crate::{
         ids::{
             Id,
             marker::{
-                ChannelMarker, ForumTagMarker, GuildMarker, MessageMarker, RoleMarker, UserMarker,
+                ChannelMarker, ForumTagMarker, GuildMarker, MessageMarker, RoleMarker,
+                StickerMarker, UserMarker,
             },
         },
     },
@@ -24,9 +25,17 @@ pub(super) async fn send_message(
     content: String,
     reply_to: Option<ReplyReference>,
     attachments: Vec<MessageAttachmentUpload>,
+    sticker_ids: Vec<Id<StickerMarker>>,
 ) {
     match client
-        .send_message(channel_id, nonce, &content, reply_to, &attachments)
+        .send_message(
+            channel_id,
+            nonce,
+            &content,
+            reply_to,
+            &attachments,
+            &sticker_ids,
+        )
         .await
     {
         Ok(mut message) => {

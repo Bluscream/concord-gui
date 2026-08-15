@@ -84,6 +84,31 @@ pub(super) fn parse_guild_create(data: &Value) -> Option<AppEvent> {
         .map(|items| items.iter().filter_map(parse_custom_emoji).collect())
         .unwrap_or_default();
 
+    // Guild stickers: the ones this account can send here without Nitro.
+    let stickers = data
+        .get("stickers")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let id = item.get("id").and_then(parse_id)?;
+                    Some(crate::discord::StickerInfo {
+                        id,
+                        name: item
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("sticker")
+                            .to_owned(),
+                        format: crate::discord::StickerFormat::from_wire(
+                            item.get("format_type").and_then(Value::as_u64).unwrap_or(1),
+                        ),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let owner_id = guild_field(data, "owner_id").and_then(parse_id::<UserMarker>);
     let boost_tier = parse_guild_boost_tier(data);
     let boost_count = parse_guild_boost_count(data).unwrap_or(0);
@@ -94,6 +119,7 @@ pub(super) fn parse_guild_create(data: &Value) -> Option<AppEvent> {
 
     Some(AppEvent::GuildCreate {
         guild_id,
+        stickers,
         name,
         member_count,
         owner_id,

@@ -141,6 +141,7 @@ pub(super) fn execute_ui_action(
         UiAction::OpenOptions => state.open_options_category_picker(),
         UiAction::ChannelSwitcher => state.open_channel_switcher(),
         UiAction::OpenNotificationInbox => state.open_notification_inbox(),
+        UiAction::OpenStickerPicker => state.open_sticker_picker(),
         UiAction::OpenDebugLog => state.open_debug_log_popup(),
         UiAction::RefreshScreen => state.request_terminal_refresh(),
         UiAction::OpenDisplayOptions => {

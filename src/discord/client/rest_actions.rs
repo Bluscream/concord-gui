@@ -29,6 +29,7 @@ impl DiscordClient {
         content: &str,
         reply_to: Option<ReplyReference>,
         attachments: &[MessageAttachmentUpload],
+        sticker_ids: &[Id<crate::discord::ids::marker::StickerMarker>],
     ) -> Result<MessageInfo> {
         self.ensure_can_send_message(channel_id, reply_to.as_ref(), attachments)?;
         let limits = self.message_send_limits(channel_id);
@@ -41,6 +42,7 @@ impl DiscordClient {
                     content,
                     reply_to,
                     attachments,
+                    sticker_ids,
                 },
                 limits,
                 slow_mode,

@@ -1222,6 +1222,7 @@ impl DiscordState {
     fn apply_guild_create_event(&mut self, event: &AppEvent) {
         let AppEvent::GuildCreate {
             guild_id,
+            stickers,
             name,
             member_count,
             owner_id,
@@ -1299,6 +1300,9 @@ impl DiscordState {
         self.navigation_mut()
             .custom_emojis
             .insert(*guild_id, emojis.clone());
+        self.navigation_mut()
+            .guild_stickers
+            .insert(*guild_id, stickers.clone());
     }
 
     fn apply_guild_delete(&mut self, guild_id: &Id<GuildMarker>) {
@@ -1326,6 +1330,7 @@ impl DiscordState {
             .retain(|(profile_guild_id, _), _| profile_guild_id != guild_id);
         self.remove_profiles_for_guild(*guild_id);
         self.navigation_mut().custom_emojis.remove(guild_id);
+        self.navigation_mut().guild_stickers.remove(guild_id);
         self.navigation_mut()
             .guild_folders
             .iter_mut()
