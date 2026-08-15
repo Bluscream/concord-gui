@@ -805,7 +805,7 @@ mod tests {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn verification_state(
+    pub(super) fn verification_state(
         level: GuildVerificationLevel,
         now: DateTime<Utc>,
         account_age_minutes: i64,
@@ -860,5 +860,103 @@ mod tests {
         let timestamp = u64::try_from(time.timestamp_millis() - DISCORD_EPOCH_MILLIS)
             .expect("test timestamp should follow Discord epoch");
         Id::new((timestamp << 22) | 1)
+    }
+}
+
+#[cfg(test)]
+mod send_block_tests {
+    use super::tests::verification_state;
+    use super::*;
+    use crate::discord::action_policy::DiscordAction;
+
+    #[test]
+    fn a_pending_member_is_told_why_they_cannot_send() {
+        // Discord documents a previewable guild as read-only until member
+        // verification passes, so the composer has to say so rather than
+        // accept text and then fail. This is the state a lurk is in.
+        let now = Utc::now();
+        let (state, channel_id) = verification_state(
+            GuildVerificationLevel::None,
+            now,
+            60,
+            60,
+            true,
+            true,
+            None,
+            Some(true),
+        );
+
+        let reason = state
+            .send_block_reason(channel_id)
+            .expect("a pending member cannot send");
+        assert!(
+            reason.contains("membership screening"),
+            "the reason should say what to do, got {reason:?}"
+        );
+    }
+
+    #[test]
+    fn a_full_member_is_not_blocked() {
+        let now = Utc::now();
+        let (state, channel_id) = verification_state(
+            GuildVerificationLevel::None,
+            now,
+            60,
+            60,
+            true,
+            true,
+            None,
+            Some(false),
+        );
+
+        assert_eq!(state.send_block_reason(channel_id), None);
+    }
+
+    #[test]
+    fn a_permission_that_cannot_be_checked_yet_does_not_disable_the_composer() {
+        // Roles arrive after the guild does. Greying the composer out while a
+        // server loads would be wrong far more often than it was right, so a
+        // data gap is not a refusal here - the request boundary still uses the
+        // strict decision, so nothing is let through.
+        let now = Utc::now();
+        let (state, channel_id) = verification_state(
+            GuildVerificationLevel::None,
+            now,
+            60,
+            60,
+            true,
+            true,
+            None,
+            Some(false),
+        );
+
+        assert_eq!(state.send_block_reason(channel_id), None);
+        // The strict decision still refuses, which is what protects the send.
+        let channel = state.channel(channel_id).expect("channel should exist");
+        assert!(
+            state
+                .channel_action_decision(channel, DiscordAction::SendMessage)
+                .block_reason()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn an_unknown_channel_blocks_nothing_rather_than_panicking() {
+        // Reachable while a channel is still loading. An enabled composer
+        // whose send fails is better than a crash.
+        let now = Utc::now();
+        let (state, _) = verification_state(
+            GuildVerificationLevel::None,
+            now,
+            60,
+            60,
+            true,
+            true,
+            None,
+            Some(false),
+        );
+
+        assert_eq!(state.send_block_reason(Id::new(999_999)), None);
     }
 }

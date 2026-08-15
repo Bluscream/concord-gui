@@ -1,5 +1,6 @@
 use std::fmt;
 
+use super::ids::{Id, marker::ChannelMarker};
 use super::{
     ChannelState, DiscordPermission, DiscordState, GuildParticipationDataGap,
     GuildParticipationDecision, GuildParticipationRestriction, PermissionDataGap,
@@ -223,6 +224,26 @@ impl DiscordState {
     /// Dynamic rules such as message authorship and existing reactions remain
     /// with their focused validators. Both the TUI and the request boundary can
     /// reuse this base decision without removing either check.
+    /// Why sending here is refused, if it is.
+    ///
+    /// Public because both front ends need it for the same reason: rule 5 says
+    /// a refused action is shown with its reason rather than hidden, and a
+    /// composer that accepts text and then fails is the worst of both. The
+    /// commonest case is a guild being read-only to you - a lurk, or a
+    /// membership screening you have not finished - where the composer should
+    /// say so rather than look ready.
+    pub fn send_block_reason(&self, channel_id: Id<ChannelMarker>) -> Option<String> {
+        let channel = self.channel(channel_id)?;
+        // The optimistic reason, not the strict one: a permission that cannot
+        // be checked yet because roles are still loading is a gap, not a
+        // refusal, and greying the composer out while a guild loads would be
+        // wrong far more often than it was right. The request boundary still
+        // uses the strict decision, so nothing is actually let through.
+        self.channel_action_decision(channel, DiscordAction::SendMessage)
+            .optimistic_ui_block_reason()
+            .map(|reason| reason.to_string())
+    }
+
     pub(crate) fn channel_action_decision(
         &self,
         channel: &ChannelState,

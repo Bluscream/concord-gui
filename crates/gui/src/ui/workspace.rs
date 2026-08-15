@@ -2125,6 +2125,18 @@ impl Workspace {
             return;
         }
 
+        // Checked here too, not only where the composer is drawn: the key
+        // path reaches this directly, and a disabled-looking composer that
+        // still sends on enter would be worse than no check at all.
+        if let Some(reason) = self
+            .last_state
+            .as_ref()
+            .and_then(|state| state.send_block_reason(channel_id))
+        {
+            self.model.status_line = format!("Cannot send here: {reason}");
+            return;
+        }
+
         let content = self.composer.take();
         self.slash = None;
 
@@ -7618,8 +7630,21 @@ impl Workspace {
     }
 
     fn composer_row(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let enabled = self.nav.channel.is_some() && self.handle.is_some();
-        let placeholder = if !enabled {
+        // Why the core refuses to send here, if it does. Checked before the
+        // composer is drawn rather than when send is pressed: rule 5 says a
+        // refused action is shown with its reason, and a composer that takes
+        // text and then fails is the worst of both. The commonest case is a
+        // guild that is read-only to you - a lurk, or a membership screening
+        // you have not finished.
+        let refusal = self
+            .nav
+            .channel
+            .zip(self.last_state.as_ref())
+            .and_then(|(channel_id, state)| state.send_block_reason(channel_id));
+        let enabled = self.nav.channel.is_some() && self.handle.is_some() && refusal.is_none();
+        let placeholder = if let Some(reason) = &refusal {
+            format!("Cannot send here: {reason}")
+        } else if !enabled {
             "Select a channel to start typing".to_string()
         } else {
             let name = self
