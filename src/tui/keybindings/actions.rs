@@ -115,6 +115,10 @@ define_ui_actions! {
     ChannelSwitcher => ("Switch channels", &[&[Leader, Leader]], None),
     OpenNotificationInbox => ("Notification inbox", &[&[Leader, Char('n')]], None),
     RefreshScreen => ("Refresh screen", &[&[Leader, Char('r')]], None),
+    OpenChannelInNewTab => ("Open in new tab", &[&[Leader, Char('t')]], Some(DashboardAction::OpenChannelTab)),
+    NextChannelTab => ("Next tab", &[&[Leader, Char(']')]], Some(DashboardAction::CycleChannelTab(true))),
+    PreviousChannelTab => ("Previous tab", &[&[Leader, Char('[')]], Some(DashboardAction::CycleChannelTab(false))),
+    CloseChannelTab => ("Close tab", &[&[Leader, Char('w')]], Some(DashboardAction::CloseChannelTab)),
     OpenDisplayOptions => ("Display options", &[], None),
     OpenComposerOptions => ("Composer options", &[], None),
     OpenNotificationOptions => ("Notification options", &[], None),
@@ -285,6 +289,10 @@ pub(in crate::tui) enum DashboardAction {
     ScrollHorizontalLeft,
     ScrollHorizontalRight,
     ActivateFocused,
+    OpenChannelTab,
+    /// True steps right, false left.
+    CycleChannelTab(bool),
+    CloseChannelTab,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

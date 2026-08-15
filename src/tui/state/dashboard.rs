@@ -19,6 +19,7 @@ pub struct DashboardState {
     pub(super) options: SettingsState,
     pub(super) requests: RequestTrackingState,
     pub(super) layout_cache: LayoutCacheState,
+    pub(super) tabs: super::tabs::TabState,
     pub(in crate::tui) syntax_highlight_cache: SyntaxHighlightCache,
 }
 

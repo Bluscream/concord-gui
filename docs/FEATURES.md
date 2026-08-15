@@ -32,7 +32,7 @@ third-party Discord clients actually expect.
 | File upload | 30 | done |
 | Theming | 28 | done |
 | Unread / mentions | 27 | done |
-| Per-channel tabs | 26 | done (GUI) |
+| Per-channel tabs | 26 | done |
 | Custom emoji | 25 | done |
 | Threads | 22 | done |
 | Search | 22 | done |
@@ -78,13 +78,6 @@ third-party Discord clients actually expect.
 | Emoji management | 1 | done |
 
 ## Missing, most-wanted first
-
-### Per-channel tabs (TUI)
-
-*26 clients* — 6cord, Dorion, Echo-Client, Fast-Discord, SailDiscord, Turbulence
-
-Done in the GUI: a tab strip with per-tab draft and scroll position, restored
-across restarts. The TUI still has none, so this stays listed.
 
 ### Multi-account
 
@@ -183,3 +176,14 @@ emoji management and the audit log.
   Discord writes "no limit" as 0 for both an invite's uses and its lifetime.
   Passing that through would render as "3/0", which reads as already spent, so
   both are carried as `Option` and shown in words.
+
+- **Per-channel tabs** - Both clients now have them. The same model in each,
+  writing the same `open_tabs` key, so a tab opened in one is a tab in the
+  other. A tab carries its draft, because a tab that forgets what you typed is
+  only a bookmark.
+
+  Opening a channel that is already tabbed switches to it rather than opening a
+  second tab: two tabs onto one channel would give it two drafts and no way to
+  tell which a message would be sent from. Tabs are restored on the first event
+  that brings channels rather than at Ready, where every one would be dropped
+  as unknown.

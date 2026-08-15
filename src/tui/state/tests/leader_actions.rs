@@ -972,3 +972,87 @@ fn renaming_is_refused_on_the_tabs_that_have_no_emoji() {
             .is_none()
     );
 }
+
+#[test]
+fn tabs_keep_a_draft_per_channel() {
+    // The point of tabs: returning to one does not lose what was typed there.
+    let mut state = state_with_channel_tree();
+    state.focus_pane(FocusPane::Channels);
+    // Row 0 is the category, which is not a channel and opens no tab.
+    state.move_down();
+    state.open_selected_channel_in_new_tab();
+
+    state.start_composer();
+    for value in "first".chars() {
+        state.push_composer_char(value);
+    }
+
+    // A second tab starts empty rather than inheriting the first one's draft.
+    state.move_down();
+    state.open_selected_channel_in_new_tab();
+    assert_eq!(state.composer_input(), "");
+
+    for value in "second".chars() {
+        state.push_composer_char(value);
+    }
+
+    state.activate_channel_tab(0);
+    assert_eq!(state.composer_input(), "first");
+    state.activate_channel_tab(1);
+    assert_eq!(state.composer_input(), "second");
+}
+
+#[test]
+fn opening_a_channel_already_in_a_tab_switches_rather_than_duplicating() {
+    // Two tabs onto one channel would give it two drafts, and no way to tell
+    // which one a message would be sent from.
+    let mut state = state_with_channel_tree();
+    state.focus_pane(FocusPane::Channels);
+    state.move_down();
+
+    state.open_selected_channel_in_new_tab();
+    state.move_down();
+    state.open_selected_channel_in_new_tab();
+    state.move_up();
+    state.open_selected_channel_in_new_tab();
+
+    assert_eq!(state.channel_tabs().len(), 2);
+    assert_eq!(state.active_channel_tab(), 0);
+}
+
+#[test]
+fn cycling_tabs_wraps_at_both_ends() {
+    let mut state = state_with_channel_tree();
+    state.focus_pane(FocusPane::Channels);
+    state.move_down();
+    state.open_selected_channel_in_new_tab();
+    state.move_down();
+    state.open_selected_channel_in_new_tab();
+
+    assert_eq!(state.active_channel_tab(), 1);
+    state.cycle_channel_tab(true);
+    assert_eq!(state.active_channel_tab(), 0);
+    state.cycle_channel_tab(false);
+    assert_eq!(state.active_channel_tab(), 1);
+}
+
+#[test]
+fn closing_a_tab_falls_back_to_the_one_on_its_left() {
+    // Where attention was before the closed tab existed.
+    let mut state = state_with_channel_tree();
+    state.focus_pane(FocusPane::Channels);
+    state.move_down();
+    state.open_selected_channel_in_new_tab();
+    state.move_down();
+    state.open_selected_channel_in_new_tab();
+
+    state.close_active_channel_tab();
+    assert_eq!(state.channel_tabs().len(), 1);
+    assert_eq!(state.active_channel_tab(), 0);
+
+    // Closing the last one leaves none, without panicking on the empty list.
+    state.close_active_channel_tab();
+    assert!(state.channel_tabs().is_empty());
+    state.cycle_channel_tab(true);
+    state.close_active_channel_tab();
+}

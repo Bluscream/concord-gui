@@ -150,6 +150,11 @@ impl DashboardState {
         let viewport = EventViewportContext::capture(self, &event);
 
         self.apply_event_ui_effects(&event);
+        // Tabs cannot be restored at Ready: the channels they name have not
+        // arrived yet, so every one would be dropped as unknown. Retried on
+        // each event instead, which is cheap because it returns immediately
+        // once tabs exist or there are none saved.
+        self.restore_channel_tabs();
         self.close_composer_for_safety_lock();
         self.refresh_event_derived_ui(&event);
         viewport.repair_after_event(self, &event);

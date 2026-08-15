@@ -46,6 +46,18 @@ pub(super) fn handle_dashboard_action(
             state.cycle_focus_backward();
             None
         }
+        DashboardAction::OpenChannelTab => {
+            state.open_selected_channel_in_new_tab();
+            None
+        }
+        DashboardAction::CycleChannelTab(forward) => {
+            state.cycle_channel_tab(forward);
+            None
+        }
+        DashboardAction::CloseChannelTab => {
+            state.close_active_channel_tab();
+            None
+        }
         DashboardAction::CycleFocusForward => {
             state.cycle_focus();
             None

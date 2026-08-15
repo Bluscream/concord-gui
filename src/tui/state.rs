@@ -34,6 +34,7 @@ mod runtime_state;
 mod scroll;
 mod stream_info;
 mod subscriptions;
+mod tabs;
 mod text_completion;
 mod toast;
 mod user;

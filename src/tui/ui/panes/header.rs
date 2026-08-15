@@ -55,6 +55,34 @@ pub(in crate::tui::ui) fn render_header(frame: &mut Frame, area: Rect, state: &D
             theme.style(theme::HighlightGroup::HeaderWarning),
         ));
     }
+    // The open tabs, if there are any. In the header rather than a strip of
+    // its own: a terminal has rows to spare across the top and none to give
+    // to a second bar above the message log.
+    let tabs = state.channel_tabs();
+    if !tabs.is_empty() {
+        spans.push(Span::styled(
+            " Tabs ",
+            theme.style(theme::HighlightGroup::HeaderLabel),
+        ));
+        for (index, tab) in tabs.iter().enumerate() {
+            spans.push(Span::styled(
+                format!(
+                    "{}#{} ",
+                    if index == state.active_channel_tab() {
+                        "*"
+                    } else {
+                        ""
+                    },
+                    tab.name
+                ),
+                theme.style(if index == state.active_channel_tab() {
+                    theme::HighlightGroup::Strong
+                } else {
+                    theme::HighlightGroup::HeaderLabel
+                }),
+            ));
+        }
+    }
     if let Some(label) = state.active_voice_connection_label() {
         spans.push(Span::styled(
             " Voice ",
