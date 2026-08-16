@@ -97,15 +97,28 @@ pub(in crate::tui::ui) fn render_channel_edit(
             "tab changes the kind, enter creates, esc cancels",
             Some(format!("Kind: {}", kind.label())),
         ),
-        crate::tui::state::ChannelEditPurpose::Rename { .. } => {
-            ("Rename channel", "enter renames, esc cancels", None)
-        }
+        crate::tui::state::ChannelEditPurpose::Edit { .. } => (
+            "Channel settings",
+            "tab moves between fields, space toggles, enter saves, esc cancels",
+            None,
+        ),
     };
 
-    let mut lines = vec![Line::from(Span::raw(format!(
-        "Name: {}",
-        edit.name().value()
-    )))];
+    // Every field this channel has, with the focused one marked. A caret is
+    // easy to lose in a column of near-identical rows.
+    let mut lines: Vec<Line<'static>> = edit
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            let marker = if index == edit.focused() { ">" } else { " " };
+            Line::from(Span::raw(format!(
+                "{marker} {}: {}",
+                field.label(),
+                edit.value(*field)
+            )))
+        })
+        .collect();
     lines.extend(kind_line.map(|line| Line::from(Span::raw(line))));
     lines.push(Line::from(Span::raw(String::new())));
     lines.push(Line::from(Span::styled(
@@ -118,7 +131,7 @@ pub(in crate::tui::ui) fn render_channel_edit(
 }
 
 pub(in crate::tui::ui) fn channel_edit_popup_area(area: Rect) -> Rect {
-    centered_rect(area, 54, 6)
+    centered_rect(area, 60, 10)
 }
 
 /// Deleting a channel, which takes its whole history with it.

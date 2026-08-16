@@ -42,6 +42,13 @@ pub struct ChannelInfo {
     /// Discord's `rate_limit_per_user` channel field, the slow-mode cooldown in
     /// seconds. Present on text channels and forum post threads.
     pub rate_limit_per_user: Option<u64>,
+    /// The channel topic, which the official client shows in the header and
+    /// which its settings form edits.
+    pub topic: Option<String>,
+    /// Discord's `nsfw`: whether the channel is age-restricted.
+    pub nsfw: Option<bool>,
+    /// Voice occupancy cap. Zero is Discord's spelling for no limit.
+    pub user_limit: Option<u64>,
     /// Tags the user can apply to posts in a forum or media parent channel.
     pub available_tags: Vec<ForumTagInfo>,
     /// Tags currently applied to a forum or media post thread.
@@ -139,6 +146,9 @@ impl ChannelInfo {
             thread_metadata: None,
             flags: None,
             rate_limit_per_user: None,
+            topic: None,
+            nsfw: None,
+            user_limit: None,
             available_tags: Vec::new(),
             applied_tags: Vec::new(),
             current_user_joined_thread: None,

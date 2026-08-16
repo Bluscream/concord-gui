@@ -242,7 +242,7 @@ impl DashboardState {
             ),
             ChannelActionItem::new(
                 ChannelActionKind::RenameChannel,
-                "Rename channel",
+                "Channel settings",
                 manage_reason.clone(),
             ),
             ChannelActionItem::new(
@@ -439,7 +439,7 @@ impl DashboardState {
                     }
                     ChannelActionKind::RenameChannel => {
                         self.close_channel_action_menu();
-                        self.open_channel_rename(channel_id);
+                        self.open_channel_settings(channel_id);
                         None
                     }
                     ChannelActionKind::DeleteChannel => {

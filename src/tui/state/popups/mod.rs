@@ -60,8 +60,8 @@ use super::{
     DashboardState, EmojiReactionItem, FocusPane, MessageUrlItem, PollVotePickerItem,
     ThreadEditField,
 };
-pub use channel_edit::ChannelEditPurpose;
 use channel_edit::{ChannelDeleteState, ChannelEditState};
+pub use channel_edit::{ChannelEditPurpose, ChannelField};
 use channel_switcher::ChannelSwitcherState;
 use notification_inbox::NotificationInboxState;
 pub use notification_inbox::{

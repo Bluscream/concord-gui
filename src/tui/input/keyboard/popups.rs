@@ -939,8 +939,17 @@ fn handle_server_management_key(state: &mut DashboardState, key: KeyEvent) -> Op
 /// Reuses the composer's key mapping so editing behaves the way every other
 /// text field in this client does, including any rebinding in keymap.toml.
 fn handle_channel_edit_key(state: &mut DashboardState, key: KeyEvent) -> Option<AppCommand> {
-    if key.code == KeyCode::Tab {
-        state.cycle_new_channel_kind();
+    // Tab means the kind while creating - there is only a name to type - and
+    // the next field while editing, where there are several.
+    if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
+        let creating = state
+            .channel_edit_state()
+            .is_some_and(|edit| edit.fields().len() < 2);
+        if creating {
+            state.cycle_new_channel_kind();
+        } else {
+            state.cycle_channel_field(key.code == KeyCode::Tab);
+        }
         return None;
     }
 

@@ -1108,3 +1108,55 @@ fn uploading_is_refused_on_the_tabs_that_have_no_emoji() {
             .is_none()
     );
 }
+
+#[test]
+fn a_channel_settings_form_only_offers_the_fields_that_kind_has() {
+    // A topic on a category, or a user limit on a text channel, would be a
+    // control that does nothing.
+    let mut state = state_with_channel_tree();
+    state.focus_pane(FocusPane::Channels);
+    state.move_down();
+
+    let channel_id = state
+        .channel_pane_entries()
+        .get(state.selected_channel())
+        .and_then(|entry| match entry {
+            crate::tui::state::ChannelPaneEntry::Channel { state, .. } => Some(state.id),
+            _ => None,
+        })
+        .expect("the cursor should be on a channel");
+
+    state.open_channel_settings(channel_id);
+    let fields: Vec<_> = state
+        .channel_edit_state()
+        .expect("settings should be open")
+        .fields()
+        .to_vec();
+
+    assert!(fields.contains(&crate::tui::state::ChannelField::Name));
+    assert!(fields.contains(&crate::tui::state::ChannelField::Topic));
+    assert!(fields.contains(&crate::tui::state::ChannelField::Slowmode));
+    // Text channels have no occupancy cap.
+    assert!(!fields.contains(&crate::tui::state::ChannelField::UserLimit));
+}
+
+#[test]
+fn saving_an_unchanged_channel_sends_nothing() {
+    // It would spend a request and write an audit log entry saying that
+    // nothing happened.
+    let mut state = state_with_channel_tree();
+    state.focus_pane(FocusPane::Channels);
+    state.move_down();
+
+    let channel_id = state
+        .channel_pane_entries()
+        .get(state.selected_channel())
+        .and_then(|entry| match entry {
+            crate::tui::state::ChannelPaneEntry::Channel { state, .. } => Some(state.id),
+            _ => None,
+        })
+        .expect("the cursor should be on a channel");
+
+    state.open_channel_settings(channel_id);
+    assert_eq!(state.submit_channel_edit(), None);
+}

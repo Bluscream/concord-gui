@@ -115,6 +115,12 @@ pub(crate) fn parse_channel_info(
         thread_metadata: value.get("thread_metadata").and_then(parse_thread_metadata),
         flags: value.get("flags").and_then(Value::as_u64),
         rate_limit_per_user: value.get("rate_limit_per_user").and_then(Value::as_u64),
+        topic: value
+            .get("topic")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        nsfw: value.get("nsfw").and_then(Value::as_bool),
+        user_limit: value.get("user_limit").and_then(Value::as_u64),
         available_tags: parse_forum_tags(value.get("available_tags")),
         applied_tags: parse_id_array(value.get("applied_tags")),
         current_user_joined_thread,

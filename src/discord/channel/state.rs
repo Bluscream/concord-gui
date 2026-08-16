@@ -43,6 +43,12 @@ pub struct ChannelState {
     pub flags: Option<u64>,
     /// Slow-mode cooldown in seconds (Discord's `rate_limit_per_user`).
     pub rate_limit_per_user: Option<u64>,
+    /// The channel topic.
+    pub topic: Option<String>,
+    /// Whether the channel is age-restricted.
+    pub nsfw: Option<bool>,
+    /// Voice occupancy cap. Zero is Discord's spelling for no limit.
+    pub user_limit: Option<u64>,
     pub available_tags: Vec<ForumTagInfo>,
     pub applied_tags: Vec<Id<ForumTagMarker>>,
     pub current_user_joined_thread: bool,
@@ -424,6 +430,19 @@ impl DiscordState {
             rate_limit_per_user: channel
                 .rate_limit_per_user
                 .or_else(|| existing.and_then(|existing| existing.rate_limit_per_user)),
+            // Kept from the existing row when a partial payload omits them,
+            // the same as every other optional field here: a CHANNEL_UPDATE
+            // that mentions only the name must not clear the topic.
+            topic: channel
+                .topic
+                .clone()
+                .or_else(|| existing.and_then(|existing| existing.topic.clone())),
+            nsfw: channel
+                .nsfw
+                .or_else(|| existing.and_then(|existing| existing.nsfw)),
+            user_limit: channel
+                .user_limit
+                .or_else(|| existing.and_then(|existing| existing.user_limit)),
             available_tags: channel.available_tags.clone(),
             applied_tags: channel.applied_tags.clone(),
             current_user_joined_thread,

@@ -92,8 +92,11 @@ pub(in crate::tui) use popups::{
     PopupInputMode, PopupKeymapContext, SelectablePopupSnapshot, SelectablePopupTarget,
     VoiceParticipantAudioField,
 };
+// ChannelField is named only by this crate's own tests, which is why clippy
+// reads the re-export as unused - removing it breaks them.
+#[allow(unused_imports)]
 pub use popups::{
-    AttachmentViewerZoom, ChannelEditPurpose, EmojiEdit, EmojiReactionPickerState,
+    AttachmentViewerZoom, ChannelEditPurpose, ChannelField, EmojiEdit, EmojiReactionPickerState,
     MessageActionMenuState, MessageUrlPickerState, NotificationInboxChannelLoad,
     NotificationInboxItem, NotificationInboxLoad, NotificationInboxMessage, NotificationInboxTab,
     NotificationInboxUnreadItem, PollVotePickerState, ReactionUsersEntry, ReactionUsersPopupState,
