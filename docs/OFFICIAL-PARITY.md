@@ -103,10 +103,14 @@ Neither listed nor manageable.
 
 ### Context menus
 
-The GUI has a message action row and the TUI has action popups, but neither has
-the right-click menu the official client puts on every user, channel, guild and
-message. This is less a feature than the way most people reach the features
-that already exist.
+Done in the TUI: right-clicking a row focuses its pane, moves the selection to
+the row under the pointer, and opens that pane's action menu. The menus already
+existed and were reachable by keyboard, so this was routing rather than new
+menus.
+
+Still missing in the GUI, which has a hover action row on messages and panels
+elsewhere but no right-click menu. It needs the menu itself - a positioned
+overlay - reusing the same action enums so both clients offer the same items.
 
 ### Video
 

@@ -329,9 +329,13 @@ fn mouse_click_outside_dashboard_panes_does_not_change_focus() {
     ));
     assert_eq!(state.focus(), FocusPane::Messages);
 
+    // Right-click used to be a no-op, so this asserted it at a coordinate
+    // inside a pane. It now opens that pane's action menu, so the check moves
+    // to a coordinate genuinely outside the panes - which is what the test is
+    // named for.
     assert!(!handle_mouse(
         &mut state,
-        mouse(MouseEventKind::Down(MouseButton::Right), 1, 1),
+        mouse(MouseEventKind::Down(MouseButton::Right), 10, 0),
         dashboard_area(),
     ));
     assert_eq!(state.focus(), FocusPane::Messages);
@@ -589,4 +593,44 @@ fn mouse_wheel_moves_active_popup_lists() {
         handle_mouse_event(&mut state, event, dashboard_area(), &mut clicks);
         assert!(!state.is_options_category_picker_open());
     }
+}
+
+#[test]
+fn right_click_opens_the_action_menu_for_the_row_under_the_pointer() {
+    // The menus already existed and were reachable by keyboard; what was
+    // missing is the way most people expect to reach them.
+    let mut state = state_with_channel_tree();
+    state.focus_pane(FocusPane::Guilds);
+
+    let handled = handle_mouse(
+        &mut state,
+        mouse(MouseEventKind::Down(MouseButton::Right), 5, 3),
+        dashboard_area(),
+    );
+
+    assert!(handled, "right-click should be consumed");
+    assert!(
+        state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::ChannelActionMenu)
+            || state
+                .is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::GuildActionMenu),
+        "a pane's action menu should open"
+    );
+}
+
+#[test]
+fn right_click_inside_a_popup_does_not_reach_the_pane_behind() {
+    // Otherwise a menu would open underneath the popup that is already open.
+    let mut state = state_with_channel_tree();
+    state.focus_pane(FocusPane::Channels);
+    state.open_focused_pane_actions();
+    let before = state.active_modal_popup_kind();
+
+    let handled = handle_mouse(
+        &mut state,
+        mouse(MouseEventKind::Down(MouseButton::Right), 5, 3),
+        dashboard_area(),
+    );
+
+    assert!(handled);
+    assert_eq!(state.active_modal_popup_kind(), before);
 }

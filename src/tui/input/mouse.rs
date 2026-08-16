@@ -71,6 +71,16 @@ pub fn handle_mouse_event(
     }
 
     match mouse.kind {
+        // The action menus already exist and are reachable by keyboard. What
+        // was missing is the way most people expect to reach them, which is
+        // routing rather than new menus.
+        MouseEventKind::Down(MouseButton::Right) => {
+            clicks.clear();
+            let Some(target) = target else {
+                return MouseOutcome::ignored();
+            };
+            handle_right_click(state, target)
+        }
         MouseEventKind::Down(MouseButton::Left) => {
             let Some(target) = target else {
                 clicks.clear();
@@ -136,6 +146,36 @@ impl MouseClickTracker {
             Some(MouseClick { target, at: now })
         };
         double_click
+    }
+}
+
+/// Open the action menu for whatever was right-clicked.
+///
+/// Focusing the pane and moving the selection first, so the menu opens on the
+/// row under the pointer rather than on whatever was selected before - which
+/// is the difference between a context menu and a menu that happens to appear.
+fn handle_right_click(state: &mut DashboardState, target: ui::MouseTarget) -> MouseOutcome {
+    match target {
+        ui::MouseTarget::PaneRow { pane, row } => {
+            state.focus_pane(pane);
+            if !state.select_visible_pane_row(pane, row) {
+                return MouseOutcome::handled(None);
+            }
+            state.open_focused_pane_actions();
+            MouseOutcome::handled(None)
+        }
+        // A right-click on a pane's empty space still opens its menu, which is
+        // what a desktop client does.
+        ui::MouseTarget::Pane(pane) => {
+            state.focus_pane(pane);
+            state.open_focused_pane_actions();
+            MouseOutcome::handled(None)
+        }
+        // Inside a popup or the composer, right-click means nothing yet;
+        // swallowing it beats acting on the pane behind.
+        ui::MouseTarget::Composer
+        | ui::MouseTarget::PopupRow { .. }
+        | ui::MouseTarget::ModalBackdrop => MouseOutcome::handled(None),
     }
 }
 
