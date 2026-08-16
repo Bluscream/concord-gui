@@ -141,6 +141,10 @@ pub enum EmojiEdit {
     NewRole,
     /// A name for a new server template.
     NewTemplate,
+    /// The line shown to people arriving at the server.
+    WelcomeDescription,
+    /// The channel the widget's invite points at, by name.
+    WidgetChannel,
 }
 
 // Not Eq: a sound carries a float volume, so the panel can only be compared
@@ -495,6 +499,37 @@ impl DashboardState {
                     guild_id,
                     name: text,
                 });
+            }
+            EmojiEdit::WelcomeDescription => {
+                return Some(AppCommand::ModifyWelcomeScreen {
+                    guild_id,
+                    // Empty clears it, which is a real thing to want and is
+                    // distinct from leaving the description alone.
+                    edit: crate::discord::WelcomeScreenEdit {
+                        description: Some((!text.is_empty()).then_some(text)),
+                        ..Default::default()
+                    },
+                });
+            }
+            EmojiEdit::WidgetChannel => {
+                let mut widget = self
+                    .popups
+                    .server_management()
+                    .and_then(|state| state.widget.clone())
+                    .unwrap_or_default();
+                // Empty means "issue no invite", which the endpoint expresses
+                // as a null channel rather than an omitted one.
+                widget.channel_id = if text.is_empty() {
+                    None
+                } else {
+                    self.channel_id_by_name(guild_id, &text)
+                };
+                if !text.is_empty() && widget.channel_id.is_none() {
+                    // A name nobody recognises would otherwise silently clear
+                    // the invite, which is not what was asked for.
+                    return None;
+                }
+                return Some(AppCommand::ModifyGuildWidget { guild_id, widget });
             }
             EmojiEdit::NewTemplate => {
                 if text.is_empty() {
@@ -976,6 +1011,98 @@ impl DashboardState {
         {
             state.renaming = Some((EmojiEdit::NewRole, TextInputState::default()));
         }
+    }
+
+    /// The channel with this name in the guild, if there is exactly one.
+    ///
+    /// Names are not unique in Discord, so an ambiguous one resolves to
+    /// nothing rather than to whichever happened to be first - picking one
+    /// would point the widget's invite at a channel nobody chose.
+    fn channel_id_by_name(
+        &self,
+        guild_id: Id<GuildMarker>,
+        name: &str,
+    ) -> Option<Id<crate::discord::ids::marker::ChannelMarker>> {
+        let wanted = name.trim().trim_start_matches('#');
+        let mut matches = self
+            .discord
+            .cache
+            .channels_for_guild(Some(guild_id))
+            .into_iter()
+            .filter(|channel| channel.name == wanted);
+        let first = matches.next()?;
+        matches.next().is_none().then_some(first.id)
+    }
+
+    /// Start editing whichever membership row needs text.
+    ///
+    /// The two that are not toggles: the welcome description and the widget's
+    /// invite channel. Seeded with what is there, since both are usually being
+    /// corrected rather than written from nothing.
+    pub fn start_membership_edit(&mut self) {
+        let Some(index) = self.selected_server_row() else {
+            return;
+        };
+        let Some(row) = MEMBERSHIP_ROWS.get(index).copied() else {
+            return;
+        };
+        let Some(state) = self.popups.server_management_mut() else {
+            return;
+        };
+        if state.tab != ServerPanelTab::Membership {
+            return;
+        }
+        let (edit, current) = match row {
+            MembershipRow::WelcomeDescription => (
+                EmojiEdit::WelcomeDescription,
+                state
+                    .welcome
+                    .as_ref()
+                    .and_then(|screen| screen.description.clone())
+                    .unwrap_or_default(),
+            ),
+            MembershipRow::WidgetChannel => (EmojiEdit::WidgetChannel, String::new()),
+            // The rest are toggles, which enter already handles.
+            _ => return,
+        };
+        let mut input = TextInputState::default();
+        input.set_value(current);
+        state.renaming = Some((edit, input));
+    }
+
+    /// Test helpers for the widget-channel field, which is otherwise only
+    /// reachable by selecting the right row first.
+    #[cfg(test)]
+    pub(in crate::tui) fn start_membership_edit_for_widget_channel(&mut self) {
+        if let Some(state) = self.popups.server_management_mut() {
+            state.renaming = Some((EmojiEdit::WidgetChannel, TextInputState::default()));
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::tui) fn set_membership_edit_text(&mut self, text: &str) {
+        if let Some(state) = self.popups.server_management_mut()
+            && let Some((_, input)) = state.renaming.as_mut()
+        {
+            input.set_value(text.to_owned());
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::tui) fn discord_cache_channel_names(
+        &self,
+        guild_id: Id<GuildMarker>,
+    ) -> Vec<String> {
+        let channels = self.discord.cache.channels_for_guild(Some(guild_id));
+        channels
+            .iter()
+            .map(|channel| channel.name.clone())
+            .filter(|name| {
+                // Only names exactly one channel has; an ambiguous one is what
+                // the other half of the test is about.
+                channels.iter().filter(|other| &other.name == name).count() == 1
+            })
+            .collect()
     }
 
     /// Start creating a server template, reusing the same field.

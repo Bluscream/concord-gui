@@ -314,3 +314,4 @@ action-cancel-event = Cancel
 action-interested = Interested
 action-sync = Sync
 action-new-template = New template
+status-no-such-channel = No channel with that name, or more than one

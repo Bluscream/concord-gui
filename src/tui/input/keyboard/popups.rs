@@ -943,6 +943,8 @@ fn handle_server_management_key(state: &mut DashboardState, key: KeyEvent) -> Op
             state.start_role_create();
             state.start_template_create();
         }
+        // Editing the two membership rows that need text rather than a toggle.
+        KeyCode::Char('e') => state.start_membership_edit(),
         // Pruning, which is irreversible and so goes through the risk prompt
         // rather than acting on enter like the other rows.
         KeyCode::Char('P') => {

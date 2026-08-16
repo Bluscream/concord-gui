@@ -822,6 +822,17 @@ pub(in crate::tui::ui) fn render_server_management(
                 vec![Line::from(Span::raw(format!("Name: {}", input.value())))],
                 "enter creates the role, esc cancels",
             ),
+            crate::tui::state::EmojiEdit::WelcomeDescription => (
+                vec![Line::from(Span::raw(format!(
+                    "Description: {}",
+                    input.value()
+                )))],
+                "enter sets it, empty clears it, esc cancels",
+            ),
+            crate::tui::state::EmojiEdit::WidgetChannel => (
+                vec![Line::from(Span::raw(format!("Channel: {}", input.value())))],
+                "channel name - enter sets it, empty means no invite, esc cancels",
+            ),
             crate::tui::state::EmojiEdit::NewTemplate => (
                 vec![Line::from(Span::raw(format!("Name: {}", input.value())))],
                 "enter creates the template, esc cancels",
@@ -842,7 +853,9 @@ pub(in crate::tui::ui) fn render_server_management(
                 ServerPanelTab::Emoji => "tab, r reload, a add, n rename, enter delete",
                 ServerPanelTab::Sounds => "tab, r reload, n rename, enter delete",
                 ServerPanelTab::AutoMod => "tab, r reload, enter on/off, d delete",
-                ServerPanelTab::Membership => "tab, r reload, enter toggles or cycles, P prunes",
+                ServerPanelTab::Membership => {
+                    "tab, r reload, enter toggles or cycles, e edits, P prunes"
+                }
                 ServerPanelTab::Events => "tab, r reload, enter marks interested, d cancels",
                 ServerPanelTab::Templates => "tab, r reload, enter syncs, N new, d deletes",
                 ServerPanelTab::AuditLog => "tab to switch, r to reload",

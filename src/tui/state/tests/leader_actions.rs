@@ -1534,3 +1534,42 @@ fn every_server_tab_that_needs_a_fetch_asks_for_one() {
         );
     }
 }
+
+#[test]
+fn an_ambiguous_channel_name_does_not_aim_the_widget_at_a_guess() {
+    // Discord allows two channels with the same name. Resolving to whichever
+    // came first would point the widget's invite at a channel nobody chose,
+    // and the result looks exactly like success.
+    use crate::tui::state::popups::ServerPanelTab;
+
+    let mut state = state_with_many_guilds(1);
+    state.focus_pane(FocusPane::Guilds);
+    let guild_id = state.selected_guild_cursor_id().expect("a guild");
+    state.open_server_management(guild_id, ServerPanelTab::Membership);
+    state.set_guild_widget(crate::discord::GuildWidget::default());
+    state.drain_pending_commands();
+
+    let names: Vec<String> = state
+        .discord_cache_channel_names(guild_id)
+        .into_iter()
+        .collect();
+    let Some(unique) = names.first().cloned() else {
+        // A fixture with no channels proves nothing either way.
+        return;
+    };
+
+    state.start_membership_edit_for_widget_channel();
+    state.set_membership_edit_text(&unique);
+    let resolved = state.submit_emoji_rename();
+    assert!(
+        matches!(resolved, Some(AppCommand::ModifyGuildWidget { .. })),
+        "a name that exactly one channel has should resolve"
+    );
+
+    state.start_membership_edit_for_widget_channel();
+    state.set_membership_edit_text("definitely-not-a-channel");
+    assert!(
+        state.submit_emoji_rename().is_none(),
+        "an unknown name silently cleared the invite"
+    );
+}

@@ -204,6 +204,10 @@ pub enum Prompt {
     NewRole,
     /// A name for a new server template.
     NewTemplate,
+    /// The line shown to people arriving at the server.
+    WelcomeDescription,
+    /// The channel the widget's invite points at, by name.
+    WidgetChannel,
     /// A new name for the open guild.
     GuildName,
     /// A path to an image to use as the guild icon.
@@ -227,6 +231,8 @@ impl Prompt {
             Prompt::SoundName(_) => "Rename sound",
             Prompt::NewRole => "New role",
             Prompt::NewTemplate => "New template",
+            Prompt::WelcomeDescription => "Welcome description",
+            Prompt::WidgetChannel => "Widget invite channel",
             Prompt::GuildName => "Rename server",
             Prompt::GuildIcon => "Server icon",
             Prompt::ChannelTopic(_) => "Channel topic",
@@ -246,6 +252,8 @@ impl Prompt {
             Prompt::SoundName(_) => "Sound name",
             Prompt::NewRole => "Role name",
             Prompt::NewTemplate => "Template name",
+            Prompt::WelcomeDescription => "Shown to people arriving - empty clears it",
+            Prompt::WidgetChannel => "Channel name - empty means no invite",
             Prompt::GuildName => "Server name",
             Prompt::GuildIcon => "Path to a PNG, JPEG, GIF or WebP",
             Prompt::ChannelTopic(_) => "Topic - empty clears it",
@@ -1878,6 +1886,8 @@ impl Workspace {
             Prompt::SoundName(index) => self.rename_sound(index, text),
             Prompt::NewRole => self.create_role(text),
             Prompt::NewTemplate => self.create_template(text),
+            Prompt::WelcomeDescription => self.set_welcome_description(text),
+            Prompt::WidgetChannel => self.set_widget_channel(&text),
             Prompt::GuildName => self.rename_guild(text),
             Prompt::GuildIcon => self.set_guild_icon(text),
             Prompt::ChannelTopic(channel_id) => self.set_channel_topic(channel_id, text),
@@ -4919,8 +4929,21 @@ impl Workspace {
                 });
             }
             5 => self.prune_guild(),
-            // The description and the widget channel need text rather than a
-            // toggle, and are edited through the second action.
+            // The two that need text rather than a toggle.
+            1 => {
+                let mut text = Composer::default();
+                if let Some(description) = view
+                    .welcome
+                    .as_ref()
+                    .and_then(|screen| screen.description.clone())
+                {
+                    // Seeded: this is usually a correction rather than
+                    // something written from nothing.
+                    text.set_text(&description);
+                }
+                self.prompt = Some((Prompt::WelcomeDescription, text));
+            }
+            3 => self.prompt = Some((Prompt::WidgetChannel, Composer::default())),
             _ => {}
         }
     }
@@ -5353,6 +5376,60 @@ impl Workspace {
             return;
         };
         handle.send(AppCommand::CreateRole { guild_id, name });
+    }
+
+    fn set_welcome_description(&mut self, text: String) {
+        let (Some(handle), Some(view)) = (&self.handle, &self.server_management) else {
+            return;
+        };
+        handle.send(AppCommand::ModifyWelcomeScreen {
+            guild_id: view.guild_id,
+            // Empty clears it, which is a real thing to want and is distinct
+            // from leaving the description alone.
+            edit: concord::discord::WelcomeScreenEdit {
+                description: Some((!text.is_empty()).then_some(text)),
+                ..Default::default()
+            },
+        });
+    }
+
+    /// Point the widget's invite at a channel, by name.
+    ///
+    /// Names are not unique in Discord, so an ambiguous one is refused rather
+    /// than resolved to whichever came first - picking one would aim the
+    /// invite at a channel nobody chose.
+    fn set_widget_channel(&mut self, name: &str) {
+        let (Some(handle), Some(view)) = (&self.handle, &self.server_management) else {
+            return;
+        };
+        let guild_id = view.guild_id;
+        let mut widget = view.widget.clone().unwrap_or_default();
+        if name.trim().is_empty() {
+            widget.channel_id = None;
+        } else {
+            let Some(channel_id) = self.channel_id_by_name(guild_id, name) else {
+                self.model.status_line = t!("status-no-such-channel");
+                return;
+            };
+            widget.channel_id = Some(channel_id);
+        }
+        handle.send(AppCommand::ModifyGuildWidget { guild_id, widget });
+    }
+
+    /// The channel with this name, if there is exactly one.
+    fn channel_id_by_name(
+        &self,
+        guild_id: Id<marker::GuildMarker>,
+        name: &str,
+    ) -> Option<Id<marker::ChannelMarker>> {
+        let wanted = name.trim().trim_start_matches('#');
+        let state = self.last_state.as_ref()?;
+        let mut matches = state
+            .channels_for_guild(Some(guild_id))
+            .into_iter()
+            .filter(|channel| channel.name == wanted);
+        let first = matches.next()?;
+        matches.next().is_none().then_some(first.id)
     }
 
     /// Take a template of the server as it stands.

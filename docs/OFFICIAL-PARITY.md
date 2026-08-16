@@ -246,8 +246,15 @@ a welcome screen that has not loaded is not one Discord confirmed is disabled.
 Still missing: browsing and searching members from settings, bulk-ban,
 onboarding questions, new-member actions, and membership screening - which the
 client detects as a participation restriction but can neither configure nor
-complete. Editing the welcome description and the widget's channel needs a text
-prompt each; only the toggles and the prune window are wired.
+complete.
+
+The welcome description and the widget's invite channel are edited by text in
+both clients - `e` in the TUI, the row's action in the GUI. The channel is
+given by name, and an ambiguous one is refused rather than resolved to whichever
+came first: Discord allows two channels with the same name, and guessing would
+aim the invite somewhere nobody chose while looking exactly like success. An
+empty description clears it; an empty channel means the widget issues no invite,
+which is a real state rather than a missing value.
 
 ### Scheduled events, stages, templates, discovery
 
