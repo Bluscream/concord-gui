@@ -561,6 +561,26 @@ pub struct ConnectionsView {
     pub error: Option<String>,
 }
 
+/// Sessions and authorised applications.
+pub struct AccessView {
+    pub sessions: Vec<concord::discord::AuthSession>,
+    pub apps: Vec<concord::discord::AuthorisedApp>,
+    pub loading: bool,
+    pub error: Option<String>,
+    /// Which sessions are selected for logout.
+    pub logout_targets: std::collections::BTreeSet<String>,
+    /// The password Discord requires for a logout, held only while it is being
+    /// typed and dropped the moment the request is sent. Never persisted.
+    pub password: String,
+}
+
+impl AccessView {
+    /// Bullets, so the password is never drawn.
+    pub fn masked_password(&self) -> String {
+        "•".repeat(self.password.chars().count())
+    }
+}
+
 /// An image opened full size.
 ///
 /// Carries every image in the message rather than only the one clicked, so
@@ -915,6 +935,7 @@ pub struct Workspace {
     /// Privacy and safety. No fetch of its own - the values arrive with READY,
     /// so the panel is either open or not.
     pub privacy_open: bool,
+    pub access: Option<AccessView>,
     /// A role's permissions, once opened.
     pub permission_grid: Option<PermissionGridView>,
     /// An image being viewed full size.
@@ -1062,6 +1083,7 @@ impl Workspace {
             soundboard: None,
             connections: None,
             privacy_open: false,
+            access: None,
             permission_grid: None,
             viewing_image: None,
             deleting_channel: None,
@@ -4210,6 +4232,99 @@ impl Workspace {
         }
     }
 
+    pub fn open_access(&mut self) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        self.access = Some(AccessView {
+            sessions: Vec::new(),
+            apps: Vec::new(),
+            loading: true,
+            error: None,
+            logout_targets: std::collections::BTreeSet::new(),
+            password: String::new(),
+        });
+        // Both, because the panel shows both and fetching one on demand would
+        // leave half of it empty until it was touched.
+        handle.send(AppCommand::LoadAuthSessions);
+        handle.send(AppCommand::LoadAuthorisedApps);
+    }
+
+    /// Select a session for logout, or revoke an app.
+    ///
+    /// Sessions select rather than act: Discord needs the account password, so
+    /// it takes a prompt either way, and one prompt for several beats one each.
+    pub fn activate_access_row(&mut self, index: usize) {
+        let Some(view) = &mut self.access else {
+            return;
+        };
+        if let Some(session) = view.sessions.get(index) {
+            let id_hash = session.id_hash.clone();
+            if !view.logout_targets.remove(&id_hash) {
+                view.logout_targets.insert(id_hash);
+            }
+            return;
+        }
+
+        // Apps are listed after sessions, so the row index is offset by them.
+        let Some(app_index) = index.checked_sub(view.sessions.len()) else {
+            return;
+        };
+        if app_index >= view.apps.len() {
+            return;
+        }
+        let app = view.apps.remove(app_index);
+        if let Some(handle) = &self.handle {
+            handle.send(AppCommand::RevokeAuthorisedApp {
+                id: app.id,
+                label: app.name,
+            });
+        }
+    }
+
+    /// Take one keystroke into the password field.
+    pub fn type_access_password(&mut self, key: &str) {
+        let Some(view) = &mut self.access else {
+            return;
+        };
+        match key {
+            "backspace" => {
+                view.password.pop();
+            }
+            other => {
+                // Only real characters. A bare modifier or an arrow key
+                // arrives here as a name like "shift", and appending it would
+                // put "shift" into the password.
+                let mut characters = other.chars();
+                if let (Some(character), None) = (characters.next(), characters.next()) {
+                    view.password.push(character);
+                }
+            }
+        }
+    }
+
+    /// Send the logout, dropping the password in the same step.
+    pub fn log_out_selected_sessions(&mut self) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(view) = &mut self.access else {
+            return;
+        };
+        let id_hashes: Vec<String> = view.logout_targets.iter().cloned().collect();
+        let password = std::mem::take(&mut view.password);
+        view.logout_targets.clear();
+        // Empty is not sent: Discord would reject it, and the round trip would
+        // read as a wrong password rather than as an empty one.
+        if id_hashes.is_empty() || password.is_empty() {
+            return;
+        }
+        handle.send(AppCommand::RevokeAuthSessions {
+            id_hashes,
+            password: concord::discord::Secret::new(password),
+        });
+    }
+
     /// Open the privacy and safety panel.
     pub fn open_privacy(&mut self) {
         self.privacy_open = true;
@@ -6570,6 +6685,31 @@ impl Workspace {
                     view.error = Some(message.clone());
                 }
             }
+            AppEvent::AuthSessionsLoaded { sessions } => {
+                if let Some(view) = &mut self.access {
+                    view.loading = false;
+                    view.error = None;
+                    // Selections for sessions that are gone are dropped: a
+                    // logout aimed at one would fail the whole request.
+                    view.logout_targets
+                        .retain(|hash| sessions.iter().any(|s| &s.id_hash == hash));
+                    view.sessions = sessions.clone();
+                }
+            }
+            AppEvent::AuthorisedAppsLoaded { apps } => {
+                if let Some(view) = &mut self.access {
+                    view.loading = false;
+                    view.error = None;
+                    view.apps = apps.clone();
+                }
+            }
+            AppEvent::AuthSessionsLoadFailed { message }
+            | AppEvent::AuthorisedAppsLoadFailed { message } => {
+                if let Some(view) = &mut self.access {
+                    view.loading = false;
+                    view.error = Some(message.clone());
+                }
+            }
             AppEvent::ConnectionsLoaded { connections } => {
                 if let Some(view) = &mut self.connections {
                     view.loading = false;
@@ -7864,6 +8004,84 @@ impl Workspace {
                     move |cx: &mut gpui::App| {
                         entity.update(cx, |workspace, cx| {
                             workspace.permission_grid = None;
+                            cx.notify();
+                        });
+                    }
+                },
+            )));
+        }
+
+        if let Some(view) = &self.access {
+            let sessions = view.sessions.iter().map(|session| overlay::AccessRow {
+                primary: if session.platform.is_empty() {
+                    t!("label-session")
+                } else {
+                    session.platform.clone()
+                },
+                secondary: session.summary(),
+                action: if view.logout_targets.contains(&session.id_hash) {
+                    t!("action-deselect")
+                } else {
+                    t!("action-select-for-logout")
+                },
+                destructive: false,
+                selected: view.logout_targets.contains(&session.id_hash),
+            });
+            let apps = view.apps.iter().map(|app| overlay::AccessRow {
+                primary: app.name.clone(),
+                secondary: app.summary(),
+                action: t!("action-revoke"),
+                destructive: true,
+                selected: false,
+            });
+            let rows: Vec<overlay::AccessRow> = sessions.chain(apps).collect();
+            let selected_any = !view.logout_targets.is_empty();
+            let masked = view.masked_password();
+
+            return Some(overlay::scrim().child(overlay::access_view(
+                overlay::AccessPanel {
+                    rows: &rows,
+                    loading: view.loading,
+                    error: view.error.as_deref(),
+                    // The field appears only once something is selected: an
+                    // always present password box invites typing one for no
+                    // reason.
+                    password: selected_any.then_some(masked.as_str()),
+                    logout_enabled: selected_any && !view.password.is_empty(),
+                },
+                {
+                    let entity = entity.clone();
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.activate_access_row(index);
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |key: &str, cx: &mut gpui::App| {
+                        let key = key.to_owned();
+                        entity.update(cx, |workspace, cx| {
+                            workspace.type_access_password(&key);
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.log_out_selected_sessions();
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.access = None;
                             cx.notify();
                         });
                     }
@@ -10534,5 +10752,56 @@ mod permission_grid_tests {
         view.deny = 1;
 
         assert!(view.is_dirty());
+    }
+}
+
+#[cfg(test)]
+mod access_tests {
+    use super::*;
+
+    fn view(sessions: usize, apps: usize) -> AccessView {
+        AccessView {
+            sessions: (0..sessions)
+                .map(|index| concord::discord::AuthSession {
+                    id_hash: format!("s{index}"),
+                    os: "Linux".to_owned(),
+                    platform: "Desktop".to_owned(),
+                    location: None,
+                    last_used: None,
+                    current: index == 0,
+                })
+                .collect(),
+            apps: (0..apps)
+                .map(|index| concord::discord::AuthorisedApp {
+                    id: format!("a{index}"),
+                    name: format!("App {index}"),
+                    scopes: Vec::new(),
+                })
+                .collect(),
+            loading: false,
+            error: None,
+            logout_targets: std::collections::BTreeSet::new(),
+            password: String::new(),
+        }
+    }
+
+    #[test]
+    fn the_password_is_never_drawn() {
+        let mut access = view(1, 0);
+        access.password = "hunter2".to_owned();
+
+        let masked = access.masked_password();
+        assert!(!masked.contains("hunter2"));
+        assert_eq!(masked.chars().count(), 7);
+    }
+
+    #[test]
+    fn bullets_count_characters_not_bytes() {
+        // A multi-byte password would otherwise show more bullets than it has
+        // characters, which reads as typing that did not land where it did.
+        let mut access = view(1, 0);
+        access.password = "héllo".to_owned();
+
+        assert_eq!(access.masked_password().chars().count(), 5);
     }
 }

@@ -326,6 +326,31 @@ impl DiscordClient {
             .await
     }
 
+    pub async fn auth_sessions(&self) -> Result<Vec<crate::discord::AuthSession>> {
+        // The current session is not identified here: the gateway's session id
+        // is a different value from the hash this endpoint keys on, and
+        // guessing a match would mark the wrong row as "this session".
+        self.rest.auth_sessions(None).await
+    }
+
+    pub async fn revoke_auth_sessions(
+        &self,
+        id_hashes: &[String],
+        password: &crate::discord::Secret,
+    ) -> Result<()> {
+        self.rest
+            .revoke_auth_sessions(id_hashes, password.expose())
+            .await
+    }
+
+    pub async fn authorised_apps(&self) -> Result<Vec<crate::discord::AuthorisedApp>> {
+        self.rest.authorised_apps().await
+    }
+
+    pub async fn revoke_authorised_app(&self, id: &str) -> Result<()> {
+        self.rest.revoke_authorised_app(id).await
+    }
+
     pub async fn modify_privacy_settings(&self, edit: &crate::discord::PrivacyEdit) -> Result<()> {
         self.rest.modify_privacy_settings(edit).await
     }

@@ -79,6 +79,12 @@ impl DashboardState {
         if category == OptionsCategory::Connections {
             self.enqueue_pending_command(AppCommand::LoadConnections);
         }
+        if category == OptionsCategory::Access {
+            // Both lists, because the panel shows both and fetching one on
+            // demand would mean a tab that is empty until it is touched.
+            self.enqueue_pending_command(AppCommand::LoadAuthSessions);
+            self.enqueue_pending_command(AppCommand::LoadAuthorisedApps);
+        }
         self.popups
             .set_modal(ModalPopup::Options(OptionsPopupState {
                 category: Some(category),
@@ -118,6 +124,7 @@ impl DashboardState {
             Some(OptionsCategory::Voice) => "Voice Options",
             Some(OptionsCategory::Connections) => "Linked Accounts",
             Some(OptionsCategory::Privacy) => "Privacy and Safety",
+            Some(OptionsCategory::Access) => "Sessions and Apps",
         }
     }
 
@@ -159,6 +166,9 @@ impl DashboardState {
             // itself rather than rendering as a blank panel.
             Some(OptionsCategory::Connections) => self.connection_rows().len().max(1),
             Some(OptionsCategory::Privacy) => crate::discord::PrivacySetting::ALL.len(),
+            // At least one, so an empty account still has a row to explain
+            // itself rather than rendering as a blank panel.
+            Some(OptionsCategory::Access) => self.access_row_count().max(1),
         }
     }
 
@@ -169,6 +179,7 @@ impl DashboardState {
             }
             Some(OptionsCategory::Connections) => return self.connection_option_items(),
             Some(OptionsCategory::Privacy) => return self.privacy_option_items(),
+            Some(OptionsCategory::Access) => return self.access_option_items(),
             Some(OptionsCategory::Display) => return self.display_option_items_for_display(),
             Some(OptionsCategory::Composer) => return self.display_option_items_for_composer(),
             Some(OptionsCategory::Notifications) => {
@@ -235,6 +246,14 @@ impl DashboardState {
                 effective: true,
                 description: "Direct-message scanning and who may send you a friend request.",
             },
+            DisplayOptionItem {
+                label: "Sessions and apps",
+                enabled: true,
+                value: Some(OptionsCategoryShortcut::Access.key().to_string()),
+                gauge: None,
+                effective: true,
+                description: "What else is signed in to this account, and which apps have access.",
+            },
         ]
     }
 
@@ -243,6 +262,240 @@ impl DashboardState {
         self.popups
             .options_popup()
             .map_or(&[], |popup| popup.connections.as_slice())
+    }
+
+    /// Sessions first, then apps: one list, because two panels to hunt through
+    /// is the last thing wanted by someone checking after a scare.
+    fn access_row_count(&self) -> usize {
+        self.popups
+            .options_popup()
+            .map_or(0, |popup| popup.sessions.len() + popup.apps.len())
+    }
+
+    fn access_option_items(&self) -> Vec<DisplayOptionItem> {
+        let Some(popup) = self.popups.options_popup() else {
+            return Vec::new();
+        };
+        if popup.sessions.is_empty() && popup.apps.is_empty() {
+            return vec![DisplayOptionItem {
+                label: if popup.access_loading {
+                    "Loading"
+                } else {
+                    "Nothing else has access"
+                },
+                enabled: false,
+                value: None,
+                gauge: None,
+                effective: false,
+                description: "No other sessions and no authorised applications.",
+            }];
+        }
+
+        let sessions = popup.sessions.iter().map(|session| DisplayOptionItem {
+            label: "Session",
+            // Selected for logout, not "active" - every listed session is
+            // active, so a tick meaning that would say nothing.
+            enabled: popup.session_logout_targets.contains(&session.id_hash),
+            value: Some(format!(
+                "{} - {}",
+                if session.platform.is_empty() {
+                    "Unknown platform"
+                } else {
+                    &session.platform
+                },
+                session.summary()
+            )),
+            gauge: None,
+            effective: !session.current,
+            description: "enter selects it for logout; L logs the selected ones out.",
+        });
+
+        let apps = popup.apps.iter().map(|app| DisplayOptionItem {
+            label: "Application",
+            enabled: false,
+            value: Some(format!("{} - {}", app.name, app.summary())),
+            gauge: None,
+            effective: true,
+            description: "r revokes this application's access.",
+        });
+
+        sessions.chain(apps).collect()
+    }
+
+    /// Mark or unmark the highlighted session for logout.
+    ///
+    /// Selecting rather than logging out immediately: Discord needs the account
+    /// password for this, so it takes a prompt either way, and one prompt for
+    /// several sessions beats one per session.
+    fn toggle_selected_session_target(&mut self) {
+        let Some(index) = self.selected_option_index() else {
+            return;
+        };
+        let Some(popup) = self.popups.options_popup_mut() else {
+            return;
+        };
+        let Some(session) = popup.sessions.get(index) else {
+            return;
+        };
+        let id_hash = session.id_hash.clone();
+        if !popup.session_logout_targets.remove(&id_hash) {
+            popup.session_logout_targets.insert(id_hash);
+        }
+    }
+
+    /// Revoke the highlighted application's access.
+    ///
+    /// Immediate, unlike a session logout: Discord asks for no password here,
+    /// so there is no prompt to batch behind.
+    pub fn revoke_selected_authorised_app(&mut self) {
+        if !self.is_access_category_open() {
+            return;
+        }
+        let Some(index) = self.selected_option_index() else {
+            return;
+        };
+        let Some(popup) = self.popups.options_popup_mut() else {
+            return;
+        };
+        // Apps are listed after sessions, so the row index is offset by them.
+        let Some(app_index) = index.checked_sub(popup.sessions.len()) else {
+            return;
+        };
+        if app_index >= popup.apps.len() {
+            return;
+        }
+        let app = popup.apps.remove(app_index);
+        self.enqueue_pending_command(AppCommand::RevokeAuthorisedApp {
+            id: app.id,
+            label: app.name,
+        });
+    }
+
+    pub fn is_access_category_open(&self) -> bool {
+        self.popups.options_popup().and_then(|popup| popup.category)
+            == Some(OptionsCategory::Access)
+    }
+
+    /// Whether any session is selected, which is what makes a logout possible.
+    pub fn has_session_logout_targets(&self) -> bool {
+        self.popups
+            .options_popup()
+            .is_some_and(|popup| !popup.session_logout_targets.is_empty())
+    }
+
+    /// Ask for the password that Discord requires to log a session out.
+    ///
+    /// A prompt rather than anything remembered: the client has nowhere to
+    /// keep a password and no reason to, so it is typed each time.
+    pub fn start_session_logout(&mut self) {
+        if !self.is_access_category_open() || !self.has_session_logout_targets() {
+            return;
+        }
+        if let Some(popup) = self.popups.options_popup_mut() {
+            popup.access_password = Some(crate::tui::text_input::TextInputState::masked());
+        }
+    }
+
+    pub fn is_session_password_prompt_open(&self) -> bool {
+        self.popups
+            .options_popup()
+            .is_some_and(|popup| popup.access_password.is_some())
+    }
+
+    pub fn edit_session_password(&mut self, action: crate::tui::text_input::TextEditAction) {
+        if let Some(popup) = self.popups.options_popup_mut()
+            && let Some(input) = popup.access_password.as_mut()
+        {
+            input.apply_edit_action(action);
+        }
+    }
+
+    pub fn insert_session_password_char(&mut self, value: char) {
+        if let Some(popup) = self.popups.options_popup_mut()
+            && let Some(input) = popup.access_password.as_mut()
+        {
+            input.insert_char(value);
+        }
+    }
+
+    pub fn session_password_display(&self) -> Option<String> {
+        self.popups
+            .options_popup()
+            .and_then(|popup| popup.access_password.as_ref())
+            .map(crate::tui::text_input::TextInputState::display_value)
+    }
+
+    pub fn cancel_session_logout(&mut self) {
+        if let Some(popup) = self.popups.options_popup_mut() {
+            popup.access_password = None;
+        }
+    }
+
+    /// Take what was typed and send the logout.
+    pub fn confirm_session_logout(&mut self) {
+        let Some(popup) = self.popups.options_popup_mut() else {
+            return;
+        };
+        let Some(input) = popup.access_password.take() else {
+            return;
+        };
+        // Empty is not sent: Discord would reject it, and the round trip would
+        // read as a wrong password rather than as an empty one.
+        if input.value().is_empty() {
+            return;
+        }
+        self.log_out_selected_sessions(crate::discord::Secret::new(input.value()));
+    }
+
+    /// Send the logout for the selected sessions.
+    ///
+    /// The password is taken, used and dropped in one step - it is never put
+    /// back into popup state, so there is no window in which it is held after
+    /// the request is queued.
+    pub fn log_out_selected_sessions(&mut self, password: crate::discord::Secret) {
+        let Some(popup) = self.popups.options_popup_mut() else {
+            return;
+        };
+        let id_hashes: Vec<String> = popup.session_logout_targets.iter().cloned().collect();
+        popup.session_logout_targets.clear();
+        popup.access_password = None;
+        if id_hashes.is_empty() {
+            return;
+        }
+        self.enqueue_pending_command(AppCommand::RevokeAuthSessions {
+            id_hashes,
+            password,
+        });
+    }
+
+    pub fn set_auth_sessions(&mut self, sessions: Vec<crate::discord::AuthSession>) {
+        if let Some(popup) = self.popups.options_popup_mut() {
+            // Selections for sessions that no longer exist are dropped: a
+            // logout aimed at a gone session would fail the whole request.
+            popup
+                .session_logout_targets
+                .retain(|id_hash| sessions.iter().any(|s| &s.id_hash == id_hash));
+            popup.sessions = sessions;
+            popup.access_loading = false;
+        }
+    }
+
+    pub fn set_authorised_apps(&mut self, apps: Vec<crate::discord::AuthorisedApp>) {
+        if let Some(popup) = self.popups.options_popup_mut() {
+            popup.apps = apps;
+            popup.access_loading = false;
+        }
+    }
+
+    pub fn mark_access_load_failed(&mut self) {
+        if let Some(popup) = self.popups.options_popup_mut() {
+            popup.access_loading = false;
+        }
+    }
+
+    /// Open the sessions and apps panel.
+    pub fn open_access(&mut self) {
+        self.open_options_category(OptionsCategory::Access);
     }
 
     /// Open the linked-accounts panel.
@@ -680,6 +933,11 @@ impl DashboardState {
             return;
         }
 
+        if category == OptionsCategory::Access {
+            self.toggle_selected_session_target();
+            return;
+        }
+
         if category == OptionsCategory::Privacy {
             if let Some(setting) = crate::discord::PrivacySetting::at(selected) {
                 let edit = setting.toggled(&self.discord.privacy_state());
@@ -881,6 +1139,7 @@ impl DashboardState {
             OptionsCategoryShortcut::Privacy => {
                 self.open_options_category(OptionsCategory::Privacy)
             }
+            OptionsCategoryShortcut::Access => self.open_options_category(OptionsCategory::Access),
         }
     }
 

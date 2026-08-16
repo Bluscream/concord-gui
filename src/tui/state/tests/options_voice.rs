@@ -1221,3 +1221,173 @@ mod privacy {
         );
     }
 }
+
+mod access {
+    use super::*;
+    use crate::discord::{AuthSession, AuthorisedApp};
+
+    fn session(id: &str, current: bool) -> AuthSession {
+        AuthSession {
+            id_hash: id.to_owned(),
+            os: "Linux".to_owned(),
+            platform: "Desktop".to_owned(),
+            location: Some("Berlin".to_owned()),
+            last_used: None,
+            current,
+        }
+    }
+
+    fn app(id: &str) -> AuthorisedApp {
+        AuthorisedApp {
+            id: id.to_owned(),
+            name: format!("App {id}"),
+            scopes: vec!["identify".to_owned()],
+        }
+    }
+
+    fn opened() -> DashboardState {
+        let mut state = DashboardState::new();
+        state.open_access();
+        state.set_auth_sessions(vec![session("a", true), session("b", false)]);
+        state.set_authorised_apps(vec![app("1")]);
+        state.drain_pending_commands();
+        state
+    }
+
+    #[test]
+    fn opening_asks_for_both_lists() {
+        // One panel showing both, so fetching one on demand would leave half
+        // of it empty until it was touched.
+        let mut state = DashboardState::new();
+        state.open_access();
+        let commands = state.drain_pending_commands();
+
+        assert!(
+            commands
+                .iter()
+                .any(|c| matches!(c, AppCommand::LoadAuthSessions))
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|c| matches!(c, AppCommand::LoadAuthorisedApps))
+        );
+    }
+
+    #[test]
+    fn an_empty_account_still_has_a_row_saying_why() {
+        let mut state = DashboardState::new();
+        state.open_access();
+        state.set_auth_sessions(Vec::new());
+        state.set_authorised_apps(Vec::new());
+
+        assert_eq!(state.display_option_items().len(), 1);
+    }
+
+    #[test]
+    fn revoking_an_app_addresses_the_app_not_the_session_at_that_row() {
+        // Apps are listed after sessions, so the row index is offset by them.
+        // Forgetting that would revoke the wrong thing, or nothing.
+        let mut state = opened();
+        for _ in 0..2 {
+            state.move_option_down();
+        }
+        state.revoke_selected_authorised_app();
+
+        let Some(AppCommand::RevokeAuthorisedApp { id, .. }) = state
+            .drain_pending_commands()
+            .into_iter()
+            .find(|c| matches!(c, AppCommand::RevokeAuthorisedApp { .. }))
+        else {
+            panic!("no revoke sent");
+        };
+        assert_eq!(id, "1");
+    }
+
+    #[test]
+    fn revoking_does_nothing_while_a_session_row_is_highlighted() {
+        // The offset subtraction must not wrap into the app list.
+        let mut state = opened();
+        state.revoke_selected_authorised_app();
+
+        assert!(state.drain_pending_commands().is_empty());
+    }
+
+    #[test]
+    fn a_logout_needs_a_selection_before_it_asks_for_a_password() {
+        let mut state = opened();
+        state.start_session_logout();
+
+        assert!(
+            !state.is_session_password_prompt_open(),
+            "asked for a password with nothing selected"
+        );
+    }
+
+    #[test]
+    fn the_typed_password_is_never_drawn_and_never_debug_printed() {
+        let mut state = opened();
+        state.toggle_selected_display_option();
+        state.start_session_logout();
+        for character in "hunter2".chars() {
+            state.insert_session_password_char(character);
+        }
+
+        let shown = state.session_password_display().expect("no prompt open");
+        assert!(!shown.contains("hunter2"), "the password was drawn");
+        assert_eq!(shown.chars().count(), 7);
+        assert!(!format!("{state:?}").contains("hunter2"));
+    }
+
+    #[test]
+    fn confirming_sends_the_selected_hashes_and_drops_the_password() {
+        let mut state = opened();
+        state.toggle_selected_display_option();
+        state.start_session_logout();
+        for character in "hunter2".chars() {
+            state.insert_session_password_char(character);
+        }
+        state.confirm_session_logout();
+
+        let Some(AppCommand::RevokeAuthSessions {
+            id_hashes,
+            password,
+        }) = state
+            .drain_pending_commands()
+            .into_iter()
+            .find(|c| matches!(c, AppCommand::RevokeAuthSessions { .. }))
+        else {
+            panic!("no logout sent");
+        };
+
+        assert_eq!(id_hashes, vec!["a".to_owned()]);
+        assert_eq!(password.expose(), "hunter2");
+        // The prompt is gone, so there is no window in which it is still held.
+        assert!(!state.is_session_password_prompt_open());
+        assert!(!state.has_session_logout_targets());
+    }
+
+    #[test]
+    fn an_empty_password_is_not_sent() {
+        // Discord would reject it, and the round trip would read as a wrong
+        // password rather than as an empty one.
+        let mut state = opened();
+        state.toggle_selected_display_option();
+        state.start_session_logout();
+        state.confirm_session_logout();
+
+        assert!(state.drain_pending_commands().is_empty());
+    }
+
+    #[test]
+    fn a_refetch_drops_selections_for_sessions_that_are_gone() {
+        // A logout aimed at a session that no longer exists would fail the
+        // whole request, taking the still-valid targets with it.
+        let mut state = opened();
+        state.toggle_selected_display_option();
+        assert!(state.has_session_logout_targets());
+
+        state.set_auth_sessions(vec![session("b", false)]);
+        assert!(!state.has_session_logout_targets());
+    }
+}

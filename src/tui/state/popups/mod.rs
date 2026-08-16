@@ -727,6 +727,10 @@ pub enum OptionsCategory {
     /// Privacy and safety. Read from the account rather than from config, so
     /// like connections it is not an `AppOptions` field.
     Privacy,
+    /// Sessions and authorised applications - what else has access to this
+    /// account. One category rather than two: they answer the same question,
+    /// and after a scare hunting through two panels is the last thing wanted.
+    Access,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -735,6 +739,15 @@ pub(super) struct OptionsPopupState {
     /// Linked accounts, once the connections category has fetched them.
     pub(super) connections: Vec<crate::discord::Connection>,
     pub(super) connections_loading: bool,
+    pub(super) sessions: Vec<crate::discord::AuthSession>,
+    pub(super) apps: Vec<crate::discord::AuthorisedApp>,
+    pub(super) access_loading: bool,
+    /// The password prompt for a session logout, open only while it is being
+    /// typed. Masked, so it is neither drawn nor debug-printed, and dropped
+    /// the moment the request is queued. Never written to config.
+    pub(super) access_password: Option<crate::tui::text_input::TextInputState>,
+    /// Which session rows are selected for logout.
+    pub(super) session_logout_targets: std::collections::BTreeSet<String>,
     pub(super) category: Option<OptionsCategory>,
     pub(super) capturing_push_to_talk_shortcut: bool,
 }

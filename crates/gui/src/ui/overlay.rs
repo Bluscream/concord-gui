@@ -1598,6 +1598,180 @@ pub fn privacy_view(
     )
 }
 
+/// One row of the sessions-and-apps panel.
+pub struct AccessRow {
+    pub primary: String,
+    pub secondary: String,
+    /// What the row's button does. Sessions select for logout; apps revoke.
+    pub action: String,
+    pub destructive: bool,
+    /// Whether a session row is currently selected for logout.
+    pub selected: bool,
+}
+
+/// What the panel is showing, as one value.
+///
+/// Grouped for the same reason `ServerPanel` is: passed separately the
+/// signature was long enough that clippy objected, and a caller could
+/// transpose two booleans without the compiler noticing.
+pub struct AccessPanel<'a> {
+    pub rows: &'a [AccessRow],
+    pub loading: bool,
+    pub error: Option<&'a str>,
+    /// The masked password, when the field is showing.
+    pub password: Option<&'a str>,
+    pub logout_enabled: bool,
+}
+
+/// Sessions and authorised applications.
+///
+/// One panel for both: they answer the same question - what else has access to
+/// this account - and after a scare, hunting through two panels is the last
+/// thing wanted.
+pub fn access_view(
+    panel_state: AccessPanel<'_>,
+    on_row: impl Fn(usize, &mut gpui::App) + Clone + 'static,
+    on_password: impl Fn(&str, &mut gpui::App) + Clone + 'static,
+    on_logout: impl Fn(&mut gpui::App) + 'static,
+    on_close: impl Fn(&mut gpui::App) + 'static,
+) -> Div {
+    let mut list = column()
+        .id("access-rows")
+        .max_h(px(320.))
+        .overflow_y_scroll();
+
+    // Loading, failed and "nothing else has access" are three different
+    // things, and a blank list that might mean any of them is the worst.
+    let notice = if panel_state.loading {
+        Some(t!("status-loading"))
+    } else if let Some(error) = panel_state.error {
+        Some(error.to_owned())
+    } else if panel_state.rows.is_empty() {
+        Some(t!("status-no-access"))
+    } else {
+        None
+    };
+
+    if let Some(notice) = notice {
+        list = list.child(
+            gpui::div()
+                .px(px(space::LG))
+                .py(px(space::MD))
+                .text_size(px(scaled(text::SM)))
+                .text_color(rgb(if panel_state.error.is_some() {
+                    active().danger
+                } else {
+                    active().text_subtle
+                }))
+                .child(notice),
+        );
+    }
+
+    for (index, entry) in panel_state.rows.iter().enumerate() {
+        let act = on_row.clone();
+        list = list.child(
+            row()
+                .id(("access-row", index))
+                .w_full()
+                .px(px(space::LG))
+                .py(px(space::XS))
+                .gap(px(space::SM))
+                .items_center()
+                .when(entry.selected, |r| r.bg(rgb(active().surface_active)))
+                .child(
+                    column()
+                        .flex_1()
+                        .child(
+                            gpui::div()
+                                .text_size(px(scaled(text::SM)))
+                                .text_color(rgb(active().text))
+                                .child(entry.primary.clone()),
+                        )
+                        .child(
+                            gpui::div()
+                                .text_size(px(scaled(text::XS)))
+                                .text_color(rgb(active().text_subtle))
+                                .child(entry.secondary.clone()),
+                        ),
+                )
+                .child(
+                    gpui::div()
+                        .id(("access-row-action", index))
+                        .px(px(space::SM))
+                        .py(px(space::XS))
+                        .rounded(px(4.))
+                        .cursor_pointer()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(if entry.destructive {
+                            active().danger
+                        } else {
+                            active().text_muted
+                        }))
+                        .hover(|style| style.bg(rgb(active().surface_hover)))
+                        .on_click(move |_event, _window, cx| act(index, cx))
+                        .child(entry.action.clone()),
+                ),
+        );
+    }
+
+    let mut panel = panel(&t!("label-access"), 560.).child(list);
+
+    // The password field appears only once something is selected: an always
+    // present password box on a settings panel invites typing one for no
+    // reason.
+    if let Some(password) = panel_state.password {
+        let typed = on_password.clone();
+        panel = panel.child(
+            column()
+                .w_full()
+                .px(px(space::LG))
+                .py(px(space::SM))
+                .gap(px(space::XS))
+                .child(
+                    gpui::div()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().text_subtle))
+                        .child(t!("hint-session-password")),
+                )
+                .child(
+                    gpui::div()
+                        .id("access-password")
+                        .w_full()
+                        .px(px(space::SM))
+                        .py(px(space::XS))
+                        .rounded(px(layout::RADIUS))
+                        .bg(rgb(active().surface_sunken))
+                        .text_size(px(scaled(text::SM)))
+                        .text_color(rgb(active().text))
+                        // Bullets. The real value never reaches this function.
+                        .child(password.to_owned())
+                        .on_key_down(move |event: &gpui::KeyDownEvent, _window, cx| {
+                            typed(&event.keystroke.key, cx);
+                        }),
+                ),
+        );
+    }
+
+    panel.child(
+        row()
+            .w_full()
+            .px(px(space::LG))
+            .py(px(space::MD))
+            .gap(px(space::SM))
+            .justify_end()
+            .when(panel_state.logout_enabled, |r| {
+                let logout = std::rc::Rc::new(on_logout);
+                r.child(button(
+                    "access-logout",
+                    &t!("action-log-out-sessions"),
+                    true,
+                    move |cx| logout(cx),
+                ))
+            })
+            .child(button("access-close", &t!("action-close"), false, on_close)),
+    )
+}
+
 /// One entry in a context menu.
 pub struct ContextItem {
     pub label: String,

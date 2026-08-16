@@ -32,6 +32,7 @@ mod read;
 mod request_lifecycle;
 mod rest;
 mod rpc;
+mod secret;
 pub(in crate::discord) mod state;
 pub(crate) mod upload;
 mod user_settings;
@@ -123,19 +124,20 @@ pub use profile::{
 pub use read::ReadStateInfo;
 pub(crate) use request_lifecycle::GuildMemberSearchSurface;
 pub use rest::{
-    AFK_TIMEOUTS, AuditLogAction, AuditLogEntryInfo, AutoModAction, AutoModRule, AutoModTrigger,
-    ChannelEdit, Connection, ConnectionVisibility, DefaultNotifications, DmScanLevel,
-    ExplicitContentFilter, ForumPostPage, FriendDiscovery, FriendSources, GuildBanInfo, GuildEdit,
-    GuildEmojiInfo, GuildInviteInfo, InvitePreview, MAX_BAN_DELETE_MESSAGE_SECONDS,
-    MAX_CHANNEL_NAME_CHARS, MAX_CHANNEL_TOPIC_CHARS, MAX_EMOJI_BYTES, MAX_GUILD_NAME_CHARS,
-    MAX_INVITE_MAX_AGE_SECONDS, MAX_INVITE_MAX_USES, MAX_MESSAGE_STICKERS, MAX_ROLE_NAME_CHARS,
-    MAX_SLOWMODE_SECONDS, MAX_SOUND_NAME_CHARS, MAX_VOICE_USER_LIMIT, MIN_GUILD_NAME_CHARS,
-    MIN_SOUND_NAME_CHARS, NewChannelKind, OverwriteTarget, PrivacyEdit, PrivacySetting,
-    PrivacyState, ReactionUsersPage, RoleEdit, SoundboardSound, clamp_invite_max_age,
-    clamp_invite_max_uses, emoji_name_from_filename, friend_request_target, invite_code_from,
-    is_valid_emoji_name, is_valid_guild_name, is_valid_sound_name, nearest_afk_timeout,
-    verification_code, verification_label,
+    AFK_TIMEOUTS, AuditLogAction, AuditLogEntryInfo, AuthSession, AuthorisedApp, AutoModAction,
+    AutoModRule, AutoModTrigger, ChannelEdit, Connection, ConnectionVisibility,
+    DefaultNotifications, DmScanLevel, ExplicitContentFilter, ForumPostPage, FriendDiscovery,
+    FriendSources, GuildBanInfo, GuildEdit, GuildEmojiInfo, GuildInviteInfo, InvitePreview,
+    MAX_BAN_DELETE_MESSAGE_SECONDS, MAX_CHANNEL_NAME_CHARS, MAX_CHANNEL_TOPIC_CHARS,
+    MAX_EMOJI_BYTES, MAX_GUILD_NAME_CHARS, MAX_INVITE_MAX_AGE_SECONDS, MAX_INVITE_MAX_USES,
+    MAX_MESSAGE_STICKERS, MAX_ROLE_NAME_CHARS, MAX_SLOWMODE_SECONDS, MAX_SOUND_NAME_CHARS,
+    MAX_VOICE_USER_LIMIT, MIN_GUILD_NAME_CHARS, MIN_SOUND_NAME_CHARS, NewChannelKind,
+    OverwriteTarget, PrivacyEdit, PrivacySetting, PrivacyState, ReactionUsersPage, RoleEdit,
+    SoundboardSound, clamp_invite_max_age, clamp_invite_max_uses, emoji_name_from_filename,
+    friend_request_target, invite_code_from, is_valid_emoji_name, is_valid_guild_name,
+    is_valid_sound_name, nearest_afk_timeout, verification_code, verification_label,
 };
+pub use secret::Secret;
 pub use state::{
     ChannelRecipientState, ChannelState, ChannelUnreadState, ChannelVisibilityStats,
     CurrentVoiceConnectionState, DiscordSnapshot, DiscordState, GuildMemberListEntry,

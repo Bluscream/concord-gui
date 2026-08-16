@@ -36,6 +36,30 @@ pub(in crate::tui::ui) fn render_options_popup(
     );
     render_option_gauges(frame, content, &items, visible_items, scroll);
     render_vertical_scrollbar(frame, inner, scroll, visible_items, items.len());
+    render_session_password_prompt(frame, popup, state);
+}
+
+/// The password Discord requires before logging other sessions out.
+///
+/// Drawn over the list rather than beside it: while it is open the keyboard
+/// belongs to the field, and a layout that still showed the rows as reachable
+/// would say otherwise.
+fn render_session_password_prompt(frame: &mut Frame, popup: Rect, state: &DashboardState) {
+    let Some(shown) = state.session_password_display() else {
+        return;
+    };
+
+    let height = 3;
+    let prompt = Rect {
+        x: popup.x,
+        y: popup.y + popup.height.saturating_sub(height).min(popup.height),
+        width: popup.width,
+        height: height.min(popup.height),
+    };
+    frame.render_widget(Clear, prompt);
+    let inner = render_modal_frame(frame, prompt, "Password to log those sessions out");
+    // Bullets, from the input's own masking - the value never reaches here.
+    frame.render_widget(Paragraph::new(shown), inner);
 }
 
 pub(in crate::tui::ui) fn options_popup_list_layout(

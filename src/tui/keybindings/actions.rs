@@ -129,6 +129,7 @@ define_ui_actions! {
     OpenSoundboard => ("Soundboard", &[&[Leader, Char('v'), Char('b')]], None),
     OpenConnections => ("Linked accounts", &[&[Leader, Char('l')]], None),
     OpenPrivacy => ("Privacy and safety", &[&[Leader, Char('y')]], None),
+    OpenAccess => ("Sessions and apps", &[&[Leader, Char('k')]], None),
     VoiceLeave => ("leave voice", &[&[Leader, Char('v'), Char('l')]], None),
 }
 
@@ -425,16 +426,18 @@ pub enum OptionsCategoryShortcut {
     Voice,
     Connections,
     Privacy,
+    Access,
 }
 
 impl OptionsCategoryShortcut {
-    pub(in crate::tui) const ALL: [Self; 6] = [
+    pub(in crate::tui) const ALL: [Self; 7] = [
         Self::Display,
         Self::Composer,
         Self::Notifications,
         Self::Voice,
         Self::Connections,
         Self::Privacy,
+        Self::Access,
     ];
 
     pub(in crate::tui) const fn key(self) -> char {
@@ -447,6 +450,7 @@ impl OptionsCategoryShortcut {
             Self::Connections => 'l',
             // Not 'p', which is a leader prefix.
             Self::Privacy => 'y',
+            Self::Access => 'k',
         }
     }
 

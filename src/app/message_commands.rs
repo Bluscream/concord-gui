@@ -468,6 +468,63 @@ load_guild_panel!(
 );
 
 /// Fetch a sound list. `None` asks for the default sounds.
+pub(super) async fn load_auth_sessions(client: DiscordClient) {
+    match client.auth_sessions().await {
+        Ok(sessions) => {
+            client
+                .publish_event(AppEvent::AuthSessionsLoaded { sessions })
+                .await;
+        }
+        Err(error) => {
+            log_app_error("load sessions failed", &error);
+            client
+                .publish_event(AppEvent::AuthSessionsLoadFailed {
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
+pub(super) async fn revoke_auth_sessions(
+    client: DiscordClient,
+    id_hashes: Vec<String>,
+    password: crate::discord::Secret,
+) {
+    if let Err(error) = client.revoke_auth_sessions(&id_hashes, &password).await {
+        report_moderation_failure(&client, "logging out", "those sessions", &error).await;
+        return;
+    }
+    // Refetched rather than removed locally: a partial failure would otherwise
+    // leave rows on screen for sessions that are gone, or drop rows for ones
+    // that are not.
+    load_auth_sessions(client).await;
+}
+
+pub(super) async fn load_authorised_apps(client: DiscordClient) {
+    match client.authorised_apps().await {
+        Ok(apps) => {
+            client
+                .publish_event(AppEvent::AuthorisedAppsLoaded { apps })
+                .await;
+        }
+        Err(error) => {
+            log_app_error("load authorised apps failed", &error);
+            client
+                .publish_event(AppEvent::AuthorisedAppsLoadFailed {
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
+pub(super) async fn revoke_authorised_app(client: DiscordClient, id: String, label: String) {
+    if let Err(error) = client.revoke_authorised_app(&id).await {
+        report_moderation_failure(&client, "revoking", &label, &error).await;
+    }
+}
+
 pub(super) async fn load_connections(client: DiscordClient) {
     match client.connections().await {
         Ok(connections) => {

@@ -712,6 +712,18 @@ pub enum AppEvent {
     ConnectionsLoaded {
         connections: Vec<crate::discord::Connection>,
     },
+    AuthSessionsLoaded {
+        sessions: Vec<crate::discord::AuthSession>,
+    },
+    AuthSessionsLoadFailed {
+        message: String,
+    },
+    AuthorisedAppsLoaded {
+        apps: Vec<crate::discord::AuthorisedApp>,
+    },
+    AuthorisedAppsLoadFailed {
+        message: String,
+    },
     ConnectionsLoadFailed {
         message: String,
     },
@@ -1042,6 +1054,10 @@ define_app_event_kinds! {
     SoundboardSoundsLoaded: AppEvent::SoundboardSoundsLoaded { .. },
     SoundboardSoundsLoadFailed: AppEvent::SoundboardSoundsLoadFailed { .. },
     ConnectionsLoaded: AppEvent::ConnectionsLoaded { .. },
+    AuthSessionsLoaded: AppEvent::AuthSessionsLoaded { .. },
+    AuthSessionsLoadFailed: AppEvent::AuthSessionsLoadFailed { .. },
+    AuthorisedAppsLoaded: AppEvent::AuthorisedAppsLoaded { .. },
+    AuthorisedAppsLoadFailed: AppEvent::AuthorisedAppsLoadFailed { .. },
     ConnectionsLoadFailed: AppEvent::ConnectionsLoadFailed { .. },
     AutoModRulesLoaded: AppEvent::AutoModRulesLoaded { .. },
     AutoModRulesLoadFailed: AppEvent::AutoModRulesLoadFailed { .. },
@@ -2108,6 +2124,10 @@ impl AppEventKind {
             | AppEventKind::SoundboardSoundPlayed
             | AppEventKind::SoundboardSoundsLoaded
             | AppEventKind::SoundboardSoundsLoadFailed
+            | AppEventKind::AuthSessionsLoaded
+            | AppEventKind::AuthSessionsLoadFailed
+            | AppEventKind::AuthorisedAppsLoaded
+            | AppEventKind::AuthorisedAppsLoadFailed
             | AppEventKind::ConnectionsLoaded
             | AppEventKind::ConnectionsLoadFailed
             | AppEventKind::AutoModRulesLoaded

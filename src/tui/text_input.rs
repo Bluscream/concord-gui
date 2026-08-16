@@ -5,10 +5,33 @@ use super::text_cursor::{
     previous_word_boundary, vertical_cursor_target,
 };
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Default, Eq, PartialEq)]
 pub(in crate::tui) struct TextInputState {
     value: String,
     cursor_byte_index: usize,
+    /// Whether this holds a credential. Set once at creation; it makes the
+    /// value render as bullets and keeps it out of `{:?}`.
+    masked: bool,
+}
+
+// Hand-written rather than derived: the derive would print a password in full
+// from any `{:?}` of a popup, which is what a debug log or a failing test
+// assertion does.
+impl std::fmt::Debug for TextInputState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TextInputState")
+            .field(
+                "value",
+                if self.masked {
+                    &"[redacted]"
+                } else {
+                    &self.value
+                },
+            )
+            .field("cursor_byte_index", &self.cursor_byte_index)
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -28,6 +51,24 @@ pub(in crate::tui) enum TextEditAction {
 }
 
 impl TextInputState {
+    /// An input whose contents are a credential.
+    pub(in crate::tui) fn masked() -> Self {
+        Self {
+            masked: true,
+            ..Self::default()
+        }
+    }
+
+    /// What to draw. Bullets for a masked input, so a password is not put on
+    /// screen in a terminal someone else may be looking at.
+    pub(in crate::tui) fn display_value(&self) -> String {
+        if self.masked {
+            "•".repeat(self.value.chars().count())
+        } else {
+            self.value.clone()
+        }
+    }
+
     pub(in crate::tui) fn value(&self) -> &str {
         &self.value
     }
@@ -233,5 +274,52 @@ mod tests {
 
         assert!(!input.replace_range(1..2, "x"));
         assert_eq!(input.value(), "가나");
+    }
+}
+
+#[cfg(test)]
+mod masking_tests {
+    use super::*;
+
+    fn typed(value: &str, masked: bool) -> TextInputState {
+        let mut input = if masked {
+            TextInputState::masked()
+        } else {
+            TextInputState::default()
+        };
+        input.set_value(value.to_owned());
+        input
+    }
+
+    #[test]
+    fn a_masked_input_never_prints_its_value() {
+        // The real risk is `{:?}` on a whole popup, which a debug log or a
+        // failing assertion does without anyone thinking about it.
+        let input = typed("hunter2", true);
+
+        assert!(!format!("{input:?}").contains("hunter2"));
+        assert!(!input.display_value().contains("hunter2"));
+    }
+
+    #[test]
+    fn an_ordinary_input_is_unaffected() {
+        // Masking every input would hide the emoji and channel names that the
+        // other prompts exist to show.
+        let input = typed("general", false);
+
+        assert!(format!("{input:?}").contains("general"));
+        assert_eq!(input.display_value(), "general");
+    }
+
+    #[test]
+    fn the_masked_value_is_still_readable_for_the_request() {
+        assert_eq!(typed("hunter2", true).value(), "hunter2");
+    }
+
+    #[test]
+    fn bullets_count_characters_not_bytes() {
+        // A multi-byte password would otherwise show more bullets than it has
+        // characters, which reads as typing that did not land where it did.
+        assert_eq!(typed("héllo", true).display_value().chars().count(), 5);
     }
 }

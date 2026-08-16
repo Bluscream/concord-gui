@@ -543,6 +543,21 @@ pub enum AppCommand {
     },
     /// Fetch every linked account.
     LoadConnections,
+    /// Fetch every session signed in to this account.
+    LoadAuthSessions,
+    /// Log other sessions out.
+    ///
+    /// The password is the user's to type; it is carried for the one request
+    /// that needs it and never stored. `Secret` keeps it out of any `{:?}`.
+    RevokeAuthSessions {
+        id_hashes: Vec<String>,
+        password: crate::discord::Secret,
+    },
+    LoadAuthorisedApps,
+    RevokeAuthorisedApp {
+        id: String,
+        label: String,
+    },
     /// Change what a connection shows on your profile.
     ModifyConnection {
         kind: String,

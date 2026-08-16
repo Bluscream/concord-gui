@@ -36,6 +36,7 @@ mod guild_settings;
 mod guilds;
 mod invites;
 mod privacy;
+mod sessions;
 
 pub use automod::{AutoModAction, AutoModRule, AutoModTrigger};
 pub use channel_management::{
@@ -61,6 +62,7 @@ pub use privacy::{
 };
 pub use relationships::friend_request_target;
 pub use roles::{MAX_ROLE_NAME_CHARS, RoleEdit};
+pub use sessions::{AuthSession, AuthorisedApp};
 pub use soundboard::{
     MAX_SOUND_NAME_CHARS, MIN_SOUND_NAME_CHARS, SoundboardSound, is_valid_sound_name,
 };

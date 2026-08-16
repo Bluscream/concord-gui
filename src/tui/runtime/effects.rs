@@ -209,6 +209,19 @@ fn push_dashboard_effect(event: AppEvent, ctx: &mut EffectContext<'_>) {
             ctx.state.apply_soundboard_failure(message);
             return;
         }
+        AppEvent::AuthSessionsLoaded { sessions } => {
+            ctx.state.set_auth_sessions(sessions);
+            return;
+        }
+        AppEvent::AuthorisedAppsLoaded { apps } => {
+            ctx.state.set_authorised_apps(apps);
+            return;
+        }
+        AppEvent::AuthSessionsLoadFailed { .. } | AppEvent::AuthorisedAppsLoadFailed { .. } => {
+            // The message reaches the status line through the normal path;
+            // this only stops the panel claiming to be loading.
+            ctx.state.mark_access_load_failed();
+        }
         AppEvent::ConnectionsLoaded { connections } => {
             ctx.state.set_connections(connections);
             return;

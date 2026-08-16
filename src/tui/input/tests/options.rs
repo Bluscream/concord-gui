@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::tui::keybindings::OptionsCategoryShortcut;
+
 type DisplayOptionCheck = fn(&DashboardState) -> bool;
 
 #[test]
@@ -248,7 +250,12 @@ fn options_popup_sequences_own_continuations_then_restore_fixed_shortcuts() {
             .into_iter()
             .map(|item| item.value.expect("category has a shortcut"))
             .collect::<Vec<_>>(),
-        ["d", "c", "n", "v", "l", "y"]
+        // Derived from the enum rather than typed out: this list broke three
+        // times as categories were added, and each break taught nothing.
+        OptionsCategoryShortcut::ALL
+            .iter()
+            .map(|category| category.key().to_string())
+            .collect::<Vec<_>>()
     );
 
     handle_key(&mut state, char_key('z'));

@@ -125,9 +125,25 @@ The privacy group is complete.
 
 ### Sessions and authorised apps
 
-No list of active sessions and no way to log another one out, which is the
-first thing anyone wants after a scare. No list of authorised OAuth
-applications or bots, and no way to revoke one.
+Both in one panel in both clients - TUI `<leader> k`, GUI the same action -
+because they answer the same question, and after a scare hunting through two
+panels is the last thing wanted.
+
+Sessions are selected and logged out in a batch; applications are revoked one
+at a time. The difference is Discord's: a session logout needs the account
+password and an app revocation does not, so batching only earns its keep on the
+side that has a prompt to amortise.
+
+The password is typed, used for that one request and dropped. It is never
+stored, never written to config, and cannot reach a log: it travels as
+`Secret`, whose `Debug` and `Display` both print `[redacted]`, and it is typed
+into a masked `TextInputState` whose hand-written `Debug` does the same. Both
+have tests, because `AppCommand` derives `Debug` and a plain `String` there
+would be printed in full by any `{:?}` written later by someone with no reason
+to suspect that variant carries a credential.
+
+Still missing: credentials and two-factor enrolment, which are the rest of the
+account settings.
 
 ### Blocked and ignored users
 

@@ -1019,6 +1019,10 @@ impl DiscordState {
             | AppEvent::GuildAuditLogLoaded { .. }
             | AppEvent::GuildAuditLogLoadFailed { .. }
             | AppEvent::InviteCreated { .. }
+            | AppEvent::AuthSessionsLoaded { .. }
+            | AppEvent::AuthSessionsLoadFailed { .. }
+            | AppEvent::AuthorisedAppsLoaded { .. }
+            | AppEvent::AuthorisedAppsLoadFailed { .. }
             | AppEvent::ConnectionsLoaded { .. }
             | AppEvent::ConnectionsLoadFailed { .. }
             | AppEvent::AutoModRulesLoaded { .. }

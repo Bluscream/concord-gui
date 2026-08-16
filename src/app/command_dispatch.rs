@@ -552,6 +552,22 @@ impl CommandDispatcher {
                     .publish_event(crate::discord::AppEvent::GuildForgotten { guild_id })
                     .await;
             }
+            AppCommand::LoadAuthSessions => {
+                message_commands::load_auth_sessions(self.client.clone()).await;
+            }
+            AppCommand::RevokeAuthSessions {
+                id_hashes,
+                password,
+            } => {
+                message_commands::revoke_auth_sessions(self.client.clone(), id_hashes, password)
+                    .await;
+            }
+            AppCommand::LoadAuthorisedApps => {
+                message_commands::load_authorised_apps(self.client.clone()).await;
+            }
+            AppCommand::RevokeAuthorisedApp { id, label } => {
+                message_commands::revoke_authorised_app(self.client.clone(), id, label).await;
+            }
             AppCommand::LoadConnections => {
                 message_commands::load_connections(self.client.clone()).await;
             }

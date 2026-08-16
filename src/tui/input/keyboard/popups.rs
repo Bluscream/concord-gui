@@ -1597,6 +1597,39 @@ fn handle_options_popup_fixed_key(
         return None;
     }
 
+    // The password prompt owns every key while it is open, or typing a
+    // password containing "d" would unlink something.
+    if state.is_session_password_prompt_open() {
+        // Reuses the composer's key mapping so the field behaves the way every
+        // other text field here does, including any rebinding.
+        match state.key_bindings().composer_action(key) {
+            ComposerAction::Submit => state.confirm_session_logout(),
+            ComposerAction::Close => state.cancel_session_logout(),
+            ComposerAction::ClearInput => {
+                state.edit_session_password(TextEditAction::DeleteToLineStart);
+            }
+            ComposerAction::EditText(action) => state.edit_session_password(action),
+            ComposerAction::InsertChar(value) => state.insert_session_password_char(value),
+            // Newlines, editors and attachments have no meaning in a password.
+            _ => {}
+        }
+        return Some(None);
+    }
+
+    if state.is_access_category_open() {
+        match key.code {
+            KeyCode::Char('r') => {
+                state.revoke_selected_authorised_app();
+                return Some(None);
+            }
+            KeyCode::Char('L') => {
+                state.start_session_logout();
+                return Some(None);
+            }
+            _ => {}
+        }
+    }
+
     // Taken before the shared router, which has no rows-of-fetched-data
     // notion and would read these as the ordinary option keys.
     if state.is_connections_category_open() {
