@@ -326,6 +326,54 @@ impl DiscordClient {
             .await
     }
 
+    pub async fn prune_count(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+        days: u16,
+        include_roles: &[crate::discord::ids::Id<crate::discord::ids::marker::RoleMarker>],
+    ) -> Result<u64> {
+        self.rest.prune_count(guild_id, days, include_roles).await
+    }
+
+    pub async fn prune_guild(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+        days: u16,
+        include_roles: &[crate::discord::ids::Id<crate::discord::ids::marker::RoleMarker>],
+    ) -> Result<u64> {
+        self.rest.prune_guild(guild_id, days, include_roles).await
+    }
+
+    pub async fn welcome_screen(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+    ) -> Result<crate::discord::WelcomeScreen> {
+        self.rest.welcome_screen(guild_id).await
+    }
+
+    pub async fn modify_welcome_screen(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+        edit: &crate::discord::WelcomeScreenEdit,
+    ) -> Result<()> {
+        self.rest.modify_welcome_screen(guild_id, edit).await
+    }
+
+    pub async fn guild_widget(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+    ) -> Result<crate::discord::GuildWidget> {
+        self.rest.guild_widget(guild_id).await
+    }
+
+    pub async fn modify_guild_widget(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+        widget: &crate::discord::GuildWidget,
+    ) -> Result<()> {
+        self.rest.modify_guild_widget(guild_id, widget).await
+    }
+
     pub async fn modify_account(
         &self,
         edit: &crate::discord::AccountEdit,

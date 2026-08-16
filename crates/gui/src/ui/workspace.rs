@@ -401,6 +401,9 @@ pub enum RiskAction {
     /// Adding, removing or blocking someone. Carries the command, which is
     /// already built by the time the warning goes up.
     FriendAction(Box<AppCommand>),
+    /// Removing inactive members. Carries the command, which needs the window
+    /// and the count that were on screen when it was offered.
+    PruneMembers(Box<AppCommand>),
 }
 
 impl RiskAction {
@@ -412,6 +415,7 @@ impl RiskAction {
             Self::LeaveGuild => RiskKind::LeaveGuild,
             Self::ProfileEdit(..) => RiskKind::ProfileEdit,
             Self::FriendAction(..) => RiskKind::FriendAction,
+            Self::PruneMembers(..) => RiskKind::PruneMembers,
         }
     }
 
@@ -629,6 +633,9 @@ impl ImageViewerView {
     }
 }
 
+/// Discord's own default prune window.
+const DEFAULT_PRUNE_DAYS: u16 = 30;
+
 /// Which part of the server-management panel is showing.
 ///
 /// One panel with three tabs rather than three separate ones: they are all
@@ -643,10 +650,13 @@ pub enum ServerTab {
     Sounds,
     AutoMod,
     AuditLog,
+    /// The welcome screen, the widget, and pruning - how members arrive and
+    /// leave. One tab because each is two or three rows.
+    Membership,
 }
 
 impl ServerTab {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Settings,
         Self::Invites,
         Self::Roles,
@@ -654,6 +664,7 @@ impl ServerTab {
         Self::Sounds,
         Self::AutoMod,
         Self::AuditLog,
+        Self::Membership,
     ];
 
     pub fn label(self) -> String {
@@ -665,24 +676,35 @@ impl ServerTab {
             Self::Sounds => t!("label-soundboard"),
             Self::AutoMod => t!("label-automod"),
             Self::AuditLog => t!("label-audit-log"),
+            Self::Membership => t!("label-membership"),
         }
     }
 
     /// What to fetch when this tab opens.
     ///
-    /// `None` for settings and roles: both arrive with the guild and live in
-    /// the snapshot, so the tab reads them rather than asking for them.
-    fn load(self, guild_id: Id<marker::GuildMarker>) -> Option<AppCommand> {
-        Some(match self {
-            Self::Settings | Self::Roles => return None,
-            Self::Invites => AppCommand::LoadGuildInvites { guild_id },
-            Self::Emoji => AppCommand::LoadGuildEmojis { guild_id },
-            Self::Sounds => AppCommand::LoadSoundboardSounds {
+    /// A list rather than one command: membership needs three. Empty for
+    /// settings and roles, which arrive with the guild and are read from the
+    /// snapshot rather than asked for.
+    fn load(self, guild_id: Id<marker::GuildMarker>) -> Vec<AppCommand> {
+        match self {
+            Self::Settings | Self::Roles => Vec::new(),
+            Self::Invites => vec![AppCommand::LoadGuildInvites { guild_id }],
+            Self::Emoji => vec![AppCommand::LoadGuildEmojis { guild_id }],
+            Self::Sounds => vec![AppCommand::LoadSoundboardSounds {
                 guild_id: Some(guild_id),
-            },
-            Self::AutoMod => AppCommand::LoadAutoModRules { guild_id },
-            Self::AuditLog => AppCommand::LoadGuildAuditLog { guild_id },
-        })
+            }],
+            Self::AutoMod => vec![AppCommand::LoadAutoModRules { guild_id }],
+            Self::AuditLog => vec![AppCommand::LoadGuildAuditLog { guild_id }],
+            Self::Membership => vec![
+                AppCommand::LoadWelcomeScreen { guild_id },
+                AppCommand::LoadGuildWidget { guild_id },
+                AppCommand::LoadPruneCount {
+                    guild_id,
+                    days: DEFAULT_PRUNE_DAYS,
+                    include_roles: Vec::new(),
+                },
+            ],
+        }
     }
 }
 
@@ -700,6 +722,12 @@ pub struct ServerManagementView {
     /// can be played but not managed.
     pub sounds: Vec<concord::discord::SoundboardSound>,
     pub automod: Vec<concord::discord::AutoModRule>,
+    pub welcome: Option<concord::discord::WelcomeScreen>,
+    pub widget: Option<concord::discord::GuildWidget>,
+    pub prune_days: u16,
+    /// `None` until the count has arrived - not the same as zero, and a panel
+    /// showing them alike would offer to prune nobody.
+    pub prune_count: Option<u64>,
     /// The guild's settings as label and value, read from the snapshot.
     pub settings: Vec<(String, String)>,
     /// Set while the open tab's fetch is outstanding. Distinct from an empty
@@ -2013,7 +2041,7 @@ impl Workspace {
             RiskAction::ProfileEdit(guild_id, nickname) => {
                 self.set_nickname_confirmed(guild_id, nickname)
             }
-            RiskAction::FriendAction(command) => {
+            RiskAction::FriendAction(command) | RiskAction::PruneMembers(command) => {
                 if let Some(handle) = &self.handle {
                     handle.send(*command);
                 }
@@ -4683,6 +4711,161 @@ impl Workspace {
     }
 
     /// Open the server-management panel on the given tab.
+    /// The membership tab's rows as label and value.
+    fn membership_rows(&self) -> Vec<(String, String)> {
+        let Some(view) = &self.server_management else {
+            return Vec::new();
+        };
+        vec![
+            (
+                t!("label-welcome-screen"),
+                // "unknown" rather than "off": one that has not arrived is not
+                // one Discord confirmed is off.
+                view.welcome.as_ref().map_or_else(
+                    || t!("state-unknown"),
+                    |screen| {
+                        if screen.enabled {
+                            t!("state-on")
+                        } else {
+                            t!("state-off")
+                        }
+                    },
+                ),
+            ),
+            (
+                t!("label-welcome-description"),
+                view.welcome
+                    .as_ref()
+                    .and_then(|screen| screen.description.clone())
+                    .unwrap_or_else(|| t!("state-not-set")),
+            ),
+            (
+                t!("label-widget"),
+                view.widget.as_ref().map_or_else(
+                    || t!("state-unknown"),
+                    |widget| {
+                        if widget.enabled {
+                            t!("state-on")
+                        } else {
+                            t!("state-off")
+                        }
+                    },
+                ),
+            ),
+            (
+                t!("label-widget-channel"),
+                view.widget
+                    .as_ref()
+                    .and_then(|widget| widget.channel_id)
+                    .map_or_else(|| t!("state-no-invite"), |id| self.channel_name(id)),
+            ),
+            (t!("label-prune-after"), format!("{} days", view.prune_days)),
+            (
+                t!("label-prune"),
+                match view.prune_count {
+                    // Zero is a real answer and the commonest one: Discord
+                    // exempts every member who has any role at all.
+                    Some(count) => {
+                        t!("status-prune-count", "count" => i64::try_from(count).unwrap_or(i64::MAX))
+                    }
+                    None => t!("status-loading"),
+                },
+            ),
+        ]
+    }
+
+    /// Act on a membership row.
+    pub fn activate_membership_row(&mut self, index: usize) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(view) = &mut self.server_management else {
+            return;
+        };
+        let guild_id = view.guild_id;
+        match index {
+            0 => {
+                let Some(screen) = view.welcome.as_mut() else {
+                    return;
+                };
+                screen.enabled = !screen.enabled;
+                handle.send(AppCommand::ModifyWelcomeScreen {
+                    guild_id,
+                    edit: concord::discord::WelcomeScreenEdit {
+                        enabled: Some(screen.enabled),
+                        ..Default::default()
+                    },
+                });
+            }
+            2 => {
+                let Some(widget) = view.widget.as_mut() else {
+                    return;
+                };
+                widget.enabled = !widget.enabled;
+                handle.send(AppCommand::ModifyGuildWidget {
+                    guild_id,
+                    widget: widget.clone(),
+                });
+            }
+            4 => {
+                // Cycles through what Discord accepts, wrapping, so every
+                // window is reachable from every other.
+                let current = concord::discord::PRUNE_DAYS
+                    .iter()
+                    .position(|days| *days == view.prune_days)
+                    .unwrap_or(0);
+                let next = (current + 1) % concord::discord::PRUNE_DAYS.len();
+                view.prune_days = concord::discord::PRUNE_DAYS[next];
+                // The old count described the old window, so it is cleared
+                // rather than left to describe the wrong one.
+                view.prune_count = None;
+                handle.send(AppCommand::LoadPruneCount {
+                    guild_id,
+                    days: view.prune_days,
+                    include_roles: Vec::new(),
+                });
+            }
+            5 => self.prune_guild(),
+            // The description and the widget channel need text rather than a
+            // toggle, and are edited through the second action.
+            _ => {}
+        }
+    }
+
+    /// The guild's name, or a stand-in for the log line.
+    fn guild_name_or_default(&self, guild_id: Id<marker::GuildMarker>) -> String {
+        self.model
+            .guilds
+            .iter()
+            .find(|guild| guild.id == Some(guild_id))
+            .map_or_else(|| "this server".to_owned(), |guild| guild.name.clone())
+    }
+
+    /// Remove inactive members, behind the risk prompt.
+    fn prune_guild(&mut self) {
+        let Some(view) = &self.server_management else {
+            return;
+        };
+        // Nothing to confirm when the count is zero or has not arrived: a
+        // warning about removing nobody teaches the wrong lesson about it.
+        if view.prune_count.unwrap_or(0) == 0 {
+            return;
+        }
+        let (guild_id, days) = (view.guild_id, view.prune_days);
+        let command = AppCommand::PruneGuild {
+            guild_id,
+            days,
+            include_roles: Vec::new(),
+            label: self.guild_name_or_default(guild_id),
+        };
+        if !self.confirm_risk(RiskAction::PruneMembers(Box::new(command.clone()))) {
+            return;
+        }
+        if let Some(handle) = &self.handle {
+            handle.send(command);
+        }
+    }
+
     pub fn open_server_management(&mut self, tab: ServerTab) {
         let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
             return;
@@ -4698,18 +4881,24 @@ impl Workspace {
             sounds: Vec::new(),
             automod: Vec::new(),
             settings: Vec::new(),
+            welcome: None,
+            widget: None,
+            prune_days: DEFAULT_PRUNE_DAYS,
+            prune_count: None,
             loading: true,
             error: None,
         });
-        match tab.load(guild_id) {
-            Some(command) => handle.send(command),
+        let fetches = tab.load(guild_id);
+        if fetches.is_empty() {
             // Settings and roles read the snapshot, so nothing is asked for.
-            None => {
-                self.fill_server_snapshot_tab(tab);
-                if let Some(view) = &mut self.server_management {
-                    view.loading = false;
-                }
+            self.fill_server_snapshot_tab(tab);
+            if let Some(view) = &mut self.server_management {
+                view.loading = false;
             }
+            return;
+        }
+        for command in fetches {
+            handle.send(command);
         }
     }
 
@@ -4785,11 +4974,14 @@ impl Workspace {
             ServerTab::Sounds => !view.sounds.is_empty(),
             ServerTab::AutoMod => !view.automod.is_empty(),
             ServerTab::AuditLog => !view.audit_log.is_empty(),
+            ServerTab::Membership => view.welcome.is_some() && view.widget.is_some(),
         };
         view.loading = !already_loaded;
         let guild_id = view.guild_id;
-        if !already_loaded && let Some(command) = tab.load(guild_id) {
-            handle.send(command);
+        if !already_loaded {
+            for command in tab.load(guild_id) {
+                handle.send(command);
+            }
         }
         self.fill_server_snapshot_tab(tab);
     }
@@ -4800,15 +4992,18 @@ impl Workspace {
             return;
         };
         let (tab, guild_id) = (view.tab, view.guild_id);
-        match tab.load(guild_id) {
-            Some(command) => {
+        let fetches = tab.load(guild_id);
+        match fetches.is_empty() {
+            false => {
                 view.loading = true;
                 view.error = None;
-                handle.send(command);
+                for command in fetches {
+                    handle.send(command);
+                }
             }
             // A refresh of a snapshot tab re-reads rather than spending a
             // request that would fetch nothing.
-            None => self.fill_server_snapshot_tab(tab),
+            true => self.fill_server_snapshot_tab(tab),
         }
     }
 
@@ -6880,6 +7075,47 @@ impl Workspace {
                     view.error = Some(message.clone());
                 }
             }
+            AppEvent::WelcomeScreenLoaded { guild_id, screen } => {
+                if let Some(view) = &mut self.server_management
+                    && view.guild_id == *guild_id
+                {
+                    view.loading = false;
+                    view.error = None;
+                    view.welcome = Some(screen.clone());
+                }
+            }
+            AppEvent::GuildWidgetLoaded { guild_id, widget } => {
+                if let Some(view) = &mut self.server_management
+                    && view.guild_id == *guild_id
+                {
+                    view.loading = false;
+                    view.error = None;
+                    view.widget = Some(widget.clone());
+                }
+            }
+            AppEvent::PruneCountLoaded { guild_id, count } => {
+                if let Some(view) = &mut self.server_management
+                    && view.guild_id == *guild_id
+                {
+                    view.prune_count = Some(*count);
+                }
+            }
+            AppEvent::GuildPruned { guild_id, .. } => {
+                if let Some(view) = &mut self.server_management
+                    && view.guild_id == *guild_id
+                {
+                    // Zeroed rather than left alone: the old count described
+                    // members who have just been removed, so leaving it would
+                    // offer to prune them again.
+                    view.prune_count = Some(0);
+                }
+            }
+            AppEvent::MembershipRequestFailed { message } => {
+                if let Some(view) = &mut self.server_management {
+                    view.loading = false;
+                    view.error = Some(message.clone());
+                }
+            }
             AppEvent::TotpEnabled { backup_codes } => {
                 if let Some(view) = &mut self.account {
                     // Kept on screen rather than flashed: these are the only
@@ -8539,7 +8775,22 @@ impl Workspace {
                 .map(|tab| (tab.label(), *tab == view.tab))
                 .collect();
 
+            let membership = self.membership_rows();
             let (rows, empty_label) = match view.tab {
+                ServerTab::Membership => (
+                    membership
+                        .iter()
+                        .map(|(label, value)| overlay::ServerRow {
+                            primary: label.clone(),
+                            secondary: Some(value.clone()),
+                            // Every row is activated the same way; which of
+                            // them does something is decided by the handler.
+                            action: None,
+                            secondary_action: Some(t!("action-change")),
+                        })
+                        .collect::<Vec<_>>(),
+                    t!("status-loading"),
+                ),
                 ServerTab::Settings => (
                     view.settings
                         .iter()
@@ -8698,7 +8949,11 @@ impl Workspace {
                                 ServerTab::AutoMod => workspace.delete_automod_rule(index),
                                 // The settings list has no destructive action;
                                 // its rows are edited through the second one.
-                                ServerTab::AuditLog | ServerTab::Settings => {}
+                                // Pruning is destructive but goes through the
+                                // risk prompt, not this row action.
+                                ServerTab::AuditLog
+                                | ServerTab::Settings
+                                | ServerTab::Membership => {}
                             }
                             cx.notify();
                         });
@@ -8714,6 +8969,7 @@ impl Workspace {
                                 ServerTab::Sounds => workspace.start_sound_rename(index),
                                 ServerTab::Roles => workspace.open_role_permissions(index),
                                 ServerTab::AutoMod => workspace.toggle_automod_rule(index),
+                                ServerTab::Membership => workspace.activate_membership_row(index),
                                 // Only the name is editable here; verification
                                 // and boosts are shown but not changed yet.
                                 ServerTab::Settings if index == 0 => {
@@ -11176,5 +11432,57 @@ mod account_view_tests {
             account.form.display_value(AccountField::Username),
             "someone"
         );
+    }
+}
+
+#[cfg(test)]
+mod membership_tab_tests {
+    use super::*;
+
+    #[test]
+    fn every_tab_that_needs_a_fetch_asks_for_one() {
+        // A tab added without a fetch renders empty forever, which reads as a
+        // server that has none of whatever the tab shows.
+        let guild_id = Id::new(1);
+        for tab in ServerTab::ALL {
+            let fetches = tab.load(guild_id);
+            let snapshot_tab = matches!(tab, ServerTab::Settings | ServerTab::Roles);
+            assert_eq!(
+                fetches.is_empty(),
+                snapshot_tab,
+                "{tab:?} fetches {} commands",
+                fetches.len()
+            );
+        }
+    }
+
+    #[test]
+    fn membership_asks_for_all_three_things_it_shows() {
+        // Returning one and queueing the rest at the call site is what left
+        // the TUI's tab-switch path fetching nothing at all.
+        let fetches = ServerTab::Membership.load(Id::new(1));
+
+        assert!(
+            fetches
+                .iter()
+                .any(|c| matches!(c, AppCommand::LoadWelcomeScreen { .. }))
+        );
+        assert!(
+            fetches
+                .iter()
+                .any(|c| matches!(c, AppCommand::LoadGuildWidget { .. }))
+        );
+        assert!(
+            fetches
+                .iter()
+                .any(|c| matches!(c, AppCommand::LoadPruneCount { .. }))
+        );
+    }
+
+    #[test]
+    fn the_prune_window_it_opens_on_is_one_discord_accepts() {
+        // Discord rejects anything outside its own list, so a default outside
+        // it would make the first count request fail every time.
+        assert!(concord::discord::PRUNE_DAYS.contains(&DEFAULT_PRUNE_DAYS));
     }
 }

@@ -552,6 +552,46 @@ impl CommandDispatcher {
                     .publish_event(crate::discord::AppEvent::GuildForgotten { guild_id })
                     .await;
             }
+            AppCommand::LoadPruneCount {
+                guild_id,
+                days,
+                include_roles,
+            } => {
+                message_commands::load_prune_count(
+                    self.client.clone(),
+                    guild_id,
+                    days,
+                    include_roles,
+                )
+                .await;
+            }
+            AppCommand::PruneGuild {
+                guild_id,
+                days,
+                include_roles,
+                label,
+            } => {
+                message_commands::prune_guild(
+                    self.client.clone(),
+                    guild_id,
+                    days,
+                    include_roles,
+                    label,
+                )
+                .await;
+            }
+            AppCommand::LoadWelcomeScreen { guild_id } => {
+                message_commands::load_welcome_screen(self.client.clone(), guild_id).await;
+            }
+            AppCommand::ModifyWelcomeScreen { guild_id, edit } => {
+                message_commands::modify_welcome_screen(self.client.clone(), guild_id, edit).await;
+            }
+            AppCommand::LoadGuildWidget { guild_id } => {
+                message_commands::load_guild_widget(self.client.clone(), guild_id).await;
+            }
+            AppCommand::ModifyGuildWidget { guild_id, widget } => {
+                message_commands::modify_guild_widget(self.client.clone(), guild_id, widget).await;
+            }
             AppCommand::ModifyAccount {
                 edit,
                 current_password,

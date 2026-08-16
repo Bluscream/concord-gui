@@ -754,6 +754,13 @@ pub(in crate::tui::ui) fn render_server_management(
                     line
                 })
                 .collect(),
+            // Built by the state rather than here: the values come from three
+            // separate fetches, and each has an "unknown" that is not "off".
+            ServerPanelTab::Membership => state
+                .membership_rows()
+                .into_iter()
+                .map(|(label, value)| format!("{label}: {value}"))
+                .collect(),
         };
 
         if rows.is_empty() {
@@ -765,6 +772,7 @@ pub(in crate::tui::ui) fn render_server_management(
                 ServerPanelTab::Sounds => "No sounds in this server",
                 ServerPanelTab::AutoMod => "No AutoMod rules",
                 ServerPanelTab::AuditLog => "Nothing recorded",
+                ServerPanelTab::Membership => "Loading",
             };
             vec![Line::from(Span::styled(
                 empty.to_owned(),
@@ -811,6 +819,7 @@ pub(in crate::tui::ui) fn render_server_management(
                 ServerPanelTab::Emoji => "tab, r reload, a add, n rename, enter delete",
                 ServerPanelTab::Sounds => "tab, r reload, n rename, enter delete",
                 ServerPanelTab::AutoMod => "tab, r reload, enter on/off, d delete",
+                ServerPanelTab::Membership => "tab, r reload, enter toggles or cycles, P prunes",
                 ServerPanelTab::AuditLog => "tab to switch, r to reload",
             },
         ),

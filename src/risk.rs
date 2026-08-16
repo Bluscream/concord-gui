@@ -27,6 +27,9 @@ pub enum RiskKind {
     ProfileEdit,
     /// Adding, removing or blocking someone.
     FriendAction,
+    /// Removing inactive members. Irreversible, and unlike the others it acts
+    /// on people who are not here to notice.
+    PruneMembers,
 }
 
 impl RiskKind {
@@ -35,6 +38,7 @@ impl RiskKind {
         Self::LeaveGuild,
         Self::ProfileEdit,
         Self::FriendAction,
+        Self::PruneMembers,
     ];
 
     /// Why this is worth a pause, in the active language.
@@ -44,6 +48,7 @@ impl RiskKind {
             Self::LeaveGuild => crate::t!("warning-leave-guild"),
             Self::ProfileEdit => crate::t!("warning-profile-edit"),
             Self::FriendAction => crate::t!("warning-friend-action"),
+            Self::PruneMembers => crate::t!("warning-prune-members"),
         }
     }
 
@@ -54,6 +59,7 @@ impl RiskKind {
             Self::LeaveGuild => options.suppress_leave_guild,
             Self::ProfileEdit => options.suppress_profile_edit,
             Self::FriendAction => options.suppress_friend_action,
+            Self::PruneMembers => options.suppress_prune_members,
         }
     }
 
@@ -64,6 +70,7 @@ impl RiskKind {
             Self::LeaveGuild => options.suppress_leave_guild = true,
             Self::ProfileEdit => options.suppress_profile_edit = true,
             Self::FriendAction => options.suppress_friend_action = true,
+            Self::PruneMembers => options.suppress_prune_members = true,
         }
     }
 }

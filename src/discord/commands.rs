@@ -554,6 +554,33 @@ pub enum AppCommand {
         password: crate::discord::Secret,
     },
     LoadAuthorisedApps,
+    /// How many members a prune would remove. Always asked before pruning:
+    /// the count is what makes an irreversible action reviewable beforehand.
+    LoadPruneCount {
+        guild_id: Id<GuildMarker>,
+        days: u16,
+        include_roles: Vec<Id<RoleMarker>>,
+    },
+    PruneGuild {
+        guild_id: Id<GuildMarker>,
+        days: u16,
+        include_roles: Vec<Id<RoleMarker>>,
+        label: String,
+    },
+    LoadWelcomeScreen {
+        guild_id: Id<GuildMarker>,
+    },
+    ModifyWelcomeScreen {
+        guild_id: Id<GuildMarker>,
+        edit: crate::discord::WelcomeScreenEdit,
+    },
+    LoadGuildWidget {
+        guild_id: Id<GuildMarker>,
+    },
+    ModifyGuildWidget {
+        guild_id: Id<GuildMarker>,
+        widget: crate::discord::GuildWidget,
+    },
     /// Change username, email or password. All of it is what the user typed;
     /// none of it is stored.
     ModifyAccount {

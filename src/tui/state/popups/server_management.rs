@@ -21,10 +21,14 @@ pub enum ServerPanelTab {
     Sounds,
     AutoMod,
     AuditLog,
+    /// The welcome screen, the widget, and pruning - how members arrive and
+    /// leave. One tab because each is two or three rows, and three tabs of
+    /// three rows is more hunting than reading.
+    Membership,
 }
 
 impl ServerPanelTab {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Settings,
         Self::Invites,
         Self::Roles,
@@ -32,6 +36,7 @@ impl ServerPanelTab {
         Self::Sounds,
         Self::AutoMod,
         Self::AuditLog,
+        Self::Membership,
     ];
 
     pub(in crate::tui) fn label(self) -> &'static str {
@@ -43,28 +48,75 @@ impl ServerPanelTab {
             Self::Sounds => "Sounds",
             Self::AutoMod => "AutoMod",
             Self::AuditLog => "Audit log",
+            Self::Membership => "Membership",
         }
     }
 
     /// What to fetch when this tab opens.
     ///
-    /// `None` for roles: they arrive with the guild and live in the snapshot,
-    /// so the tab reads them rather than asking for them.
-    fn load(self, guild_id: Id<GuildMarker>) -> Option<AppCommand> {
-        Some(match self {
-            // Both read from the snapshot rather than fetching: the guild and
-            // its roles arrive together.
-            Self::Settings | Self::Roles => return None,
-            Self::Invites => AppCommand::LoadGuildInvites { guild_id },
-            Self::Emoji => AppCommand::LoadGuildEmojis { guild_id },
-            Self::Sounds => AppCommand::LoadSoundboardSounds {
+    /// A list rather than one command: membership needs three, and an earlier
+    /// version that returned one and queued the rest at the call site meant
+    /// the tab-switch path fetched nothing at all. Empty for settings and
+    /// roles, which arrive with the guild and are read from the snapshot.
+    fn load(self, guild_id: Id<GuildMarker>) -> Vec<AppCommand> {
+        match self {
+            Self::Settings | Self::Roles => Vec::new(),
+            Self::Invites => vec![AppCommand::LoadGuildInvites { guild_id }],
+            Self::Emoji => vec![AppCommand::LoadGuildEmojis { guild_id }],
+            Self::Sounds => vec![AppCommand::LoadSoundboardSounds {
                 guild_id: Some(guild_id),
-            },
-            Self::AutoMod => AppCommand::LoadAutoModRules { guild_id },
-            Self::AuditLog => AppCommand::LoadGuildAuditLog { guild_id },
-        })
+            }],
+            Self::AutoMod => vec![AppCommand::LoadAutoModRules { guild_id }],
+            Self::AuditLog => vec![AppCommand::LoadGuildAuditLog { guild_id }],
+            Self::Membership => vec![
+                AppCommand::LoadWelcomeScreen { guild_id },
+                AppCommand::LoadGuildWidget { guild_id },
+                AppCommand::LoadPruneCount {
+                    guild_id,
+                    days: DEFAULT_PRUNE_DAYS,
+                    include_roles: Vec::new(),
+                },
+            ],
+        }
     }
 }
+
+/// The membership tab's rows, in order.
+///
+/// A list rather than match arms on an index: rows were renumbered by hand
+/// three times elsewhere in this client and it broke the tests every time.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::tui) enum MembershipRow {
+    WelcomeEnabled,
+    WelcomeDescription,
+    WidgetEnabled,
+    WidgetChannel,
+    PruneDays,
+    Prune,
+}
+
+/// Discord's own default prune window.
+const DEFAULT_PRUNE_DAYS: u16 = 30;
+
+pub(in crate::tui) const fn membership_label(row: MembershipRow) -> &'static str {
+    match row {
+        MembershipRow::WelcomeEnabled => "Welcome screen",
+        MembershipRow::WelcomeDescription => "Welcome description",
+        MembershipRow::WidgetEnabled => "Widget",
+        MembershipRow::WidgetChannel => "Widget invite channel",
+        MembershipRow::PruneDays => "Prune inactive after",
+        MembershipRow::Prune => "Prune",
+    }
+}
+
+pub(in crate::tui) const MEMBERSHIP_ROWS: [MembershipRow; 6] = [
+    MembershipRow::WelcomeEnabled,
+    MembershipRow::WelcomeDescription,
+    MembershipRow::WidgetEnabled,
+    MembershipRow::WidgetChannel,
+    MembershipRow::PruneDays,
+    MembershipRow::Prune,
+];
 
 /// What the emoji text field is being used for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -100,6 +152,13 @@ pub(in crate::tui) struct ServerManagementState {
     pub(super) sounds: Vec<crate::discord::SoundboardSound>,
     pub(super) automod: Vec<crate::discord::AutoModRule>,
     pub(super) audit_log: Vec<AuditLogEntryInfo>,
+    pub(super) welcome: Option<crate::discord::WelcomeScreen>,
+    pub(super) widget: Option<crate::discord::GuildWidget>,
+    /// How far back a prune would reach, and how many it would remove.
+    pub(super) prune_days: u16,
+    /// `None` until the count has been asked for - which is not the same as
+    /// zero, and a panel that showed them alike would offer to prune nobody.
+    pub(super) prune_count: Option<u64>,
     /// Set while the open tab's fetch is outstanding, so the popup can say so
     /// rather than looking like an empty list.
     pub(super) loading: bool,
@@ -156,6 +215,9 @@ impl ServerManagementState {
             ServerPanelTab::Sounds => self.sounds.len(),
             ServerPanelTab::AutoMod => self.automod.len(),
             ServerPanelTab::AuditLog => self.audit_log.len(),
+            // Welcome screen on/off, its description, the widget, the widget's
+            // channel, the prune window, and the prune itself.
+            ServerPanelTab::Membership => MEMBERSHIP_ROWS.len(),
         }
     }
 
@@ -186,6 +248,10 @@ impl DashboardState {
                 sounds: Vec::new(),
                 automod: Vec::new(),
                 audit_log: Vec::new(),
+                welcome: None,
+                widget: None,
+                prune_days: DEFAULT_PRUNE_DAYS,
+                prune_count: None,
                 loading: true,
                 error: None,
                 renaming: None,
@@ -197,7 +263,7 @@ impl DashboardState {
             ServerPanelTab::Settings => self.fill_guild_settings(),
             _ => {}
         }
-        tab.load(guild_id)
+        self.queue_tab_fetches(tab, guild_id)
     }
 
     pub fn close_server_management(&mut self) {
@@ -208,6 +274,24 @@ impl DashboardState {
 
     pub(in crate::tui) fn server_management_state(&self) -> Option<&ServerManagementState> {
         self.popups.server_management()
+    }
+
+    /// Queue a tab's fetches, returning the first for the caller to send.
+    ///
+    /// One place rather than three: every caller of `load` had the same
+    /// "return one, queue the rest" shape, and the tab-switch copy of it was
+    /// missing entirely, so switching to a multi-fetch tab fetched nothing.
+    fn queue_tab_fetches(
+        &mut self,
+        tab: ServerPanelTab,
+        guild_id: Id<GuildMarker>,
+    ) -> Option<AppCommand> {
+        let mut fetches = tab.load(guild_id).into_iter();
+        let first = fetches.next();
+        for command in fetches {
+            self.enqueue_pending_command(command);
+        }
+        first
     }
 
     /// Move to the next tab, fetching its list if it has not arrived.
@@ -233,6 +317,7 @@ impl DashboardState {
             ServerPanelTab::Sounds => !state.sounds.is_empty(),
             ServerPanelTab::AutoMod => !state.automod.is_empty(),
             ServerPanelTab::AuditLog => !state.audit_log.is_empty(),
+            ServerPanelTab::Membership => state.welcome.is_some() && state.widget.is_some(),
         };
         state.loading = !already_loaded;
         let guild_id = state.guild_id;
@@ -241,7 +326,10 @@ impl DashboardState {
             ServerPanelTab::Settings => self.fill_guild_settings(),
             _ => {}
         }
-        (!already_loaded).then(|| tab.load(guild_id)).flatten()
+        if already_loaded {
+            return None;
+        }
+        self.queue_tab_fetches(tab, guild_id)
     }
 
     /// Delete the highlighted AutoMod rule.
@@ -463,7 +551,7 @@ impl DashboardState {
         }
         state.loading = true;
         state.error = None;
-        tab.load(guild_id)
+        self.queue_tab_fetches(tab, guild_id)
     }
 
     pub fn move_server_selection_down(&mut self) {
@@ -478,6 +566,101 @@ impl DashboardState {
             SelectablePopupTarget::ServerManagement,
             crate::tui::keybindings::SelectionAction::Previous,
         );
+    }
+
+    /// The membership tab's rows as label and value.
+    pub(in crate::tui) fn membership_rows(&self) -> Vec<(String, String)> {
+        let Some(state) = self.popups.server_management() else {
+            return Vec::new();
+        };
+        MEMBERSHIP_ROWS
+            .into_iter()
+            .map(|row| {
+                let value = match row {
+                    MembershipRow::WelcomeEnabled => state
+                        .welcome
+                        .as_ref()
+                        // Says "unknown" rather than "off": a screen that has
+                        // not arrived is not one Discord confirmed is off.
+                        .map_or("unknown".to_owned(), |screen| {
+                            if screen.enabled { "on" } else { "off" }.to_owned()
+                        }),
+                    MembershipRow::WelcomeDescription => state
+                        .welcome
+                        .as_ref()
+                        .and_then(|screen| screen.description.clone())
+                        .unwrap_or_else(|| "not set".to_owned()),
+                    MembershipRow::WidgetEnabled => state
+                        .widget
+                        .as_ref()
+                        .map_or("unknown".to_owned(), |widget| {
+                            if widget.enabled { "on" } else { "off" }.to_owned()
+                        }),
+                    MembershipRow::WidgetChannel => state
+                        .widget
+                        .as_ref()
+                        .and_then(|widget| widget.channel_id)
+                        .map_or_else(
+                            || "no invite".to_owned(),
+                            |channel_id| self.channel_label(channel_id),
+                        ),
+                    MembershipRow::PruneDays => format!("{} days", state.prune_days),
+                    MembershipRow::Prune => match state.prune_count {
+                        // Zero is a real answer and the commonest one: Discord
+                        // exempts every member who has any role at all.
+                        Some(count) => format!("{count} members would be removed"),
+                        None => "counting".to_owned(),
+                    },
+                };
+                (membership_label(row).to_owned(), value)
+            })
+            .collect()
+    }
+
+    /// The prune the membership tab is offering, for the risk prompt.
+    pub(in crate::tui) fn pending_prune(&self) -> Option<AppCommand> {
+        let state = self.popups.server_management()?;
+        if state.tab != ServerPanelTab::Membership {
+            return None;
+        }
+        if MEMBERSHIP_ROWS.get(self.selected_server_row()?) != Some(&MembershipRow::Prune) {
+            return None;
+        }
+        // Nothing to confirm when the count is zero or has not arrived: a
+        // warning about removing nobody teaches the wrong lesson about the
+        // warning.
+        if state.prune_count.unwrap_or(0) == 0 {
+            return None;
+        }
+        Some(AppCommand::PruneGuild {
+            guild_id: state.guild_id,
+            days: state.prune_days,
+            include_roles: Vec::new(),
+            label: self
+                .guild_name(state.guild_id)
+                .unwrap_or("this server")
+                .to_owned(),
+        })
+    }
+
+    pub(in crate::tui) fn set_welcome_screen(&mut self, screen: crate::discord::WelcomeScreen) {
+        if let Some(state) = self.popups.server_management_mut() {
+            state.welcome = Some(screen);
+            state.loading = false;
+        }
+    }
+
+    pub(in crate::tui) fn set_guild_widget(&mut self, widget: crate::discord::GuildWidget) {
+        if let Some(state) = self.popups.server_management_mut() {
+            state.widget = Some(widget);
+            state.loading = false;
+        }
+    }
+
+    pub(in crate::tui) fn set_prune_count(&mut self, count: u64) {
+        if let Some(state) = self.popups.server_management_mut() {
+            state.prune_count = Some(count);
+        }
     }
 
     pub(in crate::tui) fn selected_server_row(&self) -> Option<usize> {
@@ -498,6 +681,54 @@ impl DashboardState {
         let guild_id = state.guild_id;
 
         match state.tab {
+            ServerPanelTab::Membership => {
+                let row = *MEMBERSHIP_ROWS.get(index)?;
+                match row {
+                    MembershipRow::WelcomeEnabled => {
+                        let screen = state.welcome.as_mut()?;
+                        screen.enabled = !screen.enabled;
+                        Some(AppCommand::ModifyWelcomeScreen {
+                            guild_id,
+                            edit: crate::discord::WelcomeScreenEdit {
+                                enabled: Some(screen.enabled),
+                                ..Default::default()
+                            },
+                        })
+                    }
+                    MembershipRow::WidgetEnabled => {
+                        let widget = state.widget.as_mut()?;
+                        widget.enabled = !widget.enabled;
+                        Some(AppCommand::ModifyGuildWidget {
+                            guild_id,
+                            widget: widget.clone(),
+                        })
+                    }
+                    MembershipRow::PruneDays => {
+                        // Cycles through what Discord accepts, wrapping, so
+                        // every window is reachable from every other.
+                        let current = crate::discord::PRUNE_DAYS
+                            .iter()
+                            .position(|days| *days == state.prune_days)
+                            .unwrap_or(0);
+                        let next = (current + 1) % crate::discord::PRUNE_DAYS.len();
+                        state.prune_days = crate::discord::PRUNE_DAYS[next];
+                        // The old count describes the old window, so it is
+                        // cleared rather than left to describe the wrong one.
+                        state.prune_count = None;
+                        Some(AppCommand::LoadPruneCount {
+                            guild_id,
+                            days: state.prune_days,
+                            include_roles: Vec::new(),
+                        })
+                    }
+                    // The description, the widget channel and the prune itself
+                    // are not plain toggles: the first two need text, and the
+                    // last is irreversible and goes through the risk prompt.
+                    MembershipRow::WelcomeDescription
+                    | MembershipRow::WidgetChannel
+                    | MembershipRow::Prune => None,
+                }
+            }
             ServerPanelTab::Invites => {
                 if index >= state.invites.len() {
                     return None;

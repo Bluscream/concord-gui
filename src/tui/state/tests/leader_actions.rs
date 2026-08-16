@@ -806,6 +806,21 @@ fn the_server_panel_only_fetches_a_tab_it_has_not_seen() {
     );
     state.apply_guild_audit_log(guild_id, Vec::new());
 
+    // Membership needs three fetches: the first is returned, the rest queued.
+    assert_eq!(
+        state.next_server_tab(),
+        Some(AppCommand::LoadWelcomeScreen { guild_id })
+    );
+    assert!(
+        state
+            .drain_pending_commands()
+            .iter()
+            .any(|command| matches!(command, AppCommand::LoadGuildWidget { .. })),
+        "the membership tab queued nothing beyond its first fetch"
+    );
+    state.set_welcome_screen(crate::discord::WelcomeScreen::default());
+    state.set_guild_widget(crate::discord::GuildWidget::default());
+
     // Wrapping round lands on settings, which reads the snapshot and so
     // fetches nothing either.
     assert_eq!(state.next_server_tab(), None);
@@ -1353,4 +1368,129 @@ fn blocking_one_guilds_direct_messages_keeps_the_other_restrictions() {
 
     assert!(guilds.contains(&selected), "the guild was not restricted");
     assert!(guilds.contains(&other), "the other restriction was dropped");
+}
+
+mod membership {
+    use super::*;
+    use crate::tui::state::popups::ServerPanelTab;
+
+    fn opened() -> DashboardState {
+        let mut state = state_with_many_guilds(1);
+        state.focus_pane(FocusPane::Guilds);
+        let guild_id = state.selected_guild_cursor_id().expect("a guild");
+        state.open_server_management(guild_id, ServerPanelTab::Membership);
+        state.drain_pending_commands();
+        state
+    }
+
+    fn select(state: &mut DashboardState, label: &str) {
+        let index = state
+            .membership_rows()
+            .iter()
+            .position(|(row, _)| row == label)
+            .unwrap_or_else(|| panic!("{label} should be a row"));
+        while state.selected_server_row() != Some(index) {
+            state.move_server_selection_down();
+        }
+    }
+
+    #[test]
+    fn opening_asks_for_all_three_things_the_tab_shows() {
+        // Fetching one on demand would leave two thirds of the tab empty
+        // until it was touched.
+        let mut state = state_with_many_guilds(1);
+        state.focus_pane(FocusPane::Guilds);
+        let guild_id = state.selected_guild_cursor_id().expect("a guild");
+        // The first fetch is returned for the caller to send; the rest are
+        // queued. Both halves count as having asked.
+        let mut commands: Vec<AppCommand> = Vec::new();
+        commands.extend(state.open_server_management(guild_id, ServerPanelTab::Membership));
+        commands.extend(state.drain_pending_commands());
+
+        assert!(
+            commands
+                .iter()
+                .any(|c| matches!(c, AppCommand::LoadWelcomeScreen { .. }))
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|c| matches!(c, AppCommand::LoadGuildWidget { .. }))
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|c| matches!(c, AppCommand::LoadPruneCount { .. }))
+        );
+    }
+
+    #[test]
+    fn a_value_that_never_arrived_reads_as_unknown_rather_than_off() {
+        // A welcome screen that has not loaded is not one Discord confirmed is
+        // off, and showing "off" would describe the server wrongly.
+        let state = opened();
+        let rows = state.membership_rows();
+
+        assert_eq!(rows[0].1, "unknown");
+        assert_eq!(rows[2].1, "unknown");
+    }
+
+    #[test]
+    fn cycling_the_prune_window_clears_the_count_it_no_longer_describes() {
+        // The old count was for the old window. Leaving it would state a
+        // number for a prune nobody is about to run.
+        let mut state = opened();
+        state.set_prune_count(12);
+        select(&mut state, "Prune inactive after");
+        state.activate_selected_server_row();
+
+        assert_eq!(
+            state
+                .membership_rows()
+                .iter()
+                .find(|(label, _)| label == "Prune")
+                .map(|(_, value)| value.clone()),
+            Some("counting".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_prune_that_would_remove_nobody_is_not_offered() {
+        // Discord exempts every member who has any role at all, so zero is the
+        // commonest answer - and a warning about removing nobody teaches the
+        // wrong lesson about the warning.
+        let mut state = opened();
+        state.set_prune_count(0);
+        select(&mut state, "Prune");
+
+        assert!(state.pending_prune().is_none());
+    }
+
+    #[test]
+    fn a_prune_with_members_to_remove_is_offered_for_the_chosen_window() {
+        let mut state = opened();
+        state.set_prune_count(4);
+        select(&mut state, "Prune");
+
+        let Some(AppCommand::PruneGuild { days, .. }) = state.pending_prune() else {
+            panic!("no prune offered");
+        };
+        assert!(crate::discord::PRUNE_DAYS.contains(&days));
+    }
+
+    #[test]
+    fn the_prune_row_is_the_only_one_that_offers_a_prune() {
+        // The row list is positional, so a row inserted above it would
+        // otherwise silently move the destructive action under another label.
+        let mut state = opened();
+        state.set_prune_count(4);
+        for (label, _) in state.membership_rows() {
+            select(&mut state, &label);
+            assert_eq!(
+                state.pending_prune().is_some(),
+                label == "Prune",
+                "{label} offered the wrong thing"
+            );
+        }
+    }
 }

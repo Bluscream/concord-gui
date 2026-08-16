@@ -36,6 +36,7 @@ mod guild_management;
 mod guild_settings;
 mod guilds;
 mod invites;
+mod membership;
 mod privacy;
 mod sessions;
 
@@ -60,6 +61,10 @@ pub use guild_settings::{
     verification_label,
 };
 pub use invites::{InvitePreview, invite_code_from};
+pub use membership::{
+    GuildWidget, MAX_WELCOME_CHANNELS, MAX_WELCOME_DESCRIPTION_CHARS, PRUNE_DAYS, WelcomeChannel,
+    WelcomeScreen, WelcomeScreenEdit, nearest_prune_days,
+};
 pub use messages::MAX_MESSAGE_STICKERS;
 pub use moderation::{GuildBanInfo, MAX_BAN_DELETE_MESSAGE_SECONDS};
 pub use privacy::{

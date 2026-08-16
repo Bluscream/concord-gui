@@ -229,10 +229,25 @@ a row in a list.
 
 ### Members, onboarding and welcome
 
-Browsing and searching members from settings, pruning, bulk-ban; the welcome
-screen, onboarding questions, new-member actions, and membership screening -
-which the client detects as a participation restriction but can neither
-configure nor complete.
+Pruning, the welcome screen and the guild widget are a Membership tab on the
+server panel in both clients - one tab rather than three, because each is two
+or three rows.
+
+Pruning goes through the risk prompt, unlike every other row there: it is
+irreversible and it acts on people who are not present to object. It is not
+offered at all when the count is zero or has not arrived, since a warning about
+removing nobody teaches the wrong lesson about the warning. Zero is the
+commonest answer, because Discord exempts every member who has any role at all
+unless that role is named in the request.
+
+A value that has not arrived reads as unknown rather than off in both clients:
+a welcome screen that has not loaded is not one Discord confirmed is disabled.
+
+Still missing: browsing and searching members from settings, bulk-ban,
+onboarding questions, new-member actions, and membership screening - which the
+client detects as a participation restriction but can neither configure nor
+complete. Editing the welcome description and the widget's channel needs a text
+prompt each; only the toggles and the prune window are wired.
 
 ### Scheduled events, stages, templates, discovery
 

@@ -1019,6 +1019,11 @@ impl DiscordState {
             | AppEvent::GuildAuditLogLoaded { .. }
             | AppEvent::GuildAuditLogLoadFailed { .. }
             | AppEvent::InviteCreated { .. }
+            | AppEvent::PruneCountLoaded { .. }
+            | AppEvent::GuildPruned { .. }
+            | AppEvent::WelcomeScreenLoaded { .. }
+            | AppEvent::GuildWidgetLoaded { .. }
+            | AppEvent::MembershipRequestFailed { .. }
             | AppEvent::AccountModified
             | AppEvent::AccountModifyFailed { .. }
             | AppEvent::TotpEnabled { .. }

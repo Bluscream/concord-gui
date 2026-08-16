@@ -718,6 +718,25 @@ pub enum AppEvent {
     AuthSessionsLoadFailed {
         message: String,
     },
+    PruneCountLoaded {
+        guild_id: Id<GuildMarker>,
+        count: u64,
+    },
+    GuildPruned {
+        guild_id: Id<GuildMarker>,
+        count: u64,
+    },
+    WelcomeScreenLoaded {
+        guild_id: Id<GuildMarker>,
+        screen: crate::discord::WelcomeScreen,
+    },
+    GuildWidgetLoaded {
+        guild_id: Id<GuildMarker>,
+        widget: crate::discord::GuildWidget,
+    },
+    MembershipRequestFailed {
+        message: String,
+    },
     AccountModified,
     AccountModifyFailed {
         message: String,
@@ -1075,6 +1094,11 @@ define_app_event_kinds! {
     ConnectionsLoaded: AppEvent::ConnectionsLoaded { .. },
     AuthSessionsLoaded: AppEvent::AuthSessionsLoaded { .. },
     AuthSessionsLoadFailed: AppEvent::AuthSessionsLoadFailed { .. },
+    PruneCountLoaded: AppEvent::PruneCountLoaded { .. },
+    GuildPruned: AppEvent::GuildPruned { .. },
+    WelcomeScreenLoaded: AppEvent::WelcomeScreenLoaded { .. },
+    GuildWidgetLoaded: AppEvent::GuildWidgetLoaded { .. },
+    MembershipRequestFailed: AppEvent::MembershipRequestFailed { .. },
     AccountModified: AppEvent::AccountModified,
     AccountModifyFailed: AppEvent::AccountModifyFailed { .. },
     TotpEnabled: AppEvent::TotpEnabled { .. },
@@ -2150,6 +2174,11 @@ impl AppEventKind {
             | AppEventKind::SoundboardSoundPlayed
             | AppEventKind::SoundboardSoundsLoaded
             | AppEventKind::SoundboardSoundsLoadFailed
+            | AppEventKind::PruneCountLoaded
+            | AppEventKind::GuildPruned
+            | AppEventKind::WelcomeScreenLoaded
+            | AppEventKind::GuildWidgetLoaded
+            | AppEventKind::MembershipRequestFailed
             | AppEventKind::AccountModified
             | AppEventKind::AccountModifyFailed
             | AppEventKind::TotpEnabled

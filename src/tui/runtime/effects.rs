@@ -209,6 +209,25 @@ fn push_dashboard_effect(event: AppEvent, ctx: &mut EffectContext<'_>) {
             ctx.state.apply_soundboard_failure(message);
             return;
         }
+        AppEvent::WelcomeScreenLoaded { screen, .. } => {
+            ctx.state.set_welcome_screen(screen);
+            return;
+        }
+        AppEvent::GuildWidgetLoaded { widget, .. } => {
+            ctx.state.set_guild_widget(widget);
+            return;
+        }
+        AppEvent::PruneCountLoaded { count, .. } => {
+            ctx.state.set_prune_count(count);
+            return;
+        }
+        AppEvent::GuildPruned { .. } => {
+            // Zeroed rather than left alone: the old count described members
+            // who have just been removed, so leaving it would offer to prune
+            // them again.
+            ctx.state.set_prune_count(0);
+            return;
+        }
         AppEvent::TotpEnabled { backup_codes } => {
             // Shown once. These are the only thing between a lost phone and a
             // lost account, so they are kept on screen rather than flashed.

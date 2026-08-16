@@ -468,6 +468,116 @@ load_guild_panel!(
 );
 
 /// Fetch a sound list. `None` asks for the default sounds.
+pub(super) async fn load_prune_count(
+    client: DiscordClient,
+    guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+    days: u16,
+    include_roles: Vec<crate::discord::ids::Id<crate::discord::ids::marker::RoleMarker>>,
+) {
+    match client.prune_count(guild_id, days, &include_roles).await {
+        Ok(count) => {
+            client
+                .publish_event(AppEvent::PruneCountLoaded { guild_id, count })
+                .await;
+        }
+        Err(error) => {
+            log_app_error("prune count failed", &error);
+            client
+                .publish_event(AppEvent::MembershipRequestFailed {
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
+pub(super) async fn prune_guild(
+    client: DiscordClient,
+    guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+    days: u16,
+    include_roles: Vec<crate::discord::ids::Id<crate::discord::ids::marker::RoleMarker>>,
+    label: String,
+) {
+    match client.prune_guild(guild_id, days, &include_roles).await {
+        Ok(count) => {
+            client
+                .publish_event(AppEvent::GuildPruned { guild_id, count })
+                .await;
+        }
+        Err(error) => {
+            report_moderation_failure(&client, "pruning", &label, &error).await;
+        }
+    }
+}
+
+pub(super) async fn load_welcome_screen(
+    client: DiscordClient,
+    guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+) {
+    match client.welcome_screen(guild_id).await {
+        Ok(screen) => {
+            client
+                .publish_event(AppEvent::WelcomeScreenLoaded { guild_id, screen })
+                .await;
+        }
+        Err(error) => {
+            log_app_error("welcome screen failed", &error);
+            client
+                .publish_event(AppEvent::MembershipRequestFailed {
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
+pub(super) async fn modify_welcome_screen(
+    client: DiscordClient,
+    guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+    edit: crate::discord::WelcomeScreenEdit,
+) {
+    if let Err(error) = client.modify_welcome_screen(guild_id, &edit).await {
+        report_moderation_failure(&client, "changing", "the welcome screen", &error).await;
+        return;
+    }
+    // Refetched rather than patched locally, so what is on screen is what
+    // Discord kept - it silently drops channels it does not accept.
+    load_welcome_screen(client, guild_id).await;
+}
+
+pub(super) async fn load_guild_widget(
+    client: DiscordClient,
+    guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+) {
+    match client.guild_widget(guild_id).await {
+        Ok(widget) => {
+            client
+                .publish_event(AppEvent::GuildWidgetLoaded { guild_id, widget })
+                .await;
+        }
+        Err(error) => {
+            log_app_error("guild widget failed", &error);
+            client
+                .publish_event(AppEvent::MembershipRequestFailed {
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
+pub(super) async fn modify_guild_widget(
+    client: DiscordClient,
+    guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+    widget: crate::discord::GuildWidget,
+) {
+    if let Err(error) = client.modify_guild_widget(guild_id, &widget).await {
+        report_moderation_failure(&client, "changing", "the widget", &error).await;
+        return;
+    }
+    load_guild_widget(client, guild_id).await;
+}
+
 pub(super) async fn modify_account(
     client: DiscordClient,
     edit: crate::discord::AccountEdit,
