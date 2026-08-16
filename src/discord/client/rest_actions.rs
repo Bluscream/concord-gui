@@ -326,6 +326,10 @@ impl DiscordClient {
             .await
     }
 
+    pub async fn modify_privacy_settings(&self, edit: &crate::discord::PrivacyEdit) -> Result<()> {
+        self.rest.modify_privacy_settings(edit).await
+    }
+
     pub async fn delete_connection(&self, kind: &str, id: &str) -> Result<()> {
         self.rest.delete_connection(kind, id).await
     }

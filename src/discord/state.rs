@@ -760,6 +760,20 @@ impl DiscordState {
                 if let Some(folders) = &settings.guild_folders {
                     self.navigation_mut().guild_folders = folders.clone();
                 }
+                // Each field is only taken when present. Discord sends partial
+                // settings updates, and treating an absent field as a change
+                // would reset a privacy setting nobody touched.
+                if let Some(filter) = settings.explicit_content_filter {
+                    self.session_mut().dm_scan_level =
+                        Some(crate::discord::DmScanLevel::from_code(filter));
+                }
+                if let Some(restricted) = settings.default_guilds_restricted {
+                    self.session_mut().default_guilds_restricted = Some(restricted);
+                }
+                if let Some(sources) = &settings.friend_source_flags {
+                    self.session_mut().friend_sources =
+                        Some(crate::discord::FriendSources::from_info(sources));
+                }
             }
             AppEvent::UserNotificationSettingsUpdate { flags } => {
                 self.notifications_mut().user_notification_flags = *flags;

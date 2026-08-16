@@ -555,6 +555,9 @@ impl CommandDispatcher {
             AppCommand::LoadConnections => {
                 message_commands::load_connections(self.client.clone()).await;
             }
+            AppCommand::ModifyPrivacySettings { edit } => {
+                message_commands::modify_privacy_settings(self.client.clone(), edit).await;
+            }
             AppCommand::ModifyConnection {
                 kind,
                 id,

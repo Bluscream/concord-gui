@@ -1500,6 +1500,104 @@ pub fn connections_view(
         )
 }
 
+/// One row of the privacy panel.
+pub struct PrivacyRow {
+    pub label: String,
+    pub detail: String,
+    /// Whether the setting is on. `None` when it never arrived, which is not
+    /// the same as off - showing a default would describe the account as more
+    /// exposed than it may be.
+    pub enabled: Option<bool>,
+    /// For settings that are not a plain on/off. Only DM scanning has three
+    /// states, and its name is what the row must show rather than a tick.
+    pub value: Option<String>,
+}
+
+impl PrivacyRow {
+    pub fn new(
+        setting: concord::discord::PrivacySetting,
+        state: &concord::discord::PrivacyState,
+    ) -> Self {
+        Self {
+            label: setting.label().to_owned(),
+            detail: setting.detail().to_owned(),
+            enabled: setting.is_on(state),
+            value: setting.value(state).map(str::to_owned),
+        }
+    }
+}
+
+/// Privacy and safety.
+pub fn privacy_view(
+    rows: &[PrivacyRow],
+    on_toggle: impl Fn(usize, &mut gpui::App) + Clone + 'static,
+    on_close: impl Fn(&mut gpui::App) + 'static,
+) -> Div {
+    let mut list = column()
+        .id("privacy-rows")
+        .max_h(px(360.))
+        .overflow_y_scroll();
+
+    for (index, entry) in rows.iter().enumerate() {
+        let toggle = on_toggle.clone();
+        list = list.child(
+            row()
+                .id(("privacy-row", index))
+                .w_full()
+                .px(px(space::LG))
+                .py(px(space::XS))
+                .gap(px(space::SM))
+                .items_center()
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(active().surface_hover)))
+                .on_click(move |_event, _window, cx| toggle(index, cx))
+                .child(
+                    column()
+                        .flex_1()
+                        .child(
+                            gpui::div()
+                                .text_size(px(scaled(text::SM)))
+                                .text_color(rgb(active().text))
+                                .child(entry.label.clone()),
+                        )
+                        .child(
+                            gpui::div()
+                                .text_size(px(scaled(text::XS)))
+                                .text_color(rgb(active().text_subtle))
+                                .child(entry.detail.clone()),
+                        ),
+                )
+                .child(
+                    gpui::div()
+                        .text_size(px(scaled(text::SM)))
+                        .text_color(rgb(match entry.enabled {
+                            Some(true) => active().accent,
+                            Some(false) => active().text_muted,
+                            None => active().text_subtle,
+                        }))
+                        // A three-state setting shows its name; only a real
+                        // on/off gets a tick, or "Scan every direct message"
+                        // would be flattened to "On".
+                        .child(match (&entry.value, entry.enabled) {
+                            (Some(value), _) => value.clone(),
+                            (None, Some(true)) => t!("state-on"),
+                            (None, Some(false)) => t!("state-off"),
+                            (None, None) => t!("state-unknown"),
+                        }),
+                ),
+        );
+    }
+
+    panel(&t!("label-privacy"), 520.).child(list).child(
+        row()
+            .w_full()
+            .px(px(space::LG))
+            .py(px(space::MD))
+            .justify_end()
+            .child(button("privacy-close", &t!("action-close"), true, on_close)),
+    )
+}
+
 /// One entry in a context menu.
 pub struct ContextItem {
     pub label: String,
@@ -1711,5 +1809,50 @@ mod connection_row_tests {
         let row = ConnectionRow::new(&connection(ConnectionVisibility::Everyone, false));
         assert_eq!(row.visibility_action, t!("action-connection-hide"));
         assert_eq!(row.activity_action, t!("action-connection-activity-on"));
+    }
+}
+
+#[cfg(test)]
+mod privacy_row_tests {
+    use super::*;
+    use concord::discord::{DmScanLevel, PrivacySetting, PrivacyState};
+
+    #[test]
+    fn a_three_state_setting_shows_its_name_rather_than_a_tick() {
+        // "Scan every direct message" and "Scan messages from non-friends" are
+        // both "on"; a tick would make two different settings look identical.
+        let state = PrivacyState {
+            dm_scan_level: Some(DmScanLevel::NonFriends),
+            ..PrivacyState::default()
+        };
+        let row = PrivacyRow::new(PrivacySetting::DmScanning, &state);
+
+        assert_eq!(row.value.as_deref(), Some(DmScanLevel::NonFriends.label()));
+        assert_eq!(row.enabled, Some(true));
+    }
+
+    #[test]
+    fn a_plain_toggle_has_no_value_to_show() {
+        let row = PrivacyRow::new(
+            PrivacySetting::FriendsEveryone,
+            &PrivacyState {
+                friend_sources: Some(concord::discord::FriendSources {
+                    everyone: true,
+                    ..Default::default()
+                }),
+                ..PrivacyState::default()
+            },
+        );
+
+        assert_eq!(row.value, None);
+        assert_eq!(row.enabled, Some(true));
+    }
+
+    #[test]
+    fn a_setting_that_never_arrived_is_unknown_rather_than_off() {
+        let state = PrivacyState::default();
+        for setting in PrivacySetting::ALL {
+            assert_eq!(PrivacyRow::new(setting, &state).enabled, None);
+        }
     }
 }

@@ -724,6 +724,9 @@ pub enum OptionsCategory {
     /// Linked accounts. Fetched rather than read from config, which is why it
     /// carries a list the others do not need.
     Connections,
+    /// Privacy and safety. Read from the account rather than from config, so
+    /// like connections it is not an `AppOptions` field.
+    Privacy,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

@@ -551,6 +551,10 @@ pub enum AppCommand {
         show_activity: bool,
         label: String,
     },
+    /// Change privacy and safety. Only the named fields are sent.
+    ModifyPrivacySettings {
+        edit: crate::discord::PrivacyEdit,
+    },
     DeleteConnection {
         kind: String,
         id: String,

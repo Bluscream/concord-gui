@@ -172,6 +172,13 @@ pub(in crate::discord) struct SessionState {
     pub(in crate::discord) selected_message_channel_id: Option<Id<ChannelMarker>>,
     pub(in crate::discord) ready_users:
         BTreeMap<Id<UserMarker>, crate::discord::ChannelRecipientInfo>,
+    /// Privacy and safety, as READY's `user_settings` reported them.
+    ///
+    /// Kept so the panel opens on the real values rather than on defaults that
+    /// would show the account as more permissive than it is.
+    pub(in crate::discord) dm_scan_level: Option<crate::discord::DmScanLevel>,
+    pub(in crate::discord) default_guilds_restricted: Option<bool>,
+    pub(in crate::discord) friend_sources: Option<crate::discord::FriendSources>,
     /// READY's private channels are partial with PRIORITIZED_READY_PAYLOAD.
     /// Hold them until READY_SUPPLEMENTAL supplies the remaining cached DMs.
     pub(in crate::discord) pending_ready_private_channel_ids: Option<BTreeSet<Id<ChannelMarker>>>,

@@ -117,6 +117,7 @@ impl DashboardState {
             Some(OptionsCategory::Notifications) => "Notification Options",
             Some(OptionsCategory::Voice) => "Voice Options",
             Some(OptionsCategory::Connections) => "Linked Accounts",
+            Some(OptionsCategory::Privacy) => "Privacy and Safety",
         }
     }
 
@@ -157,6 +158,7 @@ impl DashboardState {
             // At least one, so an empty list still has a row to explain
             // itself rather than rendering as a blank panel.
             Some(OptionsCategory::Connections) => self.connection_rows().len().max(1),
+            Some(OptionsCategory::Privacy) => crate::discord::PrivacySetting::ALL.len(),
         }
     }
 
@@ -166,6 +168,7 @@ impl DashboardState {
                 return self.option_category_items();
             }
             Some(OptionsCategory::Connections) => return self.connection_option_items(),
+            Some(OptionsCategory::Privacy) => return self.privacy_option_items(),
             Some(OptionsCategory::Display) => return self.display_option_items_for_display(),
             Some(OptionsCategory::Composer) => return self.display_option_items_for_composer(),
             Some(OptionsCategory::Notifications) => {
@@ -224,6 +227,14 @@ impl DashboardState {
                 effective: true,
                 description: "Accounts linked to your profile, what they show, and unlinking.",
             },
+            DisplayOptionItem {
+                label: "Privacy and safety",
+                enabled: true,
+                value: Some(OptionsCategoryShortcut::Privacy.key().to_string()),
+                gauge: None,
+                effective: true,
+                description: "Direct-message scanning and who may send you a friend request.",
+            },
         ]
     }
 
@@ -238,6 +249,41 @@ impl DashboardState {
     ///
     /// Named rather than reached through `open_options_category`, so callers
     /// outside this module need no access to the private category enum.
+    /// Open the privacy and safety panel.
+    pub fn open_privacy(&mut self) {
+        self.open_options_category(OptionsCategory::Privacy);
+    }
+
+    /// Privacy and safety as the account last reported it.
+    fn privacy_state(&self) -> crate::discord::PrivacyState {
+        crate::discord::PrivacyState {
+            dm_scan_level: self.discord.dm_scan_level(),
+            default_guilds_restricted: self.discord.default_guilds_restricted(),
+            friend_sources: self.discord.friend_sources(),
+        }
+    }
+
+    fn privacy_option_items(&self) -> Vec<DisplayOptionItem> {
+        let state = self.privacy_state();
+        crate::discord::PrivacySetting::ALL
+            .into_iter()
+            .map(|setting| {
+                let on = setting.is_on(&state);
+                DisplayOptionItem {
+                    label: setting.label(),
+                    enabled: on.unwrap_or(false),
+                    value: setting.value(&state).map(str::to_owned),
+                    gauge: None,
+                    // Not yet received is distinct from off, and a row that
+                    // showed them alike would report an unknown setting as
+                    // permissive.
+                    effective: on.is_some(),
+                    description: setting.detail(),
+                }
+            })
+            .collect()
+    }
+
     pub fn open_connections(&mut self) {
         self.open_options_category(OptionsCategory::Connections);
     }
@@ -643,6 +689,14 @@ impl DashboardState {
             return;
         }
 
+        if category == OptionsCategory::Privacy {
+            if let Some(setting) = crate::discord::PrivacySetting::at(selected) {
+                let edit = setting.toggled(&self.privacy_state());
+                self.enqueue_pending_command(AppCommand::ModifyPrivacySettings { edit });
+            }
+            return;
+        }
+
         let images_visible_before = self.show_images();
 
         match (category, selected) {
@@ -832,6 +886,9 @@ impl DashboardState {
             OptionsCategoryShortcut::Voice => self.open_options_category(OptionsCategory::Voice),
             OptionsCategoryShortcut::Connections => {
                 self.open_options_category(OptionsCategory::Connections)
+            }
+            OptionsCategoryShortcut::Privacy => {
+                self.open_options_category(OptionsCategory::Privacy)
             }
         }
     }

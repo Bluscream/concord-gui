@@ -90,8 +90,26 @@ Still missing: other people's connections on their profiles.
 
 ### Privacy and safety
 
-Who may send a DM, whether DMs are scanned, friend-request sources, and the
-data controls.
+Both clients show and change direct-message scanning, whether servers you join
+from now on may send you direct messages, and the three friend-request sources.
+TUI: an options category (`<leader> y`, or `y` from the picker). GUI: a panel on
+the same action.
+
+The rows live in the core (`PrivacySetting`) rather than in each front end,
+because the part that drifts when written twice is that the three friend-request
+flags share one field - toggling one has to carry the other two, or it clears
+them. Same reason the "new servers" row is inverted there: Discord stores the
+restriction and the row is phrased as the permission.
+
+A setting that never arrived reads as unknown rather than off. Showing a default
+would describe the account as more exposed than it may be.
+
+Written through the legacy `/users/@me/settings` endpoint, which is where these
+same fields are read from in READY - editing one representation while displaying
+another would leave a rejected write showing as applied.
+
+Still missing: the data controls, and per-guild direct-message restrictions
+(`restricted_guilds`) for servers already joined.
 
 ### Sessions and authorised apps
 
@@ -199,7 +217,7 @@ forward so it is not built twice.
 6. **AutoMod.**
 7. **Account settings** - credentials, 2FA, sessions, authorised apps.
    Password and 2FA fields are the user's to drive, never the agent's.
-8. **Privacy and safety** - connections are done; this is the rest of that
+8. **Data controls and per-guild DM restrictions** - the rest of the privacy
    group.
 9. **Members, onboarding, welcome screen, widget.**
 10. **Video** - camera on the voice connection, receiving remote video,

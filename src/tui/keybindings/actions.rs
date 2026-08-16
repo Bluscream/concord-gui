@@ -128,6 +128,7 @@ define_ui_actions! {
     ToggleStream => ("Share screen", &[&[Leader, Char('v'), Char('s')]], None),
     OpenSoundboard => ("Soundboard", &[&[Leader, Char('v'), Char('b')]], None),
     OpenConnections => ("Linked accounts", &[&[Leader, Char('l')]], None),
+    OpenPrivacy => ("Privacy and safety", &[&[Leader, Char('y')]], None),
     VoiceLeave => ("leave voice", &[&[Leader, Char('v'), Char('l')]], None),
 }
 
@@ -423,15 +424,17 @@ pub enum OptionsCategoryShortcut {
     Notifications,
     Voice,
     Connections,
+    Privacy,
 }
 
 impl OptionsCategoryShortcut {
-    pub(in crate::tui) const ALL: [Self; 5] = [
+    pub(in crate::tui) const ALL: [Self; 6] = [
         Self::Display,
         Self::Composer,
         Self::Notifications,
         Self::Voice,
         Self::Connections,
+        Self::Privacy,
     ];
 
     pub(in crate::tui) const fn key(self) -> char {
@@ -442,6 +445,8 @@ impl OptionsCategoryShortcut {
             Self::Voice => 'v',
             // Not 'c', which composer already has.
             Self::Connections => 'l',
+            // Not 'p', which is a leader prefix.
+            Self::Privacy => 'y',
         }
     }
 

@@ -911,6 +911,9 @@ pub struct Workspace {
     /// The soundboard picker, once opened.
     pub soundboard: Option<SoundboardView>,
     pub connections: Option<ConnectionsView>,
+    /// Privacy and safety. No fetch of its own - the values arrive with READY,
+    /// so the panel is either open or not.
+    pub privacy_open: bool,
     /// A role's permissions, once opened.
     pub permission_grid: Option<PermissionGridView>,
     /// An image being viewed full size.
@@ -1057,6 +1060,7 @@ impl Workspace {
             server_management: None,
             soundboard: None,
             connections: None,
+            privacy_open: false,
             permission_grid: None,
             viewing_image: None,
             deleting_channel: None,
@@ -4191,6 +4195,34 @@ impl Workspace {
     }
 
     /// Open the soundboard picker for the guild we are in voice in.
+    pub fn open_privacy(&mut self) {
+        self.privacy_open = true;
+    }
+
+    /// Privacy and safety as the account last reported it.
+    fn privacy_state(&self) -> concord::discord::PrivacyState {
+        // Nothing arrived yet leaves every field None, which the panel shows
+        // as "unknown" rather than as a set of permissive defaults.
+        self.last_state
+            .as_ref()
+            .map_or_else(Default::default, |state| concord::discord::PrivacyState {
+                dm_scan_level: state.dm_scan_level(),
+                default_guilds_restricted: state.default_guilds_restricted(),
+                friend_sources: state.friend_sources(),
+            })
+    }
+
+    pub fn toggle_privacy_setting(&mut self, index: usize) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(setting) = concord::discord::PrivacySetting::at(index) else {
+            return;
+        };
+        let edit = setting.toggled(&self.privacy_state());
+        handle.send(AppCommand::ModifyPrivacySettings { edit });
+    }
+
     pub fn open_connections(&mut self) {
         let Some(handle) = &self.handle else {
             return;
@@ -7792,6 +7824,36 @@ impl Workspace {
                     move |cx: &mut gpui::App| {
                         entity.update(cx, |workspace, cx| {
                             workspace.permission_grid = None;
+                            cx.notify();
+                        });
+                    }
+                },
+            )));
+        }
+
+        if self.privacy_open {
+            let state = self.privacy_state();
+            let rows: Vec<overlay::PrivacyRow> = concord::discord::PrivacySetting::ALL
+                .into_iter()
+                .map(|setting| overlay::PrivacyRow::new(setting, &state))
+                .collect();
+
+            return Some(overlay::scrim().child(overlay::privacy_view(
+                &rows,
+                {
+                    let entity = entity.clone();
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.toggle_privacy_setting(index);
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.privacy_open = false;
                             cx.notify();
                         });
                     }

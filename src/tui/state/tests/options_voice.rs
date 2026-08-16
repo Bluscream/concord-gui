@@ -1091,3 +1091,133 @@ mod connections {
         assert_eq!(state.display_option_items()[0].label, "No linked accounts");
     }
 }
+
+mod privacy {
+    use super::*;
+    use crate::discord::{DmScanLevel, FriendSources, PrivacyEdit};
+
+    fn edit_from(state: &mut DashboardState) -> PrivacyEdit {
+        state
+            .drain_pending_commands()
+            .into_iter()
+            .find_map(|command| match command {
+                AppCommand::ModifyPrivacySettings { edit } => Some(edit),
+                _ => None,
+            })
+            .expect("no privacy edit sent")
+    }
+
+    fn opened() -> DashboardState {
+        let mut state = DashboardState::new();
+        state.open_privacy();
+        state.drain_pending_commands();
+        state
+    }
+
+    #[test]
+    fn a_setting_that_never_arrived_reads_as_unknown_rather_than_off() {
+        // Showing a default would describe the account as more exposed than it
+        // may be, which is the wrong way to be wrong about a privacy setting.
+        let state = opened();
+        let items = state.display_option_items();
+
+        assert_eq!(items[0].value.as_deref(), Some("Unknown"));
+        for item in &items {
+            assert!(
+                !item.effective,
+                "{} claims to know a setting that never arrived",
+                item.label
+            );
+        }
+    }
+
+    #[test]
+    fn toggling_one_friend_source_carries_the_others() {
+        // All three share one field. Sending a default for the two not being
+        // changed would silently clear them.
+        let mut state = opened();
+        state.push_event(AppEvent::UserSettingsUpdate {
+            settings: crate::discord::UserSettingsInfo {
+                friend_source_flags: Some(crate::discord::UserFriendSourceFlagsInfo {
+                    all: None,
+                    mutual_friends: Some(true),
+                    mutual_guilds: Some(true),
+                }),
+                ..Default::default()
+            },
+        });
+
+        // Row 2 is "everyone"; the two mutual flags must survive it.
+        state.move_option_down();
+        state.move_option_down();
+        state.toggle_selected_display_option();
+
+        assert_eq!(
+            edit_from(&mut state).friend_sources,
+            Some(FriendSources {
+                everyone: true,
+                mutual_friends: true,
+                mutual_guilds: true,
+            })
+        );
+    }
+
+    #[test]
+    fn only_the_touched_field_is_sent() {
+        // This endpoint replaces what it is given, so an edit naming a field
+        // nobody touched would reset it.
+        let mut state = opened();
+        state.toggle_selected_display_option();
+
+        let edit = edit_from(&mut state);
+        assert_eq!(edit.dm_scan_level, Some(DmScanLevel::NonFriends));
+        assert!(edit.friend_sources.is_none());
+        assert!(edit.default_guilds_restricted.is_none());
+    }
+
+    #[test]
+    fn the_new_server_row_is_phrased_as_the_permission_not_the_restriction() {
+        // Discord stores the negative. A row showing the stored flag directly
+        // would be checked exactly when direct messages are turned off.
+        let mut state = opened();
+        state.push_event(AppEvent::UserSettingsUpdate {
+            settings: crate::discord::UserSettingsInfo {
+                default_guilds_restricted: Some(true),
+                ..Default::default()
+            },
+        });
+
+        let item = &state.display_option_items()[1];
+        assert!(item.effective, "the setting did arrive");
+        assert!(!item.enabled, "restricted must read as may-not-send");
+
+        state.move_option_down();
+        state.toggle_selected_display_option();
+        assert_eq!(edit_from(&mut state).default_guilds_restricted, Some(false));
+    }
+
+    #[test]
+    fn a_partial_settings_update_leaves_the_other_fields_alone() {
+        // Discord sends partial updates. Treating an absent field as a change
+        // would reset a privacy setting nobody touched.
+        let mut state = opened();
+        state.push_event(AppEvent::UserSettingsUpdate {
+            settings: crate::discord::UserSettingsInfo {
+                explicit_content_filter: Some(2),
+                ..Default::default()
+            },
+        });
+        state.push_event(AppEvent::UserSettingsUpdate {
+            settings: crate::discord::UserSettingsInfo {
+                default_guilds_restricted: Some(true),
+                ..Default::default()
+            },
+        });
+
+        let items = state.display_option_items();
+        assert_eq!(
+            items[0].value.as_deref(),
+            Some(DmScanLevel::Everyone.label())
+        );
+    }
+}

@@ -271,3 +271,7 @@ action-connection-show = Im Profil zeigen
 action-connection-hide = Im Profil verbergen
 action-connection-activity-on = Aktivität teilen
 action-connection-activity-off = Aktivität nicht mehr teilen
+label-privacy = Privatsphäre und Sicherheit
+state-on = An
+state-off = Aus
+state-unknown = Unbekannt

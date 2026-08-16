@@ -35,6 +35,7 @@ mod guild_management;
 mod guild_settings;
 mod guilds;
 mod invites;
+mod privacy;
 
 pub use automod::{AutoModAction, AutoModRule, AutoModTrigger};
 pub use channel_management::{
@@ -55,6 +56,7 @@ pub use guild_settings::{
 pub use invites::{InvitePreview, invite_code_from};
 pub use messages::MAX_MESSAGE_STICKERS;
 pub use moderation::{GuildBanInfo, MAX_BAN_DELETE_MESSAGE_SECONDS};
+pub use privacy::{DmScanLevel, FriendSources, PrivacyEdit, PrivacySetting, PrivacyState};
 pub use relationships::friend_request_target;
 pub use roles::{MAX_ROLE_NAME_CHARS, RoleEdit};
 pub use soundboard::{

@@ -502,6 +502,15 @@ pub(super) async fn modify_connection(
     }
 }
 
+pub(super) async fn modify_privacy_settings(
+    client: DiscordClient,
+    edit: crate::discord::PrivacyEdit,
+) {
+    if let Err(error) = client.modify_privacy_settings(&edit).await {
+        report_moderation_failure(&client, "changing", "privacy settings", &error).await;
+    }
+}
+
 pub(super) async fn delete_connection(
     client: DiscordClient,
     kind: String,

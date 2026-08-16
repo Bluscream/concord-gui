@@ -52,6 +52,23 @@ impl DiscordState {
         self.session.current_user.as_deref()
     }
 
+    /// Privacy and safety as READY reported it.
+    ///
+    /// Each is optional rather than defaulted: a panel that showed a default
+    /// for a setting it never received would claim the account is more
+    /// permissive than it may be, and the panel can say "unknown" instead.
+    pub fn dm_scan_level(&self) -> Option<crate::discord::DmScanLevel> {
+        self.session.dm_scan_level
+    }
+
+    pub fn default_guilds_restricted(&self) -> Option<bool> {
+        self.session.default_guilds_restricted
+    }
+
+    pub fn friend_sources(&self) -> Option<crate::discord::FriendSources> {
+        self.session.friend_sources
+    }
+
     pub(in crate::discord) fn remember_profile_cache_key(&mut self, key: UserProfileCacheKey) {
         let profiles = self.profiles_mut();
         touch_recent(&mut profiles.profile_cache_order, key);
