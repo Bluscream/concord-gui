@@ -147,6 +147,33 @@ Also out: creator monetisation, role subscriptions, entitlements, SKUs,
 premium referrals, billing, payments, the store, promotions, guild analytics
 and top-games. Selling and measuring, neither of which this client does.
 
+## Order of work
+
+Roughly by how often the absence stops someone, with shared machinery pulled
+forward so it is not built twice.
+
+1. **Channel settings form** - topic, slowmode, NSFW. Create, rename and delete
+   are done; these three want a form rather than a one-field prompt.
+2. **Roles and permissions.** The permission editor is shared by role editing
+   and per-channel overwrites, so both land together, and channel reordering
+   comes with them.
+3. **Guild settings** - name, icon, verification, system and AFK channels.
+4. **Context menus.** Not a feature so much as how people reach the features
+   that already exist; the TUI's work is mouse routing, the GUI's is the menus.
+5. **Expression management** - one panel for emoji, stickers and sounds, which
+   finishes soundboard rename/delete and sticker management at the same time.
+6. **AutoMod.**
+7. **Account settings** - credentials, 2FA, sessions, authorised apps.
+   Password and 2FA fields are the user's to drive, never the agent's.
+8. **Connections and privacy.**
+9. **Members, onboarding, welcome screen, widget.**
+10. **Video** - camera on the voice connection, receiving remote video,
+    pop-out windows, per-user mute and hide. Needs a real account to verify.
+11. **Events, stages, templates, discovery.**
+
+Then, and only then, the extras from AGENTS.md: offline-first, merged
+multi-account, and the rest.
+
 ## Built but unreachable
 
 Core work whose interface has not been built yet. A legitimate intermediate
