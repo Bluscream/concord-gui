@@ -180,6 +180,7 @@ pub(super) fn execute_ui_action(
         UiAction::OpenConnections => state.open_connections(),
         UiAction::OpenPrivacy => state.open_privacy(),
         UiAction::OpenAccess => state.open_access(),
+        UiAction::OpenAccount => state.open_account(),
         UiAction::VoiceLeave => return state.leave_current_voice_channel_command(),
         _ => {}
     }

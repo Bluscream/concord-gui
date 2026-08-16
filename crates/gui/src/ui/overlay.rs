@@ -1772,6 +1772,248 @@ pub fn access_view(
     )
 }
 
+/// What the account panel is showing.
+pub struct AccountPanel<'a> {
+    /// Label, drawn value, hint, and whether it is the focused field.
+    pub fields: &'a [(String, String, String, bool)],
+    /// Why it cannot be saved, when it cannot.
+    pub problem: Option<&'a str>,
+    /// The enrolment URI while two-factor is being set up. Shown on purpose:
+    /// enrolment cannot happen unless it reaches the authenticator app.
+    pub enrolment_uri: Option<&'a str>,
+    pub enrolment_code: &'a str,
+    /// Backup codes and whether each is used.
+    pub backup_codes: &'a [(String, bool)],
+}
+
+/// What the account panel's buttons do.
+///
+/// Grouped for the same reason `ServerPanel` and `AccessPanel` are: passed
+/// separately the signature was long enough that clippy objected.
+/// A button's handler.
+type AccountAction = Box<dyn Fn(&mut gpui::App)>;
+/// The backup-codes handler, which also carries whether to regenerate.
+type BackupCodesAction = Box<dyn Fn(bool, &mut gpui::App)>;
+
+pub struct AccountActions {
+    pub save: AccountAction,
+    pub enrol: AccountAction,
+    pub submit_enrolment: AccountAction,
+    pub disable: AccountAction,
+    pub backup_codes: BackupCodesAction,
+    pub close: AccountAction,
+}
+
+/// Credentials and two-factor.
+pub fn account_view(
+    panel_state: AccountPanel<'_>,
+    on_focus: impl Fn(usize, &mut gpui::App) + Clone + 'static,
+    on_key: impl Fn(&str, &mut gpui::App) + Clone + 'static,
+    on_code: impl Fn(&str, &mut gpui::App) + Clone + 'static,
+    actions: AccountActions,
+) -> Div {
+    let mut list = column()
+        .id("account-fields")
+        .max_h(px(340.))
+        .overflow_y_scroll();
+
+    for (index, (label, value, hint, focused)) in panel_state.fields.iter().enumerate() {
+        let focus = on_focus.clone();
+        let typed = on_key.clone();
+        list = list.child(
+            column()
+                .id(("account-field", index))
+                .w_full()
+                .px(px(space::LG))
+                .py(px(space::XS))
+                .gap(px(space::XS))
+                .cursor_pointer()
+                .on_click(move |_event, _window, cx| focus(index, cx))
+                .child(
+                    gpui::div()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().text_subtle))
+                        .child(label.clone()),
+                )
+                .child(
+                    gpui::div()
+                        .w_full()
+                        .px(px(space::SM))
+                        .py(px(space::XS))
+                        .rounded(px(layout::RADIUS))
+                        .bg(rgb(active().surface_sunken))
+                        .border_1()
+                        .border_color(rgb(if *focused {
+                            active().accent
+                        } else {
+                            active().border
+                        }))
+                        .text_size(px(scaled(text::SM)))
+                        .text_color(rgb(active().text))
+                        // Already bullets for a credential; the real value
+                        // never reaches this function.
+                        .child(value.clone())
+                        .when(*focused, |field| {
+                            field.on_key_down(move |event: &gpui::KeyDownEvent, _window, cx| {
+                                typed(&event.keystroke.key, cx);
+                            })
+                        }),
+                )
+                .child(
+                    gpui::div()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().text_subtle))
+                        .child(hint.clone()),
+                ),
+        );
+    }
+
+    let mut panel = panel(&t!("label-account"), 560.).child(list);
+
+    if let Some(problem) = panel_state.problem {
+        panel = panel.child(
+            gpui::div()
+                .px(px(space::LG))
+                .py(px(space::XS))
+                .text_size(px(scaled(text::XS)))
+                .text_color(rgb(active().text_subtle))
+                .child(problem.to_owned()),
+        );
+    }
+
+    if let Some(uri) = panel_state.enrolment_uri {
+        panel = panel.child(
+            column()
+                .w_full()
+                .px(px(space::LG))
+                .py(px(space::SM))
+                .gap(px(space::XS))
+                .child(
+                    gpui::div()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().text_subtle))
+                        .child(t!("hint-totp-enrolment")),
+                )
+                // The whole URI, so it can be copied into an authenticator app
+                // on another machine. Truncating it would make it useless.
+                .child(
+                    gpui::div()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().text))
+                        .child(uri.to_owned()),
+                )
+                .child(
+                    gpui::div()
+                        .id("totp-code")
+                        .w_full()
+                        .px(px(space::SM))
+                        .py(px(space::XS))
+                        .rounded(px(layout::RADIUS))
+                        .bg(rgb(active().surface_sunken))
+                        .text_size(px(scaled(text::SM)))
+                        .text_color(rgb(active().text))
+                        .child(panel_state.enrolment_code.to_owned())
+                        .on_key_down({
+                            let typed = on_code.clone();
+                            move |event: &gpui::KeyDownEvent, _window, cx| {
+                                typed(&event.keystroke.key, cx);
+                            }
+                        }),
+                ),
+        );
+    }
+
+    if !panel_state.backup_codes.is_empty() {
+        let mut codes = row().w_full().flex_wrap().gap(px(space::SM));
+        for (code, consumed) in panel_state.backup_codes {
+            codes = codes.child(
+                gpui::div()
+                    .text_size(px(scaled(text::SM)))
+                    // A used code is dimmed rather than hidden, so the count
+                    // on screen matches the count Discord issued.
+                    .text_color(rgb(if *consumed {
+                        active().text_subtle
+                    } else {
+                        active().text
+                    }))
+                    .child(code.clone()),
+            );
+        }
+        panel = panel.child(
+            column()
+                .w_full()
+                .px(px(space::LG))
+                .py(px(space::SM))
+                .gap(px(space::XS))
+                .child(
+                    gpui::div()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().text_subtle))
+                        .child(t!("hint-backup-codes")),
+                )
+                .child(codes),
+        );
+    }
+
+    panel.child(
+        row()
+            .w_full()
+            .px(px(space::LG))
+            .py(px(space::MD))
+            .gap(px(space::SM))
+            .justify_end()
+            // Fetching the codes, then regenerating - regenerating is last
+            // because it invalidates the ones just fetched.
+            .child(button(
+                "account-codes",
+                &t!("action-backup-codes"),
+                false,
+                {
+                    let codes = actions.backup_codes;
+                    move |cx| codes(false, cx)
+                },
+            ))
+            .child(button(
+                "account-enrol",
+                &t!("action-two-factor"),
+                false,
+                actions.enrol,
+            ))
+            .when(panel_state.enrolment_uri.is_some(), |r| {
+                r.child(button(
+                    "account-enrol-finish",
+                    &t!("action-finish-enrolment"),
+                    true,
+                    actions.submit_enrolment,
+                ))
+            })
+            // Only when no enrolment is in progress, or this would offer to
+            // disable using a code meant for the enrolment being set up.
+            .when(panel_state.enrolment_uri.is_none(), |r| {
+                r.child(button(
+                    "account-disable",
+                    &t!("action-disable-two-factor"),
+                    false,
+                    actions.disable,
+                ))
+            })
+            .when(panel_state.problem.is_none(), |r| {
+                r.child(button(
+                    "account-save",
+                    &t!("action-save"),
+                    true,
+                    actions.save,
+                ))
+            })
+            .child(button(
+                "account-close",
+                &t!("action-close"),
+                false,
+                actions.close,
+            )),
+    )
+}
+
 /// One entry in a context menu.
 pub struct ContextItem {
     pub label: String,

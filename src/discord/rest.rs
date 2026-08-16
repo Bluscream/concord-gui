@@ -24,6 +24,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::sync::{Mutex as AsyncMutex, Notify, OwnedMutexGuard};
 
+mod account;
 mod application;
 mod application_commands;
 mod automod;
@@ -38,6 +39,10 @@ mod invites;
 mod privacy;
 mod sessions;
 
+pub use account::{
+    AccountEdit, BackupCode, MAX_USERNAME_CHARS, MIN_PASSWORD_CHARS, MIN_USERNAME_CHARS,
+    password_problem, username_problem,
+};
 pub use automod::{AutoModAction, AutoModRule, AutoModTrigger};
 pub use channel_management::{
     ChannelEdit, MAX_CHANNEL_NAME_CHARS, MAX_CHANNEL_TOPIC_CHARS, MAX_SLOWMODE_SECONDS,

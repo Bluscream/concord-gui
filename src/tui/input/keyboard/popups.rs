@@ -1616,6 +1616,38 @@ fn handle_options_popup_fixed_key(
         return Some(None);
     }
 
+    // The account panel is a form: every printable key is text, so it takes
+    // the keyboard before the shared router turns letters into shortcuts.
+    if state.is_account_category_open() {
+        match key.code {
+            KeyCode::Char(character) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Shift+S submits, which is the one letter that is not text.
+                match character {
+                    'S' => {
+                        state.submit_account_form();
+                        state.submit_totp_enrolment();
+                    }
+                    // Turning two-factor off, and fetching or regenerating the
+                    // backup codes. Capitals, so they are not swallowed as
+                    // text into whichever field is highlighted.
+                    'X' => state.disable_totp(),
+                    'B' => state.load_backup_codes(false),
+                    'R' => state.load_backup_codes(true),
+                    _ => {}
+                }
+                if !matches!(character, 'S' | 'X' | 'B' | 'R') {
+                    state.type_account_character(character);
+                }
+                return Some(None);
+            }
+            KeyCode::Backspace => {
+                state.delete_account_character();
+                return Some(None);
+            }
+            _ => {}
+        }
+    }
+
     if state.is_access_category_open() {
         match key.code {
             KeyCode::Char('r') => {

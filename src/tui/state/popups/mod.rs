@@ -731,6 +731,9 @@ pub enum OptionsCategory {
     /// account. One category rather than two: they answer the same question,
     /// and after a scare hunting through two panels is the last thing wanted.
     Access,
+    /// Credentials and two-factor. Every field here is typed by the person at
+    /// the keyboard; nothing is stored, defaulted or remembered.
+    Account,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -748,6 +751,15 @@ pub(super) struct OptionsPopupState {
     pub(super) access_password: Option<crate::tui::text_input::TextInputState>,
     /// Which session rows are selected for logout.
     pub(super) session_logout_targets: std::collections::BTreeSet<String>,
+    /// The credentials form. Its own `Debug` redacts the three password
+    /// fields, so a `{:?}` of this popup cannot print them.
+    pub(super) account_form: crate::discord::AccountForm,
+    /// The enrolment secret while two-factor is being turned on. Shown on
+    /// purpose - enrolment cannot happen unless it reaches the authenticator
+    /// app - and dropped as soon as the code is accepted.
+    pub(super) totp_secret: Option<crate::discord::TotpSecret>,
+    pub(super) totp_code: String,
+    pub(super) backup_codes: Vec<crate::discord::BackupCode>,
     pub(super) category: Option<OptionsCategory>,
     pub(super) capturing_push_to_talk_shortcut: bool,
 }

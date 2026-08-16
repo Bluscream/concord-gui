@@ -468,6 +468,83 @@ load_guild_panel!(
 );
 
 /// Fetch a sound list. `None` asks for the default sounds.
+pub(super) async fn modify_account(
+    client: DiscordClient,
+    edit: crate::discord::AccountEdit,
+    current_password: crate::discord::Secret,
+) {
+    match client.modify_account(&edit, &current_password).await {
+        Ok(()) => client.publish_event(AppEvent::AccountModified).await,
+        Err(error) => {
+            log_app_error("account change failed", &error);
+            client
+                .publish_event(AppEvent::AccountModifyFailed {
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
+pub(super) async fn enable_totp(
+    client: DiscordClient,
+    secret: String,
+    code: String,
+    password: crate::discord::Secret,
+) {
+    match client.enable_totp(&secret, &code, &password).await {
+        Ok(backup_codes) => {
+            client
+                .publish_event(AppEvent::TotpEnabled { backup_codes })
+                .await;
+        }
+        Err(error) => {
+            log_app_error("enable two-factor failed", &error);
+            client
+                .publish_event(AppEvent::TotpFailed {
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
+pub(super) async fn disable_totp(client: DiscordClient, code: String) {
+    match client.disable_totp(&code).await {
+        Ok(()) => client.publish_event(AppEvent::TotpDisabled).await,
+        Err(error) => {
+            log_app_error("disable two-factor failed", &error);
+            client
+                .publish_event(AppEvent::TotpFailed {
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
+pub(super) async fn load_backup_codes(
+    client: DiscordClient,
+    password: crate::discord::Secret,
+    regenerate: bool,
+) {
+    match client.backup_codes(&password, regenerate).await {
+        Ok(codes) => {
+            client
+                .publish_event(AppEvent::BackupCodesLoaded { codes })
+                .await;
+        }
+        Err(error) => {
+            log_app_error("backup codes failed", &error);
+            client
+                .publish_event(AppEvent::BackupCodesFailed {
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
 pub(super) async fn load_auth_sessions(client: DiscordClient) {
     match client.auth_sessions().await {
         Ok(sessions) => {

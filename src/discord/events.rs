@@ -718,6 +718,25 @@ pub enum AppEvent {
     AuthSessionsLoadFailed {
         message: String,
     },
+    AccountModified,
+    AccountModifyFailed {
+        message: String,
+    },
+    /// Two-factor is on. Carries the backup codes, which arrive once and are
+    /// the only thing between a lost phone and a lost account.
+    TotpEnabled {
+        backup_codes: Vec<crate::discord::BackupCode>,
+    },
+    TotpDisabled,
+    TotpFailed {
+        message: String,
+    },
+    BackupCodesLoaded {
+        codes: Vec<crate::discord::BackupCode>,
+    },
+    BackupCodesFailed {
+        message: String,
+    },
     AuthorisedAppsLoaded {
         apps: Vec<crate::discord::AuthorisedApp>,
     },
@@ -1056,6 +1075,13 @@ define_app_event_kinds! {
     ConnectionsLoaded: AppEvent::ConnectionsLoaded { .. },
     AuthSessionsLoaded: AppEvent::AuthSessionsLoaded { .. },
     AuthSessionsLoadFailed: AppEvent::AuthSessionsLoadFailed { .. },
+    AccountModified: AppEvent::AccountModified,
+    AccountModifyFailed: AppEvent::AccountModifyFailed { .. },
+    TotpEnabled: AppEvent::TotpEnabled { .. },
+    TotpDisabled: AppEvent::TotpDisabled,
+    TotpFailed: AppEvent::TotpFailed { .. },
+    BackupCodesLoaded: AppEvent::BackupCodesLoaded { .. },
+    BackupCodesFailed: AppEvent::BackupCodesFailed { .. },
     AuthorisedAppsLoaded: AppEvent::AuthorisedAppsLoaded { .. },
     AuthorisedAppsLoadFailed: AppEvent::AuthorisedAppsLoadFailed { .. },
     ConnectionsLoadFailed: AppEvent::ConnectionsLoadFailed { .. },
@@ -2124,6 +2150,13 @@ impl AppEventKind {
             | AppEventKind::SoundboardSoundPlayed
             | AppEventKind::SoundboardSoundsLoaded
             | AppEventKind::SoundboardSoundsLoadFailed
+            | AppEventKind::AccountModified
+            | AppEventKind::AccountModifyFailed
+            | AppEventKind::TotpEnabled
+            | AppEventKind::TotpDisabled
+            | AppEventKind::TotpFailed
+            | AppEventKind::BackupCodesLoaded
+            | AppEventKind::BackupCodesFailed
             | AppEventKind::AuthSessionsLoaded
             | AppEventKind::AuthSessionsLoadFailed
             | AppEventKind::AuthorisedAppsLoaded

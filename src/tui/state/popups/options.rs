@@ -89,6 +89,11 @@ impl DashboardState {
             .set_modal(ModalPopup::Options(OptionsPopupState {
                 category: Some(category),
                 connections_loading: category == OptionsCategory::Connections,
+                access_loading: category == OptionsCategory::Access,
+                account_form: crate::discord::AccountForm::new(
+                    self.current_user().unwrap_or_default(),
+                    "",
+                ),
                 ..OptionsPopupState::default()
             }));
     }
@@ -125,6 +130,7 @@ impl DashboardState {
             Some(OptionsCategory::Connections) => "Linked Accounts",
             Some(OptionsCategory::Privacy) => "Privacy and Safety",
             Some(OptionsCategory::Access) => "Sessions and Apps",
+            Some(OptionsCategory::Account) => "Account Settings",
         }
     }
 
@@ -169,6 +175,8 @@ impl DashboardState {
             // At least one, so an empty account still has a row to explain
             // itself rather than rendering as a blank panel.
             Some(OptionsCategory::Access) => self.access_row_count().max(1),
+            // The form's fields, then the two-factor row under them.
+            Some(OptionsCategory::Account) => crate::discord::AccountField::ALL.len() + 1,
         }
     }
 
@@ -180,6 +188,7 @@ impl DashboardState {
             Some(OptionsCategory::Connections) => return self.connection_option_items(),
             Some(OptionsCategory::Privacy) => return self.privacy_option_items(),
             Some(OptionsCategory::Access) => return self.access_option_items(),
+            Some(OptionsCategory::Account) => return self.account_option_items(),
             Some(OptionsCategory::Display) => return self.display_option_items_for_display(),
             Some(OptionsCategory::Composer) => return self.display_option_items_for_composer(),
             Some(OptionsCategory::Notifications) => {
@@ -253,6 +262,14 @@ impl DashboardState {
                 gauge: None,
                 effective: true,
                 description: "What else is signed in to this account, and which apps have access.",
+            },
+            DisplayOptionItem {
+                label: "Account",
+                enabled: true,
+                value: Some(OptionsCategoryShortcut::Account.key().to_string()),
+                gauge: None,
+                effective: true,
+                description: "Username, email, password and two-factor authentication.",
             },
         ]
     }
@@ -491,6 +508,225 @@ impl DashboardState {
         if let Some(popup) = self.popups.options_popup_mut() {
             popup.access_loading = false;
         }
+    }
+
+    /// The two-factor row sits after the form's fields.
+    fn totp_row_index(&self) -> usize {
+        crate::discord::AccountField::ALL.len()
+    }
+
+    fn account_option_items(&self) -> Vec<DisplayOptionItem> {
+        let Some(popup) = self.popups.options_popup() else {
+            return Vec::new();
+        };
+        let form = &popup.account_form;
+
+        let mut items: Vec<DisplayOptionItem> = crate::discord::AccountField::ALL
+            .into_iter()
+            .map(|field| DisplayOptionItem {
+                label: field.label(),
+                enabled: !form.value(field).is_empty(),
+                // Bullets for a credential; the real value never reaches here.
+                value: Some(form.display_value(field)),
+                gauge: None,
+                effective: true,
+                description: field.hint(),
+            })
+            .collect();
+
+        items.push(DisplayOptionItem {
+            label: "Two-factor authentication",
+            enabled: popup.totp_secret.is_some(),
+            value: Some(match &popup.totp_secret {
+                // Shown deliberately: enrolment cannot happen unless this
+                // reaches the authenticator app.
+                Some(secret) => secret.grouped(),
+                None => "enter starts enrolment".to_owned(),
+            }),
+            gauge: None,
+            effective: true,
+            description: "enter starts or cancels enrolment; type the code and press S to finish.",
+        });
+        items
+    }
+
+    /// Start or cancel two-factor enrolment.
+    fn toggle_totp_enrolment(&mut self) {
+        let Some(popup) = self.popups.options_popup_mut() else {
+            return;
+        };
+        if popup.totp_secret.is_some() {
+            popup.totp_secret = None;
+            popup.totp_code.clear();
+        } else {
+            popup.totp_secret = Some(crate::discord::TotpSecret::generate());
+        }
+    }
+
+    /// The `otpauth://` URI for the enrolment in progress, for a QR code.
+    pub fn totp_enrolment_uri(&self) -> Option<String> {
+        let popup = self.popups.options_popup()?;
+        let secret = popup.totp_secret.as_ref()?;
+        Some(secret.otpauth_uri(self.current_user().unwrap_or("Discord")))
+    }
+
+    pub fn totp_code(&self) -> Option<&str> {
+        self.popups
+            .options_popup()
+            .map(|popup| popup.totp_code.as_str())
+    }
+
+    pub fn is_account_category_open(&self) -> bool {
+        self.popups.options_popup().and_then(|popup| popup.category)
+            == Some(OptionsCategory::Account)
+    }
+
+    /// Type into whichever field is highlighted.
+    pub fn type_account_character(&mut self, character: char) {
+        let Some(index) = self.selected_option_index() else {
+            return;
+        };
+        let totp_row = self.totp_row_index();
+        let Some(popup) = self.popups.options_popup_mut() else {
+            return;
+        };
+        if index == totp_row {
+            // Only while enrolling, or typing would fill a code for an
+            // enrolment that has not started.
+            if popup.totp_secret.is_some() {
+                popup.totp_code.push(character);
+            }
+            return;
+        }
+        if let Some(field) = crate::discord::AccountField::at(index) {
+            popup.account_form.push(field, character);
+        }
+    }
+
+    pub fn delete_account_character(&mut self) {
+        let Some(index) = self.selected_option_index() else {
+            return;
+        };
+        let totp_row = self.totp_row_index();
+        let Some(popup) = self.popups.options_popup_mut() else {
+            return;
+        };
+        if index == totp_row {
+            popup.totp_code.pop();
+            return;
+        }
+        if let Some(field) = crate::discord::AccountField::at(index) {
+            popup.account_form.pop(field);
+        }
+    }
+
+    /// Why the form cannot be submitted, for the line under it.
+    pub fn account_form_problem(&self) -> Option<String> {
+        self.popups
+            .options_popup()
+            .and_then(|popup| popup.account_form.problem())
+            .map(crate::discord::AccountFormProblem::message)
+    }
+
+    /// Send the credential change.
+    ///
+    /// The form is taken rather than borrowed, so submitting leaves no copy of
+    /// three passwords behind in popup state.
+    pub fn submit_account_form(&mut self) {
+        let Some(popup) = self.popups.options_popup_mut() else {
+            return;
+        };
+        if popup.account_form.problem().is_some() {
+            return;
+        }
+        let form = std::mem::take(&mut popup.account_form);
+        if let Some(command) = form.submit() {
+            self.enqueue_pending_command(command);
+        }
+    }
+
+    /// Finish enrolment with the code from the authenticator app.
+    pub fn submit_totp_enrolment(&mut self) {
+        let Some(popup) = self.popups.options_popup_mut() else {
+            return;
+        };
+        let (Some(secret), Some(())) = (
+            popup.totp_secret.clone(),
+            (!popup.totp_code.is_empty()).then_some(()),
+        ) else {
+            return;
+        };
+        // Discord needs the account password here too, and it is the one the
+        // form already asks for rather than a second prompt.
+        let password = popup
+            .account_form
+            .value(crate::discord::AccountField::CurrentPassword);
+        if password.is_empty() {
+            return;
+        }
+        let password = crate::discord::Secret::new(password);
+        let code = std::mem::take(&mut popup.totp_code);
+        popup.totp_secret = None;
+        self.enqueue_pending_command(AppCommand::EnableTotp {
+            secret: secret.as_str().to_owned(),
+            code,
+            password,
+        });
+    }
+
+    /// Turn two-factor off with a current code.
+    ///
+    /// A code rather than a password, which is Discord's rule: the point is to
+    /// prove the second factor still works before removing it.
+    pub fn disable_totp(&mut self) {
+        let Some(popup) = self.popups.options_popup_mut() else {
+            return;
+        };
+        // Only when no enrolment is in progress, or this would disable using
+        // a code meant for the enrolment being set up.
+        if popup.totp_secret.is_some() || popup.totp_code.is_empty() {
+            return;
+        }
+        let code = std::mem::take(&mut popup.totp_code);
+        self.enqueue_pending_command(AppCommand::DisableTotp { code });
+    }
+
+    /// Fetch the backup codes, or regenerate them.
+    ///
+    /// Regenerating invalidates the old ones, so it is a separate action
+    /// rather than something the fetch does on its own.
+    pub fn load_backup_codes(&mut self, regenerate: bool) {
+        let Some(popup) = self.popups.options_popup() else {
+            return;
+        };
+        let password = popup
+            .account_form
+            .value(crate::discord::AccountField::CurrentPassword);
+        if password.is_empty() {
+            return;
+        }
+        let password = crate::discord::Secret::new(password);
+        self.enqueue_pending_command(AppCommand::LoadBackupCodes {
+            password,
+            regenerate,
+        });
+    }
+
+    pub fn set_backup_codes(&mut self, codes: Vec<crate::discord::BackupCode>) {
+        if let Some(popup) = self.popups.options_popup_mut() {
+            popup.backup_codes = codes;
+        }
+    }
+
+    pub fn backup_codes(&self) -> &[crate::discord::BackupCode] {
+        self.popups
+            .options_popup()
+            .map_or(&[], |popup| popup.backup_codes.as_slice())
+    }
+
+    /// Open the account settings panel.
+    pub fn open_account(&mut self) {
+        self.open_options_category(OptionsCategory::Account);
     }
 
     /// Open the sessions and apps panel.
@@ -938,6 +1174,13 @@ impl DashboardState {
             return;
         }
 
+        if category == OptionsCategory::Account {
+            if selected == self.totp_row_index() {
+                self.toggle_totp_enrolment();
+            }
+            return;
+        }
+
         if category == OptionsCategory::Privacy {
             if let Some(setting) = crate::discord::PrivacySetting::at(selected) {
                 let edit = setting.toggled(&self.discord.privacy_state());
@@ -1140,6 +1383,9 @@ impl DashboardState {
                 self.open_options_category(OptionsCategory::Privacy)
             }
             OptionsCategoryShortcut::Access => self.open_options_category(OptionsCategory::Access),
+            OptionsCategoryShortcut::Account => {
+                self.open_options_category(OptionsCategory::Account)
+            }
         }
     }
 

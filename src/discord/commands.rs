@@ -554,6 +554,28 @@ pub enum AppCommand {
         password: crate::discord::Secret,
     },
     LoadAuthorisedApps,
+    /// Change username, email or password. All of it is what the user typed;
+    /// none of it is stored.
+    ModifyAccount {
+        edit: crate::discord::AccountEdit,
+        current_password: crate::discord::Secret,
+    },
+    /// Turn on two-factor authentication with a locally generated secret.
+    EnableTotp {
+        secret: String,
+        code: String,
+        password: crate::discord::Secret,
+    },
+    /// Turn it off. A code rather than a password, which is Discord's rule.
+    DisableTotp {
+        code: String,
+    },
+    /// Fetch the backup codes, or regenerate them - which invalidates the old
+    /// ones, so it is a flag rather than something the fetch does on its own.
+    LoadBackupCodes {
+        password: crate::discord::Secret,
+        regenerate: bool,
+    },
     RevokeAuthorisedApp {
         id: String,
         label: String,

@@ -168,6 +168,7 @@ pub fn apply(workspace: &mut Workspace, action: UiAction, cx: &mut Context<Works
         UiAction::OpenConnections => workspace.open_connections(),
         UiAction::OpenPrivacy => workspace.open_privacy(),
         UiAction::OpenAccess => workspace.open_access(),
+        UiAction::OpenAccount => workspace.open_account(),
 
         // ---- panels -------------------------------------------------------
         UiAction::OpenNotificationInbox => workspace.open_inbox(),

@@ -552,6 +552,29 @@ impl CommandDispatcher {
                     .publish_event(crate::discord::AppEvent::GuildForgotten { guild_id })
                     .await;
             }
+            AppCommand::ModifyAccount {
+                edit,
+                current_password,
+            } => {
+                message_commands::modify_account(self.client.clone(), edit, current_password).await;
+            }
+            AppCommand::EnableTotp {
+                secret,
+                code,
+                password,
+            } => {
+                message_commands::enable_totp(self.client.clone(), secret, code, password).await;
+            }
+            AppCommand::DisableTotp { code } => {
+                message_commands::disable_totp(self.client.clone(), code).await;
+            }
+            AppCommand::LoadBackupCodes {
+                password,
+                regenerate,
+            } => {
+                message_commands::load_backup_codes(self.client.clone(), password, regenerate)
+                    .await;
+            }
             AppCommand::LoadAuthSessions => {
                 message_commands::load_auth_sessions(self.client.clone()).await;
             }

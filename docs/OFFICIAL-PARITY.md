@@ -68,9 +68,32 @@ guess.
 
 ### Account settings
 
-Username, email and password changes; two-factor enrolment and removal;
-backup codes; account deletion and disabling. Currently the client can read the
-account and edit the profile, but nothing that changes credentials.
+Username, email and password changes, two-factor enrolment and removal, and
+backup codes - all in both clients (TUI `<leader> u`, GUI the same action).
+
+The form is `AccountForm` in the core, not written once per client: the parts
+that drift when duplicated are which fields are credentials, that a new password
+must be typed twice, and that the current password is required for any change at
+all. Submitting consumes the form, so no copy of three passwords is left in
+panel state.
+
+The confirmation field is this client's, not Discord's. Discord accepts whatever
+new password it is given, so a typo would become the real password with no way
+to notice until the next sign-in.
+
+This client never computes a one-time code - the authenticator app does, which
+is the point of the arrangement. So there is no HMAC and no clock arithmetic,
+only a 20-byte secret from `OsRng`, base32-encoded and checked against RFC 4648's
+own test vectors. The account name in the `otpauth://` URI is percent-encoded: a
+username containing `?` or `#` would otherwise end the path and produce an
+enrolment that silently does not match.
+
+No password is ever drawn or printed. Fields render as bullets counted in
+characters rather than bytes, and every type that can hold one has a
+hand-written `Debug` - `Secret`, `TextInputState`, `AccountForm` - because a
+derived one prints in full and `{:?}` on a whole panel is what a debug log does.
+
+Still missing: account deletion and disabling.
 
 ### Connections
 
@@ -142,8 +165,7 @@ have tests, because `AppCommand` derives `Debug` and a plain `String` there
 would be printed in full by any `{:?}` written later by someone with no reason
 to suspect that variant carries a credential.
 
-Still missing: credentials and two-factor enrolment, which are the rest of the
-account settings.
+
 
 ### Blocked and ignored users
 

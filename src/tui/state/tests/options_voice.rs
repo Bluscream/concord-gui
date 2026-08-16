@@ -1275,6 +1275,17 @@ mod access {
     }
 
     #[test]
+    fn the_panel_says_it_is_loading_before_anything_arrives() {
+        // Distinct from "nothing else has access", which is what an unset
+        // loading flag would show for an account still fetching - and which
+        // reads as a finished, empty answer.
+        let mut state = DashboardState::new();
+        state.open_access();
+
+        assert_eq!(state.display_option_items()[0].label, "Loading");
+    }
+
+    #[test]
     fn an_empty_account_still_has_a_row_saying_why() {
         let mut state = DashboardState::new();
         state.open_access();
@@ -1389,5 +1400,164 @@ mod access {
 
         state.set_auth_sessions(vec![session("b", false)]);
         assert!(!state.has_session_logout_targets());
+    }
+}
+
+mod account {
+    use super::*;
+    use crate::discord::AccountField;
+
+    fn opened() -> DashboardState {
+        let mut state = DashboardState::new();
+        state.push_event(AppEvent::Ready {
+            user: "someone".to_owned(),
+            user_id: Some(Id::new(1)),
+        });
+        assert_eq!(
+            state.current_user(),
+            Some("someone"),
+            "fixture did not sign in"
+        );
+        state.open_account();
+        state.drain_pending_commands();
+        state
+    }
+
+    fn type_into(state: &mut DashboardState, row: usize, value: &str) {
+        while state.selected_option_index() != Some(row) {
+            state.move_option_down();
+        }
+        for character in value.chars() {
+            state.type_account_character(character);
+        }
+    }
+
+    #[test]
+    fn the_form_opens_on_the_current_username() {
+        // Seeded, so an untouched field compares equal and is left out of the
+        // edit rather than sent back unchanged.
+        let state = opened();
+        assert_eq!(
+            state.display_option_items()[0].value.as_deref(),
+            Some("someone")
+        );
+        assert_eq!(
+            state.account_form_problem().as_deref(),
+            Some("Nothing to change")
+        );
+    }
+
+    #[test]
+    fn passwords_are_drawn_as_bullets_and_never_printed() {
+        let mut state = opened();
+        type_into(&mut state, 4, "hunter2");
+
+        let shown = state.display_option_items()[4].value.clone().unwrap();
+        assert!(!shown.contains("hunter2"), "the password was drawn");
+        assert_eq!(shown.chars().count(), 7);
+        assert!(!format!("{state:?}").contains("hunter2"));
+    }
+
+    #[test]
+    fn a_change_without_the_current_password_is_not_sent() {
+        let mut state = opened();
+        type_into(&mut state, 0, "x");
+        state.submit_account_form();
+
+        assert!(state.drain_pending_commands().is_empty());
+        assert!(
+            state
+                .account_form_problem()
+                .is_some_and(|problem| problem.contains("current password"))
+        );
+    }
+
+    #[test]
+    fn submitting_sends_the_change_and_leaves_no_password_behind() {
+        let mut state = opened();
+        type_into(&mut state, 0, "x");
+        type_into(&mut state, 4, "hunter2");
+        state.submit_account_form();
+
+        let Some(AppCommand::ModifyAccount { edit, .. }) = state
+            .drain_pending_commands()
+            .into_iter()
+            .find(|c| matches!(c, AppCommand::ModifyAccount { .. }))
+        else {
+            panic!("no account change sent");
+        };
+        assert_eq!(edit.username.as_deref(), Some("someonex"));
+
+        // The form is consumed by submitting, so no copy of the password is
+        // left in popup state.
+        assert!(state.display_option_items()[4].value.as_deref() == Some(""));
+        assert!(!format!("{state:?}").contains("hunter2"));
+    }
+
+    #[test]
+    fn enrolment_generates_a_secret_and_cancelling_drops_it() {
+        let mut state = opened();
+        let totp_row = AccountField::ALL.len();
+        type_into(&mut state, totp_row, "");
+        state.toggle_selected_display_option();
+
+        let uri = state.totp_enrolment_uri().expect("no enrolment started");
+        assert!(uri.starts_with("otpauth://totp/Discord:someone?"));
+
+        state.toggle_selected_display_option();
+        assert!(state.totp_enrolment_uri().is_none(), "the secret survived");
+    }
+
+    #[test]
+    fn a_code_typed_before_enrolment_starts_goes_nowhere() {
+        // Otherwise the code field would fill for an enrolment that has no
+        // secret, and submitting would send a code against nothing.
+        let mut state = opened();
+        type_into(&mut state, AccountField::ALL.len(), "123456");
+
+        assert_eq!(state.totp_code(), Some(""));
+    }
+
+    #[test]
+    fn enrolment_needs_the_current_password_too() {
+        // Discord asks for it here as well, and it is the field the form
+        // already has rather than a second prompt.
+        let mut state = opened();
+        let totp_row = AccountField::ALL.len();
+        type_into(&mut state, totp_row, "");
+        state.toggle_selected_display_option();
+        type_into(&mut state, totp_row, "123456");
+        state.submit_totp_enrolment();
+
+        assert!(state.drain_pending_commands().is_empty());
+    }
+
+    #[test]
+    fn enrolment_sends_the_generated_secret_not_a_new_one() {
+        // Sending a freshly generated secret would enrol something the
+        // authenticator app has never seen, and the code would never match.
+        let mut state = opened();
+        type_into(&mut state, 4, "hunter2");
+        let totp_row = AccountField::ALL.len();
+        type_into(&mut state, totp_row, "");
+        state.toggle_selected_display_option();
+
+        let shown = state.display_option_items()[totp_row]
+            .value
+            .clone()
+            .unwrap()
+            .replace(' ', "");
+        type_into(&mut state, totp_row, "123456");
+        state.submit_totp_enrolment();
+
+        let Some(AppCommand::EnableTotp { secret, code, .. }) = state
+            .drain_pending_commands()
+            .into_iter()
+            .find(|c| matches!(c, AppCommand::EnableTotp { .. }))
+        else {
+            panic!("no enrolment sent");
+        };
+        assert_eq!(secret, shown);
+        assert_eq!(code, "123456");
     }
 }

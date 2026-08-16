@@ -130,6 +130,7 @@ define_ui_actions! {
     OpenConnections => ("Linked accounts", &[&[Leader, Char('l')]], None),
     OpenPrivacy => ("Privacy and safety", &[&[Leader, Char('y')]], None),
     OpenAccess => ("Sessions and apps", &[&[Leader, Char('k')]], None),
+    OpenAccount => ("Account settings", &[&[Leader, Char('u')]], None),
     VoiceLeave => ("leave voice", &[&[Leader, Char('v'), Char('l')]], None),
 }
 
@@ -427,10 +428,11 @@ pub enum OptionsCategoryShortcut {
     Connections,
     Privacy,
     Access,
+    Account,
 }
 
 impl OptionsCategoryShortcut {
-    pub(in crate::tui) const ALL: [Self; 7] = [
+    pub(in crate::tui) const ALL: [Self; 8] = [
         Self::Display,
         Self::Composer,
         Self::Notifications,
@@ -438,6 +440,7 @@ impl OptionsCategoryShortcut {
         Self::Connections,
         Self::Privacy,
         Self::Access,
+        Self::Account,
     ];
 
     pub(in crate::tui) const fn key(self) -> char {
@@ -451,6 +454,7 @@ impl OptionsCategoryShortcut {
             // Not 'p', which is a leader prefix.
             Self::Privacy => 'y',
             Self::Access => 'k',
+            Self::Account => 'u',
         }
     }
 

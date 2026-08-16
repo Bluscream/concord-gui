@@ -14,6 +14,18 @@ import sys
 SOURCE = "src/discord/commands.rs"
 CLIENTS = {"tui": "src/tui", "gui": "crates/gui/src"}
 
+# Commands the core builds on a client's behalf, so no client names the variant.
+#
+# An allow-list rather than silence: each entry has to say who does build it and
+# who sends it, and a wrong entry is then a wrong sentence somebody can read -
+# which is better than a check that quietly skips things.
+BUILT_IN_CORE = {
+    # AccountForm::submit() builds it; both panels call that and send the
+    # result. Naming the variant in a client would mean duplicating the
+    # validation that decides whether it may be sent at all.
+    "ModifyAccount": "AccountForm::submit, sent by both account panels",
+}
+
 
 def variants() -> list[str]:
     src = open(SOURCE).read()
@@ -36,6 +48,8 @@ def reaches(client_path: str, variant: str) -> bool:
 def main() -> int:
     problems = []
     for variant in variants():
+        if variant in BUILT_IN_CORE:
+            continue
         reached = {name: reaches(path, variant) for name, path in CLIENTS.items()}
         if not any(reached.values()):
             problems.append(f"unreachable from both: {variant}")
@@ -45,6 +59,9 @@ def main() -> int:
 
     for problem in problems:
         print(problem)
+    # Named, so an allow-list entry cannot quietly outlive its reason.
+    for variant, why in sorted(BUILT_IN_CORE.items()):
+        print(f"allowed: {variant} - {why}")
     print(f"-- {len(variants())} commands checked, {len(problems)} problems")
     return 1 if problems else 0
 

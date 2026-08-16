@@ -561,6 +561,21 @@ pub struct ConnectionsView {
     pub error: Option<String>,
 }
 
+/// Credentials and two-factor.
+///
+/// The form itself is `concord::discord::AccountForm`, whose own `Debug`
+/// redacts the three password fields - so a `{:?}` of this view cannot print
+/// them.
+#[derive(Debug)]
+pub struct AccountView {
+    pub form: concord::discord::AccountForm,
+    pub focused: usize,
+    /// The enrolment secret while two-factor is being set up.
+    pub totp_secret: Option<concord::discord::TotpSecret>,
+    pub totp_code: String,
+    pub backup_codes: Vec<concord::discord::BackupCode>,
+}
+
 /// Sessions and authorised applications.
 pub struct AccessView {
     pub sessions: Vec<concord::discord::AuthSession>,
@@ -936,6 +951,7 @@ pub struct Workspace {
     /// so the panel is either open or not.
     pub privacy_open: bool,
     pub access: Option<AccessView>,
+    pub account: Option<AccountView>,
     /// A role's permissions, once opened.
     pub permission_grid: Option<PermissionGridView>,
     /// An image being viewed full size.
@@ -1084,6 +1100,7 @@ impl Workspace {
             connections: None,
             privacy_open: false,
             access: None,
+            account: None,
             permission_grid: None,
             viewing_image: None,
             deleting_channel: None,
@@ -4232,6 +4249,184 @@ impl Workspace {
         }
     }
 
+    /// The signed-in username, for seeding the form and labelling the
+    /// enrolment URI.
+    fn current_user_name(&self) -> Option<&str> {
+        self.last_state
+            .as_ref()
+            .and_then(|state| state.current_user())
+    }
+
+    pub fn open_account(&mut self) {
+        self.account = Some(AccountView {
+            // Seeded with the current username, so an untouched field compares
+            // equal and is left out of the edit.
+            form: concord::discord::AccountForm::new(
+                self.current_user_name().unwrap_or_default(),
+                "",
+            ),
+            focused: 0,
+            totp_secret: None,
+            totp_code: String::new(),
+            backup_codes: Vec::new(),
+        });
+    }
+
+    pub fn focus_account_field(&mut self, index: usize) {
+        if let Some(view) = &mut self.account
+            && index < concord::discord::AccountField::ALL.len()
+        {
+            view.focused = index;
+        }
+    }
+
+    /// Take one keystroke into the focused field.
+    pub fn type_account_key(&mut self, key: &str) {
+        let Some(view) = &mut self.account else {
+            return;
+        };
+        let Some(field) = concord::discord::AccountField::at(view.focused) else {
+            return;
+        };
+        match key {
+            "backspace" => view.form.pop(field),
+            other => {
+                // Only real characters. A bare modifier or an arrow key
+                // arrives as a name like "shift", and appending it would put
+                // "shift" into the field.
+                let mut characters = other.chars();
+                if let (Some(character), None) = (characters.next(), characters.next()) {
+                    view.form.push(field, character);
+                }
+            }
+        }
+    }
+
+    /// Start or cancel two-factor enrolment.
+    pub fn toggle_totp_enrolment(&mut self) {
+        let Some(view) = &mut self.account else {
+            return;
+        };
+        if view.totp_secret.is_some() {
+            view.totp_secret = None;
+            view.totp_code.clear();
+        } else {
+            view.totp_secret = Some(concord::discord::TotpSecret::generate());
+        }
+    }
+
+    /// Type into the two-factor code field.
+    ///
+    /// Separate from the form fields: the code is not part of the credential
+    /// change and is submitted by its own button.
+    pub fn type_totp_code(&mut self, key: &str) {
+        let Some(view) = &mut self.account else {
+            return;
+        };
+        match key {
+            "backspace" => {
+                view.totp_code.pop();
+            }
+            other => {
+                let mut characters = other.chars();
+                if let (Some(character), None) = (characters.next(), characters.next()) {
+                    view.totp_code.push(character);
+                }
+            }
+        }
+    }
+
+    /// Finish enrolment with the code from the authenticator app.
+    pub fn submit_totp_enrolment(&mut self) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(view) = &mut self.account else {
+            return;
+        };
+        let Some(secret) = view.totp_secret.clone() else {
+            return;
+        };
+        if view.totp_code.is_empty() {
+            return;
+        }
+        // Discord needs the account password here too, and it is the one the
+        // form already asks for rather than a second prompt.
+        let password = view
+            .form
+            .value(concord::discord::AccountField::CurrentPassword);
+        if password.is_empty() {
+            return;
+        }
+        let password = concord::discord::Secret::new(password);
+        let code = std::mem::take(&mut view.totp_code);
+        view.totp_secret = None;
+        handle.send(AppCommand::EnableTotp {
+            secret: secret.as_str().to_owned(),
+            code,
+            password,
+        });
+    }
+
+    /// Turn two-factor off with a current code.
+    ///
+    /// A code rather than a password, which is Discord's rule: the point is to
+    /// prove the second factor still works before removing it.
+    pub fn disable_totp(&mut self) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(view) = &mut self.account else {
+            return;
+        };
+        // Only when no enrolment is in progress, or this would disable using a
+        // code meant for the enrolment being set up.
+        if view.totp_secret.is_some() || view.totp_code.is_empty() {
+            return;
+        }
+        let code = std::mem::take(&mut view.totp_code);
+        handle.send(AppCommand::DisableTotp { code });
+    }
+
+    /// Fetch the backup codes, or regenerate them - which invalidates the old
+    /// ones, so it is a flag rather than something the fetch does on its own.
+    pub fn load_backup_codes(&mut self, regenerate: bool) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(view) = &self.account else {
+            return;
+        };
+        let password = view
+            .form
+            .value(concord::discord::AccountField::CurrentPassword);
+        if password.is_empty() {
+            return;
+        }
+        handle.send(AppCommand::LoadBackupCodes {
+            password: concord::discord::Secret::new(password),
+            regenerate,
+        });
+    }
+
+    /// Send the credential change, consuming the form so no copy of three
+    /// passwords is left behind.
+    pub fn submit_account_form(&mut self) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(view) = &mut self.account else {
+            return;
+        };
+        if view.form.problem().is_some() {
+            return;
+        }
+        let form = std::mem::take(&mut view.form);
+        if let Some(command) = form.submit() {
+            handle.send(command);
+        }
+    }
+
     pub fn open_access(&mut self) {
         let Some(handle) = &self.handle else {
             return;
@@ -6685,6 +6880,20 @@ impl Workspace {
                     view.error = Some(message.clone());
                 }
             }
+            AppEvent::TotpEnabled { backup_codes } => {
+                if let Some(view) = &mut self.account {
+                    // Kept on screen rather than flashed: these are the only
+                    // thing between a lost phone and a lost account.
+                    view.backup_codes = backup_codes.clone();
+                    view.totp_secret = None;
+                    view.totp_code.clear();
+                }
+            }
+            AppEvent::BackupCodesLoaded { codes } => {
+                if let Some(view) = &mut self.account {
+                    view.backup_codes = codes.clone();
+                }
+            }
             AppEvent::AuthSessionsLoaded { sessions } => {
                 if let Some(view) = &mut self.access {
                     view.loading = false;
@@ -8007,6 +8216,126 @@ impl Workspace {
                             cx.notify();
                         });
                     }
+                },
+            )));
+        }
+
+        if let Some(view) = &self.account {
+            let fields: Vec<(String, String, String, bool)> = concord::discord::AccountField::ALL
+                .into_iter()
+                .enumerate()
+                .map(|(index, field)| {
+                    (
+                        field.label().to_owned(),
+                        view.form.display_value(field),
+                        field.hint().to_owned(),
+                        index == view.focused,
+                    )
+                })
+                .collect();
+            let problem = view.form.problem().map(|p| p.message());
+            let uri = view
+                .totp_secret
+                .as_ref()
+                .map(|secret| secret.otpauth_uri(self.current_user_name().unwrap_or("Discord")));
+            let codes: Vec<(String, bool)> = view
+                .backup_codes
+                .iter()
+                .map(|code| (code.code.clone(), code.consumed))
+                .collect();
+
+            return Some(overlay::scrim().child(overlay::account_view(
+                overlay::AccountPanel {
+                    fields: &fields,
+                    problem: problem.as_deref(),
+                    enrolment_uri: uri.as_deref(),
+                    enrolment_code: &view.totp_code,
+                    backup_codes: &codes,
+                },
+                {
+                    let entity = entity.clone();
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.focus_account_field(index);
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |key: &str, cx: &mut gpui::App| {
+                        let key = key.to_owned();
+                        entity.update(cx, |workspace, cx| {
+                            workspace.type_account_key(&key);
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |key: &str, cx: &mut gpui::App| {
+                        let key = key.to_owned();
+                        entity.update(cx, |workspace, cx| {
+                            workspace.type_totp_code(&key);
+                            cx.notify();
+                        });
+                    }
+                },
+                overlay::AccountActions {
+                    save: {
+                        let entity = entity.clone();
+                        Box::new(move |cx: &mut gpui::App| {
+                            entity.update(cx, |workspace, cx| {
+                                workspace.submit_account_form();
+                                cx.notify();
+                            });
+                        })
+                    },
+                    enrol: {
+                        let entity = entity.clone();
+                        Box::new(move |cx: &mut gpui::App| {
+                            entity.update(cx, |workspace, cx| {
+                                workspace.toggle_totp_enrolment();
+                                cx.notify();
+                            });
+                        })
+                    },
+                    submit_enrolment: {
+                        let entity = entity.clone();
+                        Box::new(move |cx: &mut gpui::App| {
+                            entity.update(cx, |workspace, cx| {
+                                workspace.submit_totp_enrolment();
+                                cx.notify();
+                            });
+                        })
+                    },
+                    disable: {
+                        let entity = entity.clone();
+                        Box::new(move |cx: &mut gpui::App| {
+                            entity.update(cx, |workspace, cx| {
+                                workspace.disable_totp();
+                                cx.notify();
+                            });
+                        })
+                    },
+                    backup_codes: {
+                        let entity = entity.clone();
+                        Box::new(move |regenerate: bool, cx: &mut gpui::App| {
+                            entity.update(cx, |workspace, cx| {
+                                workspace.load_backup_codes(regenerate);
+                                cx.notify();
+                            });
+                        })
+                    },
+                    close: {
+                        let entity = entity.clone();
+                        Box::new(move |cx: &mut gpui::App| {
+                            entity.update(cx, |workspace, cx| {
+                                workspace.account = None;
+                                cx.notify();
+                            });
+                        })
+                    },
                 },
             )));
         }
@@ -10803,5 +11132,49 @@ mod access_tests {
         access.password = "héllo".to_owned();
 
         assert_eq!(access.masked_password().chars().count(), 5);
+    }
+}
+
+#[cfg(test)]
+mod account_view_tests {
+    use super::*;
+    use concord::discord::AccountField;
+
+    fn view() -> AccountView {
+        AccountView {
+            form: concord::discord::AccountForm::new("someone", ""),
+            focused: 0,
+            totp_secret: None,
+            totp_code: String::new(),
+            backup_codes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn no_password_field_is_ever_drawn_or_printed() {
+        let mut account = view();
+        for field in [
+            AccountField::NewPassword,
+            AccountField::ConfirmPassword,
+            AccountField::CurrentPassword,
+        ] {
+            account.form.set(field, "hunter2".to_owned());
+            assert!(
+                !account.form.display_value(field).contains("hunter2"),
+                "{field:?} was drawn"
+            );
+        }
+        // `{:?}` on the whole view is what a debug log does.
+        assert!(!format!("{account:?}").contains("hunter2"));
+    }
+
+    #[test]
+    fn an_ordinary_field_is_drawn_as_typed() {
+        // Masking everything would hide the username the form exists to edit.
+        let account = view();
+        assert_eq!(
+            account.form.display_value(AccountField::Username),
+            "someone"
+        );
     }
 }

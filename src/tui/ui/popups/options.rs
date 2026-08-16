@@ -37,6 +37,66 @@ pub(in crate::tui::ui) fn render_options_popup(
     render_option_gauges(frame, content, &items, visible_items, scroll);
     render_vertical_scrollbar(frame, inner, scroll, visible_items, items.len());
     render_session_password_prompt(frame, popup, state);
+    render_account_footer(frame, popup, state);
+}
+
+/// What is stopping the form, the enrolment URI, and the backup codes.
+///
+/// Under the list rather than in it: none of the three is a row you move onto,
+/// and putting them in the list would make the selection skip over them.
+fn render_account_footer(frame: &mut Frame, popup: Rect, state: &DashboardState) {
+    if !state.is_account_category_open() {
+        return;
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(problem) = state.account_form_problem() {
+        lines.push(problem);
+    } else {
+        lines.push("S saves - X turns two-factor off - B backup codes, R regenerates".to_owned());
+    }
+    if let Some(uri) = state.totp_enrolment_uri() {
+        // The whole URI, so it can be copied into an authenticator app on
+        // another machine. Truncating it would make it useless.
+        lines.push(uri);
+        lines.push(format!(
+            "Code: {} - press S to finish",
+            state.totp_code().unwrap_or_default()
+        ));
+    }
+
+    let codes = state.backup_codes();
+    if !codes.is_empty() {
+        // Shown once and kept: these are the only thing between a lost phone
+        // and a lost account.
+        lines.push("Backup codes - write these down:".to_owned());
+        lines.push(
+            codes
+                .iter()
+                .map(|code| {
+                    if code.consumed {
+                        // Kept rather than hidden, so the count on screen
+                        // matches the count Discord issued.
+                        format!("({})", code.code)
+                    } else {
+                        code.code.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("  "),
+        );
+    }
+
+    let height = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX);
+    let footer = Rect {
+        x: popup.x,
+        y: popup.y + popup.height.saturating_sub(height).min(popup.height),
+        width: popup.width,
+        height: height.min(popup.height),
+    };
+    frame.render_widget(Clear, footer);
+    let inner = render_modal_frame(frame, footer, "Account");
+    frame.render_widget(Paragraph::new(lines.join("\n")), inner);
 }
 
 /// The password Discord requires before logging other sessions out.

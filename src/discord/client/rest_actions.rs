@@ -326,6 +326,35 @@ impl DiscordClient {
             .await
     }
 
+    pub async fn modify_account(
+        &self,
+        edit: &crate::discord::AccountEdit,
+        current_password: &crate::discord::Secret,
+    ) -> Result<()> {
+        self.rest.modify_account(edit, current_password).await
+    }
+
+    pub async fn enable_totp(
+        &self,
+        secret: &str,
+        code: &str,
+        password: &crate::discord::Secret,
+    ) -> Result<Vec<crate::discord::BackupCode>> {
+        self.rest.enable_totp(secret, code, password).await
+    }
+
+    pub async fn disable_totp(&self, code: &str) -> Result<()> {
+        self.rest.disable_totp(code).await
+    }
+
+    pub async fn backup_codes(
+        &self,
+        password: &crate::discord::Secret,
+        regenerate: bool,
+    ) -> Result<Vec<crate::discord::BackupCode>> {
+        self.rest.backup_codes(password, regenerate).await
+    }
+
     pub async fn auth_sessions(&self) -> Result<Vec<crate::discord::AuthSession>> {
         // The current session is not identified here: the gateway's session id
         // is a different value from the hash this endpoint keys on, and

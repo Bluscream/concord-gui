@@ -209,6 +209,16 @@ fn push_dashboard_effect(event: AppEvent, ctx: &mut EffectContext<'_>) {
             ctx.state.apply_soundboard_failure(message);
             return;
         }
+        AppEvent::TotpEnabled { backup_codes } => {
+            // Shown once. These are the only thing between a lost phone and a
+            // lost account, so they are kept on screen rather than flashed.
+            ctx.state.set_backup_codes(backup_codes);
+            return;
+        }
+        AppEvent::BackupCodesLoaded { codes } => {
+            ctx.state.set_backup_codes(codes);
+            return;
+        }
         AppEvent::AuthSessionsLoaded { sessions } => {
             ctx.state.set_auth_sessions(sessions);
             return;
