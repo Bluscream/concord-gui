@@ -199,6 +199,9 @@ fn push_dashboard_effect(event: AppEvent, ctx: &mut EffectContext<'_>) {
             return;
         }
         AppEvent::SoundboardSoundsLoaded { guild_id, sounds } => {
+            // Both the picker and the server panel may be waiting on this; each
+            // ignores it when it is not the one that asked.
+            ctx.state.apply_panel_sounds(guild_id, sounds.clone());
             ctx.state.apply_soundboard_sounds(guild_id, sounds);
             return;
         }

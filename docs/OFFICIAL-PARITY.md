@@ -27,9 +27,9 @@ audit log.
 Server administration: invites (list, create, revoke), custom emoji (list,
 upload, rename, delete).
 
-Soundboard: both sound lists, playing one into a voice channel, and hearing
-what other people play. Uploading a new guild sound is not done; renaming and
-deleting are wired but not yet reachable from either client.
+Soundboard: both sound lists, playing one into a voice channel, hearing what
+other people play, and renaming or deleting a guild's own sounds from the
+server panel. Uploading a new sound is not done.
 
 Account: profile editing including per-guild identity, custom status, rich
 activity, friends and blocking, QR and token login.
@@ -203,5 +203,5 @@ regenerates this list, and the two must be kept in step.
   conflict and a sequence of single moves would briefly hand out the wrong
   permissions.
 - `SetVoiceChannelStatus` - small, and grouped with the other smaller gaps.
-- `RenameSoundboardSound`, `DeleteSoundboardSound` - want the expression
-  management panel that emoji, stickers and sounds will share.
+- `ModifyGuild`, `SetGuildIcon` - the settings tab shows the guild's settings
+  but does not yet edit them.

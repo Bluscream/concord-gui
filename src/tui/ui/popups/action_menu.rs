@@ -713,6 +713,20 @@ pub(in crate::tui::ui) fn render_server_management(
                     line
                 })
                 .collect(),
+            ServerPanelTab::Sounds => panel
+                .sounds()
+                .iter()
+                .map(|sound| {
+                    let mut line = match &sound.emoji_name {
+                        Some(emoji) => format!("{emoji} {}", sound.name),
+                        None => sound.name.clone(),
+                    };
+                    if !sound.available {
+                        line.push_str(" - unavailable");
+                    }
+                    line
+                })
+                .collect(),
             ServerPanelTab::AuditLog => panel
                 .audit_log()
                 .iter()
@@ -736,6 +750,7 @@ pub(in crate::tui::ui) fn render_server_management(
                 ServerPanelTab::Roles => "No roles",
                 ServerPanelTab::Invites => "No invites",
                 ServerPanelTab::Emoji => "No custom emoji",
+                ServerPanelTab::Sounds => "No sounds in this server",
                 ServerPanelTab::AuditLog => "Nothing recorded",
             };
             vec![Line::from(Span::styled(
@@ -773,6 +788,7 @@ pub(in crate::tui::ui) fn render_server_management(
                 ServerPanelTab::Settings => "tab to switch, r to reload",
                 ServerPanelTab::Roles => "tab to switch, N new, p permissions, enter delete",
                 ServerPanelTab::Emoji => "tab, r reload, a add, n rename, enter delete",
+                ServerPanelTab::Sounds => "tab, r reload, n rename, enter delete",
                 ServerPanelTab::AuditLog => "tab to switch, r to reload",
             },
         ),

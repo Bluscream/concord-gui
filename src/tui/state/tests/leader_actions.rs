@@ -783,6 +783,16 @@ fn the_server_panel_only_fetches_a_tab_it_has_not_seen() {
         Some(AppCommand::LoadGuildEmojis { guild_id })
     );
     state.apply_guild_emojis(guild_id, Vec::new());
+
+    // Then the guild's own sounds.
+    assert_eq!(
+        state.next_server_tab(),
+        Some(AppCommand::LoadSoundboardSounds {
+            guild_id: Some(guild_id)
+        })
+    );
+    state.apply_panel_sounds(Some(guild_id), Vec::new());
+
     assert_eq!(
         state.next_server_tab(),
         Some(AppCommand::LoadGuildAuditLog { guild_id })
@@ -1212,4 +1222,59 @@ fn everyone_cannot_be_deleted() {
             .server_management_state()
             .is_some_and(|panel| !panel.roles().is_empty())
     );
+}
+
+#[test]
+fn only_the_guilds_own_sounds_are_manageable() {
+    // The default sounds arrive on the same event and belong to the picker,
+    // where they can be played but not renamed or deleted by anyone.
+    let mut state = state_with_many_guilds(1);
+    let guild_id = Id::new(1);
+    state.open_server_management(guild_id, ServerPanelTab::Sounds);
+
+    state.apply_panel_sounds(
+        None,
+        vec![crate::discord::SoundboardSound {
+            sound_id: 1,
+            name: "default".to_owned(),
+            volume: 1.0,
+            emoji_id: None,
+            emoji_name: None,
+            guild_id: None,
+            available: true,
+        }],
+    );
+
+    assert!(
+        state
+            .server_management_state()
+            .is_some_and(|panel| panel.sounds().is_empty()),
+        "the defaults must not appear in the guild's own list"
+    );
+}
+
+#[test]
+fn renaming_a_sound_to_something_discord_rejects_sends_nothing() {
+    // Two characters minimum, so a one-character name costs a request to be
+    // told what could be checked here.
+    let mut state = state_with_many_guilds(1);
+    let guild_id = Id::new(1);
+    state.open_server_management(guild_id, ServerPanelTab::Sounds);
+    state.apply_panel_sounds(
+        Some(guild_id),
+        vec![crate::discord::SoundboardSound {
+            sound_id: 7,
+            name: "airhorn".to_owned(),
+            volume: 1.0,
+            emoji_id: None,
+            emoji_name: None,
+            guild_id: Some(guild_id),
+            available: true,
+        }],
+    );
+
+    state.start_emoji_rename();
+    state.edit_emoji_rename(crate::tui::text_input::TextEditAction::DeleteToLineStart);
+    state.insert_emoji_rename_char('a');
+    assert_eq!(state.submit_emoji_rename(), None);
 }

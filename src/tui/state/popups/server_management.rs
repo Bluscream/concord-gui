@@ -18,15 +18,17 @@ pub enum ServerPanelTab {
     Invites,
     Roles,
     Emoji,
+    Sounds,
     AuditLog,
 }
 
 impl ServerPanelTab {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Settings,
         Self::Invites,
         Self::Roles,
         Self::Emoji,
+        Self::Sounds,
         Self::AuditLog,
     ];
 
@@ -36,6 +38,7 @@ impl ServerPanelTab {
             Self::Invites => "Invites",
             Self::Roles => "Roles",
             Self::Emoji => "Emoji",
+            Self::Sounds => "Sounds",
             Self::AuditLog => "Audit log",
         }
     }
@@ -51,6 +54,9 @@ impl ServerPanelTab {
             Self::Settings | Self::Roles => return None,
             Self::Invites => AppCommand::LoadGuildInvites { guild_id },
             Self::Emoji => AppCommand::LoadGuildEmojis { guild_id },
+            Self::Sounds => AppCommand::LoadSoundboardSounds {
+                guild_id: Some(guild_id),
+            },
             Self::AuditLog => AppCommand::LoadGuildAuditLog { guild_id },
         })
     }
@@ -67,7 +73,9 @@ pub enum EmojiEdit {
     NewRole,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+// Not Eq: a sound carries a float volume, so the panel can only be compared
+// partially.
+#[derive(Clone, Debug, PartialEq)]
 pub(in crate::tui) struct ServerManagementState {
     pub(super) guild_id: Id<GuildMarker>,
     pub(super) tab: ServerPanelTab,
@@ -79,6 +87,9 @@ pub(in crate::tui) struct ServerManagementState {
     /// The guild's settings as label and value, read from the snapshot.
     pub(super) settings: Vec<(String, String)>,
     pub(super) emojis: Vec<GuildEmojiInfo>,
+    /// The guild's own sounds. The default sounds belong in the picker, not
+    /// here: they cannot be renamed or deleted by anyone.
+    pub(super) sounds: Vec<crate::discord::SoundboardSound>,
     pub(super) audit_log: Vec<AuditLogEntryInfo>,
     /// Set while the open tab's fetch is outstanding, so the popup can say so
     /// rather than looking like an empty list.
@@ -95,6 +106,10 @@ impl ServerManagementState {
 
     pub(in crate::tui) fn invites(&self) -> &[GuildInviteInfo] {
         &self.invites
+    }
+
+    pub(in crate::tui) fn sounds(&self) -> &[crate::discord::SoundboardSound] {
+        &self.sounds
     }
 
     pub(in crate::tui) fn emojis(&self) -> &[GuildEmojiInfo] {
@@ -125,6 +140,7 @@ impl ServerManagementState {
             ServerPanelTab::Settings => self.settings.len(),
             ServerPanelTab::Roles => self.roles.len(),
             ServerPanelTab::Emoji => self.emojis.len(),
+            ServerPanelTab::Sounds => self.sounds.len(),
             ServerPanelTab::AuditLog => self.audit_log.len(),
         }
     }
@@ -153,6 +169,7 @@ impl DashboardState {
                 roles: Vec::new(),
                 settings: Vec::new(),
                 emojis: Vec::new(),
+                sounds: Vec::new(),
                 audit_log: Vec::new(),
                 loading: true,
                 error: None,
@@ -198,6 +215,7 @@ impl DashboardState {
             ServerPanelTab::Invites => !state.invites.is_empty(),
             ServerPanelTab::Settings | ServerPanelTab::Roles => true,
             ServerPanelTab::Emoji => !state.emojis.is_empty(),
+            ServerPanelTab::Sounds => !state.sounds.is_empty(),
             ServerPanelTab::AuditLog => !state.audit_log.is_empty(),
         };
         state.loading = !already_loaded;
@@ -221,15 +239,21 @@ impl DashboardState {
         let Some(state) = self.popups.server_management_mut() else {
             return;
         };
-        if state.tab != ServerPanelTab::Emoji {
+        // Emoji and sounds both rename; the other tabs have nothing to.
+        if !matches!(state.tab, ServerPanelTab::Emoji | ServerPanelTab::Sounds) {
             return;
         }
-        let Some(emoji) = state.emojis.get(index) else {
+        let current = match state.tab {
+            ServerPanelTab::Emoji => state.emojis.get(index).map(|emoji| emoji.name.clone()),
+            ServerPanelTab::Sounds => state.sounds.get(index).map(|sound| sound.name.clone()),
+            _ => None,
+        };
+        let Some(current) = current else {
             return;
         };
 
         let mut input = TextInputState::default();
-        input.set_value(emoji.name.clone());
+        input.set_value(current);
         state.renaming = Some((EmojiEdit::Rename(index), input));
     }
 
@@ -304,6 +328,21 @@ impl DashboardState {
         };
 
         let name = text;
+        if state.tab == ServerPanelTab::Sounds {
+            let sound = state.sounds.get_mut(index)?;
+            if !crate::discord::is_valid_sound_name(&name) || sound.name == name {
+                return None;
+            }
+            // Applied locally too: the list is a snapshot, and leaving the old
+            // name showing makes a successful rename look like it failed.
+            sound.name = name.clone();
+            let sound_id = sound.sound_id;
+            return Some(AppCommand::RenameSoundboardSound {
+                guild_id,
+                sound_id,
+                name,
+            });
+        }
         let emoji = state.emojis.get_mut(index)?;
 
         // An empty name is a cancel rather than a rename to nothing, which
@@ -429,6 +468,17 @@ impl DashboardState {
                     label: role.name,
                 })
             }
+            ServerPanelTab::Sounds => {
+                if index >= state.sounds.len() {
+                    return None;
+                }
+                let sound = state.sounds.remove(index);
+                Some(AppCommand::DeleteSoundboardSound {
+                    guild_id,
+                    sound_id: sound.sound_id,
+                    label: sound.name,
+                })
+            }
             ServerPanelTab::AuditLog => None,
         }
     }
@@ -548,6 +598,28 @@ impl DashboardState {
         state.loading = false;
         state.error = None;
         state.invites = invites;
+    }
+
+    /// Take the guild's sounds when the panel asked for them.
+    pub(in crate::tui) fn apply_panel_sounds(
+        &mut self,
+        guild_id: Option<Id<GuildMarker>>,
+        sounds: Vec<crate::discord::SoundboardSound>,
+    ) {
+        // Only the guild's own list. The defaults arrive on the same event and
+        // belong to the picker, where they can be played but not managed.
+        let Some(guild_id) = guild_id else {
+            return;
+        };
+        let Some(state) = self.popups.server_management_mut() else {
+            return;
+        };
+        if state.guild_id != guild_id {
+            return;
+        }
+        state.loading = false;
+        state.error = None;
+        state.sounds = sounds;
     }
 
     pub(in crate::tui) fn apply_guild_emojis(
