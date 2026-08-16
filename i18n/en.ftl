@@ -86,7 +86,6 @@ action-leave-server = Leave server
 
 # Message toolbar
 action-open-thread = Open thread
-action-copy-link = Copy link
 action-remove-embeds = Remove embeds
 action-jump-to-replied = Jump to the replied message
 
@@ -190,7 +189,6 @@ activity-competing = Competing in
 activity-streaming = Streaming
 activity-custom = Custom
 
-action-set-status = set status
 action-set-activity = set activity
 
 warning-friend-action = Adding, removing and blocking people is one of the things Discord's anti-spam checks watch for on third-party clients. Doing a lot of it at once is what gets accounts flagged; doing it occasionally is normally fine.
@@ -214,7 +212,6 @@ status-no-audit-entries = Nothing recorded
 status-invite-unlimited = unlimited
 status-invite-never-expires = never expires
 action-revoke = Revoke
-action-delete = Delete
 action-reload = Reload
 action-create-invite = Invite to this channel
 label-emoji-animated = animated
@@ -237,8 +234,20 @@ action-rename-channel = Rename channel
 action-delete-channel = Delete channel
 warning-delete-channel = Deleting a channel takes its whole history with it, and Discord has no undo.
 
-action-copy-text = Copy text
-action-open-in-new-tab = Open in new tab
 action-view-profile = View profile
 status-not-your-message = You can only edit your own messages
 status-no-permission = You do not have permission
+
+label-name = Name
+label-verification = Verification
+label-boosts = Boosts
+
+status-role-permissions = { $count } permissions
+status-no-roles = No roles
+status-unavailable = Unavailable
+action-permissions = Permissions
+
+status-everyone-undeletable = @everyone cannot be deleted
+status-role-outranks-you = That role is at or above your highest
+
+status-unsaved = unsaved

@@ -192,6 +192,21 @@ forward so it is not built twice.
 Then, and only then, the extras from AGENTS.md: offline-first, merged
 multi-account, and the rest.
 
+## Where the two clients differ
+
+Everything is meant to work in both. Where one is ahead, it goes here rather
+than being described as done.
+
+- **Channel overwrites**: the TUI's permission grid has three states - allow,
+  deny, inherit - and the GUI's has two, so the GUI edits role permissions but
+  not channel overwrites. Offering two states where there are three would turn
+  inherit into deny without saying so.
+- **Channel settings**: the TUI has a form with topic, slowmode and
+  age-restriction; the GUI has create, rename and delete only.
+- **Guild settings**: the TUI edits the name, cycles verification and sets the
+  icon; the GUI's settings tab displays them.
+- **Creating roles and adding sounds**: TUI only.
+
 ## Built but unreachable
 
 Core work whose interface has not been built yet. A legitimate intermediate

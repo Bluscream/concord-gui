@@ -1392,3 +1392,90 @@ pub fn context_menu_view(
     }
     menu
 }
+
+/// One switch in the permission grid.
+pub struct PermissionRow {
+    pub label: String,
+    pub description: String,
+    pub granted: bool,
+}
+
+/// What a role may do.
+pub fn permission_grid_view(
+    title: &str,
+    rows: &[PermissionRow],
+    dirty: bool,
+    on_toggle: impl Fn(usize, &mut gpui::App) + Clone + 'static,
+    on_save: impl Fn(&mut gpui::App) + 'static,
+    on_cancel: impl Fn(&mut gpui::App) + 'static,
+) -> Div {
+    let mut list = column()
+        .id("permission-list")
+        .max_h(px(420.))
+        .overflow_y_scroll();
+
+    for (index, row) in rows.iter().enumerate() {
+        let toggle = on_toggle.clone();
+        list = list.child(
+            column()
+                .id(("permission", index))
+                .w_full()
+                .px(px(space::LG))
+                .py(px(space::XS))
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(active().surface_hover)))
+                .on_click(move |_event, _window, cx| toggle(index, cx))
+                .child(
+                    gpui::div()
+                        .text_size(px(scaled(text::SM)))
+                        .text_color(rgb(if row.granted {
+                            active().text
+                        } else {
+                            active().text_subtle
+                        }))
+                        // The marker carries the state, so the grid is
+                        // readable without relying on colour alone.
+                        .child(format!(
+                            "{} {}",
+                            if row.granted { "[x]" } else { "[ ]" },
+                            row.label
+                        )),
+                )
+                .child(
+                    gpui::div()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().text_subtle))
+                        .child(row.description.clone()),
+                ),
+        );
+    }
+
+    // Said in the title because cancelling discards, and a grid this long is
+    // easy to walk away from by accident.
+    let heading = if dirty {
+        format!("{title} - {}", t!("status-unsaved"))
+    } else {
+        title.to_owned()
+    };
+
+    panel(&heading, 460.).child(list).child(
+        row()
+            .w_full()
+            .px(px(space::LG))
+            .py(px(space::MD))
+            .gap(px(space::SM))
+            .justify_end()
+            .child(button(
+                "permissions-cancel",
+                &t!("action-cancel"),
+                false,
+                on_cancel,
+            ))
+            .child(button(
+                "permissions-save",
+                &t!("action-save"),
+                true,
+                on_save,
+            )),
+    )
+}

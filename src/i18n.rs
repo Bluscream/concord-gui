@@ -269,6 +269,32 @@ mod tests {
     }
 
     #[test]
+    fn no_language_defines_a_key_twice() {
+        // Fluent takes the first definition and drops the rest with a parse
+        // error nobody reads, so a duplicate is a string that silently never
+        // takes effect. The key-set comparison below cannot see this: a set
+        // has no duplicates by construction, which is how five of them
+        // accumulated unnoticed.
+        for language in Language::ALL {
+            let mut seen = std::collections::BTreeSet::new();
+            for line in language.source().lines() {
+                let Some((key, _)) = line.split_once(" = ") else {
+                    continue;
+                };
+                let key = key.trim();
+                if key.starts_with('#') || key.is_empty() {
+                    continue;
+                }
+                assert!(
+                    seen.insert(key.to_owned()),
+                    "{}.ftl defines {key} more than once",
+                    language.tag()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn every_translated_key_exists_in_the_source() {
         // A key only a translation has is dead weight, and usually a typo that
         // leaves the English string showing with no obvious cause.

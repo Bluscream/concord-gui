@@ -84,7 +84,6 @@ action-leave-server = Server verlassen
 
 # Nachrichten-Werkzeugleiste
 action-open-thread = Thread öffnen
-action-copy-link = Link kopieren
 action-remove-embeds = Einbettungen entfernen
 action-jump-to-replied = Zur beantworteten Nachricht springen
 
@@ -188,7 +187,6 @@ activity-competing = Tritt an in
 activity-streaming = Streamt
 activity-custom = Benutzerdefiniert
 
-action-set-status = Status setzen
 action-set-activity = Aktivität setzen
 
 warning-friend-action = Freunde hinzuzufügen, zu entfernen oder zu blockieren gehört zu dem, worauf Discords Spam-Prüfungen bei Drittanbieter-Clients achten. Problematisch wird vor allem vieles auf einmal; gelegentlich ist normalerweise unbedenklich.
@@ -212,7 +210,6 @@ status-no-audit-entries = Nichts aufgezeichnet
 status-invite-unlimited = unbegrenzt
 status-invite-never-expires = läuft nie ab
 action-revoke = Zurückziehen
-action-delete = Löschen
 action-reload = Neu laden
 action-create-invite = Einladung für diesen Kanal
 label-emoji-animated = animiert
@@ -235,8 +232,20 @@ action-rename-channel = Kanal umbenennen
 action-delete-channel = Kanal löschen
 warning-delete-channel = Beim Löschen eines Kanals geht sein gesamter Verlauf verloren, und Discord bietet kein Rückgängig.
 
-action-copy-text = Text kopieren
-action-open-in-new-tab = In neuem Tab öffnen
 action-view-profile = Profil anzeigen
 status-not-your-message = Du kannst nur eigene Nachrichten bearbeiten
 status-no-permission = Du hast keine Berechtigung
+
+label-name = Name
+label-verification = Verifizierung
+label-boosts = Boosts
+
+status-role-permissions = { $count } Berechtigungen
+status-no-roles = Keine Rollen
+status-unavailable = Nicht verfügbar
+action-permissions = Berechtigungen
+
+status-everyone-undeletable = @everyone kann nicht gelöscht werden
+status-role-outranks-you = Diese Rolle ist auf oder über deiner höchsten
+
+status-unsaved = ungespeichert

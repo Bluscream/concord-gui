@@ -198,6 +198,8 @@ pub enum Prompt {
     InviteCode,
     /// A new name for a custom emoji, by its index in the open emoji tab.
     EmojiName(usize),
+    /// A new name for a sound, by its index in the open sounds tab.
+    SoundName(usize),
     /// A path to an image to add as a custom emoji.
     EmojiImage,
     /// A name for a new channel in the open guild.
@@ -210,6 +212,7 @@ impl Prompt {
     fn title(self) -> &'static str {
         match self {
             Prompt::EmojiName(_) => "Rename emoji",
+            Prompt::SoundName(_) => "Rename sound",
             Prompt::EmojiImage => "Add emoji",
             Prompt::NewChannel => "New channel",
             Prompt::ChannelName(_) => "Rename channel",
@@ -222,6 +225,7 @@ impl Prompt {
     fn placeholder(self) -> &'static str {
         match self {
             Prompt::EmojiName(_) => "Emoji name",
+            Prompt::SoundName(_) => "Sound name",
             Prompt::EmojiImage => "Path to a PNG, JPEG, GIF or WebP",
             Prompt::NewChannel => "Channel name",
             Prompt::ChannelName(_) => "Channel name",
@@ -467,6 +471,20 @@ pub struct ContextMenu {
     pub at: gpui::Point<gpui::Pixels>,
 }
 
+/// A role's permissions, being edited.
+///
+/// Roles only, for now: a channel overwrite has a third "inherit" state that
+/// the TUI's grid models and this one does not yet, and offering two states
+/// where there are three would silently turn inherit into deny.
+pub struct PermissionGridView {
+    pub guild_id: Id<marker::GuildMarker>,
+    pub role_id: Id<marker::RoleMarker>,
+    pub name: String,
+    pub permissions: u64,
+    /// What it was when the grid opened, so saving sends only a real change.
+    pub original: u64,
+}
+
 /// The soundboard picker.
 ///
 /// Holds both lists at once: the guild's sounds and the defaults every account
@@ -529,28 +547,49 @@ impl ImageViewerView {
 /// than one with tabs in it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServerTab {
+    Settings,
     Invites,
+    Roles,
     Emoji,
+    Sounds,
     AuditLog,
 }
 
 impl ServerTab {
-    pub const ALL: [Self; 3] = [Self::Invites, Self::Emoji, Self::AuditLog];
+    pub const ALL: [Self; 6] = [
+        Self::Settings,
+        Self::Invites,
+        Self::Roles,
+        Self::Emoji,
+        Self::Sounds,
+        Self::AuditLog,
+    ];
 
     pub fn label(self) -> String {
         match self {
+            Self::Settings => t!("label-settings"),
             Self::Invites => t!("label-invites"),
+            Self::Roles => t!("label-roles"),
             Self::Emoji => t!("label-emoji"),
+            Self::Sounds => t!("label-soundboard"),
             Self::AuditLog => t!("label-audit-log"),
         }
     }
 
-    fn load(self, guild_id: Id<marker::GuildMarker>) -> AppCommand {
-        match self {
+    /// What to fetch when this tab opens.
+    ///
+    /// `None` for settings and roles: both arrive with the guild and live in
+    /// the snapshot, so the tab reads them rather than asking for them.
+    fn load(self, guild_id: Id<marker::GuildMarker>) -> Option<AppCommand> {
+        Some(match self {
+            Self::Settings | Self::Roles => return None,
             Self::Invites => AppCommand::LoadGuildInvites { guild_id },
             Self::Emoji => AppCommand::LoadGuildEmojis { guild_id },
+            Self::Sounds => AppCommand::LoadSoundboardSounds {
+                guild_id: Some(guild_id),
+            },
             Self::AuditLog => AppCommand::LoadGuildAuditLog { guild_id },
-        }
+        })
     }
 }
 
@@ -561,6 +600,14 @@ pub struct ServerManagementView {
     pub invites: Vec<concord::discord::GuildInviteInfo>,
     pub emojis: Vec<concord::discord::GuildEmojiInfo>,
     pub audit_log: Vec<concord::discord::AuditLogEntryInfo>,
+    /// Read from the snapshot when the tab opens, highest first - the order
+    /// that decides which role wins a conflict.
+    pub roles: Vec<concord::discord::RoleState>,
+    /// The guild's own sounds. The defaults belong to the picker, where they
+    /// can be played but not managed.
+    pub sounds: Vec<concord::discord::SoundboardSound>,
+    /// The guild's settings as label and value, read from the snapshot.
+    pub settings: Vec<(String, String)>,
     /// Set while the open tab's fetch is outstanding. Distinct from an empty
     /// list: a slow fetch must not read as "there are none".
     pub loading: bool,
@@ -805,6 +852,8 @@ pub struct Workspace {
     pub server_management: Option<ServerManagementView>,
     /// The soundboard picker, once opened.
     pub soundboard: Option<SoundboardView>,
+    /// A role's permissions, once opened.
+    pub permission_grid: Option<PermissionGridView>,
     /// An image being viewed full size.
     pub viewing_image: Option<ImageViewerView>,
     /// A channel awaiting delete confirmation.
@@ -948,6 +997,7 @@ impl Workspace {
             bans: None,
             server_management: None,
             soundboard: None,
+            permission_grid: None,
             viewing_image: None,
             deleting_channel: None,
             context_menu: None,
@@ -1679,6 +1729,7 @@ impl Workspace {
         match prompt {
             Prompt::ThreadName => self.rename_thread(text),
             Prompt::EmojiName(index) => self.rename_emoji(index, text),
+            Prompt::SoundName(index) => self.rename_sound(index, text),
             Prompt::EmojiImage => self.create_emoji(text),
             Prompt::NewChannel => self.create_channel(text),
             Prompt::ChannelName(channel_id) => self.rename_channel(channel_id, text),
@@ -1995,6 +2046,7 @@ impl Workspace {
             || self.viewing_image.take().is_some()
             || self.deleting_channel.take().is_some()
             || self.context_menu.take().is_some()
+            || self.permission_grid.take().is_some()
             || self.renaming_folder.take().is_some()
             || self.picker.take().is_some()
             || self.stream_picker.take().is_some()
@@ -4137,10 +4189,73 @@ impl Workspace {
             invites: Vec::new(),
             emojis: Vec::new(),
             audit_log: Vec::new(),
+            roles: Vec::new(),
+            sounds: Vec::new(),
+            settings: Vec::new(),
             loading: true,
             error: None,
         });
-        handle.send(tab.load(guild_id));
+        match tab.load(guild_id) {
+            Some(command) => handle.send(command),
+            // Settings and roles read the snapshot, so nothing is asked for.
+            None => {
+                self.fill_server_snapshot_tab(tab);
+                if let Some(view) = &mut self.server_management {
+                    view.loading = false;
+                }
+            }
+        }
+    }
+
+    /// Fill a tab that reads the snapshot rather than fetching.
+    fn fill_server_snapshot_tab(&mut self, tab: ServerTab) {
+        let Some(guild_id) = self.server_management.as_ref().map(|view| view.guild_id) else {
+            return;
+        };
+        let Some(state) = self.last_state.as_ref() else {
+            return;
+        };
+
+        match tab {
+            ServerTab::Roles => {
+                let mut roles: Vec<_> = state
+                    .roles_for_guild(guild_id)
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                // Highest first, the order that decides which role wins a
+                // permission conflict.
+                roles.sort_by_key(|role| std::cmp::Reverse(role.position));
+                if let Some(view) = &mut self.server_management {
+                    view.roles = roles;
+                }
+            }
+            ServerTab::Settings => {
+                let Some(guild) = state.guild(guild_id) else {
+                    return;
+                };
+                // Only what the snapshot carries: default notifications and
+                // the explicit-content filter are not parsed off the wire, so
+                // showing them would mean showing a guess.
+                let settings = vec![
+                    (t!("label-name"), guild.name.clone()),
+                    (
+                        t!("label-verification"),
+                        concord::discord::verification_label(
+                            guild.verification_level.unwrap_or_default(),
+                        ),
+                    ),
+                    (
+                        t!("label-boosts"),
+                        format!("{} ({:?})", guild.boost_count, guild.boost_tier),
+                    ),
+                ];
+                if let Some(view) = &mut self.server_management {
+                    view.settings = settings;
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Switch tabs, fetching that tab's list if it has not been fetched.
@@ -4158,14 +4273,18 @@ impl Workspace {
         // would make the panel flicker and spend requests for no new
         // information; a refresh is what the reload control is for.
         let already_loaded = match tab {
+            ServerTab::Settings | ServerTab::Roles => true,
             ServerTab::Invites => !view.invites.is_empty(),
             ServerTab::Emoji => !view.emojis.is_empty(),
+            ServerTab::Sounds => !view.sounds.is_empty(),
             ServerTab::AuditLog => !view.audit_log.is_empty(),
         };
         view.loading = !already_loaded;
-        if !already_loaded {
-            handle.send(tab.load(view.guild_id));
+        let guild_id = view.guild_id;
+        if !already_loaded && let Some(command) = tab.load(guild_id) {
+            handle.send(command);
         }
+        self.fill_server_snapshot_tab(tab);
     }
 
     /// Refetch the open tab.
@@ -4173,9 +4292,17 @@ impl Workspace {
         let (Some(handle), Some(view)) = (&self.handle, &mut self.server_management) else {
             return;
         };
-        view.loading = true;
-        view.error = None;
-        handle.send(view.tab.load(view.guild_id));
+        let (tab, guild_id) = (view.tab, view.guild_id);
+        match tab.load(guild_id) {
+            Some(command) => {
+                view.loading = true;
+                view.error = None;
+                handle.send(command);
+            }
+            // A refresh of a snapshot tab re-reads rather than spending a
+            // request that would fetch nothing.
+            None => self.fill_server_snapshot_tab(tab),
+        }
     }
 
     /// Revoke an invite, taking the row out straight away.
@@ -4254,6 +4381,167 @@ impl Workspace {
             guild_id: view.guild_id,
             emoji_id: emoji.id,
             name,
+        });
+    }
+
+    /// Edit what a role may do.
+    pub fn open_role_permissions(&mut self, index: usize) {
+        let Some(view) = &self.server_management else {
+            return;
+        };
+        let Some(role) = view.roles.get(index).cloned() else {
+            return;
+        };
+        let guild_id = view.guild_id;
+
+        // Discord refuses a change to a role at or above your own highest,
+        // which is what stops anyone granting themselves more than they have.
+        let allowed = self.last_state.as_ref().is_some_and(|state| {
+            state.can_manage_roles(guild_id) && state.can_assign_role(guild_id, role.id)
+        });
+        if !allowed {
+            self.model.status_line = t!("status-role-outranks-you");
+            return;
+        }
+
+        self.permission_grid = Some(PermissionGridView {
+            guild_id,
+            role_id: role.id,
+            name: role.name,
+            permissions: role.permissions,
+            original: role.permissions,
+        });
+    }
+
+    /// Turn one permission on or off.
+    pub fn toggle_permission(&mut self, index: usize) {
+        let Some(view) = &mut self.permission_grid else {
+            return;
+        };
+        let Some(permission) = concord::discord::permissions_catalogue::ALL
+            .get(index)
+            .copied()
+        else {
+            return;
+        };
+        let granted = permission.is_set(view.permissions);
+        view.permissions =
+            concord::discord::permissions_catalogue::with(view.permissions, permission, !granted);
+    }
+
+    /// Save the grid.
+    pub fn save_permissions(&mut self) {
+        let Some(view) = self.permission_grid.take() else {
+            return;
+        };
+        // Nothing changed, so nothing is sent: it would spend a request and
+        // write an audit entry saying so.
+        if view.permissions == view.original {
+            return;
+        }
+        let Some(handle) = &self.handle else {
+            return;
+        };
+
+        handle.send(AppCommand::ModifyRole {
+            guild_id: view.guild_id,
+            role_id: view.role_id,
+            edit: Box::new(concord::discord::RoleEdit {
+                permissions: Some(view.permissions),
+                ..concord::discord::RoleEdit::default()
+            }),
+            label: view.name,
+        });
+    }
+
+    /// Start renaming one of the guild's sounds.
+    pub fn start_sound_rename(&mut self, index: usize) {
+        let Some(view) = &self.server_management else {
+            return;
+        };
+        let Some(sound) = view.sounds.get(index) else {
+            return;
+        };
+        let mut text = Composer::default();
+        // Seeded with the current name: a rename is usually a correction.
+        text.set_text(&sound.name);
+        self.prompt = Some((Prompt::SoundName(index), text));
+    }
+
+    /// Apply a renamed sound.
+    fn rename_sound(&mut self, index: usize, name: String) {
+        let (Some(handle), Some(view)) = (&self.handle, &mut self.server_management) else {
+            return;
+        };
+        let guild_id = view.guild_id;
+        let Some(sound) = view.sounds.get_mut(index) else {
+            return;
+        };
+        if !concord::discord::is_valid_sound_name(&name) || sound.name == name {
+            return;
+        }
+
+        // Applied locally too: the list is a snapshot, and leaving the old
+        // name showing makes a successful rename look like it failed.
+        sound.name = name.clone();
+        let sound_id = sound.sound_id;
+        handle.send(AppCommand::RenameSoundboardSound {
+            guild_id,
+            sound_id,
+            name,
+        });
+    }
+
+    /// Delete a role.
+    ///
+    /// Refuses @everyone and anything at or above your own highest role, with
+    /// the reason, rather than round-tripping to a failure Discord explains
+    /// less clearly.
+    pub fn delete_role(&mut self, index: usize) {
+        let (Some(handle), Some(view)) = (&self.handle, &self.server_management) else {
+            return;
+        };
+        let Some(role) = view.roles.get(index).cloned() else {
+            return;
+        };
+        let guild_id = view.guild_id;
+
+        // @everyone is the guild itself.
+        if role.id.get() == guild_id.get() {
+            self.model.status_line = t!("status-everyone-undeletable");
+            return;
+        }
+        let allowed = self.last_state.as_ref().is_some_and(|state| {
+            state.can_manage_roles(guild_id) && state.can_assign_role(guild_id, role.id)
+        });
+        if !allowed {
+            self.model.status_line = t!("status-role-outranks-you");
+            return;
+        }
+
+        handle.send(AppCommand::DeleteRole {
+            guild_id,
+            role_id: role.id,
+            label: role.name.clone(),
+        });
+        if let Some(view) = &mut self.server_management {
+            view.roles.remove(index);
+        }
+    }
+
+    /// Delete one of the guild's sounds.
+    pub fn delete_sound(&mut self, index: usize) {
+        let (Some(handle), Some(view)) = (&self.handle, &mut self.server_management) else {
+            return;
+        };
+        if index >= view.sounds.len() {
+            return;
+        }
+        let sound = view.sounds.remove(index);
+        handle.send(AppCommand::DeleteSoundboardSound {
+            guild_id: view.guild_id,
+            sound_id: sound.sound_id,
+            label: sound.name,
         });
     }
 
@@ -5850,6 +6138,14 @@ impl Workspace {
             // Login cannot continue in this client: solving a captcha needs a
             // browser. Said plainly rather than leaving the attempt hanging.
             AppEvent::SoundboardSoundsLoaded { guild_id, sounds } => {
+                // The server panel may be waiting on the same event. Only the
+                // guild's own list belongs there - the defaults cannot be
+                // renamed or deleted by anyone.
+                if let (Some(view), Some(_)) = (&mut self.server_management, guild_id) {
+                    view.loading = false;
+                    view.error = None;
+                    view.sounds = sounds.clone();
+                }
                 if let Some(view) = &mut self.soundboard {
                     view.loading = false;
                     view.error = None;
@@ -7070,6 +7366,50 @@ impl Workspace {
             )));
         }
 
+        if let Some(view) = &self.permission_grid {
+            let rows: Vec<overlay::PermissionRow> = concord::discord::permissions_catalogue::ALL
+                .iter()
+                .map(|permission| overlay::PermissionRow {
+                    label: permission.label.to_owned(),
+                    description: permission.description.to_owned(),
+                    granted: permission.is_set(view.permissions),
+                })
+                .collect();
+
+            return Some(overlay::scrim().child(overlay::permission_grid_view(
+                &view.name,
+                &rows,
+                view.permissions != view.original,
+                {
+                    let entity = entity.clone();
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.toggle_permission(index);
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.save_permissions();
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.permission_grid = None;
+                            cx.notify();
+                        });
+                    }
+                },
+            )));
+        }
+
         if let Some(view) = &self.soundboard {
             let rows: Vec<overlay::SoundRow> = view
                 .sounds()
@@ -7112,6 +7452,54 @@ impl Workspace {
                 .collect();
 
             let (rows, empty_label) = match view.tab {
+                ServerTab::Settings => (
+                    view.settings
+                        .iter()
+                        .map(|(label, value)| overlay::ServerRow {
+                            primary: label.clone(),
+                            secondary: Some(value.clone()),
+                            // Only the name and verification level can be
+                            // changed here; the rest are facts about the guild.
+                            action: None,
+                            secondary_action: None,
+                        })
+                        .collect::<Vec<_>>(),
+                    t!("status-loading"),
+                ),
+                ServerTab::Roles => (
+                    view.roles
+                        .iter()
+                        .map(|role| overlay::ServerRow {
+                            primary: role.name.clone(),
+                            secondary: Some(concord::i18n::translate_text(
+                                "status-role-permissions",
+                                &[(
+                                    "count",
+                                    &concord::discord::permissions_catalogue::ALL
+                                        .iter()
+                                        .filter(|permission| permission.is_set(role.permissions))
+                                        .count()
+                                        .to_string(),
+                                )],
+                            )),
+                            action: Some(t!("action-delete")),
+                            secondary_action: Some(t!("action-permissions")),
+                        })
+                        .collect(),
+                    t!("status-no-roles"),
+                ),
+                ServerTab::Sounds => (
+                    view.sounds
+                        .iter()
+                        .map(|sound| overlay::ServerRow {
+                            primary: sound.label().to_owned(),
+                            secondary: (!sound.available).then(|| t!("status-unavailable")),
+                            action: Some(t!("action-delete")),
+                            secondary_action: Some(t!("action-rename")),
+                        })
+                        .collect(),
+                    t!("status-no-sounds"),
+                ),
                 ServerTab::Invites => (
                     view.invites
                         .iter()
@@ -7184,9 +7572,11 @@ impl Workspace {
                             match tab {
                                 ServerTab::Invites => workspace.revoke_invite(index),
                                 ServerTab::Emoji => workspace.delete_emoji(index),
-                                // The audit log offers no row action, so there
-                                // is nothing to do here.
-                                ServerTab::AuditLog => {}
+                                ServerTab::Roles => workspace.delete_role(index),
+                                ServerTab::Sounds => workspace.delete_sound(index),
+                                // Neither the audit log nor the settings list
+                                // has a destructive row action.
+                                ServerTab::AuditLog | ServerTab::Settings => {}
                             }
                             cx.notify();
                         });
@@ -7197,9 +7587,11 @@ impl Workspace {
                     let tab = view.tab;
                     move |index, cx: &mut gpui::App| {
                         entity.update(cx, |workspace, cx| {
-                            // Only emoji have a second action.
-                            if tab == ServerTab::Emoji {
-                                workspace.start_emoji_rename(index);
+                            match tab {
+                                ServerTab::Emoji => workspace.start_emoji_rename(index),
+                                ServerTab::Sounds => workspace.start_sound_rename(index),
+                                ServerTab::Roles => workspace.open_role_permissions(index),
+                                _ => {}
                             }
                             cx.notify();
                         });
