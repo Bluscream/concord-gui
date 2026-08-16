@@ -268,3 +268,20 @@ Anything else on the unreachable list is core work whose interface has not been
 built yet. That is a legitimate intermediate state, but only while it is
 written down: see the "Built but unreachable" section of
 `docs/OFFICIAL-PARITY.md`, which must be kept in step with this list.
+
+## Permission bits
+
+The client keeps named constants for the permissions it checks, and
+`src/discord/permissions_catalogue.rs` holds all 53 of Discord's, generated
+from its own table in
+`.references/official-internals/userdoccers__github/pages/topics/permissions.mdx`.
+
+The two lists are maintained separately - hot paths want named constants - so a
+test checks every constant against the generated table. That is how
+`MODERATE_MEMBERS` was found to be `1 << 42`, which is `USE_SOUNDBOARD`: every
+timeout permission check had been asking whether the member could use the
+soundboard.
+
+Regenerate the catalogue when Discord adds permissions. Deprecated ones are
+struck through in the table and excluded, which is why the bits are not
+contiguous - 47 was Clyde.

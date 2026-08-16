@@ -24,6 +24,7 @@ mod message_policy;
 mod notification;
 pub mod password_auth;
 mod permission;
+pub mod permissions_catalogue;
 mod presence;
 mod profile;
 pub mod qr_auth;

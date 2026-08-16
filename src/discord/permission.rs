@@ -37,7 +37,10 @@ const PERMISSION_BYPASS_SLOWMODE: u64 = 0x0010_0000_0000_0000;
 const PERMISSION_KICK_MEMBERS: u64 = 0x0000_0000_0000_0002;
 const PERMISSION_BAN_MEMBERS: u64 = 0x0000_0000_0000_0004;
 const PERMISSION_MANAGE_ROLES: u64 = 0x0000_0000_1000_0000;
-const PERMISSION_MODERATE_MEMBERS: u64 = 0x0000_0400_0000_0000;
+// QUIRK: this was 1 << 42 - USE_SOUNDBOARD - so every timeout check was asking
+// whether the member could use the soundboard. Caught by checking these
+// constants against Discord's own generated table; see permissions_catalogue.
+const PERMISSION_MODERATE_MEMBERS: u64 = 0x0000_0100_0000_0000;
 const PERMISSION_CREATE_INSTANT_INVITE: u64 = 0x0000_0000_0000_0001;
 const PERMISSION_VIEW_AUDIT_LOG: u64 = 0x0000_0000_0000_0080;
 /// Named `MANAGE_GUILD_EXPRESSIONS` since Discord folded stickers and sounds
