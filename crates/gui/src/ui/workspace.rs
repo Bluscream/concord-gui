@@ -228,6 +228,8 @@ pub enum Prompt {
     NewEvent,
     /// A stage's topic. Empty ends the stage.
     StageTopic(Id<marker::ChannelMarker>),
+    /// An existing event, by its id. Same line format as creating one.
+    EditEvent(u64),
     /// A new name for the open guild.
     GuildName,
     /// A path to an image to use as the guild icon.
@@ -255,6 +257,7 @@ impl Prompt {
             Prompt::WidgetChannel => "Widget invite channel",
             Prompt::NewEvent => "New event",
             Prompt::StageTopic(_) => "Stage topic",
+            Prompt::EditEvent(_) => "Edit event",
             Prompt::GuildName => "Rename server",
             Prompt::GuildIcon => "Server icon",
             Prompt::ChannelTopic(_) => "Channel topic",
@@ -278,6 +281,7 @@ impl Prompt {
             Prompt::WidgetChannel => "Channel name - empty means no invite",
             Prompt::NewEvent => "name | start | end | where - times as 2026-09-01T19:00:00Z",
             Prompt::StageTopic(_) => "What the session is about - empty ends the stage",
+            Prompt::EditEvent(_) => "name | start | end | where - times as 2026-09-01T19:00:00Z",
             Prompt::GuildName => "Server name",
             Prompt::GuildIcon => "Path to a PNG, JPEG, GIF or WebP",
             Prompt::ChannelTopic(_) => "Topic - empty clears it",
@@ -1918,6 +1922,7 @@ impl Workspace {
             Prompt::WidgetChannel => self.set_widget_channel(&text),
             Prompt::NewEvent => self.create_event(&text),
             Prompt::StageTopic(channel_id) => self.submit_stage_topic(channel_id, &text),
+            Prompt::EditEvent(event_id) => self.submit_event_edit(event_id, &text),
             Prompt::GuildName => self.rename_guild(text),
             Prompt::GuildIcon => self.set_guild_icon(text),
             Prompt::ChannelTopic(channel_id) => self.set_channel_topic(channel_id, text),
@@ -5513,6 +5518,41 @@ impl Workspace {
             user_id,
             speaking: true,
             label: self.friend_label(user_id),
+        });
+    }
+
+    /// Start editing an event, seeded with it as one line.
+    ///
+    /// Seeded so a change is a correction rather than a retype, and so what is
+    /// shown is exactly what will be sent back.
+    pub fn start_event_edit(&mut self, index: usize) {
+        let Some(view) = &self.server_management else {
+            return;
+        };
+        let Some(event) = view.events.get(index) else {
+            return;
+        };
+        let (id, line) = (event.id, event.to_line());
+        let mut text = Composer::default();
+        text.set_text(&line);
+        self.prompt = Some((Prompt::EditEvent(id), text));
+    }
+
+    fn submit_event_edit(&mut self, event_id: u64, text: &str) {
+        let (Some(handle), Some(view)) = (&self.handle, &self.server_management) else {
+            return;
+        };
+        let Some(event) = concord::discord::parse_new_event(text) else {
+            return;
+        };
+        if let Some(problem) = event.problem() {
+            self.model.status_line = problem.message();
+            return;
+        }
+        handle.send(AppCommand::ModifyScheduledEvent {
+            guild_id: view.guild_id,
+            event_id,
+            event: Box::new(event),
         });
     }
 
@@ -9169,7 +9209,12 @@ impl Workspace {
                             } else {
                                 t!("action-delete")
                             }),
-                            secondary_action: Some(t!("action-interested")),
+
+                            // Editing rather than interest: interest is on the
+                            // row's own click, and edit is the rarer action
+                            // that needs a button of its own.
+                            secondary_action: Some(t!("action-edit")),
+                            tertiary_action: Some(t!("action-interested")),
                         })
                         .collect::<Vec<_>>(),
                     t!("status-no-events"),
@@ -9182,6 +9227,7 @@ impl Workspace {
                             secondary: Some(format!("{} - {}", template.url(), template.summary())),
                             action: Some(t!("action-delete")),
                             secondary_action: Some(t!("action-sync")),
+                            tertiary_action: None,
                         })
                         .collect::<Vec<_>>(),
                     t!("status-no-templates"),
@@ -9196,6 +9242,7 @@ impl Workspace {
                             // them does something is decided by the handler.
                             action: None,
                             secondary_action: Some(t!("action-change")),
+                            tertiary_action: None,
                         })
                         .collect::<Vec<_>>(),
                     t!("status-loading"),
@@ -9212,6 +9259,7 @@ impl Workspace {
                             // Only the name can be changed from here.
                             secondary_action: (label == &t!("label-name"))
                                 .then(|| t!("action-rename")),
+                            tertiary_action: None,
                         })
                         .collect::<Vec<_>>(),
                     t!("status-loading"),
@@ -9234,6 +9282,7 @@ impl Workspace {
                             )),
                             action: Some(t!("action-delete")),
                             secondary_action: Some(t!("action-permissions")),
+                            tertiary_action: None,
                         })
                         .collect(),
                     t!("status-no-roles"),
@@ -9246,6 +9295,7 @@ impl Workspace {
                             secondary: (!sound.available).then(|| t!("status-unavailable")),
                             action: Some(t!("action-delete")),
                             secondary_action: Some(t!("action-rename")),
+                            tertiary_action: None,
                         })
                         .collect(),
                     t!("status-no-sounds"),
@@ -9268,6 +9318,7 @@ impl Workspace {
                             } else {
                                 t!("action-enable")
                             }),
+                            tertiary_action: None,
                         })
                         .collect(),
                     t!("status-no-automod"),
@@ -9280,6 +9331,7 @@ impl Workspace {
                             secondary: Some(invite_summary(invite)),
                             action: Some(t!("action-revoke")),
                             secondary_action: None,
+                            tertiary_action: None,
                         })
                         .collect::<Vec<_>>(),
                     t!("status-no-invites"),
@@ -9292,6 +9344,7 @@ impl Workspace {
                             secondary: emoji_summary(emoji),
                             action: Some(t!("action-delete")),
                             secondary_action: Some(t!("action-rename")),
+                            tertiary_action: None,
                         })
                         .collect(),
                     t!("status-no-emoji"),
@@ -9306,6 +9359,7 @@ impl Workspace {
                             // be edited from the client that reads it.
                             action: None,
                             secondary_action: None,
+                            tertiary_action: None,
                         })
                         .collect(),
                     t!("status-no-audit-entries"),
@@ -9385,7 +9439,7 @@ impl Workspace {
                                 ServerTab::Roles => workspace.open_role_permissions(index),
                                 ServerTab::AutoMod => workspace.toggle_automod_rule(index),
                                 ServerTab::Membership => workspace.activate_membership_row(index),
-                                ServerTab::Events => workspace.mark_event_interest(index),
+                                ServerTab::Events => workspace.start_event_edit(index),
                                 ServerTab::Templates => workspace.sync_template(index),
                                 // Only the name is editable here; verification
                                 // and boosts are shown but not changed yet.
@@ -9406,39 +9460,56 @@ impl Workspace {
                 },
                 {
                     let entity = entity.clone();
-                    move |cx: &mut gpui::App| {
-                        entity.update(cx, |workspace, cx| {
-                            workspace.reload_server_tab();
-                            cx.notify();
-                        });
-                    }
-                },
-                {
-                    let entity = entity.clone();
                     let tab = view.tab;
-                    move |cx: &mut gpui::App| {
+                    move |index, cx: &mut gpui::App| {
                         entity.update(cx, |workspace, cx| {
-                            // What "add" means depends on the tab: an emoji, a
-                            // role, or the server's icon.
-                            workspace.prompt = Some(match tab {
-                                ServerTab::Roles => (Prompt::NewRole, Composer::default()),
-                                ServerTab::Templates => (Prompt::NewTemplate, Composer::default()),
-                                ServerTab::Events => (Prompt::NewEvent, Composer::default()),
-                                ServerTab::Settings => (Prompt::GuildIcon, Composer::default()),
-                                _ => (Prompt::EmojiImage, Composer::default()),
-                            });
+                            // Only events have a third action.
+                            if tab == ServerTab::Events {
+                                workspace.mark_event_interest(index);
+                            }
                             cx.notify();
                         });
                     }
                 },
-                {
-                    let entity = entity.clone();
-                    move |cx: &mut gpui::App| {
-                        entity.update(cx, |workspace, cx| {
-                            workspace.server_management = None;
-                            cx.notify();
-                        });
-                    }
+                overlay::ServerPanelActions {
+                    reload: Box::new({
+                        let entity = entity.clone();
+                        move |cx: &mut gpui::App| {
+                            entity.update(cx, |workspace, cx| {
+                                workspace.reload_server_tab();
+                                cx.notify();
+                            });
+                        }
+                    }),
+                    add: Box::new({
+                        let entity = entity.clone();
+                        let tab = view.tab;
+                        move |cx: &mut gpui::App| {
+                            entity.update(cx, |workspace, cx| {
+                                // What "add" means depends on the tab: an emoji, a
+                                // role, or the server's icon.
+                                workspace.prompt = Some(match tab {
+                                    ServerTab::Roles => (Prompt::NewRole, Composer::default()),
+                                    ServerTab::Templates => {
+                                        (Prompt::NewTemplate, Composer::default())
+                                    }
+                                    ServerTab::Events => (Prompt::NewEvent, Composer::default()),
+                                    ServerTab::Settings => (Prompt::GuildIcon, Composer::default()),
+                                    _ => (Prompt::EmojiImage, Composer::default()),
+                                });
+                                cx.notify();
+                            });
+                        }
+                    }),
+                    close: Box::new({
+                        let entity = entity.clone();
+                        move |cx: &mut gpui::App| {
+                            entity.update(cx, |workspace, cx| {
+                                workspace.server_management = None;
+                                cx.notify();
+                            });
+                        }
+                    }),
                 },
             )));
         }

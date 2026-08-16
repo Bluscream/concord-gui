@@ -966,6 +966,9 @@ pub struct ServerRow {
     pub action: Option<String>,
     /// A second, non-destructive button. Only emoji have one, for renaming.
     pub secondary_action: Option<String>,
+    /// A third. Only events have one: cancel, edit and interest are three
+    /// different things and none of them is the other two.
+    pub tertiary_action: Option<String>,
 }
 
 /// A guild's invites, emoji or audit log.
@@ -984,15 +987,27 @@ pub struct ServerPanel<'a> {
     pub add_label: Option<&'a str>,
 }
 
+/// What the panel's buttons do, grouped for the same reason `AccountActions`
+/// is: passed separately the signature was long enough that clippy objected,
+/// and a caller could transpose two same-shaped closures without the compiler
+/// noticing - which is exactly how the third one landed in the wrong slot.
+pub struct ServerPanelActions {
+    pub reload: Box<dyn Fn(&mut gpui::App)>,
+    pub add: Box<dyn Fn(&mut gpui::App)>,
+    pub close: Box<dyn Fn(&mut gpui::App)>,
+}
+
 pub fn server_management_view(
     panel_state: ServerPanel<'_>,
     on_tab: impl Fn(usize, &mut gpui::App) + Clone + 'static,
     on_row_action: impl Fn(usize, &mut gpui::App) + Clone + 'static,
     on_row_secondary: impl Fn(usize, &mut gpui::App) + Clone + 'static,
-    on_reload: impl Fn(&mut gpui::App) + 'static,
-    on_add: impl Fn(&mut gpui::App) + 'static,
-    on_close: impl Fn(&mut gpui::App) + 'static,
+    on_row_tertiary: impl Fn(usize, &mut gpui::App) + Clone + 'static,
+    actions: ServerPanelActions,
 ) -> Div {
+    let on_reload = actions.reload;
+    let on_add = actions.add;
+    let on_close = actions.close;
     let mut tab_row = row()
         .w_full()
         .px(px(space::LG))
@@ -1060,6 +1075,7 @@ pub fn server_management_view(
     for (index, entry) in panel_state.rows.iter().enumerate() {
         let act = on_row_action.clone();
         let second = on_row_secondary.clone();
+        let third = on_row_tertiary.clone();
         list = list.child(
             row()
                 .id(("server-row", index))
@@ -1086,6 +1102,19 @@ pub fn server_management_view(
                 )
                 // Before the destructive one, so the safe button is not where
                 // the eye lands last on its way to clicking.
+                .children(entry.tertiary_action.as_ref().map(|label| {
+                    gpui::div()
+                        .id(("server-row-third", index))
+                        .px(px(space::SM))
+                        .py(px(space::XS))
+                        .rounded(px(4.))
+                        .cursor_pointer()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().text_muted))
+                        .hover(|style| style.bg(rgb(active().surface_hover)))
+                        .on_click(move |_event, _window, cx| third(index, cx))
+                        .child(label.clone())
+                }))
                 .children(entry.secondary_action.as_ref().map(|label| {
                     gpui::div()
                         .id(("server-row-second", index))

@@ -151,6 +151,8 @@ pub enum EmojiEdit {
     /// stacked prompts to fill in order would be worse than one line with a
     /// stated format.
     NewEvent,
+    /// An existing event, by its id. Same line format as creating one.
+    EditEvent(u64),
 }
 
 // Not Eq: a sound carries a float volume, so the panel can only be compared
@@ -504,6 +506,17 @@ impl DashboardState {
                 return Some(AppCommand::CreateRole {
                     guild_id,
                     name: text,
+                });
+            }
+            EmojiEdit::EditEvent(event_id) => {
+                let event = crate::discord::parse_new_event(&text)?;
+                if event.problem().is_some() {
+                    return None;
+                }
+                return Some(AppCommand::ModifyScheduledEvent {
+                    guild_id,
+                    event_id,
+                    event: Box::new(event),
                 });
             }
             EmojiEdit::NewEvent => {
@@ -1050,6 +1063,29 @@ impl DashboardState {
             .filter(|channel| channel.name == wanted);
         let first = matches.next()?;
         matches.next().is_none().then_some(first.id)
+    }
+
+    /// Start editing the highlighted event.
+    ///
+    /// Seeded with the event as one line, so a change is a correction rather
+    /// than a retype - and so what is shown is what will be sent back.
+    pub fn start_event_edit(&mut self) {
+        let Some(index) = self.selected_server_row() else {
+            return;
+        };
+        let Some(state) = self.popups.server_management_mut() else {
+            return;
+        };
+        if state.tab != ServerPanelTab::Events {
+            return;
+        }
+        let Some(event) = state.events.get(index) else {
+            return;
+        };
+        let (id, line) = (event.id, event.to_line());
+        let mut input = TextInputState::default();
+        input.set_value(line);
+        state.renaming = Some((EmojiEdit::EditEvent(id), input));
     }
 
     /// Start creating a scheduled event.

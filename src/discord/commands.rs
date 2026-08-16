@@ -617,6 +617,11 @@ pub enum AppCommand {
         speaking: bool,
         label: String,
     },
+    ModifyScheduledEvent {
+        guild_id: Id<GuildMarker>,
+        event_id: u64,
+        event: Box<crate::discord::NewEvent>,
+    },
     CreateScheduledEvent {
         guild_id: Id<GuildMarker>,
         event: Box<crate::discord::NewEvent>,

@@ -623,6 +623,23 @@ pub(super) async fn set_stage_speaker(
     }
 }
 
+pub(super) async fn modify_scheduled_event(
+    client: DiscordClient,
+    guild_id: GuildId,
+    event_id: u64,
+    event: crate::discord::NewEvent,
+) {
+    let label = event.name.clone();
+    if let Err(error) = client
+        .modify_scheduled_event(guild_id, event_id, &event)
+        .await
+    {
+        report_moderation_failure(&client, "changing", &label, &error).await;
+        return;
+    }
+    load_scheduled_events(client, guild_id).await;
+}
+
 pub(super) async fn create_scheduled_event(
     client: DiscordClient,
     guild_id: GuildId,

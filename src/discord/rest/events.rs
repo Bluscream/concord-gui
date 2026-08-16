@@ -76,6 +76,9 @@ pub struct ScheduledEvent {
     /// ISO 8601, as Discord gives it. Not parsed: the client shows it, and a
     /// parse that failed would lose the only time information there is.
     pub starts_at: Option<String>,
+    /// When it finishes. Only an event somewhere else has one; Discord ends a
+    /// channel event when the channel empties.
+    pub ends_at: Option<String>,
     pub status: EventStatus,
     pub location: EventLocation,
     /// How many people said they are coming. Absent unless Discord was asked
@@ -84,6 +87,26 @@ pub struct ScheduledEvent {
 }
 
 impl ScheduledEvent {
+    /// The event as one editable line, in the same format the form parses.
+    ///
+    /// Seeded so a change is a correction rather than a retype - and so what
+    /// is shown is exactly what will be sent back.
+    pub fn to_line(&self) -> String {
+        // A channel event has no place to type, and its end time is Discord's
+        // to decide - showing either would invite typing something ignored.
+        let (ends_at, place) = match &self.location {
+            EventLocation::External(place) => {
+                (self.ends_at.clone().unwrap_or_default(), place.clone())
+            }
+            EventLocation::Channel(_) | EventLocation::Unknown => (String::new(), String::new()),
+        };
+        format!(
+            "{} | {} | {ends_at} | {place}",
+            self.name,
+            self.starts_at.clone().unwrap_or_default(),
+        )
+    }
+
     /// The line under the name.
     pub fn summary(&self) -> String {
         let mut parts = vec![self.status.label()];
@@ -147,6 +170,7 @@ struct EventBody {
     name: Option<String>,
     description: Option<String>,
     scheduled_start_time: Option<String>,
+    scheduled_end_time: Option<String>,
     #[serde(default)]
     status: u64,
     channel_id: Option<String>,
@@ -201,6 +225,7 @@ impl DiscordRest {
                     name: event.name.unwrap_or_default(),
                     description: event.description.filter(|text| !text.is_empty()),
                     starts_at: event.scheduled_start_time,
+                    ends_at: event.scheduled_end_time,
                     status: EventStatus::from_code(event.status),
                     location,
                     interested: event.user_count,
@@ -341,6 +366,7 @@ mod tests {
             name: "Games night".to_owned(),
             description: None,
             starts_at: Some("2026-09-01T19:00:00Z".to_owned()),
+            ends_at: Some("2026-09-01T22:00:00Z".to_owned()),
             status,
             location,
             interested: Some(4),
@@ -399,6 +425,30 @@ mod tests {
         )
         .summary();
         assert!(summary.contains("The pub"));
+    }
+
+    #[test]
+    fn an_event_round_trips_through_the_line_the_form_parses() {
+        // What is shown must be exactly what is sent back, or editing one
+        // field would silently rewrite another.
+        let original = event(
+            EventStatus::Scheduled,
+            EventLocation::External("The pub".to_owned()),
+        );
+        let parsed = crate::discord::parse_new_event(&original.to_line()).expect("should parse");
+
+        assert_eq!(parsed.name, original.name);
+        assert_eq!(Some(parsed.starts_at.clone()), original.starts_at);
+        assert_eq!(Some(parsed.ends_at.clone()), original.ends_at);
+        assert_eq!(parsed.problem(), None);
+    }
+
+    #[test]
+    fn a_channel_event_seeds_no_place_or_end_time() {
+        // Discord decides when a channel event is over, and there is no place
+        // to type - showing either would invite typing something ignored.
+        let line = event(EventStatus::Scheduled, EventLocation::Channel(Id::new(7))).to_line();
+        assert!(line.ends_with(" |  | "), "got {line:?}");
     }
 
     #[test]
@@ -585,6 +635,29 @@ impl NewEvent {
 }
 
 impl DiscordRest {
+    /// Change an event that already exists.
+    ///
+    /// The same body as creating one: Discord's patch takes every field, and
+    /// sending a partial one leaves the rest as they were - which is not what
+    /// a form showing all of them appears to promise.
+    pub async fn modify_scheduled_event(
+        &self,
+        guild_id: Id<GuildMarker>,
+        event_id: u64,
+        event: &NewEvent,
+    ) -> Result<()> {
+        self.send_unit(
+            self.raw_http
+                .patch(format!(
+                    "https://discord.com/api/v9/guilds/{}/scheduled-events/{event_id}",
+                    guild_id.get()
+                ))
+                .json(&event.to_body()),
+            "modify event",
+        )
+        .await
+    }
+
     pub async fn create_scheduled_event(
         &self,
         guild_id: Id<GuildMarker>,

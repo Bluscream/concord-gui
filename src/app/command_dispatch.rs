@@ -637,6 +637,19 @@ impl CommandDispatcher {
                 )
                 .await;
             }
+            AppCommand::ModifyScheduledEvent {
+                guild_id,
+                event_id,
+                event,
+            } => {
+                message_commands::modify_scheduled_event(
+                    self.client.clone(),
+                    guild_id,
+                    event_id,
+                    *event,
+                )
+                .await;
+            }
             AppCommand::CreateScheduledEvent { guild_id, event } => {
                 message_commands::create_scheduled_event(self.client.clone(), guild_id, *event)
                     .await;

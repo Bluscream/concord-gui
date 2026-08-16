@@ -298,7 +298,16 @@ and the three are indistinguishable from the form alone.
 Asking to speak and inviting someone up are in both clients too, on the channel
 and member menus.
 
-Still missing: editing an existing event, and discovery.
+Editing an event is the same typed line, seeded with the event as it stands -
+so what is shown is exactly what will be sent back, and a change is a
+correction rather than a retype. A round-trip test keeps those two in step: the
+line an event produces must parse into the event it came from, or editing one
+field would silently rewrite another.
+
+A channel event seeds no place and no end time, because Discord ignores both
+there - showing them would invite typing something that goes nowhere.
+
+Still missing: discovery.
 
 ## Deliberately out of scope
 
@@ -331,7 +340,7 @@ forward so it is not built twice.
 8. **Members, onboarding, welcome screen, widget.**
 9. **Video** - camera on the voice connection, receiving remote video,
    pop-out windows, per-user mute and hide. Needs a real account to verify.
-10. **Editing events, discovery.**
+10. **Discovery.**
 
 Then, and only then, the extras from AGENTS.md: offline-first, merged
 multi-account, and the rest.

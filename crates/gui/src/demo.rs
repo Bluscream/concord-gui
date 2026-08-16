@@ -1064,6 +1064,7 @@ fn handle_command(
         | AppCommand::ModifyGuildWidget { .. }
         | AppCommand::LoadScheduledEvents { .. }
         | AppCommand::CreateScheduledEvent { .. }
+        | AppCommand::ModifyScheduledEvent { .. }
         | AppCommand::CancelScheduledEvent { .. }
         | AppCommand::DeleteScheduledEvent { .. }
         | AppCommand::SetEventInterest { .. }

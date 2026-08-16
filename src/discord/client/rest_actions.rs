@@ -415,6 +415,17 @@ impl DiscordClient {
             .await
     }
 
+    pub async fn modify_scheduled_event(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+        event_id: u64,
+        event: &crate::discord::NewEvent,
+    ) -> Result<()> {
+        self.rest
+            .modify_scheduled_event(guild_id, event_id, event)
+            .await
+    }
+
     pub async fn create_scheduled_event(
         &self,
         guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,

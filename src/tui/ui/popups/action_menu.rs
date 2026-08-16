@@ -822,7 +822,7 @@ pub(in crate::tui::ui) fn render_server_management(
                 vec![Line::from(Span::raw(format!("Name: {}", input.value())))],
                 "enter creates the role, esc cancels",
             ),
-            crate::tui::state::EmojiEdit::NewEvent => {
+            crate::tui::state::EmojiEdit::EditEvent(_) | crate::tui::state::EmojiEdit::NewEvent => {
                 let problem = crate::discord::parse_new_event(input.value())
                     .and_then(|event| event.problem())
                     .map(crate::discord::NewEventProblem::message);
