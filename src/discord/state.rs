@@ -989,6 +989,8 @@ impl DiscordState {
             | AppEvent::GuildAuditLogLoaded { .. }
             | AppEvent::GuildAuditLogLoadFailed { .. }
             | AppEvent::InviteCreated { .. }
+            | AppEvent::ConnectionsLoaded { .. }
+            | AppEvent::ConnectionsLoadFailed { .. }
             | AppEvent::AutoModRulesLoaded { .. }
             | AppEvent::AutoModRulesLoadFailed { .. }
             | AppEvent::SoundboardSoundPlayed { .. }

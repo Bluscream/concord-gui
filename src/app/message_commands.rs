@@ -468,6 +468,51 @@ load_guild_panel!(
 );
 
 /// Fetch a sound list. `None` asks for the default sounds.
+pub(super) async fn load_connections(client: DiscordClient) {
+    match client.connections().await {
+        Ok(connections) => {
+            client
+                .publish_event(AppEvent::ConnectionsLoaded { connections })
+                .await;
+        }
+        Err(error) => {
+            log_app_error("load connections failed", &error);
+            client
+                .publish_event(AppEvent::ConnectionsLoadFailed {
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
+pub(super) async fn modify_connection(
+    client: DiscordClient,
+    kind: String,
+    id: String,
+    visibility: crate::discord::ConnectionVisibility,
+    show_activity: bool,
+    label: String,
+) {
+    if let Err(error) = client
+        .modify_connection(&kind, &id, visibility, show_activity)
+        .await
+    {
+        report_moderation_failure(&client, "changing", &label, &error).await;
+    }
+}
+
+pub(super) async fn delete_connection(
+    client: DiscordClient,
+    kind: String,
+    id: String,
+    label: String,
+) {
+    if let Err(error) = client.delete_connection(&kind, &id).await {
+        report_moderation_failure(&client, "unlinking", &label, &error).await;
+    }
+}
+
 pub(super) async fn set_automod_rule_enabled(
     client: DiscordClient,
     guild_id: Id<GuildMarker>,

@@ -1324,6 +1324,182 @@ pub fn soundboard_view(
     )
 }
 
+/// One linked account, as the panel shows it.
+pub struct ConnectionRow {
+    pub primary: String,
+    pub secondary: String,
+    /// What clicking the visibility button would do, phrased as the outcome.
+    pub visibility_action: String,
+    pub activity_action: String,
+}
+
+impl ConnectionRow {
+    pub fn new(connection: &concord::discord::Connection) -> Self {
+        use concord::discord::ConnectionVisibility;
+        Self {
+            primary: format!("{} - {}", connection.kind, connection.name),
+            secondary: connection.summary(),
+            // Phrased as what clicking does, not as the state it is already
+            // in: a button labelled with the current state reads as inert.
+            visibility_action: if connection.visibility == ConnectionVisibility::Everyone {
+                t!("action-connection-hide")
+            } else {
+                t!("action-connection-show")
+            },
+            activity_action: if connection.show_activity {
+                t!("action-connection-activity-off")
+            } else {
+                t!("action-connection-activity-on")
+            },
+        }
+    }
+}
+
+/// Linked accounts.
+///
+/// Separate from the server-management panel rather than a tab in it: these
+/// belong to the account, not to a guild, and a row here needs three controls
+/// where a server row has two.
+pub fn connections_view(
+    rows: &[ConnectionRow],
+    loading: bool,
+    error: Option<&str>,
+    on_visibility: impl Fn(usize, &mut gpui::App) + Clone + 'static,
+    on_activity: impl Fn(usize, &mut gpui::App) + Clone + 'static,
+    on_unlink: impl Fn(usize, &mut gpui::App) + Clone + 'static,
+    on_close: impl Fn(&mut gpui::App) + 'static,
+) -> Div {
+    let mut list = column()
+        .id("connection-rows")
+        .max_h(px(360.))
+        .overflow_y_scroll();
+
+    // Loading, failed and "none linked" are three different things, and a
+    // blank list that might mean any of them is the worst of the three.
+    let notice = if loading {
+        Some(t!("status-loading"))
+    } else if let Some(error) = error {
+        Some(error.to_owned())
+    } else if rows.is_empty() {
+        Some(t!("status-no-connections"))
+    } else {
+        None
+    };
+
+    if let Some(notice) = notice {
+        list = list.child(
+            gpui::div()
+                .px(px(space::LG))
+                .py(px(space::MD))
+                .text_size(px(scaled(text::SM)))
+                .text_color(rgb(if error.is_some() {
+                    active().danger
+                } else {
+                    active().text_subtle
+                }))
+                .child(notice),
+        );
+    }
+
+    for (index, entry) in rows.iter().enumerate() {
+        let visibility = on_visibility.clone();
+        let activity = on_activity.clone();
+        let unlink = on_unlink.clone();
+        list = list.child(
+            row()
+                .id(("connection-row", index))
+                .w_full()
+                .px(px(space::LG))
+                .py(px(space::XS))
+                .gap(px(space::SM))
+                .items_center()
+                .child(
+                    column()
+                        .flex_1()
+                        .child(
+                            gpui::div()
+                                .text_size(px(scaled(text::SM)))
+                                .text_color(rgb(active().text))
+                                .child(entry.primary.clone()),
+                        )
+                        .child(
+                            gpui::div()
+                                .text_size(px(scaled(text::XS)))
+                                .text_color(rgb(active().text_subtle))
+                                .child(entry.secondary.clone()),
+                        ),
+                )
+                .child(
+                    gpui::div()
+                        .id(("connection-visibility", index))
+                        .px(px(space::SM))
+                        .py(px(space::XS))
+                        .rounded(px(4.))
+                        .cursor_pointer()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().text_muted))
+                        .hover(|style| style.bg(rgb(active().surface_hover)))
+                        .on_click(move |_event, _window, cx| visibility(index, cx))
+                        .child(entry.visibility_action.clone()),
+                )
+                .child(
+                    gpui::div()
+                        .id(("connection-activity", index))
+                        .px(px(space::SM))
+                        .py(px(space::XS))
+                        .rounded(px(4.))
+                        .cursor_pointer()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().text_muted))
+                        .hover(|style| style.bg(rgb(active().surface_hover)))
+                        .on_click(move |_event, _window, cx| activity(index, cx))
+                        .child(entry.activity_action.clone()),
+                )
+                // Last, so the destructive control is not between the two
+                // safe ones where a stray click lands on it.
+                .child(
+                    gpui::div()
+                        .id(("connection-unlink", index))
+                        .px(px(space::SM))
+                        .py(px(space::XS))
+                        .rounded(px(4.))
+                        .cursor_pointer()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().danger))
+                        .hover(|style| style.bg(rgb(active().surface_hover)))
+                        .on_click(move |_event, _window, cx| unlink(index, cx))
+                        .child(t!("action-unlink")),
+                ),
+        );
+    }
+
+    panel(&t!("label-connections"), 520.)
+        .child(list)
+        .child(
+            gpui::div()
+                .px(px(space::LG))
+                .py(px(space::XS))
+                .text_size(px(scaled(text::XS)))
+                .text_color(rgb(active().text_subtle))
+                // Linking is an OAuth flow through a browser, which would mean
+                // handling someone else's credentials. This client does not.
+                .child(t!("hint-connections-add")),
+        )
+        .child(
+            row()
+                .w_full()
+                .px(px(space::LG))
+                .py(px(space::MD))
+                .justify_end()
+                .child(button(
+                    "connections-close",
+                    &t!("action-close"),
+                    true,
+                    on_close,
+                )),
+        )
+}
+
 /// One entry in a context menu.
 pub struct ContextItem {
     pub label: String,
@@ -1495,4 +1671,45 @@ pub fn permission_grid_view(
                 on_save,
             )),
     )
+}
+
+#[cfg(test)]
+mod connection_row_tests {
+    use super::*;
+    use concord::discord::{Connection, ConnectionVisibility};
+
+    fn connection(visibility: ConnectionVisibility, show_activity: bool) -> Connection {
+        Connection {
+            id: "1".to_owned(),
+            kind: "github".to_owned(),
+            name: "someone".to_owned(),
+            verified: true,
+            show_activity,
+            visibility,
+        }
+    }
+
+    #[test]
+    fn each_button_says_what_clicking_it_would_do() {
+        // Not what the connection currently is. A button reading "Hidden" on a
+        // hidden connection looks like a label rather than a control, and the
+        // two readings are opposites - so getting this backwards would make
+        // every click do the reverse of what the button appeared to offer.
+        let hidden = ConnectionRow::new(&connection(ConnectionVisibility::Hidden, false));
+        assert_eq!(hidden.visibility_action, t!("action-connection-show"));
+        assert_eq!(hidden.activity_action, t!("action-connection-activity-on"));
+
+        let shown = ConnectionRow::new(&connection(ConnectionVisibility::Everyone, true));
+        assert_eq!(shown.visibility_action, t!("action-connection-hide"));
+        assert_eq!(shown.activity_action, t!("action-connection-activity-off"));
+    }
+
+    #[test]
+    fn the_two_controls_are_independent() {
+        // They share one request, so a row that derived one from the other
+        // would be the visible half of sending a stale value for the other.
+        let row = ConnectionRow::new(&connection(ConnectionVisibility::Everyone, false));
+        assert_eq!(row.visibility_action, t!("action-connection-hide"));
+        assert_eq!(row.activity_action, t!("action-connection-activity-on"));
+    }
 }

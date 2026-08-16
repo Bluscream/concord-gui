@@ -244,6 +244,27 @@ impl DashboardState {
         (!already_loaded).then(|| tab.load(guild_id)).flatten()
     }
 
+    /// Delete the highlighted AutoMod rule.
+    ///
+    /// Separate from enter, which toggles: deleting throws away the keyword
+    /// list, and the destructive path should not be the one under the key
+    /// people press without looking.
+    pub fn delete_selected_automod_rule(&mut self) -> Option<AppCommand> {
+        let index = self.selected_server_row()?;
+        let state = self.popups.server_management_mut()?;
+        if state.tab != ServerPanelTab::AutoMod || index >= state.automod.len() {
+            return None;
+        }
+        let guild_id = state.guild_id;
+        let rule = state.automod.remove(index);
+
+        Some(AppCommand::DeleteAutoModRule {
+            guild_id,
+            rule_id: rule.id,
+            label: rule.name,
+        })
+    }
+
     /// Start renaming the highlighted emoji.
     ///
     /// Seeded with the current name: a rename is usually a correction, and

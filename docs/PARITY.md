@@ -235,34 +235,23 @@ attached to it.
 ## Commands only one client sends
 
 Clippy cannot catch a core `AppCommand` variant that no front end ever
-constructs - it is public API, so it is never "dead". This finds them, and
-finds the ones only one client can reach:
+constructs - it is public API, so it is never "dead". This finds those, and the
+ones only one client can reach:
 
 ```bash
-for v in $(grep -oE '^    [A-Z][A-Za-z]+ \{' src/discord/commands.rs | tr -d ' {'); do
-  t=$(grep -rl "AppCommand::$v" src/tui --include=*.rs 2>/dev/null | grep -vc test)
-  g=$(grep -rl "AppCommand::$v" crates/gui/src --include=*.rs 2>/dev/null | grep -v demo.rs | grep -vc "^$")
-  [ "$t" -eq 0 ] && [ "$g" -gt 0 ] && echo "GUI only: $v"
-  [ "$g" -eq 0 ] && [ "$t" -gt 0 ] && echo "TUI only: $v"
-done
+python3 scripts/unreachable-commands.py
 ```
 
-And the commands neither client reaches, which the asymmetry check above
-cannot see because a hole in both is symmetric:
-
-```bash
-for v in $(grep -oE '^    [A-Z][A-Za-z]+ \{' src/discord/commands.rs | tr -d ' {'); do
-  n=$(grep -rn "AppCommand::$v" src/tui crates/gui/src --include=*.rs 2>/dev/null \
-    | grep -v "demo.rs" | grep -vc test)
-  [ "$n" -eq 0 ] && echo "unreachable: $v"
-done
-```
-
-Both lists should be empty. `RenameEmoji` was dispatched and reachable from
+It should report nothing. `RenameEmoji` was dispatched and reachable from
 neither; `CreateChannelInvite` and `RenameEmoji` were later reachable only from
-the GUI. All three were found this way rather than by noticing.
+the GUI; `DeleteAutoModRule` was GUI-only while the TUI's AutoMod tab could
+only toggle. All were found this way rather than by noticing.
 
-Ignore `Custom` - it is a `ReactionEmoji` variant the pattern also matches.
+This replaced a pair of shell one-liners whose regex was `^    [A-Z][A-Za-z]+ \{`
+- which matches only struct variants. Three unit variants (`LoadConnections`,
+`ModifyConnection`, `DeleteConnection`) sat unreachable without the check
+seeing them, because a check that silently skips part of its input reports
+success either way. The script matches `{`, `,` and `(` forms.
 
 Anything else on the unreachable list is core work whose interface has not been
 built yet. That is a legitimate intermediate state, but only while it is

@@ -209,6 +209,15 @@ fn push_dashboard_effect(event: AppEvent, ctx: &mut EffectContext<'_>) {
             ctx.state.apply_soundboard_failure(message);
             return;
         }
+        AppEvent::ConnectionsLoaded { connections } => {
+            ctx.state.set_connections(connections);
+            return;
+        }
+        AppEvent::ConnectionsLoadFailed { .. } => {
+            // The message still reaches the status line through the normal
+            // path; this only stops the panel claiming to be loading.
+            ctx.state.mark_connections_load_failed();
+        }
         AppEvent::AutoModRulesLoaded { guild_id, rules } => {
             ctx.state.apply_automod_rules(guild_id, rules);
             return;

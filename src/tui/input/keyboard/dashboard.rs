@@ -177,6 +177,7 @@ pub(super) fn execute_ui_action(
                 state.enqueue_pending_command(command);
             }
         }
+        UiAction::OpenConnections => state.open_connections(),
         UiAction::VoiceLeave => return state.leave_current_voice_channel_command(),
         _ => {}
     }

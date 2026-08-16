@@ -552,6 +552,29 @@ impl CommandDispatcher {
                     .publish_event(crate::discord::AppEvent::GuildForgotten { guild_id })
                     .await;
             }
+            AppCommand::LoadConnections => {
+                message_commands::load_connections(self.client.clone()).await;
+            }
+            AppCommand::ModifyConnection {
+                kind,
+                id,
+                visibility,
+                show_activity,
+                label,
+            } => {
+                message_commands::modify_connection(
+                    self.client.clone(),
+                    kind,
+                    id,
+                    visibility,
+                    show_activity,
+                    label,
+                )
+                .await;
+            }
+            AppCommand::DeleteConnection { kind, id, label } => {
+                message_commands::delete_connection(self.client.clone(), kind, id, label).await;
+            }
             AppCommand::LoadAutoModRules { guild_id } => {
                 message_commands::load_automod_rules(self.client.clone(), guild_id).await;
             }

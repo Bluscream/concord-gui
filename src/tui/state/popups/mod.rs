@@ -721,11 +721,17 @@ pub enum OptionsCategory {
     Composer,
     Notifications,
     Voice,
+    /// Linked accounts. Fetched rather than read from config, which is why it
+    /// carries a list the others do not need.
+    Connections,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) struct OptionsPopupState {
     pub(super) selection: SelectablePopupState,
+    /// Linked accounts, once the connections category has fetched them.
+    pub(super) connections: Vec<crate::discord::Connection>,
+    pub(super) connections_loading: bool,
     pub(super) category: Option<OptionsCategory>,
     pub(super) capturing_push_to_talk_shortcut: bool,
 }

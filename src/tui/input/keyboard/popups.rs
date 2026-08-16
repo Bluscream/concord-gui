@@ -940,6 +940,8 @@ fn handle_server_management_key(state: &mut DashboardState, key: KeyEvent) -> Op
         // 'n' means a new role on the roles tab and a rename on emoji; both
         // are the panel's one text field, told apart by which tab is open.
         KeyCode::Char('N') => state.start_role_create(),
+        // Deleting an AutoMod rule, which enter deliberately does not do.
+        KeyCode::Char('d') => return state.delete_selected_automod_rule(),
         // Editing what a role may do, which is the grid rather than a field.
         KeyCode::Char('p') => state.open_selected_role_permissions(),
         _ => {}
@@ -1593,6 +1595,22 @@ fn handle_options_popup_fixed_key(
 ) -> Option<Option<AppCommand>> {
     if state.is_capturing_push_to_talk_shortcut() {
         return None;
+    }
+
+    // Taken before the shared router, which has no rows-of-fetched-data
+    // notion and would read these as the ordinary option keys.
+    if state.is_connections_category_open() {
+        match key.code {
+            KeyCode::Char('a') => {
+                state.toggle_selected_connection_activity();
+                return Some(None);
+            }
+            KeyCode::Char('d') => {
+                state.delete_selected_connection();
+                return Some(None);
+            }
+            _ => {}
+        }
     }
 
     match state

@@ -946,3 +946,148 @@ fn voice_join_action_reflects_scope_permissions_and_participation() {
     );
     assert!(action(ChannelActionKind::ToggleMute).is_enabled());
 }
+
+mod connections {
+    use super::*;
+    use crate::discord::{Connection, ConnectionVisibility};
+
+    fn connection(name: &str) -> Connection {
+        Connection {
+            id: "1".to_owned(),
+            kind: "github".to_owned(),
+            name: name.to_owned(),
+            verified: true,
+            show_activity: false,
+            visibility: ConnectionVisibility::Hidden,
+        }
+    }
+
+    fn opened() -> DashboardState {
+        let mut state = DashboardState::new();
+        state.open_options_category(OptionsCategory::Connections);
+        state.set_connections(vec![connection("someone")]);
+        state
+    }
+
+    #[test]
+    fn opening_the_category_asks_for_the_list() {
+        let mut state = DashboardState::new();
+        state.open_options_category(OptionsCategory::Connections);
+
+        assert!(
+            state
+                .drain_pending_commands()
+                .iter()
+                .any(|command| matches!(command, AppCommand::LoadConnections))
+        );
+    }
+
+    #[test]
+    fn an_empty_list_still_has_a_row_saying_why() {
+        // A blank panel reads as a broken fetch rather than as no accounts.
+        let mut state = DashboardState::new();
+        state.open_options_category(OptionsCategory::Connections);
+        state.set_connections(Vec::new());
+
+        assert_eq!(state.display_option_items().len(), 1);
+    }
+
+    #[test]
+    fn a_failed_fetch_stops_the_panel_saying_it_is_loading() {
+        let mut state = DashboardState::new();
+        state.open_options_category(OptionsCategory::Connections);
+        state.mark_connections_load_failed();
+
+        let label = state.display_option_items()[0].label;
+        assert_eq!(label, "No linked accounts", "still claims to be loading");
+    }
+
+    #[test]
+    fn toggling_visibility_keeps_the_activity_flag() {
+        // Both go in the same request, so sending a default for the one not
+        // being changed would quietly turn activity sharing off.
+        let mut state = opened();
+        state.set_connections(vec![Connection {
+            show_activity: true,
+            ..connection("someone")
+        }]);
+        state.drain_pending_commands();
+        state.toggle_selected_display_option();
+
+        let commands = state.drain_pending_commands();
+        let AppCommand::ModifyConnection {
+            visibility,
+            show_activity,
+            ..
+        } = commands
+            .iter()
+            .find(|command| matches!(command, AppCommand::ModifyConnection { .. }))
+            .expect("no modify sent")
+        else {
+            unreachable!()
+        };
+
+        assert_eq!(*visibility, ConnectionVisibility::Everyone);
+        assert!(*show_activity, "activity sharing was turned off as well");
+    }
+
+    #[test]
+    fn toggling_activity_keeps_the_visibility() {
+        let mut state = opened();
+        state.set_connections(vec![Connection {
+            visibility: ConnectionVisibility::Everyone,
+            ..connection("someone")
+        }]);
+        state.drain_pending_commands();
+        state.toggle_selected_connection_activity();
+
+        let commands = state.drain_pending_commands();
+        let AppCommand::ModifyConnection {
+            visibility,
+            show_activity,
+            ..
+        } = commands
+            .iter()
+            .find(|command| matches!(command, AppCommand::ModifyConnection { .. }))
+            .expect("no modify sent")
+        else {
+            unreachable!()
+        };
+
+        assert!(*show_activity);
+        assert_eq!(
+            *visibility,
+            ConnectionVisibility::Everyone,
+            "the connection was hidden from the profile as a side effect"
+        );
+    }
+
+    #[test]
+    fn the_connection_keys_do_nothing_in_another_category() {
+        // They are taken before the shared router, so a category that does not
+        // have connection rows must not be affected by them.
+        let mut state = DashboardState::new();
+        state.open_options_category(OptionsCategory::Display);
+        state.drain_pending_commands();
+        state.toggle_selected_connection_activity();
+        state.delete_selected_connection();
+
+        assert!(state.drain_pending_commands().is_empty());
+    }
+
+    #[test]
+    fn unlinking_removes_the_row_and_sends_the_delete() {
+        let mut state = opened();
+        state.drain_pending_commands();
+        state.delete_selected_connection();
+
+        assert!(
+            state
+                .drain_pending_commands()
+                .iter()
+                .any(|command| matches!(command, AppCommand::DeleteConnection { .. }))
+        );
+        assert_eq!(state.display_option_items().len(), 1, "row still listed");
+        assert_eq!(state.display_option_items()[0].label, "No linked accounts");
+    }
+}

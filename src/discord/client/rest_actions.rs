@@ -310,6 +310,26 @@ impl DiscordClient {
         self.rest.unban_member(guild_id, user_id).await
     }
 
+    pub async fn connections(&self) -> Result<Vec<crate::discord::Connection>> {
+        self.rest.connections().await
+    }
+
+    pub async fn modify_connection(
+        &self,
+        kind: &str,
+        id: &str,
+        visibility: crate::discord::ConnectionVisibility,
+        show_activity: bool,
+    ) -> Result<()> {
+        self.rest
+            .modify_connection(kind, id, visibility, show_activity)
+            .await
+    }
+
+    pub async fn delete_connection(&self, kind: &str, id: &str) -> Result<()> {
+        self.rest.delete_connection(kind, id).await
+    }
+
     pub async fn automod_rules(
         &self,
         guild_id: Id<GuildMarker>,

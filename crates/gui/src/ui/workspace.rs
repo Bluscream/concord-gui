@@ -553,6 +553,13 @@ impl SoundboardView {
     }
 }
 
+/// The linked-accounts panel.
+pub struct ConnectionsView {
+    pub connections: Vec<concord::discord::Connection>,
+    pub loading: bool,
+    pub error: Option<String>,
+}
+
 /// An image opened full size.
 ///
 /// Carries every image in the message rather than only the one clicked, so
@@ -903,6 +910,7 @@ pub struct Workspace {
     pub server_management: Option<ServerManagementView>,
     /// The soundboard picker, once opened.
     pub soundboard: Option<SoundboardView>,
+    pub connections: Option<ConnectionsView>,
     /// A role's permissions, once opened.
     pub permission_grid: Option<PermissionGridView>,
     /// An image being viewed full size.
@@ -1048,6 +1056,7 @@ impl Workspace {
             bans: None,
             server_management: None,
             soundboard: None,
+            connections: None,
             permission_grid: None,
             viewing_image: None,
             deleting_channel: None,
@@ -4182,6 +4191,82 @@ impl Workspace {
     }
 
     /// Open the soundboard picker for the guild we are in voice in.
+    pub fn open_connections(&mut self) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        self.connections = Some(ConnectionsView {
+            connections: Vec::new(),
+            loading: true,
+            error: None,
+        });
+        handle.send(AppCommand::LoadConnections);
+    }
+
+    /// Show or hide a connection on your profile.
+    ///
+    /// Visibility and activity go in the same request, so each sends the other
+    /// unchanged rather than a default - which would quietly turn the other
+    /// setting off.
+    pub fn toggle_connection_visibility(&mut self, index: usize) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(view) = &mut self.connections else {
+            return;
+        };
+        let Some(connection) = view.connections.get_mut(index) else {
+            return;
+        };
+        connection.visibility = connection.visibility.toggled();
+        handle.send(AppCommand::ModifyConnection {
+            kind: connection.kind.clone(),
+            id: connection.id.clone(),
+            visibility: connection.visibility,
+            show_activity: connection.show_activity,
+            label: connection.name.clone(),
+        });
+    }
+
+    /// Whether what you do on that service appears in your presence.
+    pub fn toggle_connection_activity(&mut self, index: usize) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(view) = &mut self.connections else {
+            return;
+        };
+        let Some(connection) = view.connections.get_mut(index) else {
+            return;
+        };
+        connection.show_activity = !connection.show_activity;
+        handle.send(AppCommand::ModifyConnection {
+            kind: connection.kind.clone(),
+            id: connection.id.clone(),
+            visibility: connection.visibility,
+            show_activity: connection.show_activity,
+            label: connection.name.clone(),
+        });
+    }
+
+    pub fn unlink_connection(&mut self, index: usize) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(view) = &mut self.connections else {
+            return;
+        };
+        if index >= view.connections.len() {
+            return;
+        }
+        let connection = view.connections.remove(index);
+        handle.send(AppCommand::DeleteConnection {
+            kind: connection.kind,
+            id: connection.id,
+            label: connection.name,
+        });
+    }
+
     pub fn open_soundboard(&mut self) {
         let Some(handle) = &self.handle else {
             return;
@@ -6431,6 +6516,19 @@ impl Workspace {
                     view.error = Some(message.clone());
                 }
             }
+            AppEvent::ConnectionsLoaded { connections } => {
+                if let Some(view) = &mut self.connections {
+                    view.loading = false;
+                    view.error = None;
+                    view.connections = connections.clone();
+                }
+            }
+            AppEvent::ConnectionsLoadFailed { message } => {
+                if let Some(view) = &mut self.connections {
+                    view.loading = false;
+                    view.error = Some(message.clone());
+                }
+            }
             AppEvent::AutoModRulesLoaded { guild_id, rules } => {
                 if let Some(view) = &mut self.server_management
                     && view.guild_id == *guild_id
@@ -7694,6 +7792,56 @@ impl Workspace {
                     move |cx: &mut gpui::App| {
                         entity.update(cx, |workspace, cx| {
                             workspace.permission_grid = None;
+                            cx.notify();
+                        });
+                    }
+                },
+            )));
+        }
+
+        if let Some(view) = &self.connections {
+            let rows: Vec<overlay::ConnectionRow> = view
+                .connections
+                .iter()
+                .map(overlay::ConnectionRow::new)
+                .collect();
+
+            return Some(overlay::scrim().child(overlay::connections_view(
+                &rows,
+                view.loading,
+                view.error.as_deref(),
+                {
+                    let entity = entity.clone();
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.toggle_connection_visibility(index);
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.toggle_connection_activity(index);
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.unlink_connection(index);
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.connections = None;
                             cx.notify();
                         });
                     }

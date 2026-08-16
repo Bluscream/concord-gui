@@ -74,9 +74,19 @@ account and edit the profile, but nothing that changes credentials.
 
 ### Connections
 
-Linked accounts - Spotify, GitHub, Steam, and the rest - are neither listed nor
-manageable, and their visibility toggles are what make them appear on a
-profile. Other people's connections are also not shown on their profiles.
+Both clients list your linked accounts - Spotify, GitHub, Steam, and the rest -
+show or hide each on your profile, turn activity sharing on or off, and unlink
+one. In the TUI it is an options category (`<leader> l`, or `l` from the options
+picker); in the GUI it is a panel on the same action.
+
+Linking a new account is deliberately absent: it is an OAuth flow through a
+browser, which would mean this client handling someone else's credentials.
+The panel says so rather than leaving an empty list to look broken.
+
+An unverified connection is labelled as such. It looks linked but Discord will
+not show it on a profile, which otherwise reads as a bug in this client.
+
+Still missing: other people's connections on their profiles.
 
 ### Privacy and safety
 
@@ -189,7 +199,8 @@ forward so it is not built twice.
 6. **AutoMod.**
 7. **Account settings** - credentials, 2FA, sessions, authorised apps.
    Password and 2FA fields are the user's to drive, never the agent's.
-8. **Connections and privacy.**
+8. **Privacy and safety** - connections are done; this is the rest of that
+   group.
 9. **Members, onboarding, welcome screen, widget.**
 10. **Video** - camera on the voice connection, receiving remote video,
     pop-out windows, per-user mute and hide. Needs a real account to verify.

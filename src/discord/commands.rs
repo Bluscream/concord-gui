@@ -541,7 +541,21 @@ pub enum AppCommand {
         guild_id: Id<GuildMarker>,
         label: String,
     },
-    /// Fetch a sound list. `None` asks for the default sounds.
+    /// Fetch every linked account.
+    LoadConnections,
+    /// Change what a connection shows on your profile.
+    ModifyConnection {
+        kind: String,
+        id: String,
+        visibility: crate::discord::ConnectionVisibility,
+        show_activity: bool,
+        label: String,
+    },
+    DeleteConnection {
+        kind: String,
+        id: String,
+        label: String,
+    },
     LoadAutoModRules {
         guild_id: Id<GuildMarker>,
     },

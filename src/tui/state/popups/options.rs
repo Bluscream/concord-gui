@@ -11,7 +11,7 @@ const DISPLAY_OPTION_COUNT: usize = 9;
 const COMPOSER_OPTION_COUNT: usize = 1;
 const NOTIFICATION_OPTION_COUNT: usize = 1;
 const VOICE_OPTION_COUNT: usize = VoiceOption::ALL.len();
-const OPTION_CATEGORY_COUNT: usize = 4;
+const OPTION_CATEGORY_COUNT: usize = 5;
 
 /// A row of the voice options popup.
 ///
@@ -76,9 +76,13 @@ impl DashboardState {
             self.options.voice_audio_sources_request_id = Some(request_id);
             self.enqueue_pending_command(AppCommand::LoadVoiceAudioSources { request_id });
         }
+        if category == OptionsCategory::Connections {
+            self.enqueue_pending_command(AppCommand::LoadConnections);
+        }
         self.popups
             .set_modal(ModalPopup::Options(OptionsPopupState {
                 category: Some(category),
+                connections_loading: category == OptionsCategory::Connections,
                 ..OptionsPopupState::default()
             }));
     }
@@ -112,6 +116,7 @@ impl DashboardState {
             Some(OptionsCategory::Composer) => "Composer Options",
             Some(OptionsCategory::Notifications) => "Notification Options",
             Some(OptionsCategory::Voice) => "Voice Options",
+            Some(OptionsCategory::Connections) => "Linked Accounts",
         }
     }
 
@@ -149,6 +154,9 @@ impl DashboardState {
             Some(OptionsCategory::Composer) => COMPOSER_OPTION_COUNT,
             Some(OptionsCategory::Notifications) => NOTIFICATION_OPTION_COUNT,
             Some(OptionsCategory::Voice) => VOICE_OPTION_COUNT,
+            // At least one, so an empty list still has a row to explain
+            // itself rather than rendering as a blank panel.
+            Some(OptionsCategory::Connections) => self.connection_rows().len().max(1),
         }
     }
 
@@ -157,6 +165,7 @@ impl DashboardState {
             None if self.is_active_modal_popup(ActiveModalPopupKind::Options) => {
                 return self.option_category_items();
             }
+            Some(OptionsCategory::Connections) => return self.connection_option_items(),
             Some(OptionsCategory::Display) => return self.display_option_items_for_display(),
             Some(OptionsCategory::Composer) => return self.display_option_items_for_composer(),
             Some(OptionsCategory::Notifications) => {
@@ -207,7 +216,167 @@ impl DashboardState {
                 effective: true,
                 description: "Mute, deaf, push-to-talk, microphone processing, and volume settings.",
             },
+            DisplayOptionItem {
+                label: "Linked accounts",
+                enabled: true,
+                value: Some(OptionsCategoryShortcut::Connections.key().to_string()),
+                gauge: None,
+                effective: true,
+                description: "Accounts linked to your profile, what they show, and unlinking.",
+            },
         ]
+    }
+
+    /// The linked accounts, as loaded.
+    fn connection_rows(&self) -> &[crate::discord::Connection] {
+        self.popups
+            .options_popup()
+            .map_or(&[], |popup| popup.connections.as_slice())
+    }
+
+    /// Open the linked-accounts panel.
+    ///
+    /// Named rather than reached through `open_options_category`, so callers
+    /// outside this module need no access to the private category enum.
+    pub fn open_connections(&mut self) {
+        self.open_options_category(OptionsCategory::Connections);
+    }
+
+    pub fn is_connections_category_open(&self) -> bool {
+        self.popups.options_popup().and_then(|popup| popup.category)
+            == Some(OptionsCategory::Connections)
+    }
+
+    fn connection_option_items(&self) -> Vec<DisplayOptionItem> {
+        let loading = self
+            .popups
+            .options_popup()
+            .is_some_and(|popup| popup.connections_loading);
+        let rows = self.connection_rows();
+        if rows.is_empty() {
+            return vec![DisplayOptionItem {
+                label: if loading {
+                    "Loading linked accounts"
+                } else {
+                    "No linked accounts"
+                },
+                enabled: false,
+                value: None,
+                gauge: None,
+                effective: false,
+                // Linking is an OAuth flow through a browser, which would mean
+                // handling someone else's credentials. This client does not.
+                description: "Link an account on Discord's website; this client can show, change and unlink them.",
+            }];
+        }
+
+        rows.iter()
+            .map(|connection| DisplayOptionItem {
+                // The service and username go in the value rather than the
+                // label: the label is `&'static str`, and leaking a string per
+                // redraw to widen it would be a leak on every frame.
+                label: "Linked account",
+                enabled: connection.visibility == crate::discord::ConnectionVisibility::Everyone,
+                value: Some(format!(
+                    "{} - {} - {}",
+                    connection.kind,
+                    connection.name,
+                    connection.summary()
+                )),
+                gauge: None,
+                effective: connection.verified,
+                description: "enter changes who sees it, a toggles activity, d unlinks.",
+            })
+            .collect()
+    }
+
+    /// Show or hide the highlighted connection on your profile.
+    fn cycle_selected_connection_visibility(&mut self) {
+        let Some(index) = self.selected_option_index() else {
+            return;
+        };
+        let Some(popup) = self.popups.options_popup_mut() else {
+            return;
+        };
+        let Some(connection) = popup.connections.get_mut(index) else {
+            return;
+        };
+        connection.visibility = connection.visibility.toggled();
+        let command = AppCommand::ModifyConnection {
+            kind: connection.kind.clone(),
+            id: connection.id.clone(),
+            visibility: connection.visibility,
+            show_activity: connection.show_activity,
+            label: connection.name.clone(),
+        };
+        self.enqueue_pending_command(command);
+    }
+
+    /// Whether what you do on the highlighted service appears in your presence.
+    pub fn toggle_selected_connection_activity(&mut self) {
+        if self.popups.options_popup().and_then(|popup| popup.category)
+            != Some(OptionsCategory::Connections)
+        {
+            return;
+        }
+        let Some(index) = self.selected_option_index() else {
+            return;
+        };
+        let Some(popup) = self.popups.options_popup_mut() else {
+            return;
+        };
+        let Some(connection) = popup.connections.get_mut(index) else {
+            return;
+        };
+        connection.show_activity = !connection.show_activity;
+        let command = AppCommand::ModifyConnection {
+            kind: connection.kind.clone(),
+            id: connection.id.clone(),
+            visibility: connection.visibility,
+            show_activity: connection.show_activity,
+            label: connection.name.clone(),
+        };
+        self.enqueue_pending_command(command);
+    }
+
+    /// Unlink the highlighted account.
+    pub fn delete_selected_connection(&mut self) {
+        if self.popups.options_popup().and_then(|popup| popup.category)
+            != Some(OptionsCategory::Connections)
+        {
+            return;
+        }
+        let Some(index) = self.selected_option_index() else {
+            return;
+        };
+        let Some(popup) = self.popups.options_popup_mut() else {
+            return;
+        };
+        if index >= popup.connections.len() {
+            return;
+        }
+        let connection = popup.connections.remove(index);
+        self.enqueue_pending_command(AppCommand::DeleteConnection {
+            kind: connection.kind,
+            id: connection.id,
+            label: connection.name,
+        });
+    }
+
+    /// Take the fetched connections.
+    pub fn set_connections(&mut self, connections: Vec<crate::discord::Connection>) {
+        if let Some(popup) = self.popups.options_popup_mut() {
+            popup.connections = connections;
+            popup.connections_loading = false;
+        }
+    }
+
+    /// The fetch failed; stop saying it is loading, or the panel claims to be
+    /// working forever.
+    pub fn mark_connections_load_failed(&mut self) {
+        if let Some(popup) = self.popups.options_popup_mut() {
+            popup.connections_loading = false;
+        }
     }
 
     fn display_option_items_for_display(&self) -> Vec<DisplayOptionItem> {
@@ -469,6 +638,11 @@ impl DashboardState {
             return;
         }
 
+        if category == OptionsCategory::Connections {
+            self.cycle_selected_connection_visibility();
+            return;
+        }
+
         let images_visible_before = self.show_images();
 
         match (category, selected) {
@@ -656,6 +830,9 @@ impl DashboardState {
                 self.open_options_category(OptionsCategory::Notifications)
             }
             OptionsCategoryShortcut::Voice => self.open_options_category(OptionsCategory::Voice),
+            OptionsCategoryShortcut::Connections => {
+                self.open_options_category(OptionsCategory::Connections)
+            }
         }
     }
 

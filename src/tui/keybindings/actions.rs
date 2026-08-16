@@ -127,6 +127,7 @@ define_ui_actions! {
     VoiceMute => ("mute voice", &[&[Leader, Char('v'), Char('m')]], None),
     ToggleStream => ("Share screen", &[&[Leader, Char('v'), Char('s')]], None),
     OpenSoundboard => ("Soundboard", &[&[Leader, Char('v'), Char('b')]], None),
+    OpenConnections => ("Linked accounts", &[&[Leader, Char('l')]], None),
     VoiceLeave => ("leave voice", &[&[Leader, Char('v'), Char('l')]], None),
 }
 
@@ -421,14 +422,16 @@ pub enum OptionsCategoryShortcut {
     Composer,
     Notifications,
     Voice,
+    Connections,
 }
 
 impl OptionsCategoryShortcut {
-    pub(in crate::tui) const ALL: [Self; 4] = [
+    pub(in crate::tui) const ALL: [Self; 5] = [
         Self::Display,
         Self::Composer,
         Self::Notifications,
         Self::Voice,
+        Self::Connections,
     ];
 
     pub(in crate::tui) const fn key(self) -> char {
@@ -437,6 +440,8 @@ impl OptionsCategoryShortcut {
             Self::Composer => 'c',
             Self::Notifications => 'n',
             Self::Voice => 'v',
+            // Not 'c', which composer already has.
+            Self::Connections => 'l',
         }
     }
 
