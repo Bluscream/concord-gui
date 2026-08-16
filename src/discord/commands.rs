@@ -567,6 +567,44 @@ pub enum AppCommand {
         include_roles: Vec<Id<RoleMarker>>,
         label: String,
     },
+    LoadScheduledEvents {
+        guild_id: Id<GuildMarker>,
+    },
+    /// A status change rather than a delete: Discord keeps a cancelled event
+    /// visible so people who said they were coming can see it is off.
+    CancelScheduledEvent {
+        guild_id: Id<GuildMarker>,
+        event_id: u64,
+        label: String,
+    },
+    DeleteScheduledEvent {
+        guild_id: Id<GuildMarker>,
+        event_id: u64,
+        label: String,
+    },
+    SetEventInterest {
+        guild_id: Id<GuildMarker>,
+        event_id: u64,
+        interested: bool,
+    },
+    LoadGuildTemplates {
+        guild_id: Id<GuildMarker>,
+    },
+    CreateGuildTemplate {
+        guild_id: Id<GuildMarker>,
+        name: String,
+    },
+    /// Bring a template up to date with the server as it stands.
+    SyncGuildTemplate {
+        guild_id: Id<GuildMarker>,
+        code: String,
+        label: String,
+    },
+    DeleteGuildTemplate {
+        guild_id: Id<GuildMarker>,
+        code: String,
+        label: String,
+    },
     LoadWelcomeScreen {
         guild_id: Id<GuildMarker>,
     },

@@ -552,6 +552,70 @@ impl CommandDispatcher {
                     .publish_event(crate::discord::AppEvent::GuildForgotten { guild_id })
                     .await;
             }
+            AppCommand::LoadScheduledEvents { guild_id } => {
+                message_commands::load_scheduled_events(self.client.clone(), guild_id).await;
+            }
+            AppCommand::CancelScheduledEvent {
+                guild_id,
+                event_id,
+                label,
+            } => {
+                message_commands::cancel_scheduled_event(
+                    self.client.clone(),
+                    guild_id,
+                    event_id,
+                    label,
+                )
+                .await;
+            }
+            AppCommand::DeleteScheduledEvent {
+                guild_id,
+                event_id,
+                label,
+            } => {
+                message_commands::delete_scheduled_event(
+                    self.client.clone(),
+                    guild_id,
+                    event_id,
+                    label,
+                )
+                .await;
+            }
+            AppCommand::SetEventInterest {
+                guild_id,
+                event_id,
+                interested,
+            } => {
+                message_commands::set_event_interest(
+                    self.client.clone(),
+                    guild_id,
+                    event_id,
+                    interested,
+                )
+                .await;
+            }
+            AppCommand::LoadGuildTemplates { guild_id } => {
+                message_commands::load_guild_templates(self.client.clone(), guild_id).await;
+            }
+            AppCommand::CreateGuildTemplate { guild_id, name } => {
+                message_commands::create_guild_template(self.client.clone(), guild_id, name).await;
+            }
+            AppCommand::SyncGuildTemplate {
+                guild_id,
+                code,
+                label,
+            } => {
+                message_commands::sync_guild_template(self.client.clone(), guild_id, code, label)
+                    .await;
+            }
+            AppCommand::DeleteGuildTemplate {
+                guild_id,
+                code,
+                label,
+            } => {
+                message_commands::delete_guild_template(self.client.clone(), guild_id, code, label)
+                    .await;
+            }
             AppCommand::LoadPruneCount {
                 guild_id,
                 days,

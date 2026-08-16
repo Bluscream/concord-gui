@@ -468,6 +468,125 @@ load_guild_panel!(
 );
 
 /// Fetch a sound list. `None` asks for the default sounds.
+type GuildId = crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>;
+
+pub(super) async fn load_scheduled_events(client: DiscordClient, guild_id: GuildId) {
+    match client.scheduled_events(guild_id).await {
+        Ok(events) => {
+            client
+                .publish_event(AppEvent::ScheduledEventsLoaded { guild_id, events })
+                .await;
+        }
+        Err(error) => {
+            log_app_error("scheduled events failed", &error);
+            client
+                .publish_event(AppEvent::MembershipRequestFailed {
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
+pub(super) async fn cancel_scheduled_event(
+    client: DiscordClient,
+    guild_id: GuildId,
+    event_id: u64,
+    label: String,
+) {
+    if let Err(error) = client.cancel_scheduled_event(guild_id, event_id).await {
+        report_moderation_failure(&client, "cancelling", &label, &error).await;
+        return;
+    }
+    // Refetched: a cancel changes the status rather than removing the row, and
+    // the new status is what the list must show.
+    load_scheduled_events(client, guild_id).await;
+}
+
+pub(super) async fn delete_scheduled_event(
+    client: DiscordClient,
+    guild_id: GuildId,
+    event_id: u64,
+    label: String,
+) {
+    if let Err(error) = client.delete_scheduled_event(guild_id, event_id).await {
+        report_moderation_failure(&client, "deleting", &label, &error).await;
+    }
+}
+
+pub(super) async fn set_event_interest(
+    client: DiscordClient,
+    guild_id: GuildId,
+    event_id: u64,
+    interested: bool,
+) {
+    if let Err(error) = client
+        .set_event_interest(guild_id, event_id, interested)
+        .await
+    {
+        report_moderation_failure(&client, "changing", "your interest", &error).await;
+        return;
+    }
+    // The interested count on the row is now wrong by one, so the list is
+    // refetched rather than left disagreeing with what was just clicked.
+    load_scheduled_events(client, guild_id).await;
+}
+
+pub(super) async fn load_guild_templates(client: DiscordClient, guild_id: GuildId) {
+    match client.guild_templates(guild_id).await {
+        Ok(templates) => {
+            client
+                .publish_event(AppEvent::GuildTemplatesLoaded {
+                    guild_id,
+                    templates,
+                })
+                .await;
+        }
+        Err(error) => {
+            log_app_error("templates failed", &error);
+            client
+                .publish_event(AppEvent::MembershipRequestFailed {
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
+pub(super) async fn create_guild_template(client: DiscordClient, guild_id: GuildId, name: String) {
+    if let Err(error) = client.create_guild_template(guild_id, &name).await {
+        report_moderation_failure(&client, "creating", &name, &error).await;
+        return;
+    }
+    load_guild_templates(client, guild_id).await;
+}
+
+pub(super) async fn sync_guild_template(
+    client: DiscordClient,
+    guild_id: GuildId,
+    code: String,
+    label: String,
+) {
+    if let Err(error) = client.sync_guild_template(guild_id, &code).await {
+        report_moderation_failure(&client, "syncing", &label, &error).await;
+        return;
+    }
+    // Syncing clears the out-of-date mark, which is the whole point of doing
+    // it - so the row has to be refetched to stop saying it is stale.
+    load_guild_templates(client, guild_id).await;
+}
+
+pub(super) async fn delete_guild_template(
+    client: DiscordClient,
+    guild_id: GuildId,
+    code: String,
+    label: String,
+) {
+    if let Err(error) = client.delete_guild_template(guild_id, &code).await {
+        report_moderation_failure(&client, "deleting", &label, &error).await;
+    }
+}
+
 pub(super) async fn load_prune_count(
     client: DiscordClient,
     guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,

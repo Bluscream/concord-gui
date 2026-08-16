@@ -718,6 +718,14 @@ pub enum AppEvent {
     AuthSessionsLoadFailed {
         message: String,
     },
+    ScheduledEventsLoaded {
+        guild_id: Id<GuildMarker>,
+        events: Vec<crate::discord::ScheduledEvent>,
+    },
+    GuildTemplatesLoaded {
+        guild_id: Id<GuildMarker>,
+        templates: Vec<crate::discord::GuildTemplate>,
+    },
     PruneCountLoaded {
         guild_id: Id<GuildMarker>,
         count: u64,
@@ -1094,6 +1102,8 @@ define_app_event_kinds! {
     ConnectionsLoaded: AppEvent::ConnectionsLoaded { .. },
     AuthSessionsLoaded: AppEvent::AuthSessionsLoaded { .. },
     AuthSessionsLoadFailed: AppEvent::AuthSessionsLoadFailed { .. },
+    ScheduledEventsLoaded: AppEvent::ScheduledEventsLoaded { .. },
+    GuildTemplatesLoaded: AppEvent::GuildTemplatesLoaded { .. },
     PruneCountLoaded: AppEvent::PruneCountLoaded { .. },
     GuildPruned: AppEvent::GuildPruned { .. },
     WelcomeScreenLoaded: AppEvent::WelcomeScreenLoaded { .. },
@@ -2174,6 +2184,8 @@ impl AppEventKind {
             | AppEventKind::SoundboardSoundPlayed
             | AppEventKind::SoundboardSoundsLoaded
             | AppEventKind::SoundboardSoundsLoadFailed
+            | AppEventKind::ScheduledEventsLoaded
+            | AppEventKind::GuildTemplatesLoaded
             | AppEventKind::PruneCountLoaded
             | AppEventKind::GuildPruned
             | AppEventKind::WelcomeScreenLoaded

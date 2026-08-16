@@ -1019,6 +1019,8 @@ impl DiscordState {
             | AppEvent::GuildAuditLogLoaded { .. }
             | AppEvent::GuildAuditLogLoadFailed { .. }
             | AppEvent::InviteCreated { .. }
+            | AppEvent::ScheduledEventsLoaded { .. }
+            | AppEvent::GuildTemplatesLoaded { .. }
             | AppEvent::PruneCountLoaded { .. }
             | AppEvent::GuildPruned { .. }
             | AppEvent::WelcomeScreenLoaded { .. }

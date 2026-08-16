@@ -25,10 +25,12 @@ pub enum ServerPanelTab {
     /// leave. One tab because each is two or three rows, and three tabs of
     /// three rows is more hunting than reading.
     Membership,
+    Events,
+    Templates,
 }
 
 impl ServerPanelTab {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::Settings,
         Self::Invites,
         Self::Roles,
@@ -37,6 +39,8 @@ impl ServerPanelTab {
         Self::AutoMod,
         Self::AuditLog,
         Self::Membership,
+        Self::Events,
+        Self::Templates,
     ];
 
     pub(in crate::tui) fn label(self) -> &'static str {
@@ -49,6 +53,8 @@ impl ServerPanelTab {
             Self::AutoMod => "AutoMod",
             Self::AuditLog => "Audit log",
             Self::Membership => "Membership",
+            Self::Events => "Events",
+            Self::Templates => "Templates",
         }
     }
 
@@ -68,6 +74,8 @@ impl ServerPanelTab {
             }],
             Self::AutoMod => vec![AppCommand::LoadAutoModRules { guild_id }],
             Self::AuditLog => vec![AppCommand::LoadGuildAuditLog { guild_id }],
+            Self::Events => vec![AppCommand::LoadScheduledEvents { guild_id }],
+            Self::Templates => vec![AppCommand::LoadGuildTemplates { guild_id }],
             Self::Membership => vec![
                 AppCommand::LoadWelcomeScreen { guild_id },
                 AppCommand::LoadGuildWidget { guild_id },
@@ -131,6 +139,8 @@ pub enum EmojiEdit {
     AddImage,
     /// A name for a new role.
     NewRole,
+    /// A name for a new server template.
+    NewTemplate,
 }
 
 // Not Eq: a sound carries a float volume, so the panel can only be compared
@@ -159,6 +169,8 @@ pub(in crate::tui) struct ServerManagementState {
     /// `None` until the count has been asked for - which is not the same as
     /// zero, and a panel that showed them alike would offer to prune nobody.
     pub(super) prune_count: Option<u64>,
+    pub(super) events: Vec<crate::discord::ScheduledEvent>,
+    pub(super) templates: Vec<crate::discord::GuildTemplate>,
     /// Set while the open tab's fetch is outstanding, so the popup can say so
     /// rather than looking like an empty list.
     pub(super) loading: bool,
@@ -218,6 +230,8 @@ impl ServerManagementState {
             // Welcome screen on/off, its description, the widget, the widget's
             // channel, the prune window, and the prune itself.
             ServerPanelTab::Membership => MEMBERSHIP_ROWS.len(),
+            ServerPanelTab::Events => self.events.len(),
+            ServerPanelTab::Templates => self.templates.len(),
         }
     }
 
@@ -252,6 +266,8 @@ impl DashboardState {
                 widget: None,
                 prune_days: DEFAULT_PRUNE_DAYS,
                 prune_count: None,
+                events: Vec::new(),
+                templates: Vec::new(),
                 loading: true,
                 error: None,
                 renaming: None,
@@ -318,6 +334,8 @@ impl DashboardState {
             ServerPanelTab::AutoMod => !state.automod.is_empty(),
             ServerPanelTab::AuditLog => !state.audit_log.is_empty(),
             ServerPanelTab::Membership => state.welcome.is_some() && state.widget.is_some(),
+            ServerPanelTab::Events => !state.events.is_empty(),
+            ServerPanelTab::Templates => !state.templates.is_empty(),
         };
         state.loading = !already_loaded;
         let guild_id = state.guild_id;
@@ -478,6 +496,15 @@ impl DashboardState {
                     name: text,
                 });
             }
+            EmojiEdit::NewTemplate => {
+                if text.is_empty() {
+                    return None;
+                }
+                return Some(AppCommand::CreateGuildTemplate {
+                    guild_id,
+                    name: text,
+                });
+            }
             EmojiEdit::AddImage => {
                 if text.is_empty() {
                     return None;
@@ -566,6 +593,82 @@ impl DashboardState {
             SelectablePopupTarget::ServerManagement,
             crate::tui::keybindings::SelectionAction::Previous,
         );
+    }
+
+    /// Cancel or delete the highlighted event.
+    ///
+    /// Cancelling first: Discord keeps a cancelled event visible so people who
+    /// said they were coming can see it is off, which deleting does not.
+    pub fn remove_selected_event(&mut self) -> Option<AppCommand> {
+        let index = self.selected_server_row()?;
+        let state = self.popups.server_management_mut()?;
+        if state.tab != ServerPanelTab::Events {
+            return None;
+        }
+        let guild_id = state.guild_id;
+        let event = state.events.get(index)?;
+        if event.status.is_cancellable() {
+            return Some(AppCommand::CancelScheduledEvent {
+                guild_id,
+                event_id: event.id,
+                label: event.name.clone(),
+            });
+        }
+        // Already finished, so there is nothing to cancel and the row can only
+        // be removed outright.
+        let event = state.events.remove(index);
+        Some(AppCommand::DeleteScheduledEvent {
+            guild_id,
+            event_id: event.id,
+            label: event.name,
+        })
+    }
+
+    pub fn delete_selected_template(&mut self) -> Option<AppCommand> {
+        let index = self.selected_server_row()?;
+        let state = self.popups.server_management_mut()?;
+        if state.tab != ServerPanelTab::Templates || index >= state.templates.len() {
+            return None;
+        }
+        let guild_id = state.guild_id;
+        let template = state.templates.remove(index);
+        Some(AppCommand::DeleteGuildTemplate {
+            guild_id,
+            code: template.code,
+            label: template.name,
+        })
+    }
+
+    pub(in crate::tui) fn set_scheduled_events(
+        &mut self,
+        events: Vec<crate::discord::ScheduledEvent>,
+    ) {
+        if let Some(state) = self.popups.server_management_mut() {
+            state.events = events;
+            state.loading = false;
+        }
+    }
+
+    pub(in crate::tui) fn set_guild_templates(
+        &mut self,
+        templates: Vec<crate::discord::GuildTemplate>,
+    ) {
+        if let Some(state) = self.popups.server_management_mut() {
+            state.templates = templates;
+            state.loading = false;
+        }
+    }
+
+    pub(in crate::tui) fn scheduled_events(&self) -> &[crate::discord::ScheduledEvent] {
+        self.popups
+            .server_management()
+            .map_or(&[], |state| state.events.as_slice())
+    }
+
+    pub(in crate::tui) fn guild_templates(&self) -> &[crate::discord::GuildTemplate] {
+        self.popups
+            .server_management()
+            .map_or(&[], |state| state.templates.as_slice())
     }
 
     /// The membership tab's rows as label and value.
@@ -681,6 +784,26 @@ impl DashboardState {
         let guild_id = state.guild_id;
 
         match state.tab {
+            ServerPanelTab::Events => {
+                let event = state.events.get(index)?;
+                // Enter says you are coming rather than cancelling: interest
+                // is what most people open this list to change, and cancelling
+                // is destructive.
+                Some(AppCommand::SetEventInterest {
+                    guild_id,
+                    event_id: event.id,
+                    interested: true,
+                })
+            }
+            ServerPanelTab::Templates => {
+                let template = state.templates.get(index)?;
+                // Syncing rather than deleting, for the same reason.
+                Some(AppCommand::SyncGuildTemplate {
+                    guild_id,
+                    code: template.code.clone(),
+                    label: template.name.clone(),
+                })
+            }
             ServerPanelTab::Membership => {
                 let row = *MEMBERSHIP_ROWS.get(index)?;
                 match row {
@@ -852,6 +975,15 @@ impl DashboardState {
             && state.tab == ServerPanelTab::Roles
         {
             state.renaming = Some((EmojiEdit::NewRole, TextInputState::default()));
+        }
+    }
+
+    /// Start creating a server template, reusing the same field.
+    pub fn start_template_create(&mut self) {
+        if let Some(state) = self.popups.server_management_mut()
+            && state.tab == ServerPanelTab::Templates
+        {
+            state.renaming = Some((EmojiEdit::NewTemplate, TextInputState::default()));
         }
     }
 

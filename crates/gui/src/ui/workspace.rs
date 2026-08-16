@@ -202,6 +202,8 @@ pub enum Prompt {
     SoundName(usize),
     /// A name for a new role in the open guild.
     NewRole,
+    /// A name for a new server template.
+    NewTemplate,
     /// A new name for the open guild.
     GuildName,
     /// A path to an image to use as the guild icon.
@@ -224,6 +226,7 @@ impl Prompt {
             Prompt::EmojiName(_) => "Rename emoji",
             Prompt::SoundName(_) => "Rename sound",
             Prompt::NewRole => "New role",
+            Prompt::NewTemplate => "New template",
             Prompt::GuildName => "Rename server",
             Prompt::GuildIcon => "Server icon",
             Prompt::ChannelTopic(_) => "Channel topic",
@@ -242,6 +245,7 @@ impl Prompt {
             Prompt::EmojiName(_) => "Emoji name",
             Prompt::SoundName(_) => "Sound name",
             Prompt::NewRole => "Role name",
+            Prompt::NewTemplate => "Template name",
             Prompt::GuildName => "Server name",
             Prompt::GuildIcon => "Path to a PNG, JPEG, GIF or WebP",
             Prompt::ChannelTopic(_) => "Topic - empty clears it",
@@ -653,10 +657,12 @@ pub enum ServerTab {
     /// The welcome screen, the widget, and pruning - how members arrive and
     /// leave. One tab because each is two or three rows.
     Membership,
+    Events,
+    Templates,
 }
 
 impl ServerTab {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::Settings,
         Self::Invites,
         Self::Roles,
@@ -665,6 +671,8 @@ impl ServerTab {
         Self::AutoMod,
         Self::AuditLog,
         Self::Membership,
+        Self::Events,
+        Self::Templates,
     ];
 
     pub fn label(self) -> String {
@@ -677,6 +685,8 @@ impl ServerTab {
             Self::AutoMod => t!("label-automod"),
             Self::AuditLog => t!("label-audit-log"),
             Self::Membership => t!("label-membership"),
+            Self::Events => t!("label-events"),
+            Self::Templates => t!("label-templates"),
         }
     }
 
@@ -695,6 +705,8 @@ impl ServerTab {
             }],
             Self::AutoMod => vec![AppCommand::LoadAutoModRules { guild_id }],
             Self::AuditLog => vec![AppCommand::LoadGuildAuditLog { guild_id }],
+            Self::Events => vec![AppCommand::LoadScheduledEvents { guild_id }],
+            Self::Templates => vec![AppCommand::LoadGuildTemplates { guild_id }],
             Self::Membership => vec![
                 AppCommand::LoadWelcomeScreen { guild_id },
                 AppCommand::LoadGuildWidget { guild_id },
@@ -728,6 +740,8 @@ pub struct ServerManagementView {
     /// `None` until the count has arrived - not the same as zero, and a panel
     /// showing them alike would offer to prune nobody.
     pub prune_count: Option<u64>,
+    pub events: Vec<concord::discord::ScheduledEvent>,
+    pub templates: Vec<concord::discord::GuildTemplate>,
     /// The guild's settings as label and value, read from the snapshot.
     pub settings: Vec<(String, String)>,
     /// Set while the open tab's fetch is outstanding. Distinct from an empty
@@ -1863,6 +1877,7 @@ impl Workspace {
             Prompt::EmojiName(index) => self.rename_emoji(index, text),
             Prompt::SoundName(index) => self.rename_sound(index, text),
             Prompt::NewRole => self.create_role(text),
+            Prompt::NewTemplate => self.create_template(text),
             Prompt::GuildName => self.rename_guild(text),
             Prompt::GuildIcon => self.set_guild_icon(text),
             Prompt::ChannelTopic(channel_id) => self.set_channel_topic(channel_id, text),
@@ -4711,6 +4726,84 @@ impl Workspace {
     }
 
     /// Open the server-management panel on the given tab.
+    /// Cancel an event still to come, or delete one already finished.
+    ///
+    /// Cancelling first: Discord keeps a cancelled event visible so people who
+    /// said they were coming can see it is off, which deleting does not.
+    pub fn remove_event(&mut self, index: usize) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(view) = &mut self.server_management else {
+            return;
+        };
+        let guild_id = view.guild_id;
+        let Some(event) = view.events.get(index) else {
+            return;
+        };
+        if event.status.is_cancellable() {
+            handle.send(AppCommand::CancelScheduledEvent {
+                guild_id,
+                event_id: event.id,
+                label: event.name.clone(),
+            });
+            return;
+        }
+        let event = view.events.remove(index);
+        handle.send(AppCommand::DeleteScheduledEvent {
+            guild_id,
+            event_id: event.id,
+            label: event.name,
+        });
+    }
+
+    pub fn mark_event_interest(&mut self, index: usize) {
+        let (Some(handle), Some(view)) = (&self.handle, &self.server_management) else {
+            return;
+        };
+        let Some(event) = view.events.get(index) else {
+            return;
+        };
+        handle.send(AppCommand::SetEventInterest {
+            guild_id: view.guild_id,
+            event_id: event.id,
+            interested: true,
+        });
+    }
+
+    pub fn sync_template(&mut self, index: usize) {
+        let (Some(handle), Some(view)) = (&self.handle, &self.server_management) else {
+            return;
+        };
+        let Some(template) = view.templates.get(index) else {
+            return;
+        };
+        handle.send(AppCommand::SyncGuildTemplate {
+            guild_id: view.guild_id,
+            code: template.code.clone(),
+            label: template.name.clone(),
+        });
+    }
+
+    pub fn delete_template(&mut self, index: usize) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(view) = &mut self.server_management else {
+            return;
+        };
+        if index >= view.templates.len() {
+            return;
+        }
+        let guild_id = view.guild_id;
+        let template = view.templates.remove(index);
+        handle.send(AppCommand::DeleteGuildTemplate {
+            guild_id,
+            code: template.code,
+            label: template.name,
+        });
+    }
+
     /// The membership tab's rows as label and value.
     fn membership_rows(&self) -> Vec<(String, String)> {
         let Some(view) = &self.server_management else {
@@ -4885,6 +4978,8 @@ impl Workspace {
             widget: None,
             prune_days: DEFAULT_PRUNE_DAYS,
             prune_count: None,
+            events: Vec::new(),
+            templates: Vec::new(),
             loading: true,
             error: None,
         });
@@ -4975,6 +5070,8 @@ impl Workspace {
             ServerTab::AutoMod => !view.automod.is_empty(),
             ServerTab::AuditLog => !view.audit_log.is_empty(),
             ServerTab::Membership => view.welcome.is_some() && view.widget.is_some(),
+            ServerTab::Events => !view.events.is_empty(),
+            ServerTab::Templates => !view.templates.is_empty(),
         };
         view.loading = !already_loaded;
         let guild_id = view.guild_id;
@@ -5256,6 +5353,19 @@ impl Workspace {
             return;
         };
         handle.send(AppCommand::CreateRole { guild_id, name });
+    }
+
+    /// Take a template of the server as it stands.
+    fn create_template(&mut self, name: String) {
+        let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
+            return;
+        };
+        if name.trim().is_empty() {
+            // Discord rejects it, and the round trip would read as a failure
+            // rather than as an empty name.
+            return;
+        }
+        handle.send(AppCommand::CreateGuildTemplate { guild_id, name });
     }
 
     fn rename_guild(&mut self, name: String) {
@@ -7075,6 +7185,27 @@ impl Workspace {
                     view.error = Some(message.clone());
                 }
             }
+            AppEvent::ScheduledEventsLoaded { guild_id, events } => {
+                if let Some(view) = &mut self.server_management
+                    && view.guild_id == *guild_id
+                {
+                    view.loading = false;
+                    view.error = None;
+                    view.events = events.clone();
+                }
+            }
+            AppEvent::GuildTemplatesLoaded {
+                guild_id,
+                templates,
+            } => {
+                if let Some(view) = &mut self.server_management
+                    && view.guild_id == *guild_id
+                {
+                    view.loading = false;
+                    view.error = None;
+                    view.templates = templates.clone();
+                }
+            }
             AppEvent::WelcomeScreenLoaded { guild_id, screen } => {
                 if let Some(view) = &mut self.server_management
                     && view.guild_id == *guild_id
@@ -8777,6 +8908,36 @@ impl Workspace {
 
             let membership = self.membership_rows();
             let (rows, empty_label) = match view.tab {
+                ServerTab::Events => (
+                    view.events
+                        .iter()
+                        .map(|event| overlay::ServerRow {
+                            primary: event.name.clone(),
+                            secondary: Some(event.summary()),
+                            // Cancelling for one still to come; deleting for
+                            // one already finished, which cannot be cancelled.
+                            action: Some(if event.status.is_cancellable() {
+                                t!("action-cancel-event")
+                            } else {
+                                t!("action-delete")
+                            }),
+                            secondary_action: Some(t!("action-interested")),
+                        })
+                        .collect::<Vec<_>>(),
+                    t!("status-no-events"),
+                ),
+                ServerTab::Templates => (
+                    view.templates
+                        .iter()
+                        .map(|template| overlay::ServerRow {
+                            primary: template.name.clone(),
+                            secondary: Some(format!("{} - {}", template.url(), template.summary())),
+                            action: Some(t!("action-delete")),
+                            secondary_action: Some(t!("action-sync")),
+                        })
+                        .collect::<Vec<_>>(),
+                    t!("status-no-templates"),
+                ),
                 ServerTab::Membership => (
                     membership
                         .iter()
@@ -8906,6 +9067,7 @@ impl Workspace {
             let add_emoji_label = t!("action-add-emoji");
             let add_role_label = t!("action-new-role");
             let server_settings_label = t!("action-server-settings");
+            let add_template_label = t!("action-new-template");
             return Some(overlay::scrim().child(overlay::server_management_view(
                 overlay::ServerPanel {
                     tabs: &tabs,
@@ -8922,6 +9084,7 @@ impl Workspace {
                         ServerTab::Emoji => Some(add_emoji_label.as_str()),
                         ServerTab::Roles => Some(add_role_label.as_str()),
                         ServerTab::Settings => Some(server_settings_label.as_str()),
+                        ServerTab::Templates => Some(add_template_label.as_str()),
                         _ => None,
                     },
                 },
@@ -8947,6 +9110,8 @@ impl Workspace {
                                 ServerTab::Roles => workspace.delete_role(index),
                                 ServerTab::Sounds => workspace.delete_sound(index),
                                 ServerTab::AutoMod => workspace.delete_automod_rule(index),
+                                ServerTab::Events => workspace.remove_event(index),
+                                ServerTab::Templates => workspace.delete_template(index),
                                 // The settings list has no destructive action;
                                 // its rows are edited through the second one.
                                 // Pruning is destructive but goes through the
@@ -8970,6 +9135,8 @@ impl Workspace {
                                 ServerTab::Roles => workspace.open_role_permissions(index),
                                 ServerTab::AutoMod => workspace.toggle_automod_rule(index),
                                 ServerTab::Membership => workspace.activate_membership_row(index),
+                                ServerTab::Events => workspace.mark_event_interest(index),
+                                ServerTab::Templates => workspace.sync_template(index),
                                 // Only the name is editable here; verification
                                 // and boosts are shown but not changed yet.
                                 ServerTab::Settings if index == 0 => {
@@ -9005,6 +9172,7 @@ impl Workspace {
                             // role, or the server's icon.
                             workspace.prompt = Some(match tab {
                                 ServerTab::Roles => (Prompt::NewRole, Composer::default()),
+                                ServerTab::Templates => (Prompt::NewTemplate, Composer::default()),
                                 ServerTab::Settings => (Prompt::GuildIcon, Composer::default()),
                                 _ => (Prompt::EmojiImage, Composer::default()),
                             });

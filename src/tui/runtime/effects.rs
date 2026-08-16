@@ -209,6 +209,14 @@ fn push_dashboard_effect(event: AppEvent, ctx: &mut EffectContext<'_>) {
             ctx.state.apply_soundboard_failure(message);
             return;
         }
+        AppEvent::ScheduledEventsLoaded { events, .. } => {
+            ctx.state.set_scheduled_events(events);
+            return;
+        }
+        AppEvent::GuildTemplatesLoaded { templates, .. } => {
+            ctx.state.set_guild_templates(templates);
+            return;
+        }
         AppEvent::WelcomeScreenLoaded { screen, .. } => {
             ctx.state.set_welcome_screen(screen);
             return;

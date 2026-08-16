@@ -939,7 +939,10 @@ fn handle_server_management_key(state: &mut DashboardState, key: KeyEvent) -> Op
         }
         // 'n' means a new role on the roles tab and a rename on emoji; both
         // are the panel's one text field, told apart by which tab is open.
-        KeyCode::Char('N') => state.start_role_create(),
+        KeyCode::Char('N') => {
+            state.start_role_create();
+            state.start_template_create();
+        }
         // Pruning, which is irreversible and so goes through the risk prompt
         // rather than acting on enter like the other rows.
         KeyCode::Char('P') => {
@@ -948,8 +951,13 @@ fn handle_server_management_key(state: &mut DashboardState, key: KeyEvent) -> Op
             }
             return None;
         }
-        // Deleting an AutoMod rule, which enter deliberately does not do.
-        KeyCode::Char('d') => return state.delete_selected_automod_rule(),
+        // Deleting, which enter deliberately does not do on any of these tabs.
+        KeyCode::Char('d') => {
+            return state
+                .delete_selected_automod_rule()
+                .or_else(|| state.remove_selected_event())
+                .or_else(|| state.delete_selected_template());
+        }
         // Editing what a role may do, which is the grid rather than a field.
         KeyCode::Char('p') => state.open_selected_role_permissions(),
         _ => {}

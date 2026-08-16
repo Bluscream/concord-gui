@@ -821,6 +821,17 @@ fn the_server_panel_only_fetches_a_tab_it_has_not_seen() {
     state.set_welcome_screen(crate::discord::WelcomeScreen::default());
     state.set_guild_widget(crate::discord::GuildWidget::default());
 
+    assert_eq!(
+        state.next_server_tab(),
+        Some(AppCommand::LoadScheduledEvents { guild_id })
+    );
+    state.set_scheduled_events(Vec::new());
+    assert_eq!(
+        state.next_server_tab(),
+        Some(AppCommand::LoadGuildTemplates { guild_id })
+    );
+    state.set_guild_templates(Vec::new());
+
     // Wrapping round lands on settings, which reads the snapshot and so
     // fetches nothing either.
     assert_eq!(state.next_server_tab(), None);
@@ -1492,5 +1503,34 @@ mod membership {
                 "{label} offered the wrong thing"
             );
         }
+    }
+}
+
+#[test]
+fn every_server_tab_that_needs_a_fetch_asks_for_one() {
+    // The cycle test above walks the tabs in order and breaks whenever one is
+    // added, which teaches nothing each time. This states the actual rule, so
+    // a tab added without a fetch fails here rather than by rendering empty
+    // forever - which reads as a server that has none of whatever it shows.
+    use crate::tui::state::popups::ServerPanelTab;
+
+    let mut state = state_with_many_guilds(1);
+    state.focus_pane(FocusPane::Guilds);
+    let guild_id = state.selected_guild_cursor_id().expect("a guild");
+
+    for tab in ServerPanelTab::ALL {
+        let mut asked: Vec<AppCommand> = Vec::new();
+        asked.extend(state.open_server_management(guild_id, tab));
+        asked.extend(state.drain_pending_commands());
+
+        // Settings and roles arrive with the guild and are read from the
+        // snapshot, so they are the only two that ask for nothing.
+        let snapshot_tab = matches!(tab, ServerPanelTab::Settings | ServerPanelTab::Roles);
+        assert_eq!(
+            asked.is_empty(),
+            snapshot_tab,
+            "{tab:?} asked for {} commands",
+            asked.len()
+        );
     }
 }

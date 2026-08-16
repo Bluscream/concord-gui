@@ -326,6 +326,71 @@ impl DiscordClient {
             .await
     }
 
+    pub async fn scheduled_events(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+    ) -> Result<Vec<crate::discord::ScheduledEvent>> {
+        self.rest.scheduled_events(guild_id).await
+    }
+
+    pub async fn cancel_scheduled_event(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+        event_id: u64,
+    ) -> Result<()> {
+        self.rest.cancel_scheduled_event(guild_id, event_id).await
+    }
+
+    pub async fn delete_scheduled_event(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+        event_id: u64,
+    ) -> Result<()> {
+        self.rest.delete_scheduled_event(guild_id, event_id).await
+    }
+
+    pub async fn set_event_interest(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+        event_id: u64,
+        interested: bool,
+    ) -> Result<()> {
+        self.rest
+            .set_event_interest(guild_id, event_id, interested)
+            .await
+    }
+
+    pub async fn guild_templates(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+    ) -> Result<Vec<crate::discord::GuildTemplate>> {
+        self.rest.guild_templates(guild_id).await
+    }
+
+    pub async fn create_guild_template(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+        name: &str,
+    ) -> Result<()> {
+        self.rest.create_guild_template(guild_id, name).await
+    }
+
+    pub async fn sync_guild_template(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+        code: &str,
+    ) -> Result<()> {
+        self.rest.sync_guild_template(guild_id, code).await
+    }
+
+    pub async fn delete_guild_template(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+        code: &str,
+    ) -> Result<()> {
+        self.rest.delete_guild_template(guild_id, code).await
+    }
+
     pub async fn prune_count(
         &self,
         guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,

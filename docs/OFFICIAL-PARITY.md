@@ -251,8 +251,22 @@ prompt each; only the toggles and the prune window are wired.
 
 ### Scheduled events, stages, templates, discovery
 
-All absent. Stage channels were previously listed as a maybe and are now in
-scope.
+Events and Templates are tabs on the server panel in both clients.
+
+Events list what is on, where, and how many said they are coming. Enter marks
+you interested rather than cancelling: interest is what most people open the
+list to change, and cancelling is destructive. An event still to come is
+cancelled rather than deleted, which is Discord's own distinction - a cancelled
+event stays visible so people who said they were coming can see it is off. One
+already finished cannot be cancelled at all, so that row offers delete instead
+rather than a button that always fails.
+
+Templates list the shareable link, how many servers came from it, and whether
+the template has fallen behind the server it was taken from - which the
+template alone does not reveal. Enter syncs, `N` takes a new one, `d` deletes.
+
+Still missing: creating and editing a scheduled event, which is a form of its
+own; stage channels; and discovery.
 
 ## Deliberately out of scope
 
@@ -285,7 +299,7 @@ forward so it is not built twice.
 8. **Members, onboarding, welcome screen, widget.**
 9. **Video** - camera on the voice connection, receiving remote video,
    pop-out windows, per-user mute and hide. Needs a real account to verify.
-10. **Events, stages, templates, discovery.**
+10. **Creating and editing events, stage channels, discovery.**
 
 Then, and only then, the extras from AGENTS.md: offline-first, merged
 multi-account, and the rest.

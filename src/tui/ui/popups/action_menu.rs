@@ -756,6 +756,23 @@ pub(in crate::tui::ui) fn render_server_management(
                 .collect(),
             // Built by the state rather than here: the values come from three
             // separate fetches, and each has an "unknown" that is not "off".
+            ServerPanelTab::Events => state
+                .scheduled_events()
+                .iter()
+                .map(|event| format!("{} - {}", event.name, event.summary()))
+                .collect(),
+            ServerPanelTab::Templates => state
+                .guild_templates()
+                .iter()
+                .map(|template| {
+                    format!(
+                        "{} - {} - {}",
+                        template.name,
+                        template.url(),
+                        template.summary()
+                    )
+                })
+                .collect(),
             ServerPanelTab::Membership => state
                 .membership_rows()
                 .into_iter()
@@ -773,6 +790,8 @@ pub(in crate::tui::ui) fn render_server_management(
                 ServerPanelTab::AutoMod => "No AutoMod rules",
                 ServerPanelTab::AuditLog => "Nothing recorded",
                 ServerPanelTab::Membership => "Loading",
+                ServerPanelTab::Events => "No scheduled events",
+                ServerPanelTab::Templates => "No templates",
             };
             vec![Line::from(Span::styled(
                 empty.to_owned(),
@@ -803,6 +822,10 @@ pub(in crate::tui::ui) fn render_server_management(
                 vec![Line::from(Span::raw(format!("Name: {}", input.value())))],
                 "enter creates the role, esc cancels",
             ),
+            crate::tui::state::EmojiEdit::NewTemplate => (
+                vec![Line::from(Span::raw(format!("Name: {}", input.value())))],
+                "enter creates the template, esc cancels",
+            ),
             crate::tui::state::EmojiEdit::AddImage => (
                 vec![Line::from(Span::raw(format!("Image: {}", input.value())))],
                 "path to a PNG, JPEG, GIF or WebP - enter to add, esc to cancel",
@@ -820,6 +843,8 @@ pub(in crate::tui::ui) fn render_server_management(
                 ServerPanelTab::Sounds => "tab, r reload, n rename, enter delete",
                 ServerPanelTab::AutoMod => "tab, r reload, enter on/off, d delete",
                 ServerPanelTab::Membership => "tab, r reload, enter toggles or cycles, P prunes",
+                ServerPanelTab::Events => "tab, r reload, enter marks interested, d cancels",
+                ServerPanelTab::Templates => "tab, r reload, enter syncs, N new, d deletes",
                 ServerPanelTab::AuditLog => "tab to switch, r to reload",
             },
         ),
