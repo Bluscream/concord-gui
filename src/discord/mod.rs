@@ -126,10 +126,11 @@ pub use rest::{
     AuditLogAction, AuditLogEntryInfo, ChannelEdit, ForumPostPage, GuildBanInfo, GuildEmojiInfo,
     GuildInviteInfo, InvitePreview, MAX_BAN_DELETE_MESSAGE_SECONDS, MAX_CHANNEL_NAME_CHARS,
     MAX_CHANNEL_TOPIC_CHARS, MAX_EMOJI_BYTES, MAX_INVITE_MAX_AGE_SECONDS, MAX_INVITE_MAX_USES,
-    MAX_MESSAGE_STICKERS, MAX_SLOWMODE_SECONDS, MAX_SOUND_NAME_CHARS, MAX_VOICE_USER_LIMIT,
-    MIN_SOUND_NAME_CHARS, NewChannelKind, OverwriteTarget, ReactionUsersPage, SoundboardSound,
-    clamp_invite_max_age, clamp_invite_max_uses, emoji_name_from_filename, friend_request_target,
-    invite_code_from, is_valid_emoji_name, is_valid_sound_name,
+    MAX_MESSAGE_STICKERS, MAX_ROLE_NAME_CHARS, MAX_SLOWMODE_SECONDS, MAX_SOUND_NAME_CHARS,
+    MAX_VOICE_USER_LIMIT, MIN_SOUND_NAME_CHARS, NewChannelKind, OverwriteTarget, ReactionUsersPage,
+    RoleEdit, SoundboardSound, clamp_invite_max_age, clamp_invite_max_uses,
+    emoji_name_from_filename, friend_request_target, invite_code_from, is_valid_emoji_name,
+    is_valid_sound_name,
 };
 pub use state::{
     ChannelRecipientState, ChannelState, ChannelUnreadState, ChannelVisibilityStats,

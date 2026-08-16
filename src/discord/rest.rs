@@ -46,6 +46,7 @@ pub use invites::{InvitePreview, invite_code_from};
 pub use messages::MAX_MESSAGE_STICKERS;
 pub use moderation::{GuildBanInfo, MAX_BAN_DELETE_MESSAGE_SECONDS};
 pub use relationships::friend_request_target;
+pub use roles::{MAX_ROLE_NAME_CHARS, RoleEdit};
 pub use soundboard::{
     MAX_SOUND_NAME_CHARS, MIN_SOUND_NAME_CHARS, SoundboardSound, is_valid_sound_name,
 };
@@ -58,6 +59,7 @@ mod profile;
 mod reactions;
 mod read_state;
 mod relationships;
+mod roles;
 mod search;
 mod soundboard;
 mod streams;

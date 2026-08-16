@@ -552,6 +552,31 @@ impl CommandDispatcher {
                     .publish_event(crate::discord::AppEvent::GuildForgotten { guild_id })
                     .await;
             }
+            AppCommand::CreateRole { guild_id, name } => {
+                message_commands::create_role(self.client.clone(), guild_id, name).await;
+            }
+            AppCommand::ModifyRole {
+                guild_id,
+                role_id,
+                edit,
+                label,
+            } => {
+                message_commands::modify_role(self.client.clone(), guild_id, role_id, edit, label)
+                    .await;
+            }
+            AppCommand::DeleteRole {
+                guild_id,
+                role_id,
+                label,
+            } => {
+                message_commands::delete_role(self.client.clone(), guild_id, role_id, label).await;
+            }
+            AppCommand::ReorderRoles {
+                guild_id,
+                positions,
+            } => {
+                message_commands::reorder_roles(self.client.clone(), guild_id, positions).await;
+            }
             AppCommand::CreateGuildChannel {
                 guild_id,
                 name,

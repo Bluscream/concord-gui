@@ -460,6 +460,45 @@ load_guild_panel!(
 );
 
 /// Fetch a sound list. `None` asks for the default sounds.
+pub(super) async fn create_role(client: DiscordClient, guild_id: Id<GuildMarker>, name: String) {
+    if let Err(error) = client.create_role(guild_id, &name).await {
+        report_moderation_failure(&client, "creating role", &name, &error).await;
+    }
+}
+
+pub(super) async fn modify_role(
+    client: DiscordClient,
+    guild_id: Id<GuildMarker>,
+    role_id: Id<RoleMarker>,
+    edit: Box<crate::discord::RoleEdit>,
+    label: String,
+) {
+    if let Err(error) = client.modify_role(guild_id, role_id, &edit).await {
+        report_moderation_failure(&client, "editing role", &label, &error).await;
+    }
+}
+
+pub(super) async fn delete_role(
+    client: DiscordClient,
+    guild_id: Id<GuildMarker>,
+    role_id: Id<RoleMarker>,
+    label: String,
+) {
+    if let Err(error) = client.delete_role(guild_id, role_id).await {
+        report_moderation_failure(&client, "deleting role", &label, &error).await;
+    }
+}
+
+pub(super) async fn reorder_roles(
+    client: DiscordClient,
+    guild_id: Id<GuildMarker>,
+    positions: Vec<(Id<RoleMarker>, u32)>,
+) {
+    if let Err(error) = client.reorder_roles(guild_id, &positions).await {
+        report_moderation_failure(&client, "reordering", "roles", &error).await;
+    }
+}
+
 pub(super) async fn create_guild_channel(
     client: DiscordClient,
     guild_id: Id<GuildMarker>,

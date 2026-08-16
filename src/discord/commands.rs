@@ -19,7 +19,8 @@ use super::application_commands::{
 use super::emoji::custom_emoji_image_url;
 use super::message::MessageInfo;
 use super::{
-    ActivityInfo, ChannelEdit, NewChannelKind, OverwriteTarget, PresenceStatus, VoiceScope,
+    ActivityInfo, ChannelEdit, NewChannelKind, OverwriteTarget, PresenceStatus, RoleEdit,
+    VoiceScope,
 };
 
 pub const MAX_UPLOAD_ATTACHMENT_COUNT: usize = 10;
@@ -541,6 +542,25 @@ pub enum AppCommand {
         label: String,
     },
     /// Fetch a sound list. `None` asks for the default sounds.
+    CreateRole {
+        guild_id: Id<GuildMarker>,
+        name: String,
+    },
+    ModifyRole {
+        guild_id: Id<GuildMarker>,
+        role_id: Id<RoleMarker>,
+        edit: Box<RoleEdit>,
+        label: String,
+    },
+    DeleteRole {
+        guild_id: Id<GuildMarker>,
+        role_id: Id<RoleMarker>,
+        label: String,
+    },
+    ReorderRoles {
+        guild_id: Id<GuildMarker>,
+        positions: Vec<(Id<RoleMarker>, u32)>,
+    },
     CreateGuildChannel {
         guild_id: Id<GuildMarker>,
         name: String,

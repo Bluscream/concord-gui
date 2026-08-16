@@ -310,6 +310,35 @@ impl DiscordClient {
         self.rest.unban_member(guild_id, user_id).await
     }
 
+    pub async fn create_role(&self, guild_id: Id<GuildMarker>, name: &str) -> Result<()> {
+        self.rest.create_role(guild_id, name).await
+    }
+
+    pub async fn modify_role(
+        &self,
+        guild_id: Id<GuildMarker>,
+        role_id: Id<crate::discord::ids::marker::RoleMarker>,
+        edit: &crate::discord::RoleEdit,
+    ) -> Result<()> {
+        self.rest.modify_role(guild_id, role_id, edit).await
+    }
+
+    pub async fn delete_role(
+        &self,
+        guild_id: Id<GuildMarker>,
+        role_id: Id<crate::discord::ids::marker::RoleMarker>,
+    ) -> Result<()> {
+        self.rest.delete_role(guild_id, role_id).await
+    }
+
+    pub async fn reorder_roles(
+        &self,
+        guild_id: Id<GuildMarker>,
+        positions: &[(Id<crate::discord::ids::marker::RoleMarker>, u32)],
+    ) -> Result<()> {
+        self.rest.reorder_roles(guild_id, positions).await
+    }
+
     pub async fn create_guild_channel(
         &self,
         guild_id: Id<GuildMarker>,
