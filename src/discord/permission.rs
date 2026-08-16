@@ -220,6 +220,15 @@ impl DiscordState {
         self.has_guild_permission(guild_id, PERMISSION_MANAGE_CHANNELS)
     }
 
+    /// Whether the guild's own settings can be changed.
+    ///
+    /// The same bit as reading the invite list - Discord uses MANAGE_GUILD for
+    /// both - but named for what the caller is asking, so a reader does not
+    /// have to know that.
+    pub fn can_manage_guild(&self, guild_id: Id<GuildMarker>) -> bool {
+        self.has_guild_permission(guild_id, PERMISSION_MANAGE_GUILD)
+    }
+
     /// Whether the guild's invite list can be read.
     ///
     /// Reading every invite is Manage Server, not Create Invite: someone who

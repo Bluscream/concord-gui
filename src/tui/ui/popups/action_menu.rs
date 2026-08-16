@@ -770,6 +770,14 @@ pub(in crate::tui::ui) fn render_server_management(
                 vec![Line::from(Span::raw(format!("Name: {}", input.value())))],
                 "enter to rename, esc to cancel",
             ),
+            crate::tui::state::EmojiEdit::GuildIcon => (
+                vec![Line::from(Span::raw(format!("Icon: {}", input.value())))],
+                "path to a PNG, JPEG, GIF or WebP - enter sets it, esc cancels",
+            ),
+            crate::tui::state::EmojiEdit::GuildName => (
+                vec![Line::from(Span::raw(format!("Name: {}", input.value())))],
+                "enter renames the server, esc cancels",
+            ),
             crate::tui::state::EmojiEdit::NewRole => (
                 vec![Line::from(Span::raw(format!("Name: {}", input.value())))],
                 "enter creates the role, esc cancels",
@@ -785,7 +793,7 @@ pub(in crate::tui::ui) fn render_server_management(
             lines,
             match tab {
                 ServerPanelTab::Invites => "tab to switch, r to reload, enter to revoke",
-                ServerPanelTab::Settings => "tab to switch, r to reload",
+                ServerPanelTab::Settings => "tab to switch, enter to change, a for the icon",
                 ServerPanelTab::Roles => "tab to switch, N new, p permissions, enter delete",
                 ServerPanelTab::Emoji => "tab, r reload, a add, n rename, enter delete",
                 ServerPanelTab::Sounds => "tab, r reload, n rename, enter delete",

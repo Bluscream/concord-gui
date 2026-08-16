@@ -1278,3 +1278,18 @@ fn renaming_a_sound_to_something_discord_rejects_sends_nothing() {
     state.insert_emoji_rename_char('a');
     assert_eq!(state.submit_emoji_rename(), None);
 }
+
+#[test]
+fn a_guild_name_discord_would_reject_sends_nothing() {
+    // Two characters minimum. A one-character name costs a request to be told
+    // what could be checked here.
+    let mut state = state_with_channel_tree();
+    state.open_server_management(Id::new(1), ServerPanelTab::Settings);
+
+    // Row 0 is the name; activating it opens the field.
+    assert_eq!(state.activate_selected_server_row(), None);
+    state.edit_emoji_rename(crate::tui::text_input::TextEditAction::DeleteToLineStart);
+    state.insert_emoji_rename_char('a');
+
+    assert_eq!(state.submit_emoji_rename(), None);
+}

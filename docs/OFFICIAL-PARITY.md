@@ -59,11 +59,12 @@ explicit-content filter, AFK channel and timeout, and the system channel; the
 icon has its own call because encoding an image should not abandon a name
 change made in the same form. A settings tab shows what the snapshot holds.
 
-Still missing: the editing form itself - the tab displays rather than edits -
-plus banner and splash, vanity URL, discovery, and the community toggles. Two
-fields cannot even be displayed yet: default notifications and the
-explicit-content filter are not parsed off the wire, so showing them would mean
-showing a guess.
+The settings tab edits the name, cycles the verification level, and sets the
+icon from a file. Still missing: AFK channel and timeout, the system channel,
+banner and splash, vanity URL, discovery, and the community toggles. Two fields
+cannot even be displayed yet - default notifications and the explicit-content
+filter are not parsed off the wire, so showing them would mean showing a
+guess.
 
 ### Account settings
 
@@ -203,5 +204,3 @@ regenerates this list, and the two must be kept in step.
   conflict and a sequence of single moves would briefly hand out the wrong
   permissions.
 - `SetVoiceChannelStatus` - small, and grouped with the other smaller gaps.
-- `ModifyGuild`, `SetGuildIcon` - the settings tab shows the guild's settings
-  but does not yet edit them.

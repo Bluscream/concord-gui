@@ -931,7 +931,12 @@ fn handle_server_management_key(state: &mut DashboardState, key: KeyEvent) -> Op
         // somebody else changes something, and nothing tells this client.
         KeyCode::Char('r') => return state.reload_server_management(),
         KeyCode::Char('n') => state.start_emoji_rename(),
-        KeyCode::Char('a') => state.start_emoji_upload(),
+        // 'a' adds: an emoji on that tab, the icon on settings. Both are the
+        // panel's one file-path field, told apart by which tab is open.
+        KeyCode::Char('a') => {
+            state.start_emoji_upload();
+            state.start_guild_icon();
+        }
         // 'n' means a new role on the roles tab and a rename on emoji; both
         // are the panel's one text field, told apart by which tab is open.
         KeyCode::Char('N') => state.start_role_create(),

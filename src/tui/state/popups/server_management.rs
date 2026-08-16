@@ -65,6 +65,10 @@ impl ServerPanelTab {
 /// What the emoji text field is being used for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EmojiEdit {
+    /// A new name for the guild.
+    GuildName,
+    /// A path to an image to use as the guild icon.
+    GuildIcon,
     /// A new name for the emoji at this index.
     Rename(usize),
     /// A path to an image to add.
@@ -257,6 +261,25 @@ impl DashboardState {
         state.renaming = Some((EmojiEdit::Rename(index), input));
     }
 
+    /// Start setting the guild's icon from an image on disk.
+    pub fn start_guild_icon(&mut self) {
+        let Some(guild_id) = self.popups.server_management().map(|state| state.guild_id) else {
+            return;
+        };
+        if !self.discord.cache.can_manage_guild(guild_id) {
+            self.show_error_toast(
+                "you do not have permission".to_owned(),
+                std::time::Instant::now(),
+            );
+            return;
+        }
+        if let Some(state) = self.popups.server_management_mut()
+            && state.tab == ServerPanelTab::Settings
+        {
+            state.renaming = Some((EmojiEdit::GuildIcon, TextInputState::default()));
+        }
+    }
+
     /// Start adding an emoji from an image on disk.
     pub fn start_emoji_upload(&mut self) {
         if let Some(state) = self.popups.server_management_mut()
@@ -297,6 +320,34 @@ impl DashboardState {
 
         let index = match edit {
             EmojiEdit::Rename(index) => index,
+            EmojiEdit::GuildIcon => {
+                if text.is_empty() {
+                    return None;
+                }
+                return Some(AppCommand::SetGuildIcon {
+                    guild_id,
+                    image: Box::new(crate::discord::ProfileAvatarUpload::from_path(text.into())),
+                    label: self
+                        .discord
+                        .guild(guild_id)
+                        .map(|guild| guild.name.clone())
+                        .unwrap_or_default(),
+                });
+            }
+            EmojiEdit::GuildName => {
+                if !crate::discord::is_valid_guild_name(&text) {
+                    return None;
+                }
+                self.fill_guild_settings();
+                return Some(AppCommand::ModifyGuild {
+                    guild_id,
+                    edit: Box::new(crate::discord::GuildEdit {
+                        name: Some(text.clone()),
+                        ..crate::discord::GuildEdit::default()
+                    }),
+                    label: text,
+                });
+            }
             EmojiEdit::NewRole => {
                 if text.is_empty() {
                     return None;
@@ -432,9 +483,32 @@ impl DashboardState {
                     label: emoji.name,
                 })
             }
-            // Settings are shown rather than edited from the list; editing
-            // one opens its own field, which is not built yet.
-            ServerPanelTab::Settings => None,
+            ServerPanelTab::Settings => {
+                if !self.discord.cache.can_manage_guild(guild_id) {
+                    self.show_error_toast(
+                        "you do not have permission".to_owned(),
+                        std::time::Instant::now(),
+                    );
+                    return None;
+                }
+                match index {
+                    // Name: a field. Verification: a cycle, since it is a
+                    // fixed set and typing a number would mean nothing.
+                    0 => {
+                        let current = self.discord.guild(guild_id)?.name.clone();
+                        let mut input = TextInputState::default();
+                        input.set_value(current);
+                        if let Some(state) = self.popups.server_management_mut() {
+                            state.renaming = Some((EmojiEdit::GuildName, input));
+                        }
+                        None
+                    }
+                    1 => self.cycle_guild_verification(guild_id),
+                    // Owner and boosts are facts about the guild rather than
+                    // settings, so there is nothing to change.
+                    _ => None,
+                }
+            }
             ServerPanelTab::Roles => {
                 if index >= state.roles.len() {
                     return None;
@@ -523,6 +597,38 @@ impl DashboardState {
         // Replaces the panel rather than stacking: the grid is 53 rows and
         // wants the whole popup area.
         self.open_role_permissions(guild_id, role_id);
+    }
+
+    /// Step the guild's verification level.
+    ///
+    /// A cycle rather than a field: it is a fixed set of five, and typing a
+    /// number would mean nothing to anyone.
+    fn cycle_guild_verification(&mut self, guild_id: Id<GuildMarker>) -> Option<AppCommand> {
+        use crate::discord::GuildVerificationLevel as Level;
+        let current = self.discord.guild(guild_id)?.verification_level?;
+        let order = [
+            Level::None,
+            Level::Low,
+            Level::Medium,
+            Level::High,
+            Level::VeryHigh,
+        ];
+        // An unrecognised level from a newer Discord starts the cycle rather
+        // than being treated as None, which would silently weaken it.
+        let index = order
+            .iter()
+            .position(|level| *level == current)
+            .unwrap_or(0);
+        let next = order[(index + 1) % order.len()];
+
+        Some(AppCommand::ModifyGuild {
+            guild_id,
+            edit: Box::new(crate::discord::GuildEdit {
+                verification_level: Some(next),
+                ..crate::discord::GuildEdit::default()
+            }),
+            label: self.discord.guild(guild_id)?.name.clone(),
+        })
     }
 
     /// Read the guild's settings out of the snapshot.
