@@ -4,7 +4,7 @@
 //! does, and both are lists a moderator reads far more often than edits.
 
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Map, Value, json};
 
 use crate::Result;
 use crate::discord::ids::{
@@ -431,5 +431,315 @@ mod tests {
             is_dirty: false,
         };
         assert_eq!(template.url(), "https://discord.new/abc");
+    }
+}
+
+/// Discord's caps on a scheduled event.
+pub const MAX_EVENT_NAME_CHARS: usize = 100;
+pub const MAX_EVENT_DESCRIPTION_CHARS: usize = 1000;
+pub const MAX_EVENT_LOCATION_CHARS: usize = 100;
+
+/// A new scheduled event, as the form describes it.
+///
+/// In the core rather than once per client, for the same reason `AccountForm`
+/// is: the parts that drift when written twice are which fields are required,
+/// and that an external event needs an end time while a channel event must not
+/// have one.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NewEvent {
+    pub name: String,
+    pub description: String,
+    /// ISO 8601. Typed rather than picked: a date picker is a widget neither
+    /// client has, and Discord's own format is what its error messages quote.
+    pub starts_at: String,
+    pub ends_at: String,
+    /// A channel in this server, or free text for somewhere else.
+    pub location: NewEventLocation,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum NewEventLocation {
+    Channel(Id<ChannelMarker>),
+    External(String),
+}
+
+impl Default for NewEventLocation {
+    fn default() -> Self {
+        Self::External(String::new())
+    }
+}
+
+/// Why an event cannot be created yet.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NewEventProblem {
+    NameMissing,
+    NameTooLong,
+    StartMissing,
+    /// Discord requires an end time for an event that is not in a channel,
+    /// because nothing else can tell it when the event is over.
+    ExternalNeedsEnd,
+    ExternalNeedsLocation,
+    DescriptionTooLong,
+}
+
+impl NewEventProblem {
+    pub fn message(self) -> String {
+        match self {
+            Self::NameMissing => "The event needs a name".to_owned(),
+            Self::NameTooLong => format!("A name is at most {MAX_EVENT_NAME_CHARS} characters"),
+            Self::StartMissing => "The event needs a start time".to_owned(),
+            Self::ExternalNeedsEnd => {
+                "An event somewhere else needs an end time - nothing else says when it is over"
+                    .to_owned()
+            }
+            Self::ExternalNeedsLocation => "Say where the event is".to_owned(),
+            Self::DescriptionTooLong => {
+                format!("A description is at most {MAX_EVENT_DESCRIPTION_CHARS} characters")
+            }
+        }
+    }
+}
+
+impl NewEvent {
+    /// Why this cannot be created, or `None` when it can.
+    pub fn problem(&self) -> Option<NewEventProblem> {
+        if self.name.trim().is_empty() {
+            return Some(NewEventProblem::NameMissing);
+        }
+        if self.name.chars().count() > MAX_EVENT_NAME_CHARS {
+            return Some(NewEventProblem::NameTooLong);
+        }
+        if self.description.chars().count() > MAX_EVENT_DESCRIPTION_CHARS {
+            return Some(NewEventProblem::DescriptionTooLong);
+        }
+        if self.starts_at.trim().is_empty() {
+            return Some(NewEventProblem::StartMissing);
+        }
+        if let NewEventLocation::External(place) = &self.location {
+            if place.trim().is_empty() {
+                return Some(NewEventProblem::ExternalNeedsLocation);
+            }
+            // Discord rejects an external event without one, and the message it
+            // returns does not say which field is missing.
+            if self.ends_at.trim().is_empty() {
+                return Some(NewEventProblem::ExternalNeedsEnd);
+            }
+        }
+        None
+    }
+
+    fn to_body(&self) -> Value {
+        let mut fields = Map::new();
+        fields.insert(
+            "name".to_owned(),
+            Value::from(
+                self.name
+                    .chars()
+                    .take(MAX_EVENT_NAME_CHARS)
+                    .collect::<String>(),
+            ),
+        );
+        fields.insert(
+            "scheduled_start_time".to_owned(),
+            Value::from(self.starts_at.trim()),
+        );
+        // Everyone, which is the only privacy level Discord accepts here.
+        fields.insert("privacy_level".to_owned(), Value::from(2));
+        if !self.description.trim().is_empty() {
+            fields.insert(
+                "description".to_owned(),
+                Value::from(
+                    self.description
+                        .chars()
+                        .take(MAX_EVENT_DESCRIPTION_CHARS)
+                        .collect::<String>(),
+                ),
+            );
+        }
+        match &self.location {
+            NewEventLocation::Channel(channel_id) => {
+                // Entity type 2 is a voice channel. A channel event takes no
+                // end time: Discord decides it is over when the channel empties.
+                fields.insert("entity_type".to_owned(), Value::from(2));
+                fields.insert(
+                    "channel_id".to_owned(),
+                    Value::from(channel_id.get().to_string()),
+                );
+            }
+            NewEventLocation::External(place) => {
+                fields.insert("entity_type".to_owned(), Value::from(3));
+                fields.insert(
+                    "scheduled_end_time".to_owned(),
+                    Value::from(self.ends_at.trim()),
+                );
+                fields.insert(
+                    "entity_metadata".to_owned(),
+                    json!({
+                        "location": place.chars().take(MAX_EVENT_LOCATION_CHARS).collect::<String>()
+                    }),
+                );
+            }
+        }
+        Value::Object(fields)
+    }
+}
+
+impl DiscordRest {
+    pub async fn create_scheduled_event(
+        &self,
+        guild_id: Id<GuildMarker>,
+        event: &NewEvent,
+    ) -> Result<()> {
+        self.send_unit(
+            self.raw_http
+                .post(format!(
+                    "https://discord.com/api/v9/guilds/{}/scheduled-events",
+                    guild_id.get()
+                ))
+                .json(&event.to_body()),
+            "create event",
+        )
+        .await
+    }
+}
+
+/// Read one line of `name | start | end | where` into an event.
+///
+/// A single line rather than five prompts in sequence: the panel has one text
+/// field, and a wizard of five would be worse than one line with a stated
+/// format. `end` may be empty for an event in a channel, which Discord ends
+/// when the channel empties.
+pub fn parse_new_event(text: &str) -> Option<NewEvent> {
+    let mut parts = text.split('|').map(str::trim);
+    let name = parts.next()?.to_owned();
+    let starts_at = parts.next().unwrap_or_default().to_owned();
+    let ends_at = parts.next().unwrap_or_default().to_owned();
+    let place = parts.next().unwrap_or_default().to_owned();
+    // Anything after the fourth separator is part of the location, since a
+    // place name may itself contain one.
+    let rest: Vec<&str> = parts.collect();
+    let place = if rest.is_empty() {
+        place
+    } else {
+        format!("{place} | {}", rest.join(" | "))
+    };
+
+    Some(NewEvent {
+        name,
+        description: String::new(),
+        starts_at,
+        ends_at,
+        location: NewEventLocation::External(place),
+    })
+}
+
+#[cfg(test)]
+mod new_event_tests {
+    use super::*;
+
+    fn external() -> NewEvent {
+        NewEvent {
+            name: "Games night".to_owned(),
+            description: String::new(),
+            starts_at: "2026-09-01T19:00:00Z".to_owned(),
+            ends_at: "2026-09-01T22:00:00Z".to_owned(),
+            location: NewEventLocation::External("The pub".to_owned()),
+        }
+    }
+
+    fn in_channel() -> NewEvent {
+        NewEvent {
+            ends_at: String::new(),
+            location: NewEventLocation::Channel(Id::new(7)),
+            ..external()
+        }
+    }
+
+    #[test]
+    fn a_complete_external_event_is_accepted() {
+        assert_eq!(external().problem(), None);
+    }
+
+    #[test]
+    fn an_event_somewhere_else_needs_an_end_time_and_a_place() {
+        // Discord rejects both cases, and the message it returns does not say
+        // which field is missing - so the form says it instead.
+        let no_end = NewEvent {
+            ends_at: String::new(),
+            ..external()
+        };
+        assert_eq!(no_end.problem(), Some(NewEventProblem::ExternalNeedsEnd));
+
+        let no_place = NewEvent {
+            location: NewEventLocation::External("  ".to_owned()),
+            ..external()
+        };
+        assert_eq!(
+            no_place.problem(),
+            Some(NewEventProblem::ExternalNeedsLocation)
+        );
+    }
+
+    #[test]
+    fn an_event_in_a_channel_needs_no_end_time() {
+        // Discord decides a channel event is over when the channel empties, so
+        // requiring one here would block a perfectly valid event.
+        assert_eq!(in_channel().problem(), None);
+        assert!(in_channel().to_body().get("scheduled_end_time").is_none());
+    }
+
+    #[test]
+    fn a_channel_event_and_an_external_one_send_different_entity_types() {
+        // Transposing these makes Discord reject the request with a message
+        // about a field the form never showed.
+        assert_eq!(in_channel().to_body()["entity_type"], Value::from(2));
+        assert_eq!(external().to_body()["entity_type"], Value::from(3));
+        assert!(external().to_body().get("channel_id").is_none());
+    }
+
+    #[test]
+    fn a_nameless_or_startless_event_is_refused_before_the_round_trip() {
+        let nameless = NewEvent {
+            name: "  ".to_owned(),
+            ..external()
+        };
+        assert_eq!(nameless.problem(), Some(NewEventProblem::NameMissing));
+
+        let startless = NewEvent {
+            starts_at: String::new(),
+            ..external()
+        };
+        assert_eq!(startless.problem(), Some(NewEventProblem::StartMissing));
+    }
+
+    #[test]
+    fn lengths_are_counted_in_characters_not_bytes() {
+        // A name of multi-byte characters would otherwise be refused while
+        // being well within Discord's limit.
+        let ok = NewEvent {
+            name: "é".repeat(MAX_EVENT_NAME_CHARS),
+            ..external()
+        };
+        assert_eq!(ok.problem(), None);
+
+        let too_long = NewEvent {
+            name: "é".repeat(MAX_EVENT_NAME_CHARS + 1),
+            ..external()
+        };
+        assert_eq!(too_long.problem(), Some(NewEventProblem::NameTooLong));
+    }
+
+    #[test]
+    fn an_empty_description_is_left_out_rather_than_sent_blank() {
+        assert!(external().to_body().get("description").is_none());
+
+        let described = NewEvent {
+            description: "Bring dice".to_owned(),
+            ..external()
+        };
+        assert_eq!(
+            described.to_body()["description"],
+            Value::from("Bring dice")
+        );
     }
 }

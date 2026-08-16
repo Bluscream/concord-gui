@@ -313,3 +313,4 @@ action-interested = Interessiert
 action-sync = Abgleichen
 action-new-template = Neue Vorlage
 status-no-such-channel = Kein Kanal mit diesem Namen, oder mehrere
+action-new-event = Neuer Termin

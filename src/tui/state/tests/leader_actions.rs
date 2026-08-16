@@ -1573,3 +1573,58 @@ fn an_ambiguous_channel_name_does_not_aim_the_widget_at_a_guess() {
         "an unknown name silently cleared the invite"
     );
 }
+
+mod event_line {
+    use crate::discord::parse_new_event;
+    use crate::discord::{NewEventLocation, NewEventProblem};
+
+    #[test]
+    fn a_complete_line_becomes_a_creatable_event() {
+        let event =
+            parse_new_event("Games night | 2026-09-01T19:00:00Z | 2026-09-01T22:00:00Z | The pub")
+                .expect("should parse");
+
+        assert_eq!(event.name, "Games night");
+        assert_eq!(event.starts_at, "2026-09-01T19:00:00Z");
+        assert_eq!(event.problem(), None);
+    }
+
+    #[test]
+    fn a_place_containing_a_separator_survives() {
+        // Bar names contain pipes about as often as anything else does, and
+        // truncating at the fourth would silently drop half the address.
+        let event = parse_new_event(
+            "Quiz | 2026-09-01T19:00:00Z | 2026-09-01T22:00:00Z | The Cat | and Fiddle",
+        )
+        .expect("should parse");
+
+        let NewEventLocation::External(place) = event.location else {
+            panic!("should be external");
+        };
+        assert_eq!(place, "The Cat | and Fiddle");
+    }
+
+    #[test]
+    fn a_half_typed_line_says_which_field_is_missing() {
+        // Discord's own message does not, which is the reason for checking
+        // here at all.
+        let event = parse_new_event("Games night").expect("should parse");
+        assert_eq!(event.problem(), Some(NewEventProblem::StartMissing));
+
+        let event = parse_new_event("Games night | 2026-09-01T19:00:00Z").expect("should parse");
+        assert_eq!(
+            event.problem(),
+            Some(NewEventProblem::ExternalNeedsLocation)
+        );
+
+        let event = parse_new_event("Games night | 2026-09-01T19:00:00Z |  | The pub")
+            .expect("should parse");
+        assert_eq!(event.problem(), Some(NewEventProblem::ExternalNeedsEnd));
+    }
+
+    #[test]
+    fn an_empty_line_is_refused_rather_than_creating_a_nameless_event() {
+        let event = parse_new_event("").expect("should parse");
+        assert_eq!(event.problem(), Some(NewEventProblem::NameMissing));
+    }
+}

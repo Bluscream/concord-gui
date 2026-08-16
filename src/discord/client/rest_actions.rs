@@ -360,6 +360,14 @@ impl DiscordClient {
             .await
     }
 
+    pub async fn create_scheduled_event(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+        event: &crate::discord::NewEvent,
+    ) -> Result<()> {
+        self.rest.create_scheduled_event(guild_id, event).await
+    }
+
     pub async fn guild_templates(
         &self,
         guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,

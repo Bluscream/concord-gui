@@ -272,8 +272,19 @@ Templates list the shareable link, how many servers came from it, and whether
 the template has fallen behind the server it was taken from - which the
 template alone does not reveal. Enter syncs, `N` takes a new one, `d` deletes.
 
-Still missing: creating and editing a scheduled event, which is a form of its
-own; stage channels; and discovery.
+Creating an event is one typed line - `name | start | end | where` - in both
+clients, parsed by one function in the core so the accepted format cannot drift
+between them. One line rather than a five-step wizard: neither client has a
+date picker, and five prompts in sequence would be worse than one line with a
+stated format.
+
+The validation is in the core too, because Discord's rules here are not
+guessable from its error messages: an event somewhere else needs an end time,
+while one in a channel must not have one - Discord ends that when the channel
+empties. The two also send different entity types, and transposing them fails
+with a message about a field the form never showed.
+
+Still missing: editing an existing event, stage channels, and discovery.
 
 ## Deliberately out of scope
 
@@ -306,7 +317,7 @@ forward so it is not built twice.
 8. **Members, onboarding, welcome screen, widget.**
 9. **Video** - camera on the voice connection, receiving remote video,
    pop-out windows, per-user mute and hide. Needs a real account to verify.
-10. **Creating and editing events, stage channels, discovery.**
+10. **Editing events, stage channels, discovery.**
 
 Then, and only then, the extras from AGENTS.md: offline-first, merged
 multi-account, and the rest.

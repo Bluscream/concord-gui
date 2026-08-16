@@ -137,12 +137,13 @@ pub use rest::{
     MAX_MESSAGE_STICKERS, MAX_ROLE_NAME_CHARS, MAX_SLOWMODE_SECONDS, MAX_SOUND_NAME_CHARS,
     MAX_USERNAME_CHARS, MAX_VOICE_USER_LIMIT, MAX_WELCOME_CHANNELS, MAX_WELCOME_DESCRIPTION_CHARS,
     MIN_GUILD_NAME_CHARS, MIN_PASSWORD_CHARS, MIN_SOUND_NAME_CHARS, MIN_USERNAME_CHARS,
-    NewChannelKind, OverwriteTarget, PRUNE_DAYS, PrivacyEdit, PrivacySetting, PrivacyState,
-    ReactionUsersPage, RoleEdit, ScheduledEvent, SoundboardSound, WelcomeChannel, WelcomeScreen,
-    WelcomeScreenEdit, clamp_invite_max_age, clamp_invite_max_uses, emoji_name_from_filename,
-    friend_request_target, invite_code_from, is_valid_emoji_name, is_valid_guild_name,
-    is_valid_sound_name, nearest_afk_timeout, nearest_prune_days, password_problem,
-    username_problem, verification_code, verification_label,
+    NewChannelKind, NewEvent, NewEventLocation, NewEventProblem, OverwriteTarget, PRUNE_DAYS,
+    PrivacyEdit, PrivacySetting, PrivacyState, ReactionUsersPage, RoleEdit, ScheduledEvent,
+    SoundboardSound, WelcomeChannel, WelcomeScreen, WelcomeScreenEdit, clamp_invite_max_age,
+    clamp_invite_max_uses, emoji_name_from_filename, friend_request_target, invite_code_from,
+    is_valid_emoji_name, is_valid_guild_name, is_valid_sound_name, nearest_afk_timeout,
+    nearest_prune_days, parse_new_event, password_problem, username_problem, verification_code,
+    verification_label,
 };
 pub use secret::Secret;
 pub use state::{

@@ -942,6 +942,7 @@ fn handle_server_management_key(state: &mut DashboardState, key: KeyEvent) -> Op
         KeyCode::Char('N') => {
             state.start_role_create();
             state.start_template_create();
+            state.start_event_create();
         }
         // Editing the two membership rows that need text rather than a toggle.
         KeyCode::Char('e') => state.start_membership_edit(),

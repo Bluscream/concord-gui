@@ -208,6 +208,8 @@ pub enum Prompt {
     WelcomeDescription,
     /// The channel the widget's invite points at, by name.
     WidgetChannel,
+    /// A new scheduled event, typed as one line of fields.
+    NewEvent,
     /// A new name for the open guild.
     GuildName,
     /// A path to an image to use as the guild icon.
@@ -233,6 +235,7 @@ impl Prompt {
             Prompt::NewTemplate => "New template",
             Prompt::WelcomeDescription => "Welcome description",
             Prompt::WidgetChannel => "Widget invite channel",
+            Prompt::NewEvent => "New event",
             Prompt::GuildName => "Rename server",
             Prompt::GuildIcon => "Server icon",
             Prompt::ChannelTopic(_) => "Channel topic",
@@ -254,6 +257,7 @@ impl Prompt {
             Prompt::NewTemplate => "Template name",
             Prompt::WelcomeDescription => "Shown to people arriving - empty clears it",
             Prompt::WidgetChannel => "Channel name - empty means no invite",
+            Prompt::NewEvent => "name | start | end | where - times as 2026-09-01T19:00:00Z",
             Prompt::GuildName => "Server name",
             Prompt::GuildIcon => "Path to a PNG, JPEG, GIF or WebP",
             Prompt::ChannelTopic(_) => "Topic - empty clears it",
@@ -1888,6 +1892,7 @@ impl Workspace {
             Prompt::NewTemplate => self.create_template(text),
             Prompt::WelcomeDescription => self.set_welcome_description(text),
             Prompt::WidgetChannel => self.set_widget_channel(&text),
+            Prompt::NewEvent => self.create_event(&text),
             Prompt::GuildName => self.rename_guild(text),
             Prompt::GuildIcon => self.set_guild_icon(text),
             Prompt::ChannelTopic(channel_id) => self.set_channel_topic(channel_id, text),
@@ -5376,6 +5381,29 @@ impl Workspace {
             return;
         };
         handle.send(AppCommand::CreateRole { guild_id, name });
+    }
+
+    /// Create a scheduled event from one typed line.
+    ///
+    /// The same parser both clients use, so the accepted format cannot drift
+    /// between them.
+    fn create_event(&mut self, text: &str) {
+        let (Some(handle), Some(view)) = (&self.handle, &self.server_management) else {
+            return;
+        };
+        let Some(event) = concord::discord::parse_new_event(text) else {
+            return;
+        };
+        if let Some(problem) = event.problem() {
+            // Said here rather than left to Discord, whose message does not
+            // name which of five fields is the problem.
+            self.model.status_line = problem.message();
+            return;
+        }
+        handle.send(AppCommand::CreateScheduledEvent {
+            guild_id: view.guild_id,
+            event: Box::new(event),
+        });
     }
 
     fn set_welcome_description(&mut self, text: String) {
@@ -9145,6 +9173,7 @@ impl Workspace {
             let add_role_label = t!("action-new-role");
             let server_settings_label = t!("action-server-settings");
             let add_template_label = t!("action-new-template");
+            let add_event_label = t!("action-new-event");
             return Some(overlay::scrim().child(overlay::server_management_view(
                 overlay::ServerPanel {
                     tabs: &tabs,
@@ -9162,6 +9191,7 @@ impl Workspace {
                         ServerTab::Roles => Some(add_role_label.as_str()),
                         ServerTab::Settings => Some(server_settings_label.as_str()),
                         ServerTab::Templates => Some(add_template_label.as_str()),
+                        ServerTab::Events => Some(add_event_label.as_str()),
                         _ => None,
                     },
                 },
@@ -9250,6 +9280,7 @@ impl Workspace {
                             workspace.prompt = Some(match tab {
                                 ServerTab::Roles => (Prompt::NewRole, Composer::default()),
                                 ServerTab::Templates => (Prompt::NewTemplate, Composer::default()),
+                                ServerTab::Events => (Prompt::NewEvent, Composer::default()),
                                 ServerTab::Settings => (Prompt::GuildIcon, Composer::default()),
                                 _ => (Prompt::EmojiImage, Composer::default()),
                             });

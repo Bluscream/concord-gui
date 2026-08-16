@@ -145,6 +145,12 @@ pub enum EmojiEdit {
     WelcomeDescription,
     /// The channel the widget's invite points at, by name.
     WidgetChannel,
+    /// A new scheduled event, typed as one line of fields.
+    ///
+    /// One field rather than five: the panel has one text input, and five
+    /// stacked prompts to fill in order would be worse than one line with a
+    /// stated format.
+    NewEvent,
 }
 
 // Not Eq: a sound carries a float volume, so the panel can only be compared
@@ -498,6 +504,18 @@ impl DashboardState {
                 return Some(AppCommand::CreateRole {
                     guild_id,
                     name: text,
+                });
+            }
+            EmojiEdit::NewEvent => {
+                let event = crate::discord::parse_new_event(&text)?;
+                // Refused here rather than by Discord, whose message does not
+                // say which of five fields is the problem.
+                if event.problem().is_some() {
+                    return None;
+                }
+                return Some(AppCommand::CreateScheduledEvent {
+                    guild_id,
+                    event: Box::new(event),
                 });
             }
             EmojiEdit::WelcomeDescription => {
@@ -1032,6 +1050,15 @@ impl DashboardState {
             .filter(|channel| channel.name == wanted);
         let first = matches.next()?;
         matches.next().is_none().then_some(first.id)
+    }
+
+    /// Start creating a scheduled event.
+    pub fn start_event_create(&mut self) {
+        if let Some(state) = self.popups.server_management_mut()
+            && state.tab == ServerPanelTab::Events
+        {
+            state.renaming = Some((EmojiEdit::NewEvent, TextInputState::default()));
+        }
     }
 
     /// Start editing whichever membership row needs text.

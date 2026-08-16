@@ -822,6 +822,20 @@ pub(in crate::tui::ui) fn render_server_management(
                 vec![Line::from(Span::raw(format!("Name: {}", input.value())))],
                 "enter creates the role, esc cancels",
             ),
+            crate::tui::state::EmojiEdit::NewEvent => {
+                let problem = crate::discord::parse_new_event(input.value())
+                    .and_then(|event| event.problem())
+                    .map(crate::discord::NewEventProblem::message);
+                (
+                    vec![
+                        Line::from(Span::raw(format!("Event: {}", input.value()))),
+                        Line::from(Span::raw(
+                            problem.unwrap_or_else(|| "enter creates it".to_owned()),
+                        )),
+                    ],
+                    "name | start | end | where - times as 2026-09-01T19:00:00Z",
+                )
+            }
             crate::tui::state::EmojiEdit::WelcomeDescription => (
                 vec![Line::from(Span::raw(format!(
                     "Description: {}",
@@ -856,7 +870,7 @@ pub(in crate::tui::ui) fn render_server_management(
                 ServerPanelTab::Membership => {
                     "tab, r reload, enter toggles or cycles, e edits, P prunes"
                 }
-                ServerPanelTab::Events => "tab, r reload, enter marks interested, d cancels",
+                ServerPanelTab::Events => "tab, r reload, enter marks interested, N new, d cancels",
                 ServerPanelTab::Templates => "tab, r reload, enter syncs, N new, d deletes",
                 ServerPanelTab::AuditLog => "tab to switch, r to reload",
             },

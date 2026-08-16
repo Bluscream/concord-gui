@@ -51,7 +51,10 @@ pub use channel_management::{
     MAX_VOICE_USER_LIMIT, NewChannelKind, OverwriteTarget,
 };
 pub use connections::{Connection, ConnectionVisibility};
-pub use events::{EventLocation, EventStatus, GuildTemplate, ScheduledEvent};
+pub use events::{
+    EventLocation, EventStatus, GuildTemplate, NewEvent, NewEventLocation, NewEventProblem,
+    ScheduledEvent, parse_new_event,
+};
 pub use guild_management::{
     AuditLogAction, AuditLogEntryInfo, GuildEmojiInfo, GuildInviteInfo, MAX_EMOJI_BYTES,
     MAX_INVITE_MAX_AGE_SECONDS, MAX_INVITE_MAX_USES, clamp_invite_max_age, clamp_invite_max_uses,

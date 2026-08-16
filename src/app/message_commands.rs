@@ -532,6 +532,19 @@ pub(super) async fn set_event_interest(
     load_scheduled_events(client, guild_id).await;
 }
 
+pub(super) async fn create_scheduled_event(
+    client: DiscordClient,
+    guild_id: GuildId,
+    event: crate::discord::NewEvent,
+) {
+    let label = event.name.clone();
+    if let Err(error) = client.create_scheduled_event(guild_id, &event).await {
+        report_moderation_failure(&client, "creating", &label, &error).await;
+        return;
+    }
+    load_scheduled_events(client, guild_id).await;
+}
+
 pub(super) async fn load_guild_templates(client: DiscordClient, guild_id: GuildId) {
     match client.guild_templates(guild_id).await {
         Ok(templates) => {

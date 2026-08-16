@@ -587,6 +587,10 @@ pub enum AppCommand {
         event_id: u64,
         interested: bool,
     },
+    CreateScheduledEvent {
+        guild_id: Id<GuildMarker>,
+        event: Box<crate::discord::NewEvent>,
+    },
     LoadGuildTemplates {
         guild_id: Id<GuildMarker>,
     },
