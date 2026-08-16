@@ -108,8 +108,16 @@ Written through the legacy `/users/@me/settings` endpoint, which is where these
 same fields are read from in READY - editing one representation while displaying
 another would leave a rejected write showing as applied.
 
-Still missing: the data controls, and per-guild direct-message restrictions
-(`restricted_guilds`) for servers already joined.
+Also the data controls: being found by email or phone, local account detection,
+contact sync, and screen-reader detection. Both of the first two live in one
+bitfield, so they carry each other the same way the friend sources do.
+
+Both clients render `PrivacySetting::ALL`, so a row added to the core appears in
+both without either being edited - which is the point of it living there.
+
+Still missing: per-guild direct-message restrictions (`restricted_guilds`) for
+servers already joined. That needs a guild-scoped entry point rather than a row
+in this panel.
 
 ### Sessions and authorised apps
 
@@ -217,8 +225,7 @@ forward so it is not built twice.
 6. **AutoMod.**
 7. **Account settings** - credentials, 2FA, sessions, authorised apps.
    Password and 2FA fields are the user's to drive, never the agent's.
-8. **Data controls and per-guild DM restrictions** - the rest of the privacy
-   group.
+8. **Per-guild DM restrictions** - the last of the privacy group.
 9. **Members, onboarding, welcome screen, widget.**
 10. **Video** - camera on the voice connection, receiving remote video,
     pop-out windows, per-user mute and hide. Needs a real account to verify.

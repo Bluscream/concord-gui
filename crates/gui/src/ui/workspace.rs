@@ -4200,16 +4200,13 @@ impl Workspace {
     }
 
     /// Privacy and safety as the account last reported it.
+    ///
+    /// Nothing arrived yet leaves every field None, which the panel shows as
+    /// "unknown" rather than as a set of permissive defaults.
     fn privacy_state(&self) -> concord::discord::PrivacyState {
-        // Nothing arrived yet leaves every field None, which the panel shows
-        // as "unknown" rather than as a set of permissive defaults.
         self.last_state
             .as_ref()
-            .map_or_else(Default::default, |state| concord::discord::PrivacyState {
-                dm_scan_level: state.dm_scan_level(),
-                default_guilds_restricted: state.default_guilds_restricted(),
-                friend_sources: state.friend_sources(),
-            })
+            .map_or_else(Default::default, |state| state.privacy_state())
     }
 
     pub fn toggle_privacy_setting(&mut self, index: usize) {

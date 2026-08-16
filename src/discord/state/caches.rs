@@ -179,6 +179,10 @@ pub(in crate::discord) struct SessionState {
     pub(in crate::discord) dm_scan_level: Option<crate::discord::DmScanLevel>,
     pub(in crate::discord) default_guilds_restricted: Option<bool>,
     pub(in crate::discord) friend_sources: Option<crate::discord::FriendSources>,
+    pub(in crate::discord) friend_discovery: Option<crate::discord::FriendDiscovery>,
+    pub(in crate::discord) detect_platform_accounts: Option<bool>,
+    pub(in crate::discord) contact_sync_enabled: Option<bool>,
+    pub(in crate::discord) allow_accessibility_detection: Option<bool>,
     /// READY's private channels are partial with PRIORITIZED_READY_PAYLOAD.
     /// Hold them until READY_SUPPLEMENTAL supplies the remaining cached DMs.
     pub(in crate::discord) pending_ready_private_channel_ids: Option<BTreeSet<Id<ChannelMarker>>>,

@@ -69,6 +69,22 @@ impl DiscordState {
         self.session.friend_sources
     }
 
+    /// Privacy and safety as one value, which is what both panels want.
+    ///
+    /// Built here rather than field by field in each client, so a field added
+    /// to the panel cannot be forgotten by one of them.
+    pub fn privacy_state(&self) -> crate::discord::PrivacyState {
+        crate::discord::PrivacyState {
+            dm_scan_level: self.session.dm_scan_level,
+            default_guilds_restricted: self.session.default_guilds_restricted,
+            friend_sources: self.session.friend_sources,
+            friend_discovery: self.session.friend_discovery,
+            detect_platform_accounts: self.session.detect_platform_accounts,
+            contact_sync_enabled: self.session.contact_sync_enabled,
+            allow_accessibility_detection: self.session.allow_accessibility_detection,
+        }
+    }
+
     pub(in crate::discord) fn remember_profile_cache_key(&mut self, key: UserProfileCacheKey) {
         let profiles = self.profiles_mut();
         touch_recent(&mut profiles.profile_cache_order, key);

@@ -71,6 +71,10 @@ struct ChannelNotificationSettingsState {
     flags: u64,
 }
 
+/// Gated to match its only caller, `set_fixture_channel_muted`, which is
+/// behind the same feature. Without the gate this is dead code in every build
+/// that does not enable fixtures - which is every release build.
+#[cfg(feature = "fixtures")]
 impl ChannelNotificationSettingsState {
     fn set_fixture_muted(&mut self, muted: bool) {
         self.muted = muted;

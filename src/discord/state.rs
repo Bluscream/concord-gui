@@ -774,6 +774,19 @@ impl DiscordState {
                     self.session_mut().friend_sources =
                         Some(crate::discord::FriendSources::from_info(sources));
                 }
+                if let Some(flags) = settings.friend_discovery_flags {
+                    self.session_mut().friend_discovery =
+                        Some(crate::discord::FriendDiscovery::from_flags(flags));
+                }
+                if let Some(detect) = settings.detect_platform_accounts {
+                    self.session_mut().detect_platform_accounts = Some(detect);
+                }
+                if let Some(sync) = settings.contact_sync_enabled {
+                    self.session_mut().contact_sync_enabled = Some(sync);
+                }
+                if let Some(allow) = settings.allow_accessibility_detection {
+                    self.session_mut().allow_accessibility_detection = Some(allow);
+                }
             }
             AppEvent::UserNotificationSettingsUpdate { flags } => {
                 self.notifications_mut().user_notification_flags = *flags;

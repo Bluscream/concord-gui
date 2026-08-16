@@ -114,6 +114,40 @@ impl FriendSources {
     }
 }
 
+/// How people may find you from contact details you have given Discord.
+///
+/// A bitfield rather than two booleans on the wire, so the two rows that show
+/// it have to read and write the same number - setting one from a default
+/// would clear the other.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FriendDiscovery {
+    pub by_email: bool,
+    pub by_phone: bool,
+}
+
+impl FriendDiscovery {
+    const BY_EMAIL: u64 = 1 << 0;
+    const BY_PHONE: u64 = 1 << 1;
+
+    pub const fn from_flags(flags: u64) -> Self {
+        Self {
+            by_email: flags & Self::BY_EMAIL != 0,
+            by_phone: flags & Self::BY_PHONE != 0,
+        }
+    }
+
+    pub const fn flags(self) -> u64 {
+        let mut flags = 0;
+        if self.by_email {
+            flags |= Self::BY_EMAIL;
+        }
+        if self.by_phone {
+            flags |= Self::BY_PHONE;
+        }
+        flags
+    }
+}
+
 /// What to change. `None` means leave alone, as elsewhere: this endpoint
 /// replaces what it is given, and sending the whole settings object back would
 /// overwrite the many fields this client never shows.
@@ -123,6 +157,12 @@ pub struct PrivacyEdit {
     /// Whether new guilds start with direct messages from their members off.
     pub default_guilds_restricted: Option<bool>,
     pub friend_sources: Option<FriendSources>,
+    pub friend_discovery: Option<FriendDiscovery>,
+    /// Whether Discord may link accounts it detects on this machine.
+    pub detect_platform_accounts: Option<bool>,
+    pub contact_sync_enabled: Option<bool>,
+    /// Whether Discord may detect that a screen reader is running.
+    pub allow_accessibility_detection: Option<bool>,
 }
 
 impl PrivacyEdit {
@@ -130,6 +170,25 @@ impl PrivacyEdit {
         self.dm_scan_level.is_none()
             && self.default_guilds_restricted.is_none()
             && self.friend_sources.is_none()
+            && self.friend_discovery.is_none()
+            && self.detect_platform_accounts.is_none()
+            && self.contact_sync_enabled.is_none()
+            && self.allow_accessibility_detection.is_none()
+    }
+
+    /// How many fields this edit names.
+    ///
+    /// Used by a test rather than by the client: the endpoint replaces what it
+    /// is given, so every row must name exactly one.
+    #[cfg(test)]
+    fn named_field_count(&self) -> usize {
+        usize::from(self.dm_scan_level.is_some())
+            + usize::from(self.default_guilds_restricted.is_some())
+            + usize::from(self.friend_sources.is_some())
+            + usize::from(self.friend_discovery.is_some())
+            + usize::from(self.detect_platform_accounts.is_some())
+            + usize::from(self.contact_sync_enabled.is_some())
+            + usize::from(self.allow_accessibility_detection.is_some())
     }
 
     fn to_body(&self) -> Value {
@@ -148,6 +207,24 @@ impl PrivacyEdit {
         }
         if let Some(sources) = self.friend_sources {
             fields.insert("friend_source_flags".to_owned(), sources.to_body());
+        }
+        if let Some(discovery) = self.friend_discovery {
+            fields.insert(
+                "friend_discovery_flags".to_owned(),
+                Value::from(discovery.flags()),
+            );
+        }
+        if let Some(detect) = self.detect_platform_accounts {
+            fields.insert("detect_platform_accounts".to_owned(), Value::Bool(detect));
+        }
+        if let Some(sync) = self.contact_sync_enabled {
+            fields.insert("contact_sync_enabled".to_owned(), Value::Bool(sync));
+        }
+        if let Some(allow) = self.allow_accessibility_detection {
+            fields.insert(
+                "allow_accessibility_detection".to_owned(),
+                Value::Bool(allow),
+            );
         }
         Value::Object(fields)
     }
@@ -271,6 +348,11 @@ pub enum PrivacySetting {
     FriendsEveryone,
     FriendsMutualFriends,
     FriendsMutualGuilds,
+    DiscoverByEmail,
+    DiscoverByPhone,
+    DetectPlatformAccounts,
+    ContactSync,
+    AllowAccessibilityDetection,
 }
 
 /// What the account currently says, as far as the client has been told.
@@ -279,15 +361,24 @@ pub struct PrivacyState {
     pub dm_scan_level: Option<DmScanLevel>,
     pub default_guilds_restricted: Option<bool>,
     pub friend_sources: Option<FriendSources>,
+    pub friend_discovery: Option<FriendDiscovery>,
+    pub detect_platform_accounts: Option<bool>,
+    pub contact_sync_enabled: Option<bool>,
+    pub allow_accessibility_detection: Option<bool>,
 }
 
 impl PrivacySetting {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 10] = [
         Self::DmScanning,
         Self::NewGuildDirectMessages,
         Self::FriendsEveryone,
         Self::FriendsMutualFriends,
         Self::FriendsMutualGuilds,
+        Self::DiscoverByEmail,
+        Self::DiscoverByPhone,
+        Self::DetectPlatformAccounts,
+        Self::ContactSync,
+        Self::AllowAccessibilityDetection,
     ];
 
     pub fn at(index: usize) -> Option<Self> {
@@ -301,6 +392,11 @@ impl PrivacySetting {
             Self::FriendsEveryone => "Friend requests from everyone",
             Self::FriendsMutualFriends => "Friend requests from friends of friends",
             Self::FriendsMutualGuilds => "Friend requests from server members",
+            Self::DiscoverByEmail => "Let people find you by email",
+            Self::DiscoverByPhone => "Let people find you by phone number",
+            Self::DetectPlatformAccounts => "Detect accounts on this machine",
+            Self::ContactSync => "Sync your contacts",
+            Self::AllowAccessibilityDetection => "Allow screen-reader detection",
         }
     }
 
@@ -313,6 +409,15 @@ impl PrivacySetting {
             Self::FriendsEveryone => "Covers the other two on its own.",
             Self::FriendsMutualFriends => "Anyone who shares a friend with you.",
             Self::FriendsMutualGuilds => "Anyone in a server you are also in.",
+            Self::DiscoverByEmail => "Only applies to an email address you have given Discord.",
+            Self::DiscoverByPhone => "Only applies to a phone number you have given Discord.",
+            Self::DetectPlatformAccounts => {
+                "Discord looking for game and service accounts installed locally."
+            }
+            Self::ContactSync => "Uploading your address book so Discord can suggest friends.",
+            Self::AllowAccessibilityDetection => {
+                "Discord noticing that a screen reader is running."
+            }
         }
     }
 
@@ -332,6 +437,11 @@ impl PrivacySetting {
                 state.friend_sources.map(|sources| sources.mutual_friends)
             }
             Self::FriendsMutualGuilds => state.friend_sources.map(|sources| sources.mutual_guilds),
+            Self::DiscoverByEmail => state.friend_discovery.map(|value| value.by_email),
+            Self::DiscoverByPhone => state.friend_discovery.map(|value| value.by_phone),
+            Self::DetectPlatformAccounts => state.detect_platform_accounts,
+            Self::ContactSync => state.contact_sync_enabled,
+            Self::AllowAccessibilityDetection => state.allow_accessibility_detection,
         }
     }
 
@@ -368,6 +478,28 @@ impl PrivacySetting {
                     _ => sources.mutual_guilds = !sources.mutual_guilds,
                 }
                 edit.friend_sources = Some(sources);
+            }
+            Self::DiscoverByEmail | Self::DiscoverByPhone => {
+                // Both live in one bitfield, so the one not being changed is
+                // carried over rather than defaulted.
+                let mut discovery = state.friend_discovery.unwrap_or_default();
+                if self == Self::DiscoverByEmail {
+                    discovery.by_email = !discovery.by_email;
+                } else {
+                    discovery.by_phone = !discovery.by_phone;
+                }
+                edit.friend_discovery = Some(discovery);
+            }
+            Self::DetectPlatformAccounts => {
+                edit.detect_platform_accounts =
+                    Some(!state.detect_platform_accounts.unwrap_or(false));
+            }
+            Self::ContactSync => {
+                edit.contact_sync_enabled = Some(!state.contact_sync_enabled.unwrap_or(false));
+            }
+            Self::AllowAccessibilityDetection => {
+                edit.allow_accessibility_detection =
+                    Some(!state.allow_accessibility_detection.unwrap_or(false));
             }
         }
         edit
@@ -442,9 +574,7 @@ mod setting_tests {
         let state = PrivacyState::default();
         for setting in PrivacySetting::ALL {
             let edit = setting.toggled(&state);
-            let named = u8::from(edit.dm_scan_level.is_some())
-                + u8::from(edit.default_guilds_restricted.is_some())
-                + u8::from(edit.friend_sources.is_some());
+            let named = edit.named_field_count();
             assert_eq!(named, 1, "{setting:?} names {named} fields");
         }
     }
@@ -457,5 +587,54 @@ mod setting_tests {
         let count = labels.len();
         labels.dedup();
         assert_eq!(labels.len(), count);
+    }
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+
+    #[test]
+    fn discovery_flags_round_trip() {
+        // Both live in one bitfield. A transposed bit would turn on a way of
+        // being found that nobody asked for.
+        for by_email in [false, true] {
+            for by_phone in [false, true] {
+                let discovery = FriendDiscovery { by_email, by_phone };
+                assert_eq!(FriendDiscovery::from_flags(discovery.flags()), discovery);
+            }
+        }
+        assert!(FriendDiscovery::from_flags(1).by_email);
+        assert!(FriendDiscovery::from_flags(2).by_phone);
+    }
+
+    #[test]
+    fn unknown_discovery_bits_do_not_turn_either_row_on() {
+        // Discord may add bits. A row reading them as its own would claim a
+        // way of being found that is really something else.
+        let discovery = FriendDiscovery::from_flags(0b1111_1100);
+        assert!(!discovery.by_email);
+        assert!(!discovery.by_phone);
+    }
+
+    #[test]
+    fn toggling_one_discovery_row_carries_the_other() {
+        let state = PrivacyState {
+            friend_discovery: Some(FriendDiscovery {
+                by_email: false,
+                by_phone: true,
+            }),
+            ..PrivacyState::default()
+        };
+
+        assert_eq!(
+            PrivacySetting::DiscoverByEmail
+                .toggled(&state)
+                .friend_discovery,
+            Some(FriendDiscovery {
+                by_email: true,
+                by_phone: true,
+            })
+        );
     }
 }

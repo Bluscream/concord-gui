@@ -254,17 +254,8 @@ impl DashboardState {
         self.open_options_category(OptionsCategory::Privacy);
     }
 
-    /// Privacy and safety as the account last reported it.
-    fn privacy_state(&self) -> crate::discord::PrivacyState {
-        crate::discord::PrivacyState {
-            dm_scan_level: self.discord.dm_scan_level(),
-            default_guilds_restricted: self.discord.default_guilds_restricted(),
-            friend_sources: self.discord.friend_sources(),
-        }
-    }
-
     fn privacy_option_items(&self) -> Vec<DisplayOptionItem> {
-        let state = self.privacy_state();
+        let state = self.discord.privacy_state();
         crate::discord::PrivacySetting::ALL
             .into_iter()
             .map(|setting| {
@@ -691,7 +682,7 @@ impl DashboardState {
 
         if category == OptionsCategory::Privacy {
             if let Some(setting) = crate::discord::PrivacySetting::at(selected) {
-                let edit = setting.toggled(&self.privacy_state());
+                let edit = setting.toggled(&self.discord.privacy_state());
                 self.enqueue_pending_command(AppCommand::ModifyPrivacySettings { edit });
             }
             return;
