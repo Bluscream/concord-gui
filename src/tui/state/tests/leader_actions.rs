@@ -789,7 +789,15 @@ fn the_server_panel_only_fetches_a_tab_it_has_not_seen() {
     );
     state.apply_guild_audit_log(guild_id, Vec::new());
 
-    // Coming back round to invites does not, because they are already here.
+    // Wrapping round lands on settings, which reads the snapshot and so
+    // fetches nothing either.
+    assert_eq!(state.next_server_tab(), None);
+    assert_eq!(
+        state.server_management_state().map(|p| p.tab()),
+        Some(ServerPanelTab::Settings)
+    );
+
+    // And invites, already held, still do not refetch.
     assert_eq!(state.next_server_tab(), None);
     assert_eq!(
         state.server_management_state().map(|p| p.tab()),

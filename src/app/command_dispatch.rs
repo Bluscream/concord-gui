@@ -552,6 +552,20 @@ impl CommandDispatcher {
                     .publish_event(crate::discord::AppEvent::GuildForgotten { guild_id })
                     .await;
             }
+            AppCommand::ModifyGuild {
+                guild_id,
+                edit,
+                label,
+            } => {
+                message_commands::modify_guild(self.client.clone(), guild_id, edit, label).await;
+            }
+            AppCommand::SetGuildIcon {
+                guild_id,
+                image,
+                label,
+            } => {
+                message_commands::set_guild_icon(self.client.clone(), guild_id, image, label).await;
+            }
             AppCommand::CreateRole { guild_id, name } => {
                 message_commands::create_role(self.client.clone(), guild_id, name).await;
             }

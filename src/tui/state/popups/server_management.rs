@@ -14,6 +14,7 @@ use super::{ActiveModalPopupKind, ModalPopup, SelectablePopupState, SelectablePo
 /// Which list the popup is showing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServerPanelTab {
+    Settings,
     Invites,
     Roles,
     Emoji,
@@ -21,10 +22,17 @@ pub enum ServerPanelTab {
 }
 
 impl ServerPanelTab {
-    pub const ALL: [Self; 4] = [Self::Invites, Self::Roles, Self::Emoji, Self::AuditLog];
+    pub const ALL: [Self; 5] = [
+        Self::Settings,
+        Self::Invites,
+        Self::Roles,
+        Self::Emoji,
+        Self::AuditLog,
+    ];
 
     pub(in crate::tui) fn label(self) -> &'static str {
         match self {
+            Self::Settings => "Settings",
             Self::Invites => "Invites",
             Self::Roles => "Roles",
             Self::Emoji => "Emoji",
@@ -38,7 +46,9 @@ impl ServerPanelTab {
     /// so the tab reads them rather than asking for them.
     fn load(self, guild_id: Id<GuildMarker>) -> Option<AppCommand> {
         Some(match self {
-            Self::Roles => return None,
+            // Both read from the snapshot rather than fetching: the guild and
+            // its roles arrive together.
+            Self::Settings | Self::Roles => return None,
             Self::Invites => AppCommand::LoadGuildInvites { guild_id },
             Self::Emoji => AppCommand::LoadGuildEmojis { guild_id },
             Self::AuditLog => AppCommand::LoadGuildAuditLog { guild_id },
@@ -66,6 +76,8 @@ pub(in crate::tui) struct ServerManagementState {
     /// Read from the snapshot when the tab opens, highest first - the order
     /// that decides which role wins a conflict.
     pub(super) roles: Vec<crate::discord::RoleState>,
+    /// The guild's settings as label and value, read from the snapshot.
+    pub(super) settings: Vec<(String, String)>,
     pub(super) emojis: Vec<GuildEmojiInfo>,
     pub(super) audit_log: Vec<AuditLogEntryInfo>,
     /// Set while the open tab's fetch is outstanding, so the popup can say so
@@ -110,6 +122,7 @@ impl ServerManagementState {
     pub(in crate::tui) fn row_count(&self) -> usize {
         match self.tab {
             ServerPanelTab::Invites => self.invites.len(),
+            ServerPanelTab::Settings => self.settings.len(),
             ServerPanelTab::Roles => self.roles.len(),
             ServerPanelTab::Emoji => self.emojis.len(),
             ServerPanelTab::AuditLog => self.audit_log.len(),
@@ -118,6 +131,10 @@ impl ServerManagementState {
 
     pub(in crate::tui) fn roles(&self) -> &[crate::discord::RoleState] {
         &self.roles
+    }
+
+    pub(in crate::tui) fn settings(&self) -> &[(String, String)] {
+        &self.settings
     }
 }
 
@@ -134,6 +151,7 @@ impl DashboardState {
                 selection: SelectablePopupState::default(),
                 invites: Vec::new(),
                 roles: Vec::new(),
+                settings: Vec::new(),
                 emojis: Vec::new(),
                 audit_log: Vec::new(),
                 loading: true,
@@ -142,8 +160,10 @@ impl DashboardState {
             }));
         // Roles need no fetch, so opening on that tab fills from the snapshot
         // and asks for nothing.
-        if tab == ServerPanelTab::Roles {
-            self.fill_server_roles();
+        match tab {
+            ServerPanelTab::Roles => self.fill_server_roles(),
+            ServerPanelTab::Settings => self.fill_guild_settings(),
+            _ => {}
         }
         tab.load(guild_id)
     }
@@ -176,14 +196,16 @@ impl DashboardState {
         // for.
         let already_loaded = match tab {
             ServerPanelTab::Invites => !state.invites.is_empty(),
-            ServerPanelTab::Roles => true,
+            ServerPanelTab::Settings | ServerPanelTab::Roles => true,
             ServerPanelTab::Emoji => !state.emojis.is_empty(),
             ServerPanelTab::AuditLog => !state.audit_log.is_empty(),
         };
         state.loading = !already_loaded;
         let guild_id = state.guild_id;
-        if tab == ServerPanelTab::Roles {
-            self.fill_server_roles();
+        match tab {
+            ServerPanelTab::Roles => self.fill_server_roles(),
+            ServerPanelTab::Settings => self.fill_guild_settings(),
+            _ => {}
         }
         (!already_loaded).then(|| tab.load(guild_id)).flatten()
     }
@@ -305,9 +327,16 @@ impl DashboardState {
         let (tab, guild_id) = (state.tab, state.guild_id);
         // Roles come from the snapshot, so a refresh re-reads rather than
         // spending a request that would fetch nothing.
-        if tab == ServerPanelTab::Roles {
-            self.fill_server_roles();
-            return None;
+        match tab {
+            ServerPanelTab::Roles => {
+                self.fill_server_roles();
+                return None;
+            }
+            ServerPanelTab::Settings => {
+                self.fill_guild_settings();
+                return None;
+            }
+            _ => {}
         }
         state.loading = true;
         state.error = None;
@@ -364,6 +393,9 @@ impl DashboardState {
                     label: emoji.name,
                 })
             }
+            // Settings are shown rather than edited from the list; editing
+            // one opens its own field, which is not built yet.
+            ServerPanelTab::Settings => None,
             ServerPanelTab::Roles => {
                 if index >= state.roles.len() {
                     return None;
@@ -441,6 +473,42 @@ impl DashboardState {
         // Replaces the panel rather than stacking: the grid is 53 rows and
         // wants the whole popup area.
         self.open_role_permissions(guild_id, role_id);
+    }
+
+    /// Read the guild's settings out of the snapshot.
+    fn fill_guild_settings(&mut self) {
+        let Some(guild_id) = self.popups.server_management().map(|state| state.guild_id) else {
+            return;
+        };
+        let Some(guild) = self.discord.guild(guild_id) else {
+            return;
+        };
+
+        // Only what the snapshot actually carries. Default notifications and
+        // the explicit-content filter are not parsed off the wire yet, so
+        // showing them would mean showing a guess.
+        let settings = vec![
+            ("Name".to_owned(), guild.name.clone()),
+            (
+                "Verification".to_owned(),
+                crate::discord::verification_label(guild.verification_level.unwrap_or_default()),
+            ),
+            (
+                "Owner".to_owned(),
+                guild
+                    .owner_id
+                    .map(|id| id.get().to_string())
+                    .unwrap_or_else(|| "unknown".to_owned()),
+            ),
+            (
+                "Boosts".to_owned(),
+                format!("{} ({:?})", guild.boost_count, guild.boost_tier),
+            ),
+        ];
+
+        if let Some(state) = self.popups.server_management_mut() {
+            state.settings = settings;
+        }
     }
 
     /// Copy the guild's roles into the panel, highest first.

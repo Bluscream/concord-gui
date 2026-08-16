@@ -674,6 +674,11 @@ pub(in crate::tui::ui) fn render_server_management(
                     format!("discord.gg/{} - {uses} - {expiry}", invite.code)
                 })
                 .collect(),
+            ServerPanelTab::Settings => panel
+                .settings()
+                .iter()
+                .map(|(label, value)| format!("{label}: {value}"))
+                .collect(),
             ServerPanelTab::Roles => panel
                 .roles()
                 .iter()
@@ -727,6 +732,7 @@ pub(in crate::tui::ui) fn render_server_management(
 
         if rows.is_empty() {
             let empty = match tab {
+                ServerPanelTab::Settings => "No settings",
                 ServerPanelTab::Roles => "No roles",
                 ServerPanelTab::Invites => "No invites",
                 ServerPanelTab::Emoji => "No custom emoji",
@@ -764,7 +770,8 @@ pub(in crate::tui::ui) fn render_server_management(
             lines,
             match tab {
                 ServerPanelTab::Invites => "tab to switch, r to reload, enter to revoke",
-                ServerPanelTab::Roles => "tab to switch, n to create, enter to delete",
+                ServerPanelTab::Settings => "tab to switch, r to reload",
+                ServerPanelTab::Roles => "tab to switch, N new, p permissions, enter delete",
                 ServerPanelTab::Emoji => "tab, r reload, a add, n rename, enter delete",
                 ServerPanelTab::AuditLog => "tab to switch, r to reload",
             },

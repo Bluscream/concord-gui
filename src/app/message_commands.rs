@@ -460,6 +460,28 @@ load_guild_panel!(
 );
 
 /// Fetch a sound list. `None` asks for the default sounds.
+pub(super) async fn modify_guild(
+    client: DiscordClient,
+    guild_id: Id<GuildMarker>,
+    edit: Box<crate::discord::GuildEdit>,
+    label: String,
+) {
+    if let Err(error) = client.modify_guild(guild_id, &edit).await {
+        report_moderation_failure(&client, "editing", &label, &error).await;
+    }
+}
+
+pub(super) async fn set_guild_icon(
+    client: DiscordClient,
+    guild_id: Id<GuildMarker>,
+    image: Box<crate::discord::ProfileAvatarUpload>,
+    label: String,
+) {
+    if let Err(error) = client.set_guild_icon(guild_id, &image).await {
+        report_moderation_failure(&client, "setting the icon for", &label, &error).await;
+    }
+}
+
 pub(super) async fn create_role(client: DiscordClient, guild_id: Id<GuildMarker>, name: String) {
     if let Err(error) = client.create_role(guild_id, &name).await {
         report_moderation_failure(&client, "creating role", &name, &error).await;

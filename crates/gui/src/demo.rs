@@ -482,7 +482,9 @@ fn handle_command(
 
         // The fixture's channel tree is canned, so a create or delete would be
         // undone by the next reproject and read as the action having failed.
-        AppCommand::CreateRole { .. }
+        AppCommand::ModifyGuild { .. }
+        | AppCommand::SetGuildIcon { .. }
+        | AppCommand::CreateRole { .. }
         | AppCommand::ModifyRole { .. }
         | AppCommand::DeleteRole { .. }
         | AppCommand::ReorderRoles { .. }

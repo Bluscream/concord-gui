@@ -54,9 +54,16 @@ channel overwrite - the last wants a role picker in front of the grid.
 
 ### Guild settings
 
-Name, icon, banner, splash, verification level, default notification level,
-explicit content filter, system channel, AFK channel and timeout, vanity URL,
-discovery settings, and the community toggles.
+The REST side takes name, verification level, default notifications, the
+explicit-content filter, AFK channel and timeout, and the system channel; the
+icon has its own call because encoding an image should not abandon a name
+change made in the same form. A settings tab shows what the snapshot holds.
+
+Still missing: the editing form itself - the tab displays rather than edits -
+plus banner and splash, vanity URL, discovery, and the community toggles. Two
+fields cannot even be displayed yet: default notifications and the
+explicit-content filter are not parsed off the wire, so showing them would mean
+showing a guess.
 
 ### Account settings
 

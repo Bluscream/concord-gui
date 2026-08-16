@@ -310,6 +310,22 @@ impl DiscordClient {
         self.rest.unban_member(guild_id, user_id).await
     }
 
+    pub async fn modify_guild(
+        &self,
+        guild_id: Id<GuildMarker>,
+        edit: &crate::discord::GuildEdit,
+    ) -> Result<()> {
+        self.rest.modify_guild(guild_id, edit).await
+    }
+
+    pub async fn set_guild_icon(
+        &self,
+        guild_id: Id<GuildMarker>,
+        image: &crate::discord::ProfileAvatarUpload,
+    ) -> Result<()> {
+        self.rest.set_guild_icon(guild_id, image).await
+    }
+
     pub async fn create_role(&self, guild_id: Id<GuildMarker>, name: &str) -> Result<()> {
         self.rest.create_role(guild_id, name).await
     }
