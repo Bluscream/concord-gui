@@ -19,16 +19,18 @@ pub enum ServerPanelTab {
     Roles,
     Emoji,
     Sounds,
+    AutoMod,
     AuditLog,
 }
 
 impl ServerPanelTab {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Settings,
         Self::Invites,
         Self::Roles,
         Self::Emoji,
         Self::Sounds,
+        Self::AutoMod,
         Self::AuditLog,
     ];
 
@@ -39,6 +41,7 @@ impl ServerPanelTab {
             Self::Roles => "Roles",
             Self::Emoji => "Emoji",
             Self::Sounds => "Sounds",
+            Self::AutoMod => "AutoMod",
             Self::AuditLog => "Audit log",
         }
     }
@@ -57,6 +60,7 @@ impl ServerPanelTab {
             Self::Sounds => AppCommand::LoadSoundboardSounds {
                 guild_id: Some(guild_id),
             },
+            Self::AutoMod => AppCommand::LoadAutoModRules { guild_id },
             Self::AuditLog => AppCommand::LoadGuildAuditLog { guild_id },
         })
     }
@@ -94,6 +98,7 @@ pub(in crate::tui) struct ServerManagementState {
     /// The guild's own sounds. The default sounds belong in the picker, not
     /// here: they cannot be renamed or deleted by anyone.
     pub(super) sounds: Vec<crate::discord::SoundboardSound>,
+    pub(super) automod: Vec<crate::discord::AutoModRule>,
     pub(super) audit_log: Vec<AuditLogEntryInfo>,
     /// Set while the open tab's fetch is outstanding, so the popup can say so
     /// rather than looking like an empty list.
@@ -114,6 +119,10 @@ impl ServerManagementState {
 
     pub(in crate::tui) fn sounds(&self) -> &[crate::discord::SoundboardSound] {
         &self.sounds
+    }
+
+    pub(in crate::tui) fn automod(&self) -> &[crate::discord::AutoModRule] {
+        &self.automod
     }
 
     pub(in crate::tui) fn emojis(&self) -> &[GuildEmojiInfo] {
@@ -145,6 +154,7 @@ impl ServerManagementState {
             ServerPanelTab::Roles => self.roles.len(),
             ServerPanelTab::Emoji => self.emojis.len(),
             ServerPanelTab::Sounds => self.sounds.len(),
+            ServerPanelTab::AutoMod => self.automod.len(),
             ServerPanelTab::AuditLog => self.audit_log.len(),
         }
     }
@@ -174,6 +184,7 @@ impl DashboardState {
                 settings: Vec::new(),
                 emojis: Vec::new(),
                 sounds: Vec::new(),
+                automod: Vec::new(),
                 audit_log: Vec::new(),
                 loading: true,
                 error: None,
@@ -220,6 +231,7 @@ impl DashboardState {
             ServerPanelTab::Settings | ServerPanelTab::Roles => true,
             ServerPanelTab::Emoji => !state.emojis.is_empty(),
             ServerPanelTab::Sounds => !state.sounds.is_empty(),
+            ServerPanelTab::AutoMod => !state.automod.is_empty(),
             ServerPanelTab::AuditLog => !state.audit_log.is_empty(),
         };
         state.loading = !already_loaded;
@@ -553,6 +565,20 @@ impl DashboardState {
                     label: sound.name,
                 })
             }
+            ServerPanelTab::AutoMod => {
+                let rule = state.automod.get(index)?.clone();
+                // Toggling rather than deleting: a rule switched off can be
+                // switched back on, and its keyword list survives. Deleting is
+                // the destructive path and is not on enter.
+                let enabled = !rule.enabled;
+                state.automod[index].enabled = enabled;
+                Some(AppCommand::SetAutoModRuleEnabled {
+                    guild_id,
+                    rule_id: rule.id,
+                    enabled,
+                    label: rule.name,
+                })
+            }
             ServerPanelTab::AuditLog => None,
         }
     }
@@ -726,6 +752,22 @@ impl DashboardState {
         state.loading = false;
         state.error = None;
         state.sounds = sounds;
+    }
+
+    pub(in crate::tui) fn apply_automod_rules(
+        &mut self,
+        guild_id: Id<GuildMarker>,
+        rules: Vec<crate::discord::AutoModRule>,
+    ) {
+        let Some(state) = self.popups.server_management_mut() else {
+            return;
+        };
+        if state.guild_id != guild_id {
+            return;
+        }
+        state.loading = false;
+        state.error = None;
+        state.automod = rules;
     }
 
     pub(in crate::tui) fn apply_guild_emojis(

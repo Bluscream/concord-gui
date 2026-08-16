@@ -435,6 +435,14 @@ macro_rules! load_guild_panel {
 }
 
 load_guild_panel!(
+    load_automod_rules,
+    automod_rules,
+    AutoModRulesLoaded,
+    AutoModRulesLoadFailed,
+    rules,
+    "automod rules"
+);
+load_guild_panel!(
     load_guild_invites,
     guild_invites,
     GuildInvitesLoaded,
@@ -460,6 +468,32 @@ load_guild_panel!(
 );
 
 /// Fetch a sound list. `None` asks for the default sounds.
+pub(super) async fn set_automod_rule_enabled(
+    client: DiscordClient,
+    guild_id: Id<GuildMarker>,
+    rule_id: u64,
+    enabled: bool,
+    label: String,
+) {
+    if let Err(error) = client
+        .set_automod_rule_enabled(guild_id, rule_id, enabled)
+        .await
+    {
+        report_moderation_failure(&client, "toggling rule", &label, &error).await;
+    }
+}
+
+pub(super) async fn delete_automod_rule(
+    client: DiscordClient,
+    guild_id: Id<GuildMarker>,
+    rule_id: u64,
+    label: String,
+) {
+    if let Err(error) = client.delete_automod_rule(guild_id, rule_id).await {
+        report_moderation_failure(&client, "deleting rule", &label, &error).await;
+    }
+}
+
 pub(super) async fn modify_guild(
     client: DiscordClient,
     guild_id: Id<GuildMarker>,

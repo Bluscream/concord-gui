@@ -727,6 +727,18 @@ pub(in crate::tui::ui) fn render_server_management(
                     line
                 })
                 .collect(),
+            ServerPanelTab::AutoMod => panel
+                .automod()
+                .iter()
+                .map(|rule| {
+                    format!(
+                        "[{}] {} - {}",
+                        if rule.enabled { "on" } else { "off" },
+                        rule.name,
+                        rule.summary()
+                    )
+                })
+                .collect(),
             ServerPanelTab::AuditLog => panel
                 .audit_log()
                 .iter()
@@ -751,6 +763,7 @@ pub(in crate::tui::ui) fn render_server_management(
                 ServerPanelTab::Invites => "No invites",
                 ServerPanelTab::Emoji => "No custom emoji",
                 ServerPanelTab::Sounds => "No sounds in this server",
+                ServerPanelTab::AutoMod => "No AutoMod rules",
                 ServerPanelTab::AuditLog => "Nothing recorded",
             };
             vec![Line::from(Span::styled(
@@ -797,6 +810,7 @@ pub(in crate::tui::ui) fn render_server_management(
                 ServerPanelTab::Roles => "tab to switch, N new, p permissions, enter delete",
                 ServerPanelTab::Emoji => "tab, r reload, a add, n rename, enter delete",
                 ServerPanelTab::Sounds => "tab, r reload, n rename, enter delete",
+                ServerPanelTab::AutoMod => "tab, r reload, enter turns a rule on or off",
                 ServerPanelTab::AuditLog => "tab to switch, r to reload",
             },
         ),

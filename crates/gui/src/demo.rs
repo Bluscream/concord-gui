@@ -482,7 +482,21 @@ fn handle_command(
 
         // The fixture's channel tree is canned, so a create or delete would be
         // undone by the next reproject and read as the action having failed.
-        AppCommand::ModifyGuild { .. }
+        AppCommand::LoadAutoModRules { guild_id } => {
+            publish_event!(AppEvent::AutoModRulesLoaded {
+                guild_id,
+                rules: vec![concord::discord::AutoModRule {
+                    id: 1,
+                    name: "No invite links".to_string(),
+                    enabled: true,
+                    trigger: concord::discord::AutoModTrigger::Keyword,
+                    actions: vec![concord::discord::AutoModAction::BlockMessage],
+                }],
+            });
+        }
+        AppCommand::SetAutoModRuleEnabled { .. }
+        | AppCommand::DeleteAutoModRule { .. }
+        | AppCommand::ModifyGuild { .. }
         | AppCommand::SetGuildIcon { .. }
         | AppCommand::CreateRole { .. }
         | AppCommand::ModifyRole { .. }

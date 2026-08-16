@@ -310,6 +310,28 @@ impl DiscordClient {
         self.rest.unban_member(guild_id, user_id).await
     }
 
+    pub async fn automod_rules(
+        &self,
+        guild_id: Id<GuildMarker>,
+    ) -> Result<Vec<crate::discord::AutoModRule>> {
+        self.rest.automod_rules(guild_id).await
+    }
+
+    pub async fn set_automod_rule_enabled(
+        &self,
+        guild_id: Id<GuildMarker>,
+        rule_id: u64,
+        enabled: bool,
+    ) -> Result<()> {
+        self.rest
+            .set_automod_rule_enabled(guild_id, rule_id, enabled)
+            .await
+    }
+
+    pub async fn delete_automod_rule(&self, guild_id: Id<GuildMarker>, rule_id: u64) -> Result<()> {
+        self.rest.delete_automod_rule(guild_id, rule_id).await
+    }
+
     pub async fn modify_guild(
         &self,
         guild_id: Id<GuildMarker>,

@@ -260,3 +260,8 @@ action-new-role = New role
 action-server-settings = Server settings
 action-channel-topic = Set topic
 action-channel-slowmode = Set slowmode
+
+label-automod = AutoMod
+status-no-automod = No AutoMod rules
+action-enable = Enable
+action-disable = Disable

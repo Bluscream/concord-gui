@@ -709,6 +709,14 @@ pub enum AppEvent {
         guild_id: Option<Id<GuildMarker>>,
         message: String,
     },
+    AutoModRulesLoaded {
+        guild_id: Id<GuildMarker>,
+        rules: Vec<crate::discord::AutoModRule>,
+    },
+    AutoModRulesLoadFailed {
+        guild_id: Id<GuildMarker>,
+        message: String,
+    },
     GuildInvitesLoaded {
         guild_id: Id<GuildMarker>,
         invites: Vec<crate::discord::GuildInviteInfo>,
@@ -1027,6 +1035,8 @@ define_app_event_kinds! {
     SoundboardSoundPlayed: AppEvent::SoundboardSoundPlayed { .. },
     SoundboardSoundsLoaded: AppEvent::SoundboardSoundsLoaded { .. },
     SoundboardSoundsLoadFailed: AppEvent::SoundboardSoundsLoadFailed { .. },
+    AutoModRulesLoaded: AppEvent::AutoModRulesLoaded { .. },
+    AutoModRulesLoadFailed: AppEvent::AutoModRulesLoadFailed { .. },
     GuildInvitesLoaded: AppEvent::GuildInvitesLoaded { .. },
     GuildInvitesLoadFailed: AppEvent::GuildInvitesLoadFailed { .. },
     GuildEmojisLoaded: AppEvent::GuildEmojisLoaded { .. },
@@ -2090,6 +2100,8 @@ impl AppEventKind {
             | AppEventKind::SoundboardSoundPlayed
             | AppEventKind::SoundboardSoundsLoaded
             | AppEventKind::SoundboardSoundsLoadFailed
+            | AppEventKind::AutoModRulesLoaded
+            | AppEventKind::AutoModRulesLoadFailed
             | AppEventKind::GuildInvitesLoaded
             | AppEventKind::GuildInvitesLoadFailed
             | AppEventKind::GuildEmojisLoaded

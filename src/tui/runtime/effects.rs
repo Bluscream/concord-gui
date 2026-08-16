@@ -209,6 +209,14 @@ fn push_dashboard_effect(event: AppEvent, ctx: &mut EffectContext<'_>) {
             ctx.state.apply_soundboard_failure(message);
             return;
         }
+        AppEvent::AutoModRulesLoaded { guild_id, rules } => {
+            ctx.state.apply_automod_rules(guild_id, rules);
+            return;
+        }
+        AppEvent::AutoModRulesLoadFailed { guild_id, message } => {
+            ctx.state.apply_server_management_failure(guild_id, message);
+            return;
+        }
         AppEvent::GuildInvitesLoaded { guild_id, invites } => {
             ctx.state.apply_guild_invites(guild_id, invites);
             return;

@@ -258,3 +258,8 @@ action-new-role = Neue Rolle
 action-server-settings = Servereinstellungen
 action-channel-topic = Thema festlegen
 action-channel-slowmode = Slowmode festlegen
+
+label-automod = AutoMod
+status-no-automod = Keine AutoMod-Regeln
+action-enable = Aktivieren
+action-disable = Deaktivieren

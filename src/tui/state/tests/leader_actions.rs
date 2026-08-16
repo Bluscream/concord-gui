@@ -793,6 +793,13 @@ fn the_server_panel_only_fetches_a_tab_it_has_not_seen() {
     );
     state.apply_panel_sounds(Some(guild_id), Vec::new());
 
+    // Then the AutoMod rules.
+    assert_eq!(
+        state.next_server_tab(),
+        Some(AppCommand::LoadAutoModRules { guild_id })
+    );
+    state.apply_automod_rules(guild_id, Vec::new());
+
     assert_eq!(
         state.next_server_tab(),
         Some(AppCommand::LoadGuildAuditLog { guild_id })

@@ -26,6 +26,7 @@ use tokio::sync::{Mutex as AsyncMutex, Notify, OwnedMutexGuard};
 
 mod application;
 mod application_commands;
+mod automod;
 mod channel_management;
 mod connection;
 mod forum;
@@ -34,6 +35,7 @@ mod guild_settings;
 mod guilds;
 mod invites;
 
+pub use automod::{AutoModAction, AutoModRule, AutoModTrigger};
 pub use channel_management::{
     ChannelEdit, MAX_CHANNEL_NAME_CHARS, MAX_CHANNEL_TOPIC_CHARS, MAX_SLOWMODE_SECONDS,
     MAX_VOICE_USER_LIMIT, NewChannelKind, OverwriteTarget,

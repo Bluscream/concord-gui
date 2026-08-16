@@ -598,16 +598,18 @@ pub enum ServerTab {
     Roles,
     Emoji,
     Sounds,
+    AutoMod,
     AuditLog,
 }
 
 impl ServerTab {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Settings,
         Self::Invites,
         Self::Roles,
         Self::Emoji,
         Self::Sounds,
+        Self::AutoMod,
         Self::AuditLog,
     ];
 
@@ -618,6 +620,7 @@ impl ServerTab {
             Self::Roles => t!("label-roles"),
             Self::Emoji => t!("label-emoji"),
             Self::Sounds => t!("label-soundboard"),
+            Self::AutoMod => t!("label-automod"),
             Self::AuditLog => t!("label-audit-log"),
         }
     }
@@ -634,6 +637,7 @@ impl ServerTab {
             Self::Sounds => AppCommand::LoadSoundboardSounds {
                 guild_id: Some(guild_id),
             },
+            Self::AutoMod => AppCommand::LoadAutoModRules { guild_id },
             Self::AuditLog => AppCommand::LoadGuildAuditLog { guild_id },
         })
     }
@@ -652,6 +656,7 @@ pub struct ServerManagementView {
     /// The guild's own sounds. The defaults belong to the picker, where they
     /// can be played but not managed.
     pub sounds: Vec<concord::discord::SoundboardSound>,
+    pub automod: Vec<concord::discord::AutoModRule>,
     /// The guild's settings as label and value, read from the snapshot.
     pub settings: Vec<(String, String)>,
     /// Set while the open tab's fetch is outstanding. Distinct from an empty
@@ -4242,6 +4247,7 @@ impl Workspace {
             audit_log: Vec::new(),
             roles: Vec::new(),
             sounds: Vec::new(),
+            automod: Vec::new(),
             settings: Vec::new(),
             loading: true,
             error: None,
@@ -4328,6 +4334,7 @@ impl Workspace {
             ServerTab::Invites => !view.invites.is_empty(),
             ServerTab::Emoji => !view.emojis.is_empty(),
             ServerTab::Sounds => !view.sounds.is_empty(),
+            ServerTab::AutoMod => !view.automod.is_empty(),
             ServerTab::AuditLog => !view.audit_log.is_empty(),
         };
         view.loading = !already_loaded;
@@ -4751,6 +4758,43 @@ impl Workspace {
         if let Some(view) = &mut self.server_management {
             view.roles.remove(index);
         }
+    }
+
+    /// Turn an AutoMod rule on or off.
+    ///
+    /// The common case, and non-destructive: a rule switched off can be
+    /// switched back on, and its keyword list survives.
+    pub fn toggle_automod_rule(&mut self, index: usize) {
+        let (Some(handle), Some(view)) = (&self.handle, &mut self.server_management) else {
+            return;
+        };
+        let guild_id = view.guild_id;
+        let Some(rule) = view.automod.get_mut(index) else {
+            return;
+        };
+        rule.enabled = !rule.enabled;
+
+        handle.send(AppCommand::SetAutoModRuleEnabled {
+            guild_id,
+            rule_id: rule.id,
+            enabled: rule.enabled,
+            label: rule.name.clone(),
+        });
+    }
+
+    pub fn delete_automod_rule(&mut self, index: usize) {
+        let (Some(handle), Some(view)) = (&self.handle, &mut self.server_management) else {
+            return;
+        };
+        if index >= view.automod.len() {
+            return;
+        }
+        let rule = view.automod.remove(index);
+        handle.send(AppCommand::DeleteAutoModRule {
+            guild_id: view.guild_id,
+            rule_id: rule.id,
+            label: rule.name,
+        });
     }
 
     /// Delete one of the guild's sounds.
@@ -6387,6 +6431,23 @@ impl Workspace {
                     view.error = Some(message.clone());
                 }
             }
+            AppEvent::AutoModRulesLoaded { guild_id, rules } => {
+                if let Some(view) = &mut self.server_management
+                    && view.guild_id == *guild_id
+                {
+                    view.loading = false;
+                    view.error = None;
+                    view.automod = rules.clone();
+                }
+            }
+            AppEvent::AutoModRulesLoadFailed { guild_id, message } => {
+                if let Some(view) = &mut self.server_management
+                    && view.guild_id == *guild_id
+                {
+                    view.loading = false;
+                    view.error = Some(message.clone());
+                }
+            }
             AppEvent::GuildInvitesLoaded { guild_id, invites } => {
                 if let Some(view) = &mut self.server_management
                     && view.guild_id == *guild_id
@@ -7732,6 +7793,28 @@ impl Workspace {
                         .collect(),
                     t!("status-no-sounds"),
                 ),
+                ServerTab::AutoMod => (
+                    view.automod
+                        .iter()
+                        .map(|rule| overlay::ServerRow {
+                            primary: format!(
+                                "{} {}",
+                                if rule.enabled { "\u{25CF}" } else { "\u{25CB}" },
+                                rule.name
+                            ),
+                            secondary: Some(rule.summary()),
+                            action: Some(t!("action-delete")),
+                            // Toggling is the common case and non-destructive,
+                            // so it is the safe button rather than the red one.
+                            secondary_action: Some(if rule.enabled {
+                                t!("action-disable")
+                            } else {
+                                t!("action-enable")
+                            }),
+                        })
+                        .collect(),
+                    t!("status-no-automod"),
+                ),
                 ServerTab::Invites => (
                     view.invites
                         .iter()
@@ -7815,6 +7898,7 @@ impl Workspace {
                                 ServerTab::Emoji => workspace.delete_emoji(index),
                                 ServerTab::Roles => workspace.delete_role(index),
                                 ServerTab::Sounds => workspace.delete_sound(index),
+                                ServerTab::AutoMod => workspace.delete_automod_rule(index),
                                 // The settings list has no destructive action;
                                 // its rows are edited through the second one.
                                 ServerTab::AuditLog | ServerTab::Settings => {}
@@ -7832,6 +7916,7 @@ impl Workspace {
                                 ServerTab::Emoji => workspace.start_emoji_rename(index),
                                 ServerTab::Sounds => workspace.start_sound_rename(index),
                                 ServerTab::Roles => workspace.open_role_permissions(index),
+                                ServerTab::AutoMod => workspace.toggle_automod_rule(index),
                                 // Only the name is editable here; verification
                                 // and boosts are shown but not changed yet.
                                 ServerTab::Settings if index == 0 => {

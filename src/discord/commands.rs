@@ -542,6 +542,20 @@ pub enum AppCommand {
         label: String,
     },
     /// Fetch a sound list. `None` asks for the default sounds.
+    LoadAutoModRules {
+        guild_id: Id<GuildMarker>,
+    },
+    SetAutoModRuleEnabled {
+        guild_id: Id<GuildMarker>,
+        rule_id: u64,
+        enabled: bool,
+        label: String,
+    },
+    DeleteAutoModRule {
+        guild_id: Id<GuildMarker>,
+        rule_id: u64,
+        label: String,
+    },
     ModifyGuild {
         guild_id: Id<GuildMarker>,
         edit: Box<GuildEdit>,

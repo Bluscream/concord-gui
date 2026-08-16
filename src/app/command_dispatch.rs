@@ -552,6 +552,37 @@ impl CommandDispatcher {
                     .publish_event(crate::discord::AppEvent::GuildForgotten { guild_id })
                     .await;
             }
+            AppCommand::LoadAutoModRules { guild_id } => {
+                message_commands::load_automod_rules(self.client.clone(), guild_id).await;
+            }
+            AppCommand::SetAutoModRuleEnabled {
+                guild_id,
+                rule_id,
+                enabled,
+                label,
+            } => {
+                message_commands::set_automod_rule_enabled(
+                    self.client.clone(),
+                    guild_id,
+                    rule_id,
+                    enabled,
+                    label,
+                )
+                .await;
+            }
+            AppCommand::DeleteAutoModRule {
+                guild_id,
+                rule_id,
+                label,
+            } => {
+                message_commands::delete_automod_rule(
+                    self.client.clone(),
+                    guild_id,
+                    rule_id,
+                    label,
+                )
+                .await;
+            }
             AppCommand::ModifyGuild {
                 guild_id,
                 edit,

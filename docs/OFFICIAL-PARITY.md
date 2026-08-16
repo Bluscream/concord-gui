@@ -140,8 +140,14 @@ Setting the short status line on a voice channel.
 
 ### AutoMod
 
-Keyword filters, spam presets, allow lists, and the actions a rule takes. None
-of it exists.
+Both clients list a guild's rules, turn one on or off, and delete it. A rule
+says what fires it and what it then does, and an unrecognised trigger or action
+is shown with its number rather than hidden - Discord adds them, and a rule
+nobody can name is still filtering the server.
+
+Still missing: creating a rule, and editing its keyword list, regex patterns,
+mention cap or exempt roles and channels. That is a form of its own rather than
+a row in a list.
 
 ### Members, onboarding and welcome
 
