@@ -236,3 +236,9 @@ action-new-channel = New channel
 action-rename-channel = Rename channel
 action-delete-channel = Delete channel
 warning-delete-channel = Deleting a channel takes its whole history with it, and Discord has no undo.
+
+action-copy-text = Copy text
+action-open-in-new-tab = Open in new tab
+action-view-profile = View profile
+status-not-your-message = You can only edit your own messages
+status-no-permission = You do not have permission

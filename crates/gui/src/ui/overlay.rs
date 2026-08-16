@@ -1323,3 +1323,72 @@ pub fn soundboard_view(
             )),
     )
 }
+
+/// One entry in a context menu.
+pub struct ContextItem {
+    pub label: String,
+    /// Why it cannot be used, when it cannot. Shown greyed with the reason
+    /// rather than hidden, so the menu teaches what a permission is for.
+    pub disabled_reason: Option<String>,
+    /// Destructive entries are coloured, because a menu is a fast path and a
+    /// fast path to deleting something should look like one.
+    pub destructive: bool,
+}
+
+/// A context menu at the pointer.
+///
+/// Positioned rather than centred: a context menu that appears in the middle
+/// of the screen has lost the context it is named for.
+pub fn context_menu_view(
+    items: &[ContextItem],
+    at: gpui::Point<gpui::Pixels>,
+    on_pick: impl Fn(usize, &mut gpui::App) + Clone + 'static,
+) -> Div {
+    let mut menu = column()
+        .absolute()
+        .left(at.x)
+        .top(at.y)
+        .min_w(px(180.))
+        .py(px(space::XS))
+        .rounded(px(layout::RADIUS))
+        .bg(rgb(active().surface))
+        .border_1()
+        .border_color(rgb(active().border));
+
+    for (index, item) in items.iter().enumerate() {
+        let pick = on_pick.clone();
+        let enabled = item.disabled_reason.is_none();
+
+        menu = menu.child(
+            column()
+                .id(("context-item", index))
+                .w_full()
+                .px(px(space::SM))
+                .py(px(space::XS))
+                .when(enabled, |row| {
+                    row.cursor_pointer()
+                        .hover(|style| style.bg(rgb(active().surface_hover)))
+                        .on_click(move |_event, _window, cx| pick(index, cx))
+                })
+                .child(
+                    gpui::div()
+                        .text_size(px(scaled(text::SM)))
+                        .text_color(rgb(if !enabled {
+                            active().text_subtle
+                        } else if item.destructive {
+                            active().danger
+                        } else {
+                            active().text
+                        }))
+                        .child(item.label.clone()),
+                )
+                .children(item.disabled_reason.as_ref().map(|reason| {
+                    gpui::div()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().text_subtle))
+                        .child(reason.clone())
+                })),
+        );
+    }
+    menu
+}

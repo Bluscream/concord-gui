@@ -51,7 +51,7 @@ const EMOJI_SIZE: f32 = 20.;
 
 impl MessageAction {
     /// A stable small number, used only to build unique element ids.
-    fn slot(self) -> usize {
+    pub(super) fn slot(self) -> usize {
         match self {
             MessageAction::Reply => 0,
             MessageAction::React => 1,
@@ -75,6 +75,7 @@ impl MessageAction {
             MessageAction::LoadNewer => 19,
             MessageAction::Forward => 20,
             MessageAction::ViewImage(_) => 21,
+            MessageAction::ContextMenu(_) => 22,
         }
     }
 }
@@ -125,6 +126,11 @@ pub enum MessageAction {
     RevealSpoiler,
     /// Open an image attachment full size, by index.
     ViewImage(usize),
+    /// Right-clicked, at this position on screen.
+    ///
+    /// Carries the point because a context menu that opens anywhere but under
+    /// the pointer has lost the context it is named for.
+    ContextMenu(gpui::Point<gpui::Pixels>),
 }
 
 /// Render the full message list, oldest first.
@@ -243,6 +249,12 @@ fn message_row(
             d.bg(rgb(active().surface_hover))
                 .border_l_2()
                 .border_color(rgb(active().accent))
+        })
+        .on_mouse_down(gpui::MouseButton::Right, {
+            let handler = on_action.clone();
+            move |event: &gpui::MouseDownEvent, _window, cx| {
+                handler(index, MessageAction::ContextMenu(event.position), cx)
+            }
         })
         .child(message_block(index, message, options, on_action.clone()))
         .child(

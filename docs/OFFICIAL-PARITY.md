@@ -108,9 +108,14 @@ the row under the pointer, and opens that pane's action menu. The menus already
 existed and were reachable by keyboard, so this was routing rather than new
 menus.
 
-Still missing in the GUI, which has a hover action row on messages and panels
-elsewhere but no right-click menu. It needs the menu itself - a positioned
-overlay - reusing the same action enums so both clients offer the same items.
+Done in the GUI too: right-clicking a message, channel or member opens a menu
+at the pointer, built from the same permission checks the panels use, so a menu
+never offers what a panel refuses. Entries that cannot be used are greyed with
+the reason rather than hidden.
+
+Still missing: right-click on a guild in the sidebar, and the menu does not yet
+cover everything the panels do - pin, forward and thread actions are on the
+hover row only.
 
 ### Video
 

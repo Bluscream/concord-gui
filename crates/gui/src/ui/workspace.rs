@@ -449,6 +449,24 @@ fn audit_line(entry: &concord::discord::AuditLogEntryInfo) -> String {
     }
 }
 
+/// What a context menu was opened on.
+///
+/// Carrying the subject rather than a list of closures: the same menu is built
+/// from the same action enums the keyboard paths use, so the two cannot offer
+/// different things.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContextSubject {
+    Message(usize),
+    Channel(Id<marker::ChannelMarker>),
+    Member(Id<marker::UserMarker>),
+}
+
+/// An open context menu.
+pub struct ContextMenu {
+    pub subject: ContextSubject,
+    pub at: gpui::Point<gpui::Pixels>,
+}
+
 /// The soundboard picker.
 ///
 /// Holds both lists at once: the guild's sounds and the defaults every account
@@ -791,6 +809,8 @@ pub struct Workspace {
     pub viewing_image: Option<ImageViewerView>,
     /// A channel awaiting delete confirmation.
     pub deleting_channel: Option<Id<marker::ChannelMarker>>,
+    /// An open context menu: where it is, and what it acts on.
+    pub context_menu: Option<ContextMenu>,
     /// Roles being edited for a member: who, and the set as edited so far.
     pub editing_roles: Option<(Id<marker::UserMarker>, Vec<Id<marker::RoleMarker>>)>,
     /// Stickers staged for the next send. Discord accepts at most three.
@@ -930,6 +950,7 @@ impl Workspace {
             soundboard: None,
             viewing_image: None,
             deleting_channel: None,
+            context_menu: None,
             editing_roles: None,
             pending_stickers: Vec::new(),
             sticker_picker: false,
@@ -1973,6 +1994,7 @@ impl Workspace {
             || self.editing_activity.take().is_some()
             || self.viewing_image.take().is_some()
             || self.deleting_channel.take().is_some()
+            || self.context_menu.take().is_some()
             || self.renaming_folder.take().is_some()
             || self.picker.take().is_some()
             || self.stream_picker.take().is_some()
@@ -3296,6 +3318,9 @@ impl Workspace {
             MessageAction::LoadNewer => self.load_newer_messages(MessageHistoryAfterMode::GapFill),
             MessageAction::Forward => self.start_forward(index),
             MessageAction::ViewImage(position) => self.view_image(index, position),
+            MessageAction::ContextMenu(at) => {
+                self.open_context_menu(ContextSubject::Message(index), at);
+            }
             MessageAction::JumpToReplied => {
                 if let Some(target) = self
                     .messages
@@ -3924,6 +3949,128 @@ impl Workspace {
             matches!(self.nav.selection, Selection::Guild(guild_id)
                 if state.can_manage_channels(guild_id))
         })
+    }
+
+    /// Open a context menu on something.
+    pub fn open_context_menu(&mut self, subject: ContextSubject, at: gpui::Point<gpui::Pixels>) {
+        self.context_menu = Some(ContextMenu { subject, at });
+    }
+
+    /// What a context menu offers for its subject.
+    ///
+    /// Built from the same state the panels use, so a menu never offers
+    /// something a panel refuses or vice versa.
+    fn context_items(&self, subject: ContextSubject) -> Vec<overlay::ContextItem> {
+        let manage = self.can_manage_channels();
+        match subject {
+            ContextSubject::Message(index) => {
+                let mine = self
+                    .messages
+                    .get(index)
+                    .is_some_and(|row| Some(row.author_id) == self.current_user);
+                vec![
+                    overlay::ContextItem {
+                        label: t!("action-reply"),
+                        disabled_reason: None,
+                        destructive: false,
+                    },
+                    overlay::ContextItem {
+                        label: t!("action-copy-text"),
+                        disabled_reason: None,
+                        destructive: false,
+                    },
+                    overlay::ContextItem {
+                        label: t!("action-edit"),
+                        // Discord only lets you edit your own, so saying so
+                        // beats a round trip that fails.
+                        disabled_reason: (!mine).then(|| t!("status-not-your-message")),
+                        destructive: false,
+                    },
+                    overlay::ContextItem {
+                        label: t!("action-delete"),
+                        disabled_reason: None,
+                        destructive: true,
+                    },
+                ]
+            }
+            ContextSubject::Channel(_) => vec![
+                overlay::ContextItem {
+                    label: t!("action-open-in-new-tab"),
+                    disabled_reason: None,
+                    destructive: false,
+                },
+                overlay::ContextItem {
+                    label: t!("action-rename-channel"),
+                    disabled_reason: (!manage).then(|| t!("status-no-permission")),
+                    destructive: false,
+                },
+                overlay::ContextItem {
+                    label: t!("action-delete-channel"),
+                    disabled_reason: (!manage).then(|| t!("status-no-permission")),
+                    destructive: true,
+                },
+            ],
+            ContextSubject::Member(_) => vec![
+                overlay::ContextItem {
+                    label: t!("action-view-profile"),
+                    disabled_reason: None,
+                    destructive: false,
+                },
+                overlay::ContextItem {
+                    label: t!("action-block"),
+                    disabled_reason: None,
+                    destructive: true,
+                },
+            ],
+        }
+    }
+
+    /// Carry out the picked entry.
+    fn pick_context_item(&mut self, index: usize) {
+        let Some(menu) = self.context_menu.take() else {
+            return;
+        };
+
+        match (menu.subject, index) {
+            (ContextSubject::Message(row), 0) => {
+                if let Some(message) = self.messages.get(row) {
+                    let (id, author) = (message.id, message.author.clone());
+                    self.start_reply(id, author);
+                }
+            }
+            (ContextSubject::Message(row), 1) => {
+                self.pending_copy = self
+                    .messages
+                    .get(row)
+                    .map(|message| message.content.clone());
+            }
+            (ContextSubject::Message(row), 2) => {
+                if let Some(message) = self.messages.get(row) {
+                    self.start_edit(message.id);
+                }
+            }
+            (ContextSubject::Message(row), 3) => {
+                self.confirming = Some(Confirm {
+                    message: row,
+                    action: ConfirmAction::Delete,
+                });
+            }
+            (ContextSubject::Channel(channel_id), 0) => self.open_channel_in_new_tab(channel_id),
+            (ContextSubject::Channel(channel_id), 1) => {
+                let mut text = Composer::default();
+                text.set_text(&self.channel_name(channel_id));
+                self.prompt = Some((Prompt::ChannelName(channel_id), text));
+            }
+            (ContextSubject::Channel(channel_id), 2) => {
+                self.deleting_channel = Some(channel_id);
+            }
+            (ContextSubject::Member(user_id), 0) => self.open_profile(user_id),
+            (ContextSubject::Member(user_id), 1) => {
+                let label = self.friend_label(user_id);
+                self.friend_action(AppCommand::BlockUser { user_id, label });
+            }
+            _ => {}
+        }
     }
 
     /// Open the soundboard picker for the guild we are in voice in.
@@ -6526,6 +6673,18 @@ impl Workspace {
                 Some(channel_id) => entry
                     .id(("channel", index))
                     .cursor_pointer()
+                    // Right-click opens the same actions the header offers,
+                    // built from the same permission checks.
+                    .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                            this.open_context_menu(
+                                ContextSubject::Channel(channel_id),
+                                event.position,
+                            );
+                            cx.notify();
+                        }),
+                    )
                     .on_click(
                         cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
                             this.forum = None;
@@ -6684,6 +6843,13 @@ impl Workspace {
                 Some(user_id) => entry
                     .id(("member", pane_index))
                     .cursor_pointer()
+                    .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                            this.open_context_menu(ContextSubject::Member(user_id), event.position);
+                            cx.notify();
+                        }),
+                    )
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.open_profile(user_id);
                         cx.notify();
@@ -6831,6 +6997,45 @@ impl Workspace {
                                 }
                             },
                         )),
+                ),
+            );
+        }
+
+        if let Some(menu) = &self.context_menu {
+            let items = self.context_items(menu.subject);
+            let at = menu.at;
+
+            // A transparent full-size layer under the menu, so clicking away
+            // dismisses it - which is what closes every other context menu
+            // anyone has used.
+            let dismiss = {
+                let entity = entity.clone();
+                move |cx: &mut gpui::App| {
+                    entity.update(cx, |workspace, cx| {
+                        workspace.context_menu = None;
+                        cx.notify();
+                    });
+                }
+            };
+
+            return Some(
+                gpui::div().child(
+                    gpui::div()
+                        .id("context-dismiss")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .on_click(move |_event, _window, cx| dismiss(cx))
+                        .child(overlay::context_menu_view(&items, at, {
+                            let entity = entity.clone();
+                            move |index, cx: &mut gpui::App| {
+                                entity.update(cx, |workspace, cx| {
+                                    workspace.pick_context_item(index);
+                                    cx.notify();
+                                });
+                            }
+                        })),
                 ),
             );
         }
@@ -9182,5 +9387,51 @@ mod image_viewer_tests {
         let mut stale = view(1);
         stale.index = 5;
         assert_eq!(stale.url(), None);
+    }
+}
+
+#[cfg(test)]
+mod context_menu_tests {
+    use super::*;
+
+    #[test]
+    fn every_message_action_has_a_distinct_slot() {
+        // Slots build element ids. Two actions sharing one would make GPUI
+        // treat two different controls as the same element.
+        let actions = [
+            MessageAction::Reply,
+            MessageAction::React,
+            MessageAction::Edit,
+            MessageAction::Delete,
+            MessageAction::ToggleReaction(0),
+            MessageAction::RevealSpoiler,
+            MessageAction::OpenProfile,
+            MessageAction::LoadOlder,
+            MessageAction::JumpToReplied,
+            MessageAction::CopyText,
+            MessageAction::CopyLink,
+            MessageAction::ShowReactionUsers(0),
+            MessageAction::TogglePin,
+            MessageAction::VotePoll(0),
+            MessageAction::DownloadAttachment(0),
+            MessageAction::PlayAttachment(0),
+            MessageAction::RemoveEmbeds,
+            MessageAction::OpenLink(0),
+            MessageAction::OpenThread,
+            MessageAction::LoadNewer,
+            MessageAction::Forward,
+            MessageAction::ViewImage(0),
+            MessageAction::ContextMenu(gpui::point(gpui::px(0.), gpui::px(0.))),
+        ];
+
+        let mut slots: Vec<usize> = actions.iter().map(|action| action.slot()).collect();
+        slots.sort_unstable();
+        slots.dedup();
+
+        assert_eq!(
+            slots.len(),
+            actions.len(),
+            "two message actions share an element-id slot"
+        );
     }
 }

@@ -234,3 +234,9 @@ action-new-channel = Neuer Kanal
 action-rename-channel = Kanal umbenennen
 action-delete-channel = Kanal löschen
 warning-delete-channel = Beim Löschen eines Kanals geht sein gesamter Verlauf verloren, und Discord bietet kein Rückgängig.
+
+action-copy-text = Text kopieren
+action-open-in-new-tab = In neuem Tab öffnen
+action-view-profile = Profil anzeigen
+status-not-your-message = Du kannst nur eigene Nachrichten bearbeiten
+status-no-permission = Du hast keine Berechtigung
