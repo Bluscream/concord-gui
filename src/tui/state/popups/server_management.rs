@@ -15,27 +15,34 @@ use super::{ActiveModalPopupKind, ModalPopup, SelectablePopupState, SelectablePo
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServerPanelTab {
     Invites,
+    Roles,
     Emoji,
     AuditLog,
 }
 
 impl ServerPanelTab {
-    pub const ALL: [Self; 3] = [Self::Invites, Self::Emoji, Self::AuditLog];
+    pub const ALL: [Self; 4] = [Self::Invites, Self::Roles, Self::Emoji, Self::AuditLog];
 
     pub(in crate::tui) fn label(self) -> &'static str {
         match self {
             Self::Invites => "Invites",
+            Self::Roles => "Roles",
             Self::Emoji => "Emoji",
             Self::AuditLog => "Audit log",
         }
     }
 
-    fn load(self, guild_id: Id<GuildMarker>) -> AppCommand {
-        match self {
+    /// What to fetch when this tab opens.
+    ///
+    /// `None` for roles: they arrive with the guild and live in the snapshot,
+    /// so the tab reads them rather than asking for them.
+    fn load(self, guild_id: Id<GuildMarker>) -> Option<AppCommand> {
+        Some(match self {
+            Self::Roles => return None,
             Self::Invites => AppCommand::LoadGuildInvites { guild_id },
             Self::Emoji => AppCommand::LoadGuildEmojis { guild_id },
             Self::AuditLog => AppCommand::LoadGuildAuditLog { guild_id },
-        }
+        })
     }
 }
 
@@ -46,6 +53,8 @@ pub enum EmojiEdit {
     Rename(usize),
     /// A path to an image to add.
     AddImage,
+    /// A name for a new role.
+    NewRole,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -54,6 +63,9 @@ pub(in crate::tui) struct ServerManagementState {
     pub(super) tab: ServerPanelTab,
     pub(super) selection: SelectablePopupState,
     pub(super) invites: Vec<GuildInviteInfo>,
+    /// Read from the snapshot when the tab opens, highest first - the order
+    /// that decides which role wins a conflict.
+    pub(super) roles: Vec<crate::discord::RoleState>,
     pub(super) emojis: Vec<GuildEmojiInfo>,
     pub(super) audit_log: Vec<AuditLogEntryInfo>,
     /// Set while the open tab's fetch is outstanding, so the popup can say so
@@ -98,9 +110,14 @@ impl ServerManagementState {
     pub(in crate::tui) fn row_count(&self) -> usize {
         match self.tab {
             ServerPanelTab::Invites => self.invites.len(),
+            ServerPanelTab::Roles => self.roles.len(),
             ServerPanelTab::Emoji => self.emojis.len(),
             ServerPanelTab::AuditLog => self.audit_log.len(),
         }
+    }
+
+    pub(in crate::tui) fn roles(&self) -> &[crate::discord::RoleState] {
+        &self.roles
     }
 }
 
@@ -116,13 +133,19 @@ impl DashboardState {
                 tab,
                 selection: SelectablePopupState::default(),
                 invites: Vec::new(),
+                roles: Vec::new(),
                 emojis: Vec::new(),
                 audit_log: Vec::new(),
                 loading: true,
                 error: None,
                 renaming: None,
             }));
-        Some(tab.load(guild_id))
+        // Roles need no fetch, so opening on that tab fills from the snapshot
+        // and asks for nothing.
+        if tab == ServerPanelTab::Roles {
+            self.fill_server_roles();
+        }
+        tab.load(guild_id)
     }
 
     pub fn close_server_management(&mut self) {
@@ -153,12 +176,16 @@ impl DashboardState {
         // for.
         let already_loaded = match tab {
             ServerPanelTab::Invites => !state.invites.is_empty(),
+            ServerPanelTab::Roles => true,
             ServerPanelTab::Emoji => !state.emojis.is_empty(),
             ServerPanelTab::AuditLog => !state.audit_log.is_empty(),
         };
         state.loading = !already_loaded;
         let guild_id = state.guild_id;
-        (!already_loaded).then(|| tab.load(guild_id))
+        if tab == ServerPanelTab::Roles {
+            self.fill_server_roles();
+        }
+        (!already_loaded).then(|| tab.load(guild_id)).flatten()
     }
 
     /// Start renaming the highlighted emoji.
@@ -224,6 +251,15 @@ impl DashboardState {
 
         let index = match edit {
             EmojiEdit::Rename(index) => index,
+            EmojiEdit::NewRole => {
+                if text.is_empty() {
+                    return None;
+                }
+                return Some(AppCommand::CreateRole {
+                    guild_id,
+                    name: text,
+                });
+            }
             EmojiEdit::AddImage => {
                 if text.is_empty() {
                     return None;
@@ -266,9 +302,16 @@ impl DashboardState {
 
     pub fn reload_server_management(&mut self) -> Option<AppCommand> {
         let state = self.popups.server_management_mut()?;
+        let (tab, guild_id) = (state.tab, state.guild_id);
+        // Roles come from the snapshot, so a refresh re-reads rather than
+        // spending a request that would fetch nothing.
+        if tab == ServerPanelTab::Roles {
+            self.fill_server_roles();
+            return None;
+        }
         state.loading = true;
         state.error = None;
-        Some(state.tab.load(state.guild_id))
+        tab.load(guild_id)
     }
 
     pub fn move_server_selection_down(&mut self) {
@@ -321,7 +364,81 @@ impl DashboardState {
                     label: emoji.name,
                 })
             }
+            ServerPanelTab::Roles => {
+                if index >= state.roles.len() {
+                    return None;
+                }
+                let role = state.roles[index].clone();
+                // @everyone is the guild id and cannot be deleted; Discord
+                // refuses, so the row says why rather than failing.
+                if role.id.get() == guild_id.get() {
+                    self.show_error_toast(
+                        "@everyone cannot be deleted".to_owned(),
+                        std::time::Instant::now(),
+                    );
+                    return None;
+                }
+                // Only a role below your own: Discord refuses otherwise, and
+                // the refusal is worth explaining rather than round-tripping.
+                if !self.can_edit_role(guild_id, &role) {
+                    self.show_error_toast(
+                        format!("{} is at or above your highest role", role.name),
+                        std::time::Instant::now(),
+                    );
+                    return None;
+                }
+
+                if let Some(state) = self.popups.server_management_mut() {
+                    state.roles.remove(index);
+                }
+                Some(AppCommand::DeleteRole {
+                    guild_id,
+                    role_id: role.id,
+                    label: role.name,
+                })
+            }
             ServerPanelTab::AuditLog => None,
+        }
+    }
+
+    /// Whether this account may change a role.
+    ///
+    /// Discord refuses any change to a role at or above your own highest,
+    /// which is what stops someone granting themselves more than they have.
+    fn can_edit_role(&self, guild_id: Id<GuildMarker>, role: &crate::discord::RoleState) -> bool {
+        if !self.discord.cache.can_manage_roles(guild_id) {
+            return false;
+        }
+        self.discord.cache.can_assign_role(guild_id, role.id)
+    }
+
+    /// Start creating a role, reusing the emoji name field.
+    pub fn start_role_create(&mut self) {
+        if let Some(state) = self.popups.server_management_mut()
+            && state.tab == ServerPanelTab::Roles
+        {
+            state.renaming = Some((EmojiEdit::NewRole, TextInputState::default()));
+        }
+    }
+
+    /// Copy the guild's roles into the panel, highest first.
+    fn fill_server_roles(&mut self) {
+        let Some(guild_id) = self.popups.server_management().map(|state| state.guild_id) else {
+            return;
+        };
+        let mut roles: Vec<_> = self
+            .discord
+            .cache
+            .roles_for_guild(guild_id)
+            .into_iter()
+            .cloned()
+            .collect();
+        // Highest first, which is the order that decides which role wins a
+        // permission conflict and so the order people reason about them in.
+        roles.sort_by_key(|role| std::cmp::Reverse(role.position));
+
+        if let Some(state) = self.popups.server_management_mut() {
+            state.roles = roles;
         }
     }
 

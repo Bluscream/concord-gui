@@ -674,6 +674,24 @@ pub(in crate::tui::ui) fn render_server_management(
                     format!("discord.gg/{} - {uses} - {expiry}", invite.code)
                 })
                 .collect(),
+            ServerPanelTab::Roles => panel
+                .roles()
+                .iter()
+                .map(|role| {
+                    let mut line = role.name.clone();
+                    if role.hoist {
+                        line.push_str(" - shown separately");
+                    }
+                    // The count is what people actually want to know about a
+                    // role they are about to change.
+                    let granted = crate::discord::permissions_catalogue::ALL
+                        .iter()
+                        .filter(|permission| permission.is_set(role.permissions))
+                        .count();
+                    line.push_str(&format!(" ({granted} permissions)"));
+                    line
+                })
+                .collect(),
             ServerPanelTab::Emoji => panel
                 .emojis()
                 .iter()
@@ -709,6 +727,7 @@ pub(in crate::tui::ui) fn render_server_management(
 
         if rows.is_empty() {
             let empty = match tab {
+                ServerPanelTab::Roles => "No roles",
                 ServerPanelTab::Invites => "No invites",
                 ServerPanelTab::Emoji => "No custom emoji",
                 ServerPanelTab::AuditLog => "Nothing recorded",
@@ -730,6 +749,10 @@ pub(in crate::tui::ui) fn render_server_management(
                 vec![Line::from(Span::raw(format!("Name: {}", input.value())))],
                 "enter to rename, esc to cancel",
             ),
+            crate::tui::state::EmojiEdit::NewRole => (
+                vec![Line::from(Span::raw(format!("Name: {}", input.value())))],
+                "enter creates the role, esc cancels",
+            ),
             crate::tui::state::EmojiEdit::AddImage => (
                 vec![Line::from(Span::raw(format!("Image: {}", input.value())))],
                 "path to a PNG, JPEG, GIF or WebP - enter to add, esc to cancel",
@@ -741,6 +764,7 @@ pub(in crate::tui::ui) fn render_server_management(
             lines,
             match tab {
                 ServerPanelTab::Invites => "tab to switch, r to reload, enter to revoke",
+                ServerPanelTab::Roles => "tab to switch, n to create, enter to delete",
                 ServerPanelTab::Emoji => "tab, r reload, a add, n rename, enter delete",
                 ServerPanelTab::AuditLog => "tab to switch, r to reload",
             },

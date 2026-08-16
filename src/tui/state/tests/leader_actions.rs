@@ -773,7 +773,10 @@ fn the_server_panel_only_fetches_a_tab_it_has_not_seen() {
         }],
     );
 
-    // Moving on fetches, because that tab has never been loaded.
+    // Roles come next and fetch nothing: they arrive with the guild.
+    assert_eq!(state.next_server_tab(), None);
+
+    // Then emoji, which have never been loaded and so do fetch.
     assert_eq!(
         state.next_server_tab(),
         Some(AppCommand::LoadGuildEmojis { guild_id })
@@ -1159,4 +1162,45 @@ fn saving_an_unchanged_channel_sends_nothing() {
 
     state.open_channel_settings(channel_id);
     assert_eq!(state.submit_channel_edit(), None);
+}
+
+#[test]
+fn the_roles_tab_reads_the_snapshot_rather_than_fetching() {
+    // Roles arrive with the guild, so asking for them would spend a request
+    // that fetches nothing.
+    let mut state = state_with_many_guilds(1);
+    let guild_id = Id::new(1);
+
+    assert_eq!(
+        state.open_server_management(guild_id, ServerPanelTab::Roles),
+        None
+    );
+    assert_eq!(state.reload_server_management(), None);
+}
+
+#[test]
+fn everyone_cannot_be_deleted() {
+    // Discord refuses, because @everyone is the guild itself. Saying so beats
+    // a round trip that fails.
+    // state_with_channel_tree is the fixture that has an @everyone role;
+    // state_with_many_guilds has none at all.
+    let mut state = state_with_channel_tree();
+    let guild_id = Id::new(1);
+    state.open_server_management(guild_id, ServerPanelTab::Roles);
+
+    let has_everyone = state.server_management_state().is_some_and(|panel| {
+        panel
+            .roles()
+            .iter()
+            .any(|role| role.id.get() == guild_id.get())
+    });
+    assert!(has_everyone, "the fixture should have @everyone");
+
+    assert_eq!(state.activate_selected_server_row(), None);
+    // Still there: refused, not removed.
+    assert!(
+        state
+            .server_management_state()
+            .is_some_and(|panel| !panel.roles().is_empty())
+    );
 }

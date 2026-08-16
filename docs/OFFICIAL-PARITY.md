@@ -180,9 +180,11 @@ Core work whose interface has not been built yet. A legitimate intermediate
 state, but only while it is written down - `docs/PARITY.md` has the sweep that
 regenerates this list, and the two must be kept in step.
 
-- `ReorderChannels`, `SetChannelOverwrite`, `DeleteChannelOverwrite` - all
-  three want the permission editor, which is shared with role editing and is
-  therefore built alongside it rather than twice.
+- `ReorderChannels`, `SetChannelOverwrite`, `DeleteChannelOverwrite`,
+  `ReorderRoles`, `ModifyRole` - all want the permission grid, which role
+  editing and per-channel overwrites share and which is therefore built once.
+  Role creation and deletion are reachable; changing what a role *may do* is
+  not yet.
 - `SetVoiceChannelStatus` - small, and grouped with the other smaller gaps.
 - `RenameSoundboardSound`, `DeleteSoundboardSound` - want the expression
   management panel that emoji, stickers and sounds will share.
