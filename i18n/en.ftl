@@ -277,3 +277,6 @@ label-privacy = Privacy and safety
 state-on = On
 state-off = Off
 state-unknown = Unknown
+action-guild-dms-block = Block direct messages from this server
+action-guild-dms-allow = Allow direct messages from this server
+action-guild-dms-unknown = Direct messages from this server (unknown)

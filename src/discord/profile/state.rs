@@ -82,6 +82,7 @@ impl DiscordState {
             detect_platform_accounts: self.session.detect_platform_accounts,
             contact_sync_enabled: self.session.contact_sync_enabled,
             allow_accessibility_detection: self.session.allow_accessibility_detection,
+            restricted_guilds: self.session.restricted_guilds.clone(),
         }
     }
 

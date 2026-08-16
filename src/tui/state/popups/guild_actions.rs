@@ -103,6 +103,22 @@ impl DashboardState {
                         .then(|| "you do not have permission".to_owned()),
                 ),
                 GuildActionItem::new(
+                    GuildActionKind::ToggleGuildDirectMessages,
+                    // Phrased by what activating it does. Unknown says so
+                    // rather than guessing, since the list arrives with READY
+                    // and a guess would assert a privacy setting.
+                    match self
+                        .discord
+                        .privacy_state()
+                        .guild_direct_messages_allowed(state.id)
+                    {
+                        Some(true) => "Block direct messages from this server",
+                        Some(false) => "Allow direct messages from this server",
+                        None => "Direct messages from this server (unknown)",
+                    },
+                    ActionAvailability::Enabled,
+                ),
+                GuildActionItem::new(
                     GuildActionKind::ViewEmoji,
                     "Manage emoji",
                     (!self.discord.cache.can_manage_emoji(state.id))
@@ -230,6 +246,14 @@ impl DashboardState {
                         self.close_guild_action_menu();
                         self.open_join_server();
                         None
+                    }
+                    GuildActionKind::ToggleGuildDirectMessages => {
+                        let guild_id = self.selected_guild_cursor_id()?;
+                        let edit = self
+                            .discord
+                            .privacy_state()
+                            .toggled_guild_direct_messages(guild_id);
+                        Some(AppCommand::ModifyPrivacySettings { edit })
                     }
                     GuildActionKind::ViewBans => {
                         let guild_id = self.selected_guild_id()?;

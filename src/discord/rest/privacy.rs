@@ -163,6 +163,12 @@ pub struct PrivacyEdit {
     pub contact_sync_enabled: Option<bool>,
     /// Whether Discord may detect that a screen reader is running.
     pub allow_accessibility_detection: Option<bool>,
+    /// The guilds whose members may not send you direct messages.
+    ///
+    /// The whole list, because that is what the endpoint takes: it replaces
+    /// rather than merges, so sending one guild would unrestrict every other.
+    pub restricted_guilds:
+        Option<Vec<crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>>>,
 }
 
 impl PrivacyEdit {
@@ -174,6 +180,7 @@ impl PrivacyEdit {
             && self.detect_platform_accounts.is_none()
             && self.contact_sync_enabled.is_none()
             && self.allow_accessibility_detection.is_none()
+            && self.restricted_guilds.is_none()
     }
 
     /// How many fields this edit names.
@@ -189,6 +196,7 @@ impl PrivacyEdit {
             + usize::from(self.detect_platform_accounts.is_some())
             + usize::from(self.contact_sync_enabled.is_some())
             + usize::from(self.allow_accessibility_detection.is_some())
+            + usize::from(self.restricted_guilds.is_some())
     }
 
     fn to_body(&self) -> Value {
@@ -224,6 +232,18 @@ impl PrivacyEdit {
             fields.insert(
                 "allow_accessibility_detection".to_owned(),
                 Value::Bool(allow),
+            );
+        }
+        if let Some(guilds) = &self.restricted_guilds {
+            // Ids as strings, Discord's convention for snowflakes in JSON.
+            fields.insert(
+                "restricted_guilds".to_owned(),
+                Value::Array(
+                    guilds
+                        .iter()
+                        .map(|id| Value::from(id.get().to_string()))
+                        .collect(),
+                ),
             );
         }
         Value::Object(fields)
@@ -356,7 +376,9 @@ pub enum PrivacySetting {
 }
 
 /// What the account currently says, as far as the client has been told.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+// Not Copy: the restricted-guild list is owned, and the panels clone it once
+// per open rather than per row.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PrivacyState {
     pub dm_scan_level: Option<DmScanLevel>,
     pub default_guilds_restricted: Option<bool>,
@@ -365,6 +387,46 @@ pub struct PrivacyState {
     pub detect_platform_accounts: Option<bool>,
     pub contact_sync_enabled: Option<bool>,
     pub allow_accessibility_detection: Option<bool>,
+    /// The guilds whose members may not send you direct messages, or `None`
+    /// when the list never arrived.
+    pub restricted_guilds:
+        Option<Vec<crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>>>,
+}
+
+impl PrivacyState {
+    /// Whether members of this guild may send you direct messages.
+    ///
+    /// `None` when the list never arrived: a guild absent from a list that was
+    /// never received is not the same as one Discord confirmed is unrestricted.
+    pub fn guild_direct_messages_allowed(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+    ) -> Option<bool> {
+        self.restricted_guilds
+            .as_ref()
+            .map(|guilds| !guilds.contains(&guild_id))
+    }
+
+    /// The edit that flips one guild's restriction.
+    ///
+    /// Carries the rest of the list, since the endpoint replaces it whole -
+    /// sending only this guild would unrestrict every other one.
+    pub fn toggled_guild_direct_messages(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+    ) -> PrivacyEdit {
+        let mut guilds = self.restricted_guilds.clone().unwrap_or_default();
+        if let Some(position) = guilds.iter().position(|id| *id == guild_id) {
+            guilds.remove(position);
+        } else {
+            guilds.push(guild_id);
+        }
+
+        PrivacyEdit {
+            restricted_guilds: Some(guilds),
+            ..PrivacyEdit::default()
+        }
+    }
 }
 
 impl PrivacySetting {
@@ -636,5 +698,83 @@ mod discovery_tests {
                 by_phone: true,
             })
         );
+    }
+}
+
+#[cfg(test)]
+mod restricted_guild_tests {
+    use super::*;
+    use crate::discord::ids::Id;
+
+    fn state(restricted: &[u64]) -> PrivacyState {
+        PrivacyState {
+            restricted_guilds: Some(restricted.iter().map(|id| Id::new(*id)).collect()),
+            ..PrivacyState::default()
+        }
+    }
+
+    #[test]
+    fn toggling_one_guild_keeps_every_other_restriction() {
+        // The endpoint replaces the list rather than merging into it, so an
+        // edit carrying only this guild would unrestrict every other one.
+        let edit = state(&[1, 2, 3]).toggled_guild_direct_messages(Id::new(2));
+        let guilds = edit.restricted_guilds.expect("no list sent");
+
+        assert!(
+            !guilds.contains(&Id::new(2)),
+            "the guild is still restricted"
+        );
+        assert!(guilds.contains(&Id::new(1)));
+        assert!(guilds.contains(&Id::new(3)));
+    }
+
+    #[test]
+    fn restricting_a_guild_adds_it_without_dropping_the_others() {
+        let edit = state(&[1]).toggled_guild_direct_messages(Id::new(9));
+        let guilds = edit.restricted_guilds.expect("no list sent");
+
+        assert!(guilds.contains(&Id::new(1)));
+        assert!(guilds.contains(&Id::new(9)));
+    }
+
+    #[test]
+    fn toggling_twice_returns_to_the_original_list() {
+        let original = state(&[1, 2]);
+        let once = PrivacyState {
+            restricted_guilds: original
+                .toggled_guild_direct_messages(Id::new(1))
+                .restricted_guilds,
+            ..PrivacyState::default()
+        };
+        let twice = once.toggled_guild_direct_messages(Id::new(1));
+
+        let mut guilds = twice.restricted_guilds.expect("no list sent");
+        guilds.sort_unstable();
+        assert_eq!(guilds, vec![Id::new(1), Id::new(2)]);
+    }
+
+    #[test]
+    fn a_list_that_never_arrived_is_unknown_rather_than_unrestricted() {
+        // A guild missing from a list nobody received is not a guild Discord
+        // confirmed is unrestricted, and a menu that said "allowed" would be
+        // asserting something it was never told.
+        assert_eq!(
+            PrivacyState::default().guild_direct_messages_allowed(Id::new(1)),
+            None
+        );
+        assert_eq!(
+            state(&[1]).guild_direct_messages_allowed(Id::new(1)),
+            Some(false)
+        );
+        assert_eq!(
+            state(&[1]).guild_direct_messages_allowed(Id::new(2)),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn the_edit_names_only_the_guild_list() {
+        let edit = state(&[]).toggled_guild_direct_messages(Id::new(1));
+        assert_eq!(edit.named_field_count(), 1);
     }
 }

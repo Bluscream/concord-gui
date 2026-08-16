@@ -857,6 +857,7 @@ impl GuildActionKind {
             Self::ViewBans => "ViewBans",
             Self::ForgetServer => "ForgetServer",
             Self::ViewInvites => "ViewInvites",
+            Self::ToggleGuildDirectMessages => "ToggleGuildDirectMessages",
             Self::ViewEmoji => "ViewEmoji",
             Self::ViewAuditLog => "ViewAuditLog",
             Self::LeaveServer => "LeaveServer",

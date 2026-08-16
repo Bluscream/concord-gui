@@ -452,6 +452,8 @@ pub enum GuildActionKind {
     /// Drop a departed guild's cached conversation.
     ForgetServer,
     ViewInvites,
+    /// Whether this server's members may send you direct messages.
+    ToggleGuildDirectMessages,
     ViewEmoji,
     ViewAuditLog,
     FolderSettings,

@@ -483,6 +483,7 @@ pub enum ContextSubject {
     Message(usize),
     Channel(Id<marker::ChannelMarker>),
     Member(Id<marker::UserMarker>),
+    Guild(Id<marker::GuildMarker>),
 }
 
 /// An open context menu.
@@ -4131,6 +4132,18 @@ impl Workspace {
                     destructive: true,
                 },
             ],
+            ContextSubject::Guild(guild_id) => vec![overlay::ContextItem {
+                // Phrased by what activating it does. Unknown says so rather
+                // than guessing: the list arrives with READY, and a guess
+                // would assert a privacy setting nobody confirmed.
+                label: match self.privacy_state().guild_direct_messages_allowed(guild_id) {
+                    Some(true) => t!("action-guild-dms-block"),
+                    Some(false) => t!("action-guild-dms-allow"),
+                    None => t!("action-guild-dms-unknown"),
+                },
+                disabled_reason: None,
+                destructive: false,
+            }],
             ContextSubject::Member(_) => vec![
                 overlay::ContextItem {
                     label: t!("action-view-profile"),
@@ -4185,6 +4198,9 @@ impl Workspace {
             (ContextSubject::Channel(channel_id), 2) => {
                 self.deleting_channel = Some(channel_id);
             }
+            (ContextSubject::Guild(guild_id), 0) => {
+                self.toggle_guild_direct_messages(guild_id);
+            }
             (ContextSubject::Member(user_id), 0) => self.open_profile(user_id),
             (ContextSubject::Member(user_id), 1) => {
                 let label = self.friend_label(user_id);
@@ -4194,7 +4210,7 @@ impl Workspace {
         }
     }
 
-    /// Open the soundboard picker for the guild we are in voice in.
+    /// Open the privacy and safety panel.
     pub fn open_privacy(&mut self) {
         self.privacy_open = true;
     }
@@ -4207,6 +4223,15 @@ impl Workspace {
         self.last_state
             .as_ref()
             .map_or_else(Default::default, |state| state.privacy_state())
+    }
+
+    /// Whether this server's members may send you direct messages.
+    pub fn toggle_guild_direct_messages(&mut self, guild_id: Id<marker::GuildMarker>) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let edit = self.privacy_state().toggled_guild_direct_messages(guild_id);
+        handle.send(AppCommand::ModifyPrivacySettings { edit });
     }
 
     pub fn toggle_privacy_setting(&mut self, index: usize) {
@@ -7045,6 +7070,24 @@ impl Workspace {
                         this.open_guild(guild_id);
                         cx.notify();
                     }))
+                    // Right-click is the only way to reach the per-server
+                    // direct-message setting, which is the same place
+                    // Discord's own client puts it. Only for a real guild -
+                    // the direct-message entry on this rail has no id, and
+                    // "block direct messages from this server" would be
+                    // meaningless on it.
+                    .when_some(guild_id, |entry, guild_id| {
+                        entry.on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                                this.open_context_menu(
+                                    ContextSubject::Guild(guild_id),
+                                    event.position,
+                                );
+                                cx.notify();
+                            }),
+                        )
+                    })
                     .relative()
                     .child(avatar(44., &guild.name))
                     .when(selected, |d| {

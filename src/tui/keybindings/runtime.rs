@@ -940,6 +940,8 @@ impl KeyBindings {
             GuildActionKind::ViewBans => vec![char_chord('b')],
             GuildActionKind::ForgetServer => vec![char_chord('R')],
             GuildActionKind::ViewInvites => vec![char_chord('i')],
+            // Not 'd', which the emoji and sound tabs use for delete.
+            GuildActionKind::ToggleGuildDirectMessages => vec![char_chord('D')],
             GuildActionKind::ViewEmoji => vec![char_chord('e')],
             GuildActionKind::ViewAuditLog => vec![char_chord('A')],
             GuildActionKind::LeaveServer => vec![char_chord('l')],

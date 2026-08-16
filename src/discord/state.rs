@@ -787,6 +787,9 @@ impl DiscordState {
                 if let Some(allow) = settings.allow_accessibility_detection {
                     self.session_mut().allow_accessibility_detection = Some(allow);
                 }
+                if let Some(guilds) = &settings.restricted_guilds {
+                    self.session_mut().restricted_guilds = Some(guilds.clone());
+                }
             }
             AppEvent::UserNotificationSettingsUpdate { flags } => {
                 self.notifications_mut().user_notification_flags = *flags;

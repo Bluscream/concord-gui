@@ -1300,3 +1300,57 @@ fn a_guild_name_discord_would_reject_sends_nothing() {
 
     assert_eq!(state.submit_emoji_rename(), None);
 }
+
+#[test]
+fn guild_direct_message_action_reads_unknown_until_the_list_arrives() {
+    // The restricted-guild list comes with READY. A guild absent from a list
+    // nobody received is not a guild Discord confirmed is unrestricted, and
+    // labelling it "block" would assert a setting never seen.
+    let mut state = state_with_many_guilds(1);
+    state.focus_pane(FocusPane::Guilds);
+    state.open_selected_guild_actions();
+
+    let label = state
+        .selected_guild_action_items()
+        .into_iter()
+        .find(|action| action.kind == GuildActionKind::ToggleGuildDirectMessages)
+        .expect("the action should be offered")
+        .label;
+
+    assert!(label.contains("unknown"), "got {label:?}");
+}
+
+#[test]
+fn blocking_one_guilds_direct_messages_keeps_the_other_restrictions() {
+    // The endpoint replaces the whole list, so an edit carrying only this
+    // guild would unrestrict every other one.
+    let mut state = state_with_many_guilds(2);
+    state.focus_pane(FocusPane::Guilds);
+    let other = Id::new(9_999);
+    state.push_event(AppEvent::UserSettingsUpdate {
+        settings: crate::discord::UserSettingsInfo {
+            restricted_guilds: Some(vec![other]),
+            ..Default::default()
+        },
+    });
+    state.open_selected_guild_actions();
+
+    let selected = state
+        .selected_guild_cursor_id()
+        .expect("a guild should be selected");
+    let index = state
+        .selected_guild_action_items()
+        .iter()
+        .position(|action| action.kind == GuildActionKind::ToggleGuildDirectMessages)
+        .expect("the action should be offered");
+    assert!(state.select_guild_action_row(index));
+
+    let Some(AppCommand::ModifyPrivacySettings { edit }) = state.activate_selected_guild_action()
+    else {
+        panic!("no privacy edit sent");
+    };
+    let guilds = edit.restricted_guilds.expect("no list sent");
+
+    assert!(guilds.contains(&selected), "the guild was not restricted");
+    assert!(guilds.contains(&other), "the other restriction was dropped");
+}

@@ -115,9 +115,13 @@ bitfield, so they carry each other the same way the friend sources do.
 Both clients render `PrivacySetting::ALL`, so a row added to the core appears in
 both without either being edited - which is the point of it living there.
 
-Still missing: per-guild direct-message restrictions (`restricted_guilds`) for
-servers already joined. That needs a guild-scoped entry point rather than a row
-in this panel.
+Per-guild direct-message restrictions are on the server itself rather than in
+this panel, which is where Discord's own client puts them: the TUI's guild
+action menu (`D`) and the GUI's guild right-click. The endpoint replaces the
+whole restricted list rather than merging, so the toggle carries every other
+guild's restriction - both clients have a test for that.
+
+The privacy group is complete.
 
 ### Sessions and authorised apps
 
@@ -225,11 +229,10 @@ forward so it is not built twice.
 6. **AutoMod.**
 7. **Account settings** - credentials, 2FA, sessions, authorised apps.
    Password and 2FA fields are the user's to drive, never the agent's.
-8. **Per-guild DM restrictions** - the last of the privacy group.
-9. **Members, onboarding, welcome screen, widget.**
-10. **Video** - camera on the voice connection, receiving remote video,
-    pop-out windows, per-user mute and hide. Needs a real account to verify.
-11. **Events, stages, templates, discovery.**
+8. **Members, onboarding, welcome screen, widget.**
+9. **Video** - camera on the voice connection, receiving remote video,
+   pop-out windows, per-user mute and hide. Needs a real account to verify.
+10. **Events, stages, templates, discovery.**
 
 Then, and only then, the extras from AGENTS.md: offline-first, merged
 multi-account, and the rest.
