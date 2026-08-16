@@ -229,6 +229,17 @@ fn dispatch_popup_key(
         ActiveModalPopupKind::RolePicker => {
             route_fallback_key(state, key, stage, handle_role_picker_key)
         }
+        // Tab cycles the kind while creating; the rest is ordinary text entry.
+        ActiveModalPopupKind::ChannelEdit => {
+            route_fallback_key(state, key, stage, handle_channel_edit_key)
+        }
+        ActiveModalPopupKind::ChannelDelete => route_confirmation_key(
+            state,
+            key,
+            stage,
+            DashboardState::confirm_channel_delete,
+            DashboardState::close_channel_delete,
+        ),
         ActiveModalPopupKind::Soundboard => {
             route_fallback_key(state, key, stage, handle_soundboard_key)
         }
@@ -918,6 +929,30 @@ fn handle_server_management_key(state: &mut DashboardState, key: KeyEvent) -> Op
         KeyCode::Char('r') => return state.reload_server_management(),
         KeyCode::Char('n') => state.start_emoji_rename(),
         KeyCode::Char('a') => state.start_emoji_upload(),
+        _ => {}
+    }
+    None
+}
+
+/// Creating or renaming a channel: one field, plus a kind to cycle when new.
+///
+/// Reuses the composer's key mapping so editing behaves the way every other
+/// text field in this client does, including any rebinding in keymap.toml.
+fn handle_channel_edit_key(state: &mut DashboardState, key: KeyEvent) -> Option<AppCommand> {
+    if key.code == KeyCode::Tab {
+        state.cycle_new_channel_kind();
+        return None;
+    }
+
+    match state.key_bindings().composer_action(key) {
+        ComposerAction::Submit => return state.submit_channel_edit(),
+        ComposerAction::Close => state.close_channel_edit(),
+        ComposerAction::ClearInput => {
+            state.edit_channel_name(TextEditAction::DeleteToLineStart);
+        }
+        ComposerAction::EditText(action) => state.edit_channel_name(action),
+        ComposerAction::InsertChar(value) => state.insert_channel_name_char(value),
+        // Newlines, editors and attachments have no meaning in a name field.
         _ => {}
     }
     None

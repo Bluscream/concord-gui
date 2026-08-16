@@ -93,9 +93,9 @@ pub(in crate::tui) use popups::{
     VoiceParticipantAudioField,
 };
 pub use popups::{
-    AttachmentViewerZoom, EmojiEdit, EmojiReactionPickerState, MessageActionMenuState,
-    MessageUrlPickerState, NotificationInboxChannelLoad, NotificationInboxItem,
-    NotificationInboxLoad, NotificationInboxMessage, NotificationInboxTab,
+    AttachmentViewerZoom, ChannelEditPurpose, EmojiEdit, EmojiReactionPickerState,
+    MessageActionMenuState, MessageUrlPickerState, NotificationInboxChannelLoad,
+    NotificationInboxItem, NotificationInboxLoad, NotificationInboxMessage, NotificationInboxTab,
     NotificationInboxUnreadItem, PollVotePickerState, ReactionUsersEntry, ReactionUsersPopupState,
     ServerPanelTab, UserProfileSettingsField, UserProfileSettingsTab,
 };

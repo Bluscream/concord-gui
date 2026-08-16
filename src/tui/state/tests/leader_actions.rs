@@ -63,7 +63,7 @@ fn channel_action_menu_show_threads_opens_thread_list_view() {
 
     assert!(state.is_channel_action_menu_active());
     let actions = state.selected_channel_action_items();
-    assert_eq!(actions.len(), 8);
+    assert_eq!(actions.len(), 11);
     assert_eq!(actions[0].kind, ChannelActionKind::JoinVoice);
     assert_eq!(actions[0].label, "Join voice");
     assert!(!actions[0].is_enabled());
@@ -396,7 +396,7 @@ fn category_leader_action_lists_disabled_rows_and_dispatches_mute_command() {
 
     assert!(state.is_channel_action_menu_active());
     let actions = state.selected_channel_action_items();
-    assert_eq!(actions.len(), 8);
+    assert_eq!(actions.len(), 11);
     // Everything but muting is refused on a category, and each says why.
     for kind in [
         ChannelActionKind::JoinVoice,

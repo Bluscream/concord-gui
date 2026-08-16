@@ -212,6 +212,11 @@ impl DiscordState {
         self.has_guild_permission(guild_id, PERMISSION_MANAGE_ROLES)
     }
 
+    /// Whether channels can be created, edited, reordered or deleted.
+    pub fn can_manage_channels(&self, guild_id: Id<GuildMarker>) -> bool {
+        self.has_guild_permission(guild_id, PERMISSION_MANAGE_CHANNELS)
+    }
+
     /// Whether the guild's invite list can be read.
     ///
     /// Reading every invite is Manage Server, not Create Invite: someone who

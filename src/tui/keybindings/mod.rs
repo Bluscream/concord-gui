@@ -893,6 +893,9 @@ impl ChannelActionKind {
             Self::WatchStream => "WatchStream",
             Self::ParticipantAudioSettings => "VoiceParticipantAudio",
             Self::CreateInvite => "CreateInvite",
+            Self::RenameChannel => "RenameChannel",
+            Self::DeleteChannel => "DeleteChannel",
+            Self::CreateChannel => "CreateChannel",
         }
     }
 }

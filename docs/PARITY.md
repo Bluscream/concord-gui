@@ -247,8 +247,24 @@ for v in $(grep -oE '^    [A-Z][A-Za-z]+ \{' src/discord/commands.rs | tr -d ' {
 done
 ```
 
+And the commands neither client reaches, which the asymmetry check above
+cannot see because a hole in both is symmetric:
+
+```bash
+for v in $(grep -oE '^    [A-Z][A-Za-z]+ \{' src/discord/commands.rs | tr -d ' {'); do
+  n=$(grep -rn "AppCommand::$v" src/tui crates/gui/src --include=*.rs 2>/dev/null \
+    | grep -v "demo.rs" | grep -vc test)
+  [ "$n" -eq 0 ] && echo "unreachable: $v"
+done
+```
+
 Both lists should be empty. `RenameEmoji` was dispatched and reachable from
 neither; `CreateChannelInvite` and `RenameEmoji` were later reachable only from
 the GUI. All three were found this way rather than by noticing.
 
 Ignore `Custom` - it is a `ReactionEmoji` variant the pattern also matches.
+
+Anything else on the unreachable list is core work whose interface has not been
+built yet. That is a legitimate intermediate state, but only while it is
+written down: see the "Built but unreachable" section of
+`docs/OFFICIAL-PARITY.md`, which must be kept in step with this list.

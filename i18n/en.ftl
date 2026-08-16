@@ -231,3 +231,8 @@ action-forget-guild = Remove from this client
 label-soundboard = Soundboard
 status-no-sounds = No sounds
 action-soundboard = Soundboard
+
+action-new-channel = New channel
+action-rename-channel = Rename channel
+action-delete-channel = Delete channel
+warning-delete-channel = Deleting a channel takes its whole history with it, and Discord has no undo.

@@ -200,6 +200,10 @@ pub enum Prompt {
     EmojiName(usize),
     /// A path to an image to add as a custom emoji.
     EmojiImage,
+    /// A name for a new channel in the open guild.
+    NewChannel,
+    /// A new name for the open channel.
+    ChannelName(Id<marker::ChannelMarker>),
 }
 
 impl Prompt {
@@ -207,6 +211,8 @@ impl Prompt {
         match self {
             Prompt::EmojiName(_) => "Rename emoji",
             Prompt::EmojiImage => "Add emoji",
+            Prompt::NewChannel => "New channel",
+            Prompt::ChannelName(_) => "Rename channel",
             Prompt::ThreadName => "Rename thread",
             Prompt::ForumPostTitle => "New post",
             Prompt::InviteCode => "Join a server",
@@ -217,6 +223,8 @@ impl Prompt {
         match self {
             Prompt::EmojiName(_) => "Emoji name",
             Prompt::EmojiImage => "Path to a PNG, JPEG, GIF or WebP",
+            Prompt::NewChannel => "Channel name",
+            Prompt::ChannelName(_) => "Channel name",
             Prompt::ThreadName => "Thread name",
             Prompt::ForumPostTitle => "Post title",
             Prompt::InviteCode => "discord.gg/... or an invite code",
@@ -781,6 +789,8 @@ pub struct Workspace {
     pub soundboard: Option<SoundboardView>,
     /// An image being viewed full size.
     pub viewing_image: Option<ImageViewerView>,
+    /// A channel awaiting delete confirmation.
+    pub deleting_channel: Option<Id<marker::ChannelMarker>>,
     /// Roles being edited for a member: who, and the set as edited so far.
     pub editing_roles: Option<(Id<marker::UserMarker>, Vec<Id<marker::RoleMarker>>)>,
     /// Stickers staged for the next send. Discord accepts at most three.
@@ -919,6 +929,7 @@ impl Workspace {
             server_management: None,
             soundboard: None,
             viewing_image: None,
+            deleting_channel: None,
             editing_roles: None,
             pending_stickers: Vec::new(),
             sticker_picker: false,
@@ -1648,6 +1659,8 @@ impl Workspace {
             Prompt::ThreadName => self.rename_thread(text),
             Prompt::EmojiName(index) => self.rename_emoji(index, text),
             Prompt::EmojiImage => self.create_emoji(text),
+            Prompt::NewChannel => self.create_channel(text),
+            Prompt::ChannelName(channel_id) => self.rename_channel(channel_id, text),
             Prompt::InviteCode => self.resolve_invite(&text),
             Prompt::ForumPostTitle => {
                 // The body is the composer's content, so a post is written the
@@ -1959,6 +1972,7 @@ impl Workspace {
             || self.editing_status.take().is_some()
             || self.editing_activity.take().is_some()
             || self.viewing_image.take().is_some()
+            || self.deleting_channel.take().is_some()
             || self.renaming_folder.take().is_some()
             || self.picker.take().is_some()
             || self.stream_picker.take().is_some()
@@ -3858,6 +3872,58 @@ impl Workspace {
                 view.zoom.zoom_out()
             };
         }
+    }
+
+    /// Create a text channel in the open guild.
+    ///
+    /// Text, because that is what "new channel" means nine times out of ten;
+    /// the other kinds belong in a fuller editor rather than behind a guess.
+    fn create_channel(&mut self, name: String) {
+        let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
+            return;
+        };
+
+        handle.send(AppCommand::CreateGuildChannel {
+            guild_id,
+            name,
+            kind: concord::discord::NewChannelKind::Text,
+            // At the top level. Putting it in whichever category is nearby
+            // would be a guess about what was meant.
+            parent_id: None,
+        });
+    }
+
+    fn rename_channel(&mut self, channel_id: Id<marker::ChannelMarker>, name: String) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let label = self.channel_name(channel_id);
+
+        handle.send(AppCommand::ModifyChannel {
+            channel_id,
+            edit: Box::new(concord::discord::ChannelEdit {
+                name: Some(name),
+                ..concord::discord::ChannelEdit::default()
+            }),
+            label,
+        });
+    }
+
+    /// Delete the open channel, once confirmed.
+    fn delete_channel_confirmed(&mut self, channel_id: Id<marker::ChannelMarker>) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let label = self.channel_name(channel_id);
+        handle.send(AppCommand::DeleteChannel { channel_id, label });
+    }
+
+    /// Whether channels can be managed in the open guild.
+    fn can_manage_channels(&self) -> bool {
+        self.last_state.as_ref().is_some_and(|state| {
+            matches!(self.nav.selection, Selection::Guild(guild_id)
+                if state.can_manage_channels(guild_id))
+        })
     }
 
     /// Open the soundboard picker for the guild we are in voice in.
@@ -6769,6 +6835,36 @@ impl Workspace {
             );
         }
 
+        if let Some(channel_id) = self.deleting_channel {
+            let name = self.channel_name(channel_id);
+            return Some(overlay::scrim().child(overlay::confirm_view(
+                &format!(
+                    "{} #{name}? {}",
+                    t!("action-delete-channel"),
+                    t!("warning-delete-channel")
+                ),
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.deleting_channel = None;
+                            workspace.delete_channel_confirmed(channel_id);
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.deleting_channel = None;
+                            cx.notify();
+                        });
+                    }
+                },
+            )));
+        }
+
         if let Some(view) = &self.soundboard {
             let rows: Vec<overlay::SoundRow> = view
                 .sounds()
@@ -7707,6 +7803,65 @@ impl Workspace {
                                         this.set_thread_archived(true);
                                         cx.notify();
                                     })),
+                            )
+                    })
+                    // Managing channels needs Manage Channels. Hidden rather
+                    // than disabled: unlike a per-member action, there is no
+                    // per-channel reason to explain - either the account may
+                    // administer this server or it may not.
+                    .when(self.can_manage_channels(), |header| {
+                        header
+                            .child(
+                                icon_button(
+                                    "channel-new",
+                                    "\u{FF0B}",
+                                    t!("action-new-channel"),
+                                    false,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
+                                        this.prompt =
+                                            Some((Prompt::NewChannel, Composer::default()));
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                            .child(
+                                icon_button(
+                                    "channel-rename",
+                                    "\u{270E}",
+                                    t!("action-rename-channel"),
+                                    false,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
+                                        if let Some(channel_id) = this.nav.channel {
+                                            let mut text = Composer::default();
+                                            // Seeded with the current name: a
+                                            // rename is usually a correction.
+                                            text.set_text(&this.channel_name(channel_id));
+                                            this.prompt =
+                                                Some((Prompt::ChannelName(channel_id), text));
+                                        }
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                            .child(
+                                icon_button(
+                                    "channel-delete",
+                                    "\u{2716}",
+                                    t!("action-delete-channel"),
+                                    false,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
+                                        if let Some(channel_id) = this.nav.channel {
+                                            this.deleting_channel = Some(channel_id);
+                                        }
+                                        cx.notify();
+                                    },
+                                )),
                             )
                     })
                     // Only where the account may make one: an invite button

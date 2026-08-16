@@ -130,6 +130,12 @@ impl DashboardState {
         let Some(channel) = self.discord.cache.channel(channel_id) else {
             return Vec::new();
         };
+        // Managing channels needs Manage Channels. Refused with the reason
+        // rather than hidden, so the control teaches what it needs.
+        let can_manage = channel
+            .guild_id
+            .is_some_and(|guild_id| self.discord.cache.can_manage_channels(guild_id));
+        let manage_reason = (!can_manage).then(|| "you do not have permission".to_owned());
         // Threads live under text-like channels. Forums already show their posts
         // as the channel view, and categories and voice channels cannot host
         // threads, so the action is offered everywhere else. The list itself is
@@ -226,6 +232,23 @@ impl DashboardState {
                 } else {
                     None
                 },
+            ),
+            // Managing channels needs Manage Channels, and is refused with the
+            // reason rather than hidden, so the control teaches what it needs.
+            ChannelActionItem::new(
+                ChannelActionKind::CreateChannel,
+                "Create a channel",
+                manage_reason.clone(),
+            ),
+            ChannelActionItem::new(
+                ChannelActionKind::RenameChannel,
+                "Rename channel",
+                manage_reason.clone(),
+            ),
+            ChannelActionItem::new(
+                ChannelActionKind::DeleteChannel,
+                "Delete channel",
+                manage_reason.clone(),
             ),
             ChannelActionItem::new(
                 ChannelActionKind::ShowPinnedMessages,
@@ -408,6 +431,28 @@ impl DashboardState {
                     ChannelActionKind::ToggleStream => {
                         self.close_channel_action_menu();
                         self.toggle_current_voice_stream_command()
+                    }
+                    ChannelActionKind::CreateChannel => {
+                        self.close_channel_action_menu();
+                        self.open_channel_create();
+                        None
+                    }
+                    ChannelActionKind::RenameChannel => {
+                        self.close_channel_action_menu();
+                        self.open_channel_rename(channel_id);
+                        None
+                    }
+                    ChannelActionKind::DeleteChannel => {
+                        let label = self
+                            .discord
+                            .channel(channel_id)
+                            .map(|channel| channel.name.clone())
+                            .unwrap_or_else(|| format!("channel-{}", channel_id.get()));
+                        self.close_channel_action_menu();
+                        // Confirmed, because a deleted channel takes its whole
+                        // history with it and Discord offers no undo.
+                        self.open_channel_delete_confirmation(channel_id, label);
+                        None
                     }
                     ChannelActionKind::CreateInvite => {
                         self.close_channel_action_menu();

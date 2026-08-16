@@ -146,3 +146,16 @@ and the gift inventory - Discord selling something rather than Discord working.
 Also out: creator monetisation, role subscriptions, entitlements, SKUs,
 premium referrals, billing, payments, the store, promotions, guild analytics
 and top-games. Selling and measuring, neither of which this client does.
+
+## Built but unreachable
+
+Core work whose interface has not been built yet. A legitimate intermediate
+state, but only while it is written down - `docs/PARITY.md` has the sweep that
+regenerates this list, and the two must be kept in step.
+
+- `ReorderChannels`, `SetChannelOverwrite`, `DeleteChannelOverwrite` - all
+  three want the permission editor, which is shared with role editing and is
+  therefore built alongside it rather than twice.
+- `SetVoiceChannelStatus` - small, and grouped with the other smaller gaps.
+- `RenameSoundboardSound`, `DeleteSoundboardSound` - want the expression
+  management panel that emoji, stickers and sounds will share.

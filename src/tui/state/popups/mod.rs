@@ -25,6 +25,7 @@ use crate::tui::text_input::TextInputState;
 mod attachment_viewer;
 mod bans;
 mod channel_actions;
+mod channel_edit;
 mod channel_switcher;
 mod diagnostics;
 mod forum_post;
@@ -59,6 +60,8 @@ use super::{
     DashboardState, EmojiReactionItem, FocusPane, MessageUrlItem, PollVotePickerItem,
     ThreadEditField,
 };
+pub use channel_edit::ChannelEditPurpose;
+use channel_edit::{ChannelDeleteState, ChannelEditState};
 use channel_switcher::ChannelSwitcherState;
 use notification_inbox::NotificationInboxState;
 pub use notification_inbox::{
@@ -155,6 +158,8 @@ define_modal_popups! {
     BanList(BanListState),
     ServerManagement(ServerManagementState),
     Soundboard(SoundboardState),
+    ChannelEdit(ChannelEditState),
+    ChannelDelete(ChannelDeleteState),
     RiskWarning(RiskWarningState),
 }
 
@@ -1378,6 +1383,24 @@ impl PopupUiState {
 
     modal_popup_accessors!(ban_list, ban_list_mut, BanList, BanListState, state);
     modal_popup_accessors!(
+        channel_edit,
+        channel_edit_mut,
+        ChannelEdit,
+        ChannelEditState,
+        state
+    );
+
+    pub(super) fn channel_delete(&self) -> Option<&ChannelDeleteState> {
+        match &self.modal {
+            Some(ModalPopup::ChannelDelete(state)) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub(super) fn take_channel_delete(&mut self) -> Option<ChannelDeleteState> {
+        take_modal_state!(self, ChannelDelete, state)
+    }
+    modal_popup_accessors!(
         soundboard,
         soundboard_mut,
         Soundboard,
@@ -1836,6 +1859,8 @@ impl DashboardState {
             ActiveModalPopupKind::RiskWarning => self.close_risk_warning(),
             ActiveModalPopupKind::ServerManagement => self.close_server_management(),
             ActiveModalPopupKind::Soundboard => self.close_soundboard(),
+            ActiveModalPopupKind::ChannelEdit => self.close_channel_edit(),
+            ActiveModalPopupKind::ChannelDelete => self.close_channel_delete(),
             ActiveModalPopupKind::Options if self.is_capturing_push_to_talk_shortcut() => {
                 self.cancel_push_to_talk_shortcut_capture();
             }
@@ -2144,6 +2169,10 @@ impl DashboardState {
             ModalPopup::Soundboard(_) => {
                 ActivePopupPolicy::selectable(kind, SelectablePopupTarget::Soundboard)
             }
+            ModalPopup::ChannelEdit(_) => {
+                ActivePopupPolicy::routed(kind, ActivePopupInteraction::NoNavigation)
+            }
+            ModalPopup::ChannelDelete(_) => ActivePopupPolicy::confirmation(kind),
             ModalPopup::ForumPostComposer(_) => {
                 ActivePopupPolicy::scrollable(kind, ScrollablePopupTarget::ForumPostComposer)
             }

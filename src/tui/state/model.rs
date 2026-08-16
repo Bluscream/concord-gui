@@ -396,6 +396,9 @@ pub enum ChannelActionKind {
     WatchStream,
     ParticipantAudioSettings,
     CreateInvite,
+    RenameChannel,
+    DeleteChannel,
+    CreateChannel,
 }
 
 pub type ChannelActionItem = ActionItem<ChannelActionKind>;

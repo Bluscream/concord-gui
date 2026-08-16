@@ -226,9 +226,11 @@ pub(super) use channel_switcher::{
     channel_switcher_list_layout, channel_switcher_popup_area, render_channel_switcher_popup,
 };
 pub(super) use confirmation::{
+    channel_delete_confirmation_popup_area_for_state, channel_edit_popup_area,
     guild_leave_confirmation_popup_area_for_state, long_message_confirmation_popup_area_for_state,
     message_confirmation_popup_area_for_state, quit_confirmation_popup_area,
-    render_guild_leave_confirmation, render_long_message_confirmation, render_message_confirmation,
+    render_channel_delete_confirmation, render_channel_edit, render_guild_leave_confirmation,
+    render_long_message_confirmation, render_message_confirmation,
     render_notification_inbox_mark_all_confirmation, render_quit_confirmation, render_risk_warning,
     render_thread_delete_confirmation, risk_warning_popup_area_for_state,
     thread_delete_confirmation_popup_area_for_state,
@@ -458,6 +460,10 @@ pub(super) fn background_media_occlusion_areas(
 fn active_modal_popup_area(frame_area: Rect, state: &DashboardState) -> Option<Rect> {
     let kind = state.active_modal_popup_kind()?;
     match kind {
+        ActiveModalPopupKind::ChannelEdit => Some(channel_edit_popup_area(frame_area)),
+        ActiveModalPopupKind::ChannelDelete => {
+            channel_delete_confirmation_popup_area_for_state(frame_area, state)
+        }
         ActiveModalPopupKind::Soundboard => {
             let count = state.soundboard_state().map(|s| s.len()).unwrap_or(0);
             Some(action_menu_area(frame_area, count.max(1)))

@@ -78,6 +78,94 @@ pub(in crate::tui::ui) fn render_guild_leave_confirmation(
     render_modal_paragraph(frame, popup, "Leave server?", lines);
 }
 
+/// Creating or renaming a channel.
+pub(in crate::tui::ui) fn render_channel_edit(
+    frame: &mut Frame,
+    area: Rect,
+    state: &DashboardState,
+) {
+    if !state.is_active_modal_popup(ActiveModalPopupKind::ChannelEdit) {
+        return;
+    }
+    let Some(edit) = state.channel_edit_state() else {
+        return;
+    };
+
+    let (title, hint, kind_line) = match edit.purpose() {
+        crate::tui::state::ChannelEditPurpose::Create { kind } => (
+            "New channel",
+            "tab changes the kind, enter creates, esc cancels",
+            Some(format!("Kind: {}", kind.label())),
+        ),
+        crate::tui::state::ChannelEditPurpose::Rename { .. } => {
+            ("Rename channel", "enter renames, esc cancels", None)
+        }
+    };
+
+    let mut lines = vec![Line::from(Span::raw(format!(
+        "Name: {}",
+        edit.name().value()
+    )))];
+    lines.extend(kind_line.map(|line| Line::from(Span::raw(line))));
+    lines.push(Line::from(Span::raw(String::new())));
+    lines.push(Line::from(Span::styled(
+        hint.to_owned(),
+        theme::current().style(theme::HighlightGroup::Hint),
+    )));
+
+    let popup = channel_edit_popup_area(area);
+    render_modal_paragraph(frame, popup, title, lines);
+}
+
+pub(in crate::tui::ui) fn channel_edit_popup_area(area: Rect) -> Rect {
+    centered_rect(area, 54, 6)
+}
+
+/// Deleting a channel, which takes its whole history with it.
+pub(in crate::tui::ui) fn render_channel_delete_confirmation(
+    frame: &mut Frame,
+    area: Rect,
+    state: &DashboardState,
+) {
+    if !state.is_active_modal_popup(ActiveModalPopupKind::ChannelDelete) {
+        return;
+    }
+    let Some(name) = state.channel_delete_name() else {
+        return;
+    };
+
+    let lines = channel_delete_confirmation_lines(&name, state.active_confirmation_button());
+    let popup = message_confirmation_popup_area(area, lines.len());
+    render_modal_paragraph(frame, popup, "Delete channel?", lines);
+}
+
+fn channel_delete_confirmation_lines(name: &str, active: ConfirmationButton) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::from(Span::raw(
+            "Deleting a channel takes its whole history with it, and Discord has no undo."
+                .to_owned(),
+        )),
+        Line::from(Span::styled(
+            format!("Channel: #{name}"),
+            theme::current().style(theme::HighlightGroup::Error),
+        )),
+        Line::from(Span::raw(String::new())),
+    ];
+    lines.extend(confirmation_button_lines_with_labels(
+        active, "delete", "cancel",
+    ));
+    lines
+}
+
+pub(in crate::tui::ui) fn channel_delete_confirmation_popup_area_for_state(
+    area: Rect,
+    state: &DashboardState,
+) -> Option<Rect> {
+    let name = state.channel_delete_name()?;
+    let lines = channel_delete_confirmation_lines(&name, state.active_confirmation_button());
+    Some(message_confirmation_popup_area(area, lines.len()))
+}
+
 pub(in crate::tui::ui) fn render_risk_warning(
     frame: &mut Frame,
     area: Rect,
