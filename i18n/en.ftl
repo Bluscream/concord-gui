@@ -251,3 +251,12 @@ status-everyone-undeletable = @everyone cannot be deleted
 status-role-outranks-you = That role is at or above your highest
 
 status-unsaved = unsaved
+
+action-channel-permissions = Channel permissions (@everyone)
+
+status-name-too-short = A server name needs at least two characters
+status-not-a-number = That is not a number
+action-new-role = New role
+action-server-settings = Server settings
+action-channel-topic = Set topic
+action-channel-slowmode = Set slowmode

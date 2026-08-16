@@ -200,6 +200,16 @@ pub enum Prompt {
     EmojiName(usize),
     /// A new name for a sound, by its index in the open sounds tab.
     SoundName(usize),
+    /// A name for a new role in the open guild.
+    NewRole,
+    /// A new name for the open guild.
+    GuildName,
+    /// A path to an image to use as the guild icon.
+    GuildIcon,
+    /// A channel topic, by channel.
+    ChannelTopic(Id<marker::ChannelMarker>),
+    /// Slowmode in seconds, by channel.
+    ChannelSlowmode(Id<marker::ChannelMarker>),
     /// A path to an image to add as a custom emoji.
     EmojiImage,
     /// A name for a new channel in the open guild.
@@ -213,6 +223,11 @@ impl Prompt {
         match self {
             Prompt::EmojiName(_) => "Rename emoji",
             Prompt::SoundName(_) => "Rename sound",
+            Prompt::NewRole => "New role",
+            Prompt::GuildName => "Rename server",
+            Prompt::GuildIcon => "Server icon",
+            Prompt::ChannelTopic(_) => "Channel topic",
+            Prompt::ChannelSlowmode(_) => "Slowmode",
             Prompt::EmojiImage => "Add emoji",
             Prompt::NewChannel => "New channel",
             Prompt::ChannelName(_) => "Rename channel",
@@ -226,6 +241,11 @@ impl Prompt {
         match self {
             Prompt::EmojiName(_) => "Emoji name",
             Prompt::SoundName(_) => "Sound name",
+            Prompt::NewRole => "Role name",
+            Prompt::GuildName => "Server name",
+            Prompt::GuildIcon => "Path to a PNG, JPEG, GIF or WebP",
+            Prompt::ChannelTopic(_) => "Topic - empty clears it",
+            Prompt::ChannelSlowmode(_) => "Seconds between messages, 0 for none",
             Prompt::EmojiImage => "Path to a PNG, JPEG, GIF or WebP",
             Prompt::NewChannel => "Channel name",
             Prompt::ChannelName(_) => "Channel name",
@@ -471,18 +491,44 @@ pub struct ContextMenu {
     pub at: gpui::Point<gpui::Pixels>,
 }
 
-/// A role's permissions, being edited.
+/// What a permission grid is editing.
 ///
-/// Roles only, for now: a channel overwrite has a third "inherit" state that
-/// the TUI's grid models and this one does not yet, and offering two states
-/// where there are three would silently turn inherit into deny.
+/// A role grants or does not - two states. A channel overwrite allows, denies,
+/// or says nothing and lets the roles decide - three. Modelling the role case
+/// as a special overwrite would be neater and wrong: a role's bitfield has no
+/// inherit, and offering one would show a state that cannot be saved.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PermissionScope {
+    Role {
+        guild_id: Id<marker::GuildMarker>,
+        role_id: Id<marker::RoleMarker>,
+    },
+    ChannelOverwrite {
+        channel_id: Id<marker::ChannelMarker>,
+        target: concord::discord::OverwriteTarget,
+    },
+}
+
+/// Permissions being edited.
 pub struct PermissionGridView {
-    pub guild_id: Id<marker::GuildMarker>,
-    pub role_id: Id<marker::RoleMarker>,
+    pub scope: PermissionScope,
     pub name: String,
-    pub permissions: u64,
-    /// What it was when the grid opened, so saving sends only a real change.
-    pub original: u64,
+    /// Allowed bits. For a role this is the whole answer.
+    pub allow: u64,
+    /// Denied bits. Always zero for a role, which has no deny.
+    pub deny: u64,
+    pub original_allow: u64,
+    pub original_deny: u64,
+}
+
+impl PermissionGridView {
+    pub fn allows_inherit(&self) -> bool {
+        matches!(self.scope, PermissionScope::ChannelOverwrite { .. })
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.allow != self.original_allow || self.deny != self.original_deny
+    }
 }
 
 /// The soundboard picker.
@@ -1730,6 +1776,11 @@ impl Workspace {
             Prompt::ThreadName => self.rename_thread(text),
             Prompt::EmojiName(index) => self.rename_emoji(index, text),
             Prompt::SoundName(index) => self.rename_sound(index, text),
+            Prompt::NewRole => self.create_role(text),
+            Prompt::GuildName => self.rename_guild(text),
+            Prompt::GuildIcon => self.set_guild_icon(text),
+            Prompt::ChannelTopic(channel_id) => self.set_channel_topic(channel_id, text),
+            Prompt::ChannelSlowmode(channel_id) => self.set_channel_slowmode(channel_id, text),
             Prompt::EmojiImage => self.create_emoji(text),
             Prompt::NewChannel => self.create_channel(text),
             Prompt::ChannelName(channel_id) => self.rename_channel(channel_id, text),
@@ -4405,16 +4456,63 @@ impl Workspace {
         }
 
         self.permission_grid = Some(PermissionGridView {
-            guild_id,
-            role_id: role.id,
+            scope: PermissionScope::Role {
+                guild_id,
+                role_id: role.id,
+            },
             name: role.name,
-            permissions: role.permissions,
-            original: role.permissions,
+            allow: role.permissions,
+            deny: 0,
+            original_allow: role.permissions,
+            original_deny: 0,
         });
     }
 
-    /// Turn one permission on or off.
-    pub fn toggle_permission(&mut self, index: usize) {
+    /// Edit a channel's overwrite for @everyone.
+    ///
+    /// Seeded from the existing overwrite when there is one, so the grid opens
+    /// on what is actually in force rather than on blank.
+    pub fn open_channel_overwrite(&mut self, channel_id: Id<marker::ChannelMarker>) {
+        let Some(state) = self.last_state.as_ref() else {
+            return;
+        };
+        let Some(channel) = state.channel(channel_id) else {
+            return;
+        };
+        let Some(guild_id) = channel.guild_id else {
+            return;
+        };
+        if !state.can_manage_roles(guild_id) {
+            self.model.status_line = t!("status-no-permission");
+            return;
+        }
+
+        // @everyone's role id is the guild id.
+        let role_id = concord::discord::Id::new(guild_id.get());
+        let existing = channel
+            .permission_overwrites
+            .iter()
+            .find(|overwrite| overwrite.id == role_id.get());
+        let (allow, deny) = existing.map_or((0, 0), |overwrite| (overwrite.allow, overwrite.deny));
+
+        self.permission_grid = Some(PermissionGridView {
+            scope: PermissionScope::ChannelOverwrite {
+                channel_id,
+                target: concord::discord::OverwriteTarget::Role(role_id),
+            },
+            name: format!("#{} - @everyone", channel.name),
+            allow,
+            deny,
+            original_allow: allow,
+            original_deny: deny,
+        });
+    }
+
+    /// Step one permission through the states its scope has.
+    ///
+    /// Inherit, allow, deny for an overwrite; on and off for a role, which has
+    /// no inherit to offer.
+    pub fn cycle_permission(&mut self, index: usize) {
         let Some(view) = &mut self.permission_grid else {
             return;
         };
@@ -4424,9 +4522,23 @@ impl Workspace {
         else {
             return;
         };
-        let granted = permission.is_set(view.permissions);
-        view.permissions =
-            concord::discord::permissions_catalogue::with(view.permissions, permission, !granted);
+        use concord::discord::permissions_catalogue::with;
+
+        let allowed = permission.is_set(view.allow);
+        let denied = permission.is_set(view.deny);
+
+        if !view.allows_inherit() {
+            view.allow = with(view.allow, permission, !allowed);
+            return;
+        }
+        // inherit -> allow -> deny -> inherit
+        let (allow, deny) = match (allowed, denied) {
+            (false, false) => (true, false),
+            (true, _) => (false, true),
+            (false, true) => (false, false),
+        };
+        view.allow = with(view.allow, permission, allow);
+        view.deny = with(view.deny, permission, deny);
     }
 
     /// Save the grid.
@@ -4436,21 +4548,133 @@ impl Workspace {
         };
         // Nothing changed, so nothing is sent: it would spend a request and
         // write an audit entry saying so.
-        if view.permissions == view.original {
+        if !view.is_dirty() {
             return;
         }
         let Some(handle) = &self.handle else {
             return;
         };
 
-        handle.send(AppCommand::ModifyRole {
-            guild_id: view.guild_id,
-            role_id: view.role_id,
-            edit: Box::new(concord::discord::RoleEdit {
-                permissions: Some(view.permissions),
-                ..concord::discord::RoleEdit::default()
+        match view.scope {
+            PermissionScope::Role { guild_id, role_id } => handle.send(AppCommand::ModifyRole {
+                guild_id,
+                role_id,
+                edit: Box::new(concord::discord::RoleEdit {
+                    permissions: Some(view.allow),
+                    ..concord::discord::RoleEdit::default()
+                }),
+                label: view.name,
             }),
-            label: view.name,
+            PermissionScope::ChannelOverwrite { channel_id, target } => {
+                // An overwrite that neither allows nor denies anything is not
+                // an overwrite; Discord keeps the row, so it is removed.
+                if view.allow == 0 && view.deny == 0 {
+                    handle.send(AppCommand::DeleteChannelOverwrite {
+                        channel_id,
+                        target,
+                        label: view.name,
+                    });
+                } else {
+                    handle.send(AppCommand::SetChannelOverwrite {
+                        channel_id,
+                        target,
+                        allow: view.allow,
+                        deny: view.deny,
+                        label: view.name,
+                    });
+                }
+            }
+        }
+    }
+
+    /// The open channel's topic, for seeding the field.
+    fn channel_topic(&self, channel_id: Id<marker::ChannelMarker>) -> String {
+        self.last_state
+            .as_ref()
+            .and_then(|state| state.channel(channel_id))
+            .and_then(|channel| channel.topic.clone())
+            .unwrap_or_default()
+    }
+
+    /// Create a role, with no permissions.
+    ///
+    /// Like Discord's own "new role": granting anything at creation would be a
+    /// guess, and the grid is one click away.
+    fn create_role(&mut self, name: String) {
+        let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
+            return;
+        };
+        handle.send(AppCommand::CreateRole { guild_id, name });
+    }
+
+    fn rename_guild(&mut self, name: String) {
+        let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
+            return;
+        };
+        if !concord::discord::is_valid_guild_name(&name) {
+            self.model.status_line = t!("status-name-too-short");
+            return;
+        }
+        handle.send(AppCommand::ModifyGuild {
+            guild_id,
+            edit: Box::new(concord::discord::GuildEdit {
+                name: Some(name.clone()),
+                ..concord::discord::GuildEdit::default()
+            }),
+            label: name,
+        });
+    }
+
+    fn set_guild_icon(&mut self, path: String) {
+        let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
+            return;
+        };
+        handle.send(AppCommand::SetGuildIcon {
+            guild_id,
+            image: Box::new(concord::discord::ProfileAvatarUpload::from_path(
+                path.into(),
+            )),
+            label: self
+                .model
+                .guilds
+                .iter()
+                .find(|guild| guild.id == Some(guild_id))
+                .map(|guild| guild.name.clone())
+                .unwrap_or_default(),
+        });
+    }
+
+    fn set_channel_topic(&mut self, channel_id: Id<marker::ChannelMarker>, topic: String) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        handle.send(AppCommand::ModifyChannel {
+            channel_id,
+            edit: Box::new(concord::discord::ChannelEdit {
+                // An emptied field clears the topic rather than leaving it,
+                // which is what the placeholder promises.
+                topic: Some((!topic.is_empty()).then_some(topic)),
+                ..concord::discord::ChannelEdit::default()
+            }),
+            label: self.channel_name(channel_id),
+        });
+    }
+
+    fn set_channel_slowmode(&mut self, channel_id: Id<marker::ChannelMarker>, seconds: String) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Ok(seconds) = seconds.trim().parse::<u32>() else {
+            self.model.status_line = t!("status-not-a-number");
+            return;
+        };
+        handle.send(AppCommand::ModifyChannel {
+            channel_id,
+            edit: Box::new(concord::discord::ChannelEdit {
+                slowmode_seconds: Some(seconds),
+                ..concord::discord::ChannelEdit::default()
+            }),
+            label: self.channel_name(channel_id),
         });
     }
 
@@ -7372,19 +7596,25 @@ impl Workspace {
                 .map(|permission| overlay::PermissionRow {
                     label: permission.label.to_owned(),
                     description: permission.description.to_owned(),
-                    granted: permission.is_set(view.permissions),
+                    setting: if permission.is_set(view.allow) {
+                        overlay::PermissionState::Allow
+                    } else if permission.is_set(view.deny) {
+                        overlay::PermissionState::Deny
+                    } else {
+                        overlay::PermissionState::Inherit
+                    },
                 })
                 .collect();
 
             return Some(overlay::scrim().child(overlay::permission_grid_view(
                 &view.name,
                 &rows,
-                view.permissions != view.original,
+                view.is_dirty(),
                 {
                     let entity = entity.clone();
                     move |index, cx: &mut gpui::App| {
                         entity.update(cx, |workspace, cx| {
-                            workspace.toggle_permission(index);
+                            workspace.cycle_permission(index);
                             cx.notify();
                         });
                     }
@@ -7461,7 +7691,9 @@ impl Workspace {
                             // Only the name and verification level can be
                             // changed here; the rest are facts about the guild.
                             action: None,
-                            secondary_action: None,
+                            // Only the name can be changed from here.
+                            secondary_action: (label == &t!("label-name"))
+                                .then(|| t!("action-rename")),
                         })
                         .collect::<Vec<_>>(),
                     t!("status-loading"),
@@ -7541,6 +7773,8 @@ impl Workspace {
             };
 
             let add_emoji_label = t!("action-add-emoji");
+            let add_role_label = t!("action-new-role");
+            let server_settings_label = t!("action-server-settings");
             return Some(overlay::scrim().child(overlay::server_management_view(
                 overlay::ServerPanel {
                     tabs: &tabs,
@@ -7551,7 +7785,14 @@ impl Workspace {
                     // Only emoji can be added from here; invites have their
                     // own button in the channel header, and history cannot be
                     // added to at all.
-                    add_label: (view.tab == ServerTab::Emoji).then_some(add_emoji_label.as_str()),
+                    // Each tab that can gain something says so; the rest have
+                    // nothing to add from here.
+                    add_label: match view.tab {
+                        ServerTab::Emoji => Some(add_emoji_label.as_str()),
+                        ServerTab::Roles => Some(add_role_label.as_str()),
+                        ServerTab::Settings => Some(server_settings_label.as_str()),
+                        _ => None,
+                    },
                 },
                 {
                     let entity = entity.clone();
@@ -7574,8 +7815,8 @@ impl Workspace {
                                 ServerTab::Emoji => workspace.delete_emoji(index),
                                 ServerTab::Roles => workspace.delete_role(index),
                                 ServerTab::Sounds => workspace.delete_sound(index),
-                                // Neither the audit log nor the settings list
-                                // has a destructive row action.
+                                // The settings list has no destructive action;
+                                // its rows are edited through the second one.
                                 ServerTab::AuditLog | ServerTab::Settings => {}
                             }
                             cx.notify();
@@ -7591,6 +7832,17 @@ impl Workspace {
                                 ServerTab::Emoji => workspace.start_emoji_rename(index),
                                 ServerTab::Sounds => workspace.start_sound_rename(index),
                                 ServerTab::Roles => workspace.open_role_permissions(index),
+                                // Only the name is editable here; verification
+                                // and boosts are shown but not changed yet.
+                                ServerTab::Settings if index == 0 => {
+                                    let mut text = Composer::default();
+                                    if let Some(view) = &workspace.server_management
+                                        && let Some((_, value)) = view.settings.first()
+                                    {
+                                        text.set_text(value);
+                                    }
+                                    workspace.prompt = Some((Prompt::GuildName, text));
+                                }
                                 _ => {}
                             }
                             cx.notify();
@@ -7608,9 +7860,16 @@ impl Workspace {
                 },
                 {
                     let entity = entity.clone();
+                    let tab = view.tab;
                     move |cx: &mut gpui::App| {
                         entity.update(cx, |workspace, cx| {
-                            workspace.prompt = Some((Prompt::EmojiImage, Composer::default()));
+                            // What "add" means depends on the tab: an emoji, a
+                            // role, or the server's icon.
+                            workspace.prompt = Some(match tab {
+                                ServerTab::Roles => (Prompt::NewRole, Composer::default()),
+                                ServerTab::Settings => (Prompt::GuildIcon, Composer::default()),
+                                _ => (Prompt::EmojiImage, Composer::default()),
+                            });
                             cx.notify();
                         });
                     }
@@ -8439,6 +8698,62 @@ impl Workspace {
                                             text.set_text(&this.channel_name(channel_id));
                                             this.prompt =
                                                 Some((Prompt::ChannelName(channel_id), text));
+                                        }
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                            .child(
+                                icon_button(
+                                    "channel-topic",
+                                    "\u{2261}",
+                                    t!("action-channel-topic"),
+                                    false,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
+                                        if let Some(channel_id) = this.nav.channel {
+                                            let mut text = Composer::default();
+                                            // Seeded with the current topic, since
+                                            // editing one is usually a tweak.
+                                            text.set_text(&this.channel_topic(channel_id));
+                                            this.prompt =
+                                                Some((Prompt::ChannelTopic(channel_id), text));
+                                        }
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                            .child(
+                                icon_button(
+                                    "channel-slowmode",
+                                    "\u{29D6}",
+                                    t!("action-channel-slowmode"),
+                                    false,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
+                                        if let Some(channel_id) = this.nav.channel {
+                                            this.prompt = Some((
+                                                Prompt::ChannelSlowmode(channel_id),
+                                                Composer::default(),
+                                            ));
+                                        }
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                            .child(
+                                icon_button(
+                                    "channel-permissions",
+                                    "\u{26BF}",
+                                    t!("action-channel-permissions"),
+                                    false,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
+                                        if let Some(channel_id) = this.nav.channel {
+                                            this.open_channel_overwrite(channel_id);
                                         }
                                         cx.notify();
                                     },
@@ -9825,5 +10140,64 @@ mod context_menu_tests {
             actions.len(),
             "two message actions share an element-id slot"
         );
+    }
+}
+
+#[cfg(test)]
+mod permission_grid_tests {
+    use super::*;
+
+    fn grid(scope: PermissionScope) -> PermissionGridView {
+        PermissionGridView {
+            scope,
+            name: "test".to_owned(),
+            allow: 0,
+            deny: 0,
+            original_allow: 0,
+            original_deny: 0,
+        }
+    }
+
+    fn role_scope() -> PermissionScope {
+        PermissionScope::Role {
+            guild_id: concord::discord::Id::new(1),
+            role_id: concord::discord::Id::new(2),
+        }
+    }
+
+    fn overwrite_scope() -> PermissionScope {
+        PermissionScope::ChannelOverwrite {
+            channel_id: concord::discord::Id::new(3),
+            target: concord::discord::OverwriteTarget::Role(concord::discord::Id::new(1)),
+        }
+    }
+
+    #[test]
+    fn a_role_has_no_inherit_to_offer() {
+        // A role's bitfield has two states. Cycling through a third would show
+        // a setting that cannot be saved.
+        assert!(!grid(role_scope()).allows_inherit());
+        assert!(grid(overwrite_scope()).allows_inherit());
+    }
+
+    #[test]
+    fn an_unchanged_grid_is_not_dirty() {
+        // Saving one would spend a request and write an audit entry saying
+        // nothing happened.
+        let mut view = grid(role_scope());
+        assert!(!view.is_dirty());
+
+        view.allow = 1;
+        assert!(view.is_dirty());
+    }
+
+    #[test]
+    fn deny_only_counts_as_a_change_too() {
+        // The first version compared allow alone, which would have made a
+        // deny-only overwrite look unchanged and silently discard it.
+        let mut view = grid(overwrite_scope());
+        view.deny = 1;
+
+        assert!(view.is_dirty());
     }
 }

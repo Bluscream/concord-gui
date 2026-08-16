@@ -1393,11 +1393,34 @@ pub fn context_menu_view(
     menu
 }
 
+/// How one permission stands.
+///
+/// Three states rather than two, because a channel overwrite has an inherit
+/// that a role does not. Showing two where there are three would turn inherit
+/// into deny without saying so.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PermissionState {
+    Allow,
+    Inherit,
+    Deny,
+}
+
+impl PermissionState {
+    /// The marker carries the state, so the grid reads without colour.
+    pub fn marker(self) -> &'static str {
+        match self {
+            Self::Allow => "[+]",
+            Self::Inherit => "[ ]",
+            Self::Deny => "[-]",
+        }
+    }
+}
+
 /// One switch in the permission grid.
 pub struct PermissionRow {
     pub label: String,
     pub description: String,
-    pub granted: bool,
+    pub setting: PermissionState,
 }
 
 /// What a role may do.
@@ -1428,18 +1451,12 @@ pub fn permission_grid_view(
                 .child(
                     gpui::div()
                         .text_size(px(scaled(text::SM)))
-                        .text_color(rgb(if row.granted {
-                            active().text
-                        } else {
-                            active().text_subtle
+                        .text_color(rgb(match row.setting {
+                            PermissionState::Allow => active().success,
+                            PermissionState::Deny => active().danger,
+                            PermissionState::Inherit => active().text_subtle,
                         }))
-                        // The marker carries the state, so the grid is
-                        // readable without relying on colour alone.
-                        .child(format!(
-                            "{} {}",
-                            if row.granted { "[x]" } else { "[ ]" },
-                            row.label
-                        )),
+                        .child(format!("{} {}", row.setting.marker(), row.label)),
                 )
                 .child(
                     gpui::div()

@@ -249,3 +249,12 @@ status-everyone-undeletable = @everyone kann nicht gelöscht werden
 status-role-outranks-you = Diese Rolle ist auf oder über deiner höchsten
 
 status-unsaved = ungespeichert
+
+action-channel-permissions = Kanalberechtigungen (@everyone)
+
+status-name-too-short = Ein Servername braucht mindestens zwei Zeichen
+status-not-a-number = Das ist keine Zahl
+action-new-role = Neue Rolle
+action-server-settings = Servereinstellungen
+action-channel-topic = Thema festlegen
+action-channel-slowmode = Slowmode festlegen

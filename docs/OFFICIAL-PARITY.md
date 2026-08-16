@@ -197,15 +197,11 @@ multi-account, and the rest.
 Everything is meant to work in both. Where one is ahead, it goes here rather
 than being described as done.
 
-- **Channel overwrites**: the TUI's permission grid has three states - allow,
-  deny, inherit - and the GUI's has two, so the GUI edits role permissions but
-  not channel overwrites. Offering two states where there are three would turn
-  inherit into deny without saying so.
-- **Channel settings**: the TUI has a form with topic, slowmode and
-  age-restriction; the GUI has create, rename and delete only.
-- **Guild settings**: the TUI edits the name, cycles verification and sets the
-  icon; the GUI's settings tab displays them.
-- **Creating roles and adding sounds**: TUI only.
+- **Guild settings**: both edit the name and set the icon. The TUI also cycles
+  the verification level; the GUI shows it without changing it.
+- **Channel settings**: both do create, rename, delete, topic and slowmode.
+  Age-restriction and the voice user limit are TUI only.
+- **Adding a soundboard sound**: neither client can upload one.
 
 ## Built but unreachable
 
