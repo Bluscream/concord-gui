@@ -676,6 +676,19 @@ impl CommandDispatcher {
                 message_commands::delete_guild_template(self.client.clone(), guild_id, code, label)
                     .await;
             }
+            AppCommand::BulkBanMembers {
+                guild_id,
+                user_ids,
+                delete_message_seconds,
+            } => {
+                message_commands::bulk_ban_members(
+                    self.client.clone(),
+                    guild_id,
+                    user_ids,
+                    delete_message_seconds,
+                )
+                .await;
+            }
             AppCommand::LoadPruneCount {
                 guild_id,
                 days,

@@ -1057,6 +1057,26 @@ fn handle_soundboard_key(state: &mut DashboardState, key: KeyEvent) -> Option<Ap
 }
 
 fn handle_ban_list_key(state: &mut DashboardState, key: KeyEvent) -> Option<AppCommand> {
+    // While typing ids, the keyboard belongs to the field: navigation keys are
+    // cursor movement, and a digit is a digit rather than a shortcut.
+    if state.is_bulk_ban_open() {
+        match state.key_bindings().composer_action(key) {
+            ComposerAction::Submit => {
+                let command = state.pending_bulk_ban()?;
+                state.cancel_bulk_ban();
+                return state.request_risky(crate::risk::RiskKind::BulkBan, command);
+            }
+            ComposerAction::Close => state.cancel_bulk_ban(),
+            ComposerAction::ClearInput => {
+                state.edit_bulk_ban(TextEditAction::DeleteToLineStart);
+            }
+            ComposerAction::EditText(action) => state.edit_bulk_ban(action),
+            ComposerAction::InsertChar(value) => state.insert_bulk_ban_char(value),
+            _ => {}
+        }
+        return None;
+    }
+
     if let Some(action) = state
         .key_bindings()
         .selection_action(key, SelectionKeySet::Navigation)
@@ -1070,6 +1090,9 @@ fn handle_ban_list_key(state: &mut DashboardState, key: KeyEvent) -> Option<AppC
 
     match key.code {
         KeyCode::Enter => return state.unban_selected(),
+        // Banning several at once, which the list itself cannot offer: every
+        // row here is someone already banned.
+        KeyCode::Char('B') => state.start_bulk_ban(),
         KeyCode::Esc => state.close_ban_list(),
         _ => {}
     }

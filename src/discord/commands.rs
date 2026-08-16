@@ -556,6 +556,13 @@ pub enum AppCommand {
     LoadAuthorisedApps,
     /// How many members a prune would remove. Always asked before pruning:
     /// the count is what makes an irreversible action reviewable beforehand.
+    /// Ban several people at once. Discord bans who it can and reports the
+    /// rest, so a partial success is the normal outcome.
+    BulkBanMembers {
+        guild_id: Id<GuildMarker>,
+        user_ids: Vec<Id<UserMarker>>,
+        delete_message_seconds: u32,
+    },
     LoadPruneCount {
         guild_id: Id<GuildMarker>,
         days: u16,

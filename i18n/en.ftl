@@ -320,3 +320,6 @@ action-ask-to-speak = Ask to speak
 action-stage-topic = Stage topic
 action-invite-to-speak = Invite to speak
 status-not-a-stage = Not a stage channel
+warning-bulk-ban = This bans everyone selected in one request. Discord bans who it can and reports the rest, so a mistake here is applied to all of them before anything comes back.
+status-no-user-ids = No user ids in that
+action-bulk-ban = Ban by id

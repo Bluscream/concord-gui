@@ -143,8 +143,8 @@ pub use rest::{
     WelcomeChannel, WelcomeScreen, WelcomeScreenEdit, clamp_invite_max_age, clamp_invite_max_uses,
     emoji_name_from_filename, friend_request_target, invite_code_from, is_valid_emoji_name,
     is_valid_guild_name, is_valid_sound_name, nearest_afk_timeout, nearest_prune_days,
-    parse_new_event, password_problem, stage_action_for, stage_topic_problem, username_problem,
-    verification_code, verification_label,
+    parse_new_event, parse_user_id_list, password_problem, stage_action_for, stage_topic_problem,
+    username_problem, verification_code, verification_label,
 };
 pub use secret::Secret;
 pub use state::{

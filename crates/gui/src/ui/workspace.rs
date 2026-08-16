@@ -230,6 +230,8 @@ pub enum Prompt {
     StageTopic(Id<marker::ChannelMarker>),
     /// An existing event, by its id. Same line format as creating one.
     EditEvent(u64),
+    /// User ids to ban in one request.
+    BulkBan,
     /// A new name for the open guild.
     GuildName,
     /// A path to an image to use as the guild icon.
@@ -258,6 +260,7 @@ impl Prompt {
             Prompt::NewEvent => "New event",
             Prompt::StageTopic(_) => "Stage topic",
             Prompt::EditEvent(_) => "Edit event",
+            Prompt::BulkBan => "Ban by user id",
             Prompt::GuildName => "Rename server",
             Prompt::GuildIcon => "Server icon",
             Prompt::ChannelTopic(_) => "Channel topic",
@@ -282,6 +285,7 @@ impl Prompt {
             Prompt::NewEvent => "name | start | end | where - times as 2026-09-01T19:00:00Z",
             Prompt::StageTopic(_) => "What the session is about - empty ends the stage",
             Prompt::EditEvent(_) => "name | start | end | where - times as 2026-09-01T19:00:00Z",
+            Prompt::BulkBan => "User ids, separated by anything - spaces, commas, newlines",
             Prompt::GuildName => "Server name",
             Prompt::GuildIcon => "Path to a PNG, JPEG, GIF or WebP",
             Prompt::ChannelTopic(_) => "Topic - empty clears it",
@@ -444,6 +448,9 @@ pub enum RiskAction {
     /// Removing inactive members. Carries the command, which needs the window
     /// and the count that were on screen when it was offered.
     PruneMembers(Box<AppCommand>),
+    /// Banning several people at once. Carries the list, which is the whole
+    /// danger: it must be the one that was on screen.
+    BulkBan(Box<AppCommand>),
 }
 
 impl RiskAction {
@@ -456,6 +463,7 @@ impl RiskAction {
             Self::ProfileEdit(..) => RiskKind::ProfileEdit,
             Self::FriendAction(..) => RiskKind::FriendAction,
             Self::PruneMembers(..) => RiskKind::PruneMembers,
+            Self::BulkBan(..) => RiskKind::BulkBan,
         }
     }
 
@@ -1923,6 +1931,7 @@ impl Workspace {
             Prompt::NewEvent => self.create_event(&text),
             Prompt::StageTopic(channel_id) => self.submit_stage_topic(channel_id, &text),
             Prompt::EditEvent(event_id) => self.submit_event_edit(event_id, &text),
+            Prompt::BulkBan => self.submit_bulk_ban(&text),
             Prompt::GuildName => self.rename_guild(text),
             Prompt::GuildIcon => self.set_guild_icon(text),
             Prompt::ChannelTopic(channel_id) => self.set_channel_topic(channel_id, text),
@@ -2101,7 +2110,9 @@ impl Workspace {
             RiskAction::ProfileEdit(guild_id, nickname) => {
                 self.set_nickname_confirmed(guild_id, nickname)
             }
-            RiskAction::FriendAction(command) | RiskAction::PruneMembers(command) => {
+            RiskAction::FriendAction(command)
+            | RiskAction::PruneMembers(command)
+            | RiskAction::BulkBan(command) => {
                 if let Some(handle) = &self.handle {
                     handle.send(*command);
                 }
@@ -5519,6 +5530,36 @@ impl Workspace {
             speaking: true,
             label: self.friend_label(user_id),
         });
+    }
+
+    /// Ban several people at once, behind the risk prompt.
+    ///
+    /// A typed list rather than a member picker: this is what raid cleanup
+    /// looks like in practice, and the ids are pasted from somewhere else.
+    fn submit_bulk_ban(&mut self, text: &str) {
+        let Selection::Guild(guild_id) = self.nav.selection else {
+            return;
+        };
+        let user_ids = concord::discord::parse_user_id_list(text);
+        // Nothing readable is a typo rather than a ban of nobody, and warning
+        // about it would teach the wrong lesson about the warning.
+        if user_ids.is_empty() {
+            self.model.status_line = t!("status-no-user-ids");
+            return;
+        }
+        let command = AppCommand::BulkBanMembers {
+            guild_id,
+            user_ids,
+            // No message deletion by default: a separate decision from who to
+            // ban, and the destructive default would be the wrong one.
+            delete_message_seconds: 0,
+        };
+        if !self.confirm_risk(RiskAction::BulkBan(Box::new(command.clone()))) {
+            return;
+        }
+        if let Some(handle) = &self.handle {
+            handle.send(command);
+        }
     }
 
     /// Start editing an event, seeded with it as one line.
@@ -9542,6 +9583,15 @@ impl Workspace {
                     move |index, cx: &mut gpui::App| {
                         entity.update(cx, |workspace, cx| {
                             workspace.unban(index);
+                            cx.notify();
+                        });
+                    }
+                },
+                {
+                    let entity = entity.clone();
+                    move |cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.prompt = Some((Prompt::BulkBan, Composer::default()));
                             cx.notify();
                         });
                     }

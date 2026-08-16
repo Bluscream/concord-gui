@@ -243,8 +243,22 @@ unless that role is named in the request.
 A value that has not arrived reads as unknown rather than off in both clients:
 a welcome screen that has not loaded is not one Discord confirmed is disabled.
 
-Still missing: browsing and searching members from settings, bulk-ban,
-onboarding questions, new-member actions, and membership screening - which the
+Bulk-ban is on the bans panel in both clients - `B` in the TUI, a button in the
+GUI - as a typed list of ids rather than a member picker. That is what raid
+cleanup looks like in practice: the ids come pasted from somewhere else. The
+parser takes any separator for that reason, and the panel shows how many it
+read, so a mistyped delimiter shows as a number that does not match the paste.
+
+It goes through the risk prompt, and no message deletion is applied by default:
+what to delete is a separate decision from who to ban, and the destructive
+default would be the wrong one.
+
+Discord bans who it can and reports the rest, so a partial success is normal
+rather than an error - and an absent failure list means everyone succeeded, not
+nobody, which is the most alarming way to be wrong about a mass ban.
+
+Still missing: browsing and searching members from settings, onboarding
+questions, new-member actions, and membership screening - which the
 client detects as a participation restriction but can neither configure nor
 complete.
 

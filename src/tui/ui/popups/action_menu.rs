@@ -989,6 +989,28 @@ pub(in crate::tui::ui) fn render_ban_list(frame: &mut Frame, area: Rect, state: 
 
     let selected = state.selected_ban_index().unwrap_or(0);
 
+    // While typing ids, the field is what the popup is for: it replaces the
+    // list rather than sitting under one that no longer responds.
+    if let Some(text) = state.bulk_ban_text() {
+        let count = state.bulk_ban_count();
+        render_action_menu(
+            frame,
+            area,
+            "Ban by user id".to_owned(),
+            vec![
+                Line::from(Span::raw(format!("Ids: {text}"))),
+                Line::from(Span::styled(
+                    // The count is the check: a mistyped separator shows as a
+                    // number that does not match what was pasted.
+                    format!("{count} ids - enter bans them, esc cancels"),
+                    theme::current().style(theme::HighlightGroup::Hint),
+                )),
+            ],
+            0,
+        );
+        return;
+    }
+
     let lines = if let Some(error) = bans.error() {
         vec![Line::from(Span::styled(
             error.to_owned(),
@@ -1017,7 +1039,7 @@ pub(in crate::tui::ui) fn render_ban_list(frame: &mut Frame, area: Rect, state: 
     render_action_menu(
         frame,
         area,
-        "Bans (enter to unban)".to_owned(),
+        "Bans (enter unbans, B bans by id)".to_owned(),
         lines,
         state
             .popup_list_scroll(SelectablePopupTarget::Bans)

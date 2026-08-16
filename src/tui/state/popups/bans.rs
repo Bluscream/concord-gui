@@ -16,6 +16,8 @@ pub(in crate::tui) struct BanListState {
     pub(super) bans: Vec<GuildBanInfo>,
     /// Set while the fetch is outstanding, so the popup can say so rather
     /// than looking like an empty ban list.
+    /// Ids being typed for a bulk ban, while the field is open.
+    pub(super) bulk_ban_input: Option<crate::tui::text_input::TextInputState>,
     pub(super) loading: bool,
     pub(super) error: Option<String>,
 }
@@ -40,10 +42,82 @@ impl DashboardState {
             guild_id,
             selection: SelectablePopupState::default(),
             bans: Vec::new(),
+            bulk_ban_input: None,
             loading: true,
             error: None,
         }));
         Some(AppCommand::LoadGuildBans { guild_id })
+    }
+
+    /// Start typing a list of ids to ban.
+    ///
+    /// A typed list rather than a member picker: this is what raid cleanup
+    /// looks like in practice, the ids are pasted from somewhere else, and the
+    /// panel already has room for one field.
+    pub fn start_bulk_ban(&mut self) {
+        if let Some(state) = self.popups.ban_list_mut() {
+            state.bulk_ban_input = Some(crate::tui::text_input::TextInputState::default());
+        }
+    }
+
+    pub fn is_bulk_ban_open(&self) -> bool {
+        self.popups
+            .ban_list()
+            .is_some_and(|state| state.bulk_ban_input.is_some())
+    }
+
+    pub fn bulk_ban_text(&self) -> Option<&str> {
+        self.popups
+            .ban_list()
+            .and_then(|state| state.bulk_ban_input.as_ref())
+            .map(crate::tui::text_input::TextInputState::value)
+    }
+
+    /// How many ids are currently readable, for the line under the field.
+    pub fn bulk_ban_count(&self) -> usize {
+        self.bulk_ban_text()
+            .map_or(0, |text| crate::discord::parse_user_id_list(text).len())
+    }
+
+    pub fn edit_bulk_ban(&mut self, action: crate::tui::text_input::TextEditAction) {
+        if let Some(state) = self.popups.ban_list_mut()
+            && let Some(input) = state.bulk_ban_input.as_mut()
+        {
+            input.apply_edit_action(action);
+        }
+    }
+
+    pub fn insert_bulk_ban_char(&mut self, value: char) {
+        if let Some(state) = self.popups.ban_list_mut()
+            && let Some(input) = state.bulk_ban_input.as_mut()
+        {
+            input.insert_char(value);
+        }
+    }
+
+    pub fn cancel_bulk_ban(&mut self) {
+        if let Some(state) = self.popups.ban_list_mut() {
+            state.bulk_ban_input = None;
+        }
+    }
+
+    /// The ban this field describes, for the risk prompt.
+    pub fn pending_bulk_ban(&self) -> Option<AppCommand> {
+        let state = self.popups.ban_list()?;
+        let text = state.bulk_ban_input.as_ref()?.value();
+        let user_ids = crate::discord::parse_user_id_list(text);
+        // Nothing readable is not a ban of nobody: it is a typo, and warning
+        // about it would teach the wrong lesson about the warning.
+        if user_ids.is_empty() {
+            return None;
+        }
+        Some(AppCommand::BulkBanMembers {
+            guild_id: state.guild_id,
+            user_ids,
+            // No message deletion by default: it is a separate decision from
+            // who to ban, and the destructive default would be the wrong one.
+            delete_message_seconds: 0,
+        })
     }
 
     pub fn close_ban_list(&mut self) {

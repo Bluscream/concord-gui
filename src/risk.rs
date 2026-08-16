@@ -30,6 +30,9 @@ pub enum RiskKind {
     /// Removing inactive members. Irreversible, and unlike the others it acts
     /// on people who are not here to notice.
     PruneMembers,
+    /// Banning several people in one request. The count is the danger: one
+    /// wrong selection is one click from being applied to all of them.
+    BulkBan,
 }
 
 impl RiskKind {
@@ -39,6 +42,7 @@ impl RiskKind {
         Self::ProfileEdit,
         Self::FriendAction,
         Self::PruneMembers,
+        Self::BulkBan,
     ];
 
     /// Why this is worth a pause, in the active language.
@@ -49,6 +53,7 @@ impl RiskKind {
             Self::ProfileEdit => crate::t!("warning-profile-edit"),
             Self::FriendAction => crate::t!("warning-friend-action"),
             Self::PruneMembers => crate::t!("warning-prune-members"),
+            Self::BulkBan => crate::t!("warning-bulk-ban"),
         }
     }
 
@@ -60,6 +65,7 @@ impl RiskKind {
             Self::ProfileEdit => options.suppress_profile_edit,
             Self::FriendAction => options.suppress_friend_action,
             Self::PruneMembers => options.suppress_prune_members,
+            Self::BulkBan => options.suppress_bulk_ban,
         }
     }
 
@@ -71,6 +77,7 @@ impl RiskKind {
             Self::ProfileEdit => options.suppress_profile_edit = true,
             Self::FriendAction => options.suppress_friend_action = true,
             Self::PruneMembers => options.suppress_prune_members = true,
+            Self::BulkBan => options.suppress_bulk_ban = true,
         }
     }
 }

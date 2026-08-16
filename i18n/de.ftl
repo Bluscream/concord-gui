@@ -318,3 +318,6 @@ action-ask-to-speak = Rederecht anfragen
 action-stage-topic = Bühnenthema
 action-invite-to-speak = Zum Sprechen einladen
 status-not-a-stage = Kein Bühnenkanal
+warning-bulk-ban = Dies sperrt alle Ausgewählten in einer Anfrage. Discord sperrt, wen es kann, und meldet den Rest - ein Fehler wirkt also auf alle, bevor eine Antwort zurückkommt.
+status-no-user-ids = Darin sind keine Benutzer-IDs
+action-bulk-ban = Nach ID sperren

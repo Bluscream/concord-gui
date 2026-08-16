@@ -732,6 +732,7 @@ fn options_save_and_load_round_trip() {
             suppress_profile_edit: false,
             suppress_friend_action: false,
             suppress_prune_members: false,
+            suppress_bulk_ban: false,
         },
     };
 

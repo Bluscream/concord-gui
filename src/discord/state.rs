@@ -1023,6 +1023,7 @@ impl DiscordState {
             | AppEvent::StageRequestFailed { .. }
             | AppEvent::ScheduledEventsLoaded { .. }
             | AppEvent::GuildTemplatesLoaded { .. }
+            | AppEvent::MembersBulkBanned { .. }
             | AppEvent::PruneCountLoaded { .. }
             | AppEvent::GuildPruned { .. }
             | AppEvent::WelcomeScreenLoaded { .. }

@@ -72,7 +72,7 @@ pub use membership::{
     WelcomeScreen, WelcomeScreenEdit, nearest_prune_days,
 };
 pub use messages::MAX_MESSAGE_STICKERS;
-pub use moderation::{GuildBanInfo, MAX_BAN_DELETE_MESSAGE_SECONDS};
+pub use moderation::{GuildBanInfo, MAX_BAN_DELETE_MESSAGE_SECONDS, parse_user_id_list};
 pub use privacy::{
     DmScanLevel, FriendDiscovery, FriendSources, PrivacyEdit, PrivacySetting, PrivacyState,
 };

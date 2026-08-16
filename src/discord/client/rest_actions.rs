@@ -465,6 +465,17 @@ impl DiscordClient {
         self.rest.delete_guild_template(guild_id, code).await
     }
 
+    pub async fn bulk_ban(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+        user_ids: &[crate::discord::ids::Id<crate::discord::ids::marker::UserMarker>],
+        delete_message_seconds: u32,
+    ) -> Result<usize> {
+        self.rest
+            .bulk_ban(guild_id, user_ids, delete_message_seconds)
+            .await
+    }
+
     pub async fn prune_count(
         &self,
         guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,

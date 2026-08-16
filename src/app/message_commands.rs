@@ -708,6 +708,32 @@ pub(super) async fn delete_guild_template(
     }
 }
 
+pub(super) async fn bulk_ban_members(
+    client: DiscordClient,
+    guild_id: GuildId,
+    user_ids: Vec<crate::discord::ids::Id<crate::discord::ids::marker::UserMarker>>,
+    delete_message_seconds: u32,
+) {
+    let attempted = user_ids.len();
+    match client
+        .bulk_ban(guild_id, &user_ids, delete_message_seconds)
+        .await
+    {
+        Ok(banned) => {
+            client
+                .publish_event(AppEvent::MembersBulkBanned {
+                    guild_id,
+                    banned,
+                    attempted,
+                })
+                .await;
+        }
+        Err(error) => {
+            report_moderation_failure(&client, "banning", "those members", &error).await;
+        }
+    }
+}
+
 pub(super) async fn load_prune_count(
     client: DiscordClient,
     guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,

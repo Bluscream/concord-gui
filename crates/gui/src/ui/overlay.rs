@@ -660,6 +660,7 @@ pub fn ban_list_view(
     bans: &[BanRow],
     status: Option<&str>,
     on_unban: impl Fn(usize, &mut gpui::App) + Clone + 'static,
+    on_bulk_ban: impl Fn(&mut gpui::App) + 'static,
     on_close: impl Fn(&mut gpui::App) + 'static,
 ) -> Div {
     let mut list = column().id("ban-list").max_h(px(360.)).overflow_y_scroll();
@@ -723,6 +724,14 @@ pub fn ban_list_view(
             .px(px(space::LG))
             .py(px(space::MD))
             .justify_end()
+            // Banning several at once, which the list itself cannot offer:
+            // every row here is someone already banned.
+            .child(button(
+                "bans-bulk",
+                &t!("action-bulk-ban"),
+                false,
+                on_bulk_ban,
+            ))
             .child(button("bans-close", &t!("action-close"), false, on_close)),
     )
 }

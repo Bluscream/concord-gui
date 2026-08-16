@@ -734,6 +734,13 @@ pub enum AppEvent {
         guild_id: Id<GuildMarker>,
         templates: Vec<crate::discord::GuildTemplate>,
     },
+    MembersBulkBanned {
+        guild_id: Id<GuildMarker>,
+        /// How many were actually banned, which is not always how many were
+        /// asked for.
+        banned: usize,
+        attempted: usize,
+    },
     PruneCountLoaded {
         guild_id: Id<GuildMarker>,
         count: u64,
@@ -1114,6 +1121,7 @@ define_app_event_kinds! {
     StageRequestFailed: AppEvent::StageRequestFailed { .. },
     ScheduledEventsLoaded: AppEvent::ScheduledEventsLoaded { .. },
     GuildTemplatesLoaded: AppEvent::GuildTemplatesLoaded { .. },
+    MembersBulkBanned: AppEvent::MembersBulkBanned { .. },
     PruneCountLoaded: AppEvent::PruneCountLoaded { .. },
     GuildPruned: AppEvent::GuildPruned { .. },
     WelcomeScreenLoaded: AppEvent::WelcomeScreenLoaded { .. },
@@ -2198,6 +2206,7 @@ impl AppEventKind {
             | AppEventKind::StageRequestFailed
             | AppEventKind::ScheduledEventsLoaded
             | AppEventKind::GuildTemplatesLoaded
+            | AppEventKind::MembersBulkBanned
             | AppEventKind::PruneCountLoaded
             | AppEventKind::GuildPruned
             | AppEventKind::WelcomeScreenLoaded

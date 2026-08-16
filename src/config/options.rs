@@ -267,6 +267,8 @@ pub struct WarningOptions {
     pub suppress_friend_action: bool,
     #[serde(default)]
     pub suppress_prune_members: bool,
+    #[serde(default)]
+    pub suppress_bulk_ban: bool,
 }
 
 /// Validated Highlight Group and UI definitions from `theme.toml`.
