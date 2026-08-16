@@ -34,6 +34,7 @@ mod join_server;
 mod message_actions;
 mod notification_inbox;
 mod options;
+mod permissions;
 mod polls;
 mod reactions;
 mod risk;
@@ -68,6 +69,7 @@ pub use notification_inbox::{
     NotificationInboxChannelLoad, NotificationInboxItem, NotificationInboxLoad,
     NotificationInboxMessage, NotificationInboxTab, NotificationInboxUnreadItem,
 };
+use permissions::PermissionGridState;
 use search::SearchPopupState;
 use server_management::ServerManagementState;
 pub use server_management::{EmojiEdit, ServerPanelTab};
@@ -158,6 +160,7 @@ define_modal_popups! {
     BanList(BanListState),
     ServerManagement(ServerManagementState),
     Soundboard(SoundboardState),
+    PermissionGrid(PermissionGridState),
     ChannelEdit(ChannelEditState),
     ChannelDelete(ChannelDeleteState),
     RiskWarning(RiskWarningState),
@@ -275,6 +278,7 @@ pub(in crate::tui) enum SelectablePopupTarget {
     Stickers,
     ServerManagement,
     Soundboard,
+    Permissions,
     Roles,
     Bans,
 }
@@ -1383,6 +1387,13 @@ impl PopupUiState {
 
     modal_popup_accessors!(ban_list, ban_list_mut, BanList, BanListState, state);
     modal_popup_accessors!(
+        permission_grid,
+        permission_grid_mut,
+        PermissionGrid,
+        PermissionGridState,
+        state
+    );
+    modal_popup_accessors!(
         channel_edit,
         channel_edit_mut,
         ChannelEdit,
@@ -1859,6 +1870,7 @@ impl DashboardState {
             ActiveModalPopupKind::RiskWarning => self.close_risk_warning(),
             ActiveModalPopupKind::ServerManagement => self.close_server_management(),
             ActiveModalPopupKind::Soundboard => self.close_soundboard(),
+            ActiveModalPopupKind::PermissionGrid => self.close_permission_grid(),
             ActiveModalPopupKind::ChannelEdit => self.close_channel_edit(),
             ActiveModalPopupKind::ChannelDelete => self.close_channel_delete(),
             ActiveModalPopupKind::Options if self.is_capturing_push_to_talk_shortcut() => {
@@ -2169,6 +2181,9 @@ impl DashboardState {
             ModalPopup::Soundboard(_) => {
                 ActivePopupPolicy::selectable(kind, SelectablePopupTarget::Soundboard)
             }
+            ModalPopup::PermissionGrid(_) => {
+                ActivePopupPolicy::selectable(kind, SelectablePopupTarget::Permissions)
+            }
             ModalPopup::ChannelEdit(_) => {
                 ActivePopupPolicy::routed(kind, ActivePopupInteraction::NoNavigation)
             }
@@ -2258,6 +2273,10 @@ impl DashboardState {
             }
             SelectablePopupTarget::Soundboard => {
                 let state = self.popups.soundboard()?;
+                (&state.selection, state.len())
+            }
+            SelectablePopupTarget::Permissions => {
+                let state = self.popups.permission_grid()?;
                 (&state.selection, state.len())
             }
             SelectablePopupTarget::MessageActions => {
@@ -2428,6 +2447,10 @@ impl DashboardState {
             SelectablePopupTarget::Bans => self.unban_selected(),
             SelectablePopupTarget::ServerManagement => self.activate_selected_server_row(),
             SelectablePopupTarget::Soundboard => self.play_selected_sound(),
+            SelectablePopupTarget::Permissions => {
+                self.cycle_selected_permission();
+                None
+            }
             SelectablePopupTarget::MessageActions => self.activate_selected_message_action(),
             SelectablePopupTarget::GuildActions => self.activate_selected_guild_action(),
             SelectablePopupTarget::ChannelActions => self.activate_selected_channel_action(),
@@ -2546,6 +2569,12 @@ impl DashboardState {
             }
             SelectablePopupTarget::Soundboard => {
                 if let Some(state) = self.popups.soundboard_mut() {
+                    let len = state.len();
+                    update(&mut state.selection, len);
+                }
+            }
+            SelectablePopupTarget::Permissions => {
+                if let Some(state) = self.popups.permission_grid_mut() {
                     let len = state.len();
                     update(&mut state.selection, len);
                 }

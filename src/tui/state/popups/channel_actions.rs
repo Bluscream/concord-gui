@@ -245,6 +245,14 @@ impl DashboardState {
                 "Channel settings",
                 manage_reason.clone(),
             ),
+            // @everyone's overwrite, which is the one people mean by "channel
+            // permissions". Per-role overwrites want a role picker first and
+            // are not offered yet.
+            ChannelActionItem::new(
+                ChannelActionKind::ChannelPermissions,
+                "Channel permissions (@everyone)",
+                manage_reason.clone(),
+            ),
             ChannelActionItem::new(
                 ChannelActionKind::DeleteChannel,
                 "Delete channel",
@@ -440,6 +448,20 @@ impl DashboardState {
                     ChannelActionKind::RenameChannel => {
                         self.close_channel_action_menu();
                         self.open_channel_settings(channel_id);
+                        None
+                    }
+                    ChannelActionKind::ChannelPermissions => {
+                        // @everyone's role id is the guild id.
+                        let guild_id = self
+                            .discord
+                            .channel(channel_id)
+                            .and_then(|channel| channel.guild_id)?;
+                        self.close_channel_action_menu();
+                        self.open_channel_overwrite(
+                            channel_id,
+                            crate::discord::Id::new(guild_id.get()),
+                            "@everyone".to_owned(),
+                        );
                         None
                     }
                     ChannelActionKind::DeleteChannel => {

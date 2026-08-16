@@ -240,6 +240,9 @@ fn dispatch_popup_key(
             DashboardState::confirm_channel_delete,
             DashboardState::close_channel_delete,
         ),
+        ActiveModalPopupKind::PermissionGrid => {
+            route_fallback_key(state, key, stage, handle_permission_grid_key)
+        }
         ActiveModalPopupKind::Soundboard => {
             route_fallback_key(state, key, stage, handle_soundboard_key)
         }
@@ -932,6 +935,8 @@ fn handle_server_management_key(state: &mut DashboardState, key: KeyEvent) -> Op
         // 'n' means a new role on the roles tab and a rename on emoji; both
         // are the panel's one text field, told apart by which tab is open.
         KeyCode::Char('N') => state.start_role_create(),
+        // Editing what a role may do, which is the grid rather than a field.
+        KeyCode::Char('p') => state.open_selected_role_permissions(),
         _ => {}
     }
     None
@@ -965,6 +970,34 @@ fn handle_channel_edit_key(state: &mut DashboardState, key: KeyEvent) -> Option<
         ComposerAction::EditText(action) => state.edit_channel_name(action),
         ComposerAction::InsertChar(value) => state.insert_channel_name_char(value),
         // Newlines, editors and attachments have no meaning in a name field.
+        _ => {}
+    }
+    None
+}
+
+/// The permission grid: space cycles the highlighted permission, enter saves.
+///
+/// Space rather than enter for the toggle, so enter can mean "save" - a grid
+/// of 53 switches where enter both toggled and saved would make an accidental
+/// save easy.
+fn handle_permission_grid_key(state: &mut DashboardState, key: KeyEvent) -> Option<AppCommand> {
+    if let Some(action) = state
+        .key_bindings()
+        .selection_action(key, SelectionKeySet::Navigation)
+    {
+        match action {
+            SelectionAction::Next => state.move_permission_selection_down(),
+            SelectionAction::Previous => state.move_permission_selection_up(),
+        }
+        return None;
+    }
+
+    match key.code {
+        KeyCode::Char(' ') => state.cycle_selected_permission(),
+        KeyCode::Enter => return state.submit_permission_grid(),
+        // Escape discards, which is why the title says when there are unsaved
+        // changes.
+        KeyCode::Esc => state.close_permission_grid(),
         _ => {}
     }
     None

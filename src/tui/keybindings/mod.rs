@@ -894,6 +894,7 @@ impl ChannelActionKind {
             Self::ParticipantAudioSettings => "VoiceParticipantAudio",
             Self::CreateInvite => "CreateInvite",
             Self::RenameChannel => "RenameChannel",
+            Self::ChannelPermissions => "ChannelPermissions",
             Self::DeleteChannel => "DeleteChannel",
             Self::CreateChannel => "CreateChannel",
         }

@@ -912,6 +912,7 @@ impl KeyBindings {
             ChannelActionKind::ShowPinnedMessages => vec![char_chord('p')],
             ChannelActionKind::CreateInvite => vec![char_chord('i')],
             ChannelActionKind::RenameChannel => vec![char_chord('n')],
+            ChannelActionKind::ChannelPermissions => vec![char_chord('P')],
             ChannelActionKind::DeleteChannel => vec![char_chord('D')],
             ChannelActionKind::CreateChannel => vec![char_chord('c')],
             ChannelActionKind::ShowThreads => vec![char_chord('t')],

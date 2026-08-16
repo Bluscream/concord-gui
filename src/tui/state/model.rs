@@ -397,6 +397,7 @@ pub enum ChannelActionKind {
     ParticipantAudioSettings,
     CreateInvite,
     RenameChannel,
+    ChannelPermissions,
     DeleteChannel,
     CreateChannel,
 }

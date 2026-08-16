@@ -47,9 +47,10 @@ server's settings assumes the channels already exist.
 
 ### Role management
 
-Roles can be *assigned* and that is all. Creating, deleting, renaming,
-recolouring, reordering, and editing a role's permissions are all absent, as is
-the per-channel overwrite editor.
+Creating, deleting and editing a role's permissions are done, as is the
+per-channel overwrite editor for @everyone. Still missing: renaming and
+recolouring a role, reordering, and choosing a role other than @everyone for a
+channel overwrite - the last wants a role picker in front of the grid.
 
 ### Guild settings
 
@@ -180,11 +181,11 @@ Core work whose interface has not been built yet. A legitimate intermediate
 state, but only while it is written down - `docs/PARITY.md` has the sweep that
 regenerates this list, and the two must be kept in step.
 
-- `ReorderChannels`, `SetChannelOverwrite`, `DeleteChannelOverwrite`,
-  `ReorderRoles`, `ModifyRole` - all want the permission grid, which role
-  editing and per-channel overwrites share and which is therefore built once.
-  Role creation and deletion are reachable; changing what a role *may do* is
-  not yet.
+- `ReorderChannels`, `ReorderRoles` - both want drag-and-drop or a move
+  control, which neither client has a pattern for yet. The REST side sends all
+  moved rows in one request, since position decides who wins a permission
+  conflict and a sequence of single moves would briefly hand out the wrong
+  permissions.
 - `SetVoiceChannelStatus` - small, and grouped with the other smaller gaps.
 - `RenameSoundboardSound`, `DeleteSoundboardSound` - want the expression
   management panel that emoji, stickers and sounds will share.

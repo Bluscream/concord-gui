@@ -209,8 +209,9 @@ fn popup_visible_item_counts(
 pub(super) use action_menu::{
     action_menu_area, key_sequence_hint_area_for_state, render_ban_list,
     render_channel_action_menu, render_guild_action_menu, render_key_sequence_hint,
-    render_member_action_menu, render_message_action_menu, render_role_picker,
-    render_server_management, render_soundboard, render_sticker_picker, render_thread_action_menu,
+    render_member_action_menu, render_message_action_menu, render_permission_grid,
+    render_role_picker, render_server_management, render_soundboard, render_sticker_picker,
+    render_thread_action_menu,
 };
 #[cfg(test)]
 pub(super) use action_menu::{
@@ -324,6 +325,7 @@ pub(super) fn active_selectable_popup_layout(
         | SelectablePopupTarget::Bans
         | SelectablePopupTarget::ServerManagement
         | SelectablePopupTarget::Soundboard
+        | SelectablePopupTarget::Permissions
         | SelectablePopupTarget::MessageActions
         | SelectablePopupTarget::GuildActions
         | SelectablePopupTarget::ChannelActions
@@ -463,6 +465,10 @@ fn active_modal_popup_area(frame_area: Rect, state: &DashboardState) -> Option<R
         ActiveModalPopupKind::ChannelEdit => Some(channel_edit_popup_area(frame_area)),
         ActiveModalPopupKind::ChannelDelete => {
             channel_delete_confirmation_popup_area_for_state(frame_area, state)
+        }
+        ActiveModalPopupKind::PermissionGrid => {
+            let count = state.permission_grid_state().map(|s| s.len()).unwrap_or(0);
+            Some(action_menu_area(frame_area, count.max(1)))
         }
         ActiveModalPopupKind::Soundboard => {
             let count = state.soundboard_state().map(|s| s.len()).unwrap_or(0);

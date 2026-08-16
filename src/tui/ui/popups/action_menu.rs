@@ -782,6 +782,45 @@ pub(in crate::tui::ui) fn render_server_management(
     );
 }
 
+/// The permission grid.
+pub(in crate::tui::ui) fn render_permission_grid(
+    frame: &mut Frame,
+    area: Rect,
+    state: &DashboardState,
+) {
+    if !state.is_active_modal_popup(ActiveModalPopupKind::PermissionGrid) {
+        return;
+    }
+    let Some(grid) = state.permission_grid_state() else {
+        return;
+    };
+
+    let selected = state.selected_permission_index().unwrap_or(0);
+    let rows: Vec<String> = crate::discord::permissions_catalogue::ALL
+        .iter()
+        .enumerate()
+        .map(|(index, permission)| format!("{} {}", grid.setting(index).marker(), permission.label))
+        .collect();
+
+    let title = if grid.is_dirty() {
+        // Said in the title because escape discards, and a grid of 53
+        // switches is easy to walk away from by accident.
+        format!("{} - unsaved (enter saves)", grid.scope_name())
+    } else {
+        format!("{} (space toggles)", grid.scope_name())
+    };
+
+    render_action_menu(
+        frame,
+        area,
+        title,
+        action_menu_lines(&indexed_action_menu_rows(rows), selected),
+        state
+            .popup_list_scroll(SelectablePopupTarget::Permissions)
+            .expect("the permission grid has selection state"),
+    );
+}
+
 /// The soundboard.
 pub(in crate::tui::ui) fn render_soundboard(frame: &mut Frame, area: Rect, state: &DashboardState) {
     if !state.is_active_modal_popup(ActiveModalPopupKind::Soundboard) {

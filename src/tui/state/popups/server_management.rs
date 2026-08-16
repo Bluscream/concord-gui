@@ -421,6 +421,28 @@ impl DashboardState {
         }
     }
 
+    /// Open the permission grid on the highlighted role.
+    pub fn open_selected_role_permissions(&mut self) {
+        let Some(index) = self.selected_server_row() else {
+            return;
+        };
+        let Some(state) = self.popups.server_management() else {
+            return;
+        };
+        if state.tab != ServerPanelTab::Roles {
+            return;
+        }
+        let Some((guild_id, role_id)) =
+            state.roles.get(index).map(|role| (state.guild_id, role.id))
+        else {
+            return;
+        };
+
+        // Replaces the panel rather than stacking: the grid is 53 rows and
+        // wants the whole popup area.
+        self.open_role_permissions(guild_id, role_id);
+    }
+
     /// Copy the guild's roles into the panel, highest first.
     fn fill_server_roles(&mut self) {
         let Some(guild_id) = self.popups.server_management().map(|state| state.guild_id) else {
