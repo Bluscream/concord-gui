@@ -898,6 +898,9 @@ impl ChannelActionKind {
             Self::ChannelPermissions => "ChannelPermissions",
             Self::DeleteChannel => "DeleteChannel",
             Self::CreateChannel => "CreateChannel",
+            Self::RequestToSpeak => "RequestToSpeak",
+            Self::ToggleStage => "ToggleStage",
+            Self::InviteToSpeak => "InviteToSpeak",
         }
     }
 }

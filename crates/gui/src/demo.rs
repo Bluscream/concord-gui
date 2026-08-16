@@ -1035,11 +1035,52 @@ fn handle_command(
         | AppCommand::WatchVoiceStream { .. }
         | AppCommand::UpdateVoiceAudioSources { .. }
         | AppCommand::UpdateVoiceCapturePermission { .. }
-        | AppCommand::UpdateVoiceParticipantPlayback { .. } => {} // No catch-all: the match is exhaustive on purpose. Demo mode is the
-                                                                  // default build while the project is pre-release, so a command with no
-                                                                  // arm would silently do nothing for anyone who has not signed in.
-                                                                  // Adding one to the core now fails to compile here instead - which is
-                                                                  // how the 36 that had gone unnoticed were meant to be caught.
+        | AppCommand::UpdateVoiceParticipantPlayback { .. } => {}
+
+        // Account-wide things a fixture has no answer for: they describe a
+        // real Discord account, and inventing one would put made-up sessions,
+        // linked accounts and backup codes on screen as though they were real.
+        AppCommand::LoadConnections
+        | AppCommand::ModifyConnection { .. }
+        | AppCommand::DeleteConnection { .. }
+        | AppCommand::ModifyPrivacySettings { .. }
+        | AppCommand::LoadAuthSessions
+        | AppCommand::RevokeAuthSessions { .. }
+        | AppCommand::LoadAuthorisedApps
+        | AppCommand::RevokeAuthorisedApp { .. }
+        | AppCommand::ModifyAccount { .. }
+        | AppCommand::EnableTotp { .. }
+        | AppCommand::DisableTotp { .. }
+        | AppCommand::LoadBackupCodes { .. } => {}
+
+        // Server administration a fixture cannot answer honestly either: each
+        // reports what Discord holds, and a demo number would be a guess
+        // presented as a fact - a prune count most of all.
+        AppCommand::LoadPruneCount { .. }
+        | AppCommand::PruneGuild { .. }
+        | AppCommand::LoadWelcomeScreen { .. }
+        | AppCommand::ModifyWelcomeScreen { .. }
+        | AppCommand::LoadGuildWidget { .. }
+        | AppCommand::ModifyGuildWidget { .. }
+        | AppCommand::LoadScheduledEvents { .. }
+        | AppCommand::CreateScheduledEvent { .. }
+        | AppCommand::CancelScheduledEvent { .. }
+        | AppCommand::DeleteScheduledEvent { .. }
+        | AppCommand::SetEventInterest { .. }
+        | AppCommand::LoadGuildTemplates { .. }
+        | AppCommand::CreateGuildTemplate { .. }
+        | AppCommand::SyncGuildTemplate { .. }
+        | AppCommand::DeleteGuildTemplate { .. }
+        | AppCommand::LoadStageInstance { .. }
+        | AppCommand::StartStageInstance { .. }
+        | AppCommand::ModifyStageTopic { .. }
+        | AppCommand::EndStageInstance { .. }
+        | AppCommand::RequestToSpeak { .. }
+        | AppCommand::SetStageSpeaker { .. } => {} // No catch-all: the match is exhaustive on purpose. Demo mode is the
+                                                   // default build while the project is pre-release, so a command with no
+                                                   // arm would silently do nothing for anyone who has not signed in.
+                                                   // Adding one to the core now fails to compile here instead - which is
+                                                   // how the 36 that had gone unnoticed were meant to be caught.
     }
 
     true

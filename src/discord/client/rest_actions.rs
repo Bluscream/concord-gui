@@ -360,6 +360,61 @@ impl DiscordClient {
             .await
     }
 
+    pub async fn stage_instance(
+        &self,
+        channel_id: crate::discord::ids::Id<crate::discord::ids::marker::ChannelMarker>,
+    ) -> Result<Option<crate::discord::StageInstance>> {
+        self.rest.stage_instance(channel_id).await
+    }
+
+    pub async fn start_stage_instance(
+        &self,
+        channel_id: crate::discord::ids::Id<crate::discord::ids::marker::ChannelMarker>,
+        topic: &str,
+    ) -> Result<()> {
+        self.rest
+            .start_stage_instance(channel_id, topic, crate::discord::StagePrivacy::GuildOnly)
+            .await
+    }
+
+    pub async fn modify_stage_topic(
+        &self,
+        channel_id: crate::discord::ids::Id<crate::discord::ids::marker::ChannelMarker>,
+        topic: &str,
+    ) -> Result<()> {
+        self.rest.modify_stage_topic(channel_id, topic).await
+    }
+
+    pub async fn end_stage_instance(
+        &self,
+        channel_id: crate::discord::ids::Id<crate::discord::ids::marker::ChannelMarker>,
+    ) -> Result<()> {
+        self.rest.end_stage_instance(channel_id).await
+    }
+
+    pub async fn request_to_speak(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+        channel_id: crate::discord::ids::Id<crate::discord::ids::marker::ChannelMarker>,
+        requesting: bool,
+    ) -> Result<()> {
+        self.rest
+            .request_to_speak(guild_id, channel_id, requesting)
+            .await
+    }
+
+    pub async fn set_stage_speaker(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+        channel_id: crate::discord::ids::Id<crate::discord::ids::marker::ChannelMarker>,
+        user_id: crate::discord::ids::Id<crate::discord::ids::marker::UserMarker>,
+        speaking: bool,
+    ) -> Result<()> {
+        self.rest
+            .set_stage_speaker(guild_id, channel_id, user_id, speaking)
+            .await
+    }
+
     pub async fn create_scheduled_event(
         &self,
         guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,

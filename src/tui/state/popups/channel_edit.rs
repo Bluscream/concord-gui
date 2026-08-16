@@ -34,6 +34,12 @@ pub enum ChannelField {
     Slowmode,
     Nsfw,
     UserLimit,
+    /// A stage's topic: what the live session is about.
+    ///
+    /// Not the channel's topic. A stage channel has both - the channel's
+    /// describes the room, this describes the session running in it - and
+    /// conflating them would overwrite one with the other.
+    StageTopic,
 }
 
 impl ChannelField {
@@ -44,6 +50,9 @@ impl ChannelField {
             Self::Slowmode => "Slowmode (seconds)",
             Self::Nsfw => "Age-restricted",
             Self::UserLimit => "User limit (0 = none)",
+            // Named for what it is, so it is not mistaken for the channel
+            // topic two rows above it.
+            Self::StageTopic => "Stage topic (empty ends the stage)",
         }
     }
 }
@@ -53,6 +62,14 @@ pub(in crate::tui) struct ChannelEditState {
     pub(super) purpose: ChannelEditPurpose,
     pub(super) name: TextInputState,
     pub(super) topic: TextInputState,
+    /// The live stage's topic, for a stage channel. Separate from the channel
+    /// topic above, which describes the room rather than the session.
+    pub(super) stage_topic: TextInputState,
+    /// Whether a stage is already running here.
+    ///
+    /// Decides between starting and changing: Discord's start endpoint fails
+    /// on a running stage, and its patch fails on one that is not.
+    pub(super) stage_running: bool,
     pub(super) slowmode: TextInputState,
     pub(super) user_limit: TextInputState,
     pub(super) nsfw: bool,
@@ -81,6 +98,7 @@ impl ChannelEditState {
             ChannelField::Topic => self.topic.value().to_owned(),
             ChannelField::Slowmode => self.slowmode.value().to_owned(),
             ChannelField::UserLimit => self.user_limit.value().to_owned(),
+            ChannelField::StageTopic => self.stage_topic.value().to_owned(),
             ChannelField::Nsfw => if self.nsfw { "yes" } else { "no" }.to_owned(),
         }
     }
@@ -91,6 +109,7 @@ impl ChannelEditState {
             ChannelField::Topic => Some(&mut self.topic),
             ChannelField::Slowmode => Some(&mut self.slowmode),
             ChannelField::UserLimit => Some(&mut self.user_limit),
+            ChannelField::StageTopic => Some(&mut self.stage_topic),
             ChannelField::Nsfw => None,
         }
     }
@@ -113,6 +132,8 @@ impl DashboardState {
                 },
                 name: TextInputState::default(),
                 topic: TextInputState::default(),
+                stage_topic: TextInputState::default(),
+                stage_running: false,
                 slowmode: TextInputState::default(),
                 user_limit: TextInputState::default(),
                 nsfw: false,
@@ -144,6 +165,9 @@ impl DashboardState {
         let mut fields = vec![ChannelField::Name];
         if channel.is_voice() {
             fields.push(ChannelField::UserLimit);
+            if channel.is_stage() {
+                fields.push(ChannelField::StageTopic);
+            }
         } else if !channel.is_category() {
             fields.push(ChannelField::Topic);
             fields.push(ChannelField::Slowmode);
@@ -156,6 +180,8 @@ impl DashboardState {
                 purpose: ChannelEditPurpose::Edit { channel_id },
                 name,
                 topic,
+                stage_topic: TextInputState::default(),
+                stage_running: false,
                 slowmode,
                 user_limit,
                 nsfw,
@@ -175,6 +201,25 @@ impl DashboardState {
                 channel_id,
                 name,
             }));
+    }
+
+    /// Take the stage that is running here, if any.
+    ///
+    /// Seeds the topic field so a change is a correction rather than a
+    /// retype, and decides which endpoint the form will use.
+    pub(in crate::tui) fn set_stage_instance(
+        &mut self,
+        instance: Option<crate::discord::StageInstance>,
+    ) {
+        if let Some(state) = self.popups.channel_edit_mut() {
+            match instance {
+                Some(instance) => {
+                    state.stage_topic.set_value(instance.topic);
+                    state.stage_running = true;
+                }
+                None => state.stage_running = false,
+            }
+        }
     }
 
     pub fn close_channel_edit(&mut self) {
@@ -270,7 +315,35 @@ impl DashboardState {
         }
 
         let purpose = state.purpose.clone();
+        // Taken before the popup closes. A stage topic is its own endpoint, so
+        // it is queued rather than folded into the channel edit.
+        let stage_topic = fields
+            .iter()
+            .position(|field| *field == ChannelField::StageTopic)
+            .and_then(|index| values.get(index).cloned());
+        // Read before the popup closes: which endpoint to use depends on it.
+        let running = state.stage_running;
         self.close_channel_edit();
+
+        if let (Some(topic), ChannelEditPurpose::Edit { channel_id }) = (stage_topic, &purpose) {
+            let topic = topic.trim().to_owned();
+            // The rule is in the core, so both clients decide it alike.
+            let command = match crate::discord::stage_action_for(&topic, running) {
+                crate::discord::StageAction::End => AppCommand::EndStageInstance {
+                    channel_id: *channel_id,
+                    label: name.clone(),
+                },
+                crate::discord::StageAction::ChangeTopic => AppCommand::ModifyStageTopic {
+                    channel_id: *channel_id,
+                    topic,
+                },
+                crate::discord::StageAction::Start => AppCommand::StartStageInstance {
+                    channel_id: *channel_id,
+                    topic,
+                },
+            };
+            self.enqueue_pending_command(command);
+        }
 
         match purpose {
             ChannelEditPurpose::Create { kind } => {
@@ -356,6 +429,9 @@ impl DashboardState {
                         edit.user_limit = Some(limit);
                     }
                 }
+                // Not part of the channel edit: a stage topic is a separate
+                // endpoint, and is sent alongside rather than folded in.
+                ChannelField::StageTopic => {}
                 ChannelField::Nsfw => {
                     if nsfw != channel.nsfw.unwrap_or(false) {
                         edit.nsfw = Some(nsfw);

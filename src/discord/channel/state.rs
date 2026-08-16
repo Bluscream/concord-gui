@@ -103,8 +103,26 @@ impl ChannelState {
         None
     }
 
+    /// A voice channel, including a stage.
+    ///
+    /// Stages were excluded here, which meant they could not be joined at all:
+    /// every permission check and every join path asks this question, and a
+    /// stage that answered no was a channel the client could see and not enter.
     pub fn is_voice(&self) -> bool {
-        matches!(self.kind.as_str(), "voice" | "GuildVoice")
+        matches!(
+            self.kind.as_str(),
+            "voice" | "GuildVoice" | "stage" | "GuildStageVoice"
+        )
+    }
+
+    /// A stage specifically, which is a voice channel with an audience.
+    ///
+    /// Distinct from `is_voice` because what you can do differs: in a stage
+    /// you are an audience member until a moderator invites you to speak, so
+    /// a client that treated it as an ordinary voice channel would show a
+    /// microphone that does nothing.
+    pub fn is_stage(&self) -> bool {
+        matches!(self.kind.as_str(), "stage" | "GuildStageVoice")
     }
 
     /// A 1:1 DM or a group DM. Unlike [`Self::is_dm`], this also matches group

@@ -587,6 +587,36 @@ pub enum AppCommand {
         event_id: u64,
         interested: bool,
     },
+    /// The live stage in this channel, if one is running.
+    LoadStageInstance {
+        channel_id: Id<ChannelMarker>,
+    },
+    StartStageInstance {
+        channel_id: Id<ChannelMarker>,
+        topic: String,
+    },
+    ModifyStageTopic {
+        channel_id: Id<ChannelMarker>,
+        topic: String,
+    },
+    EndStageInstance {
+        channel_id: Id<ChannelMarker>,
+        label: String,
+    },
+    /// Raise or lower your hand in a stage.
+    RequestToSpeak {
+        guild_id: Id<GuildMarker>,
+        channel_id: Id<ChannelMarker>,
+        requesting: bool,
+    },
+    /// Invite someone in the audience to speak, or move them back down.
+    SetStageSpeaker {
+        guild_id: Id<GuildMarker>,
+        channel_id: Id<ChannelMarker>,
+        user_id: Id<UserMarker>,
+        speaking: bool,
+        label: String,
+    },
     CreateScheduledEvent {
         guild_id: Id<GuildMarker>,
         event: Box<crate::discord::NewEvent>,

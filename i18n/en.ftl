@@ -316,3 +316,7 @@ action-sync = Sync
 action-new-template = New template
 status-no-such-channel = No channel with that name, or more than one
 action-new-event = New event
+action-ask-to-speak = Ask to speak
+action-stage-topic = Stage topic
+action-invite-to-speak = Invite to speak
+status-not-a-stage = Not a stage channel

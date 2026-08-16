@@ -209,6 +209,10 @@ fn push_dashboard_effect(event: AppEvent, ctx: &mut EffectContext<'_>) {
             ctx.state.apply_soundboard_failure(message);
             return;
         }
+        AppEvent::StageInstanceLoaded { instance, .. } => {
+            ctx.state.set_stage_instance(instance);
+            return;
+        }
         AppEvent::ScheduledEventsLoaded { events, .. } => {
             ctx.state.set_scheduled_events(events);
             return;

@@ -77,6 +77,9 @@ fn channel_kind(channel: &concord::discord::ChannelState) -> ChannelKind {
         ChannelKind::Category
     } else if channel.is_thread() {
         ChannelKind::Thread
+    } else if channel.is_stage() {
+        // Checked before is_voice, which now matches a stage too.
+        ChannelKind::Stage
     } else if channel.is_voice() {
         ChannelKind::Voice
     } else if channel.is_forum() {

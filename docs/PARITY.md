@@ -258,6 +258,21 @@ built yet. That is a legitimate intermediate state, but only while it is
 written down: see the "Built but unreachable" section of
 `docs/OFFICIAL-PARITY.md`, which must be kept in step with this list.
 
+## Running the GUI tests
+
+The GUI's model tests are behind `#[cfg(all(test, feature = "fixtures"))]`, so
+`cargo test -p concord-gui` runs 76 of them and silently skips 66. The feature
+is not optional for verification:
+
+```bash
+cargo test -p concord-gui --features fixtures --all-targets
+```
+
+Without it, `crates/gui/src/demo.rs` is not compiled either - and its match over
+`AppCommand` is deliberately exhaustive, so it is the check that catches a
+command added to the core with no offline answer. Thirty-three had accumulated
+behind the missing feature flag before this was noticed.
+
 ## Permission bits
 
 The client keeps named constants for the permissions it checks, and

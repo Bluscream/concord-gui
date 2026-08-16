@@ -314,3 +314,7 @@ action-sync = Abgleichen
 action-new-template = Neue Vorlage
 status-no-such-channel = Kein Kanal mit diesem Namen, oder mehrere
 action-new-event = Neuer Termin
+action-ask-to-speak = Rederecht anfragen
+action-stage-topic = Bühnenthema
+action-invite-to-speak = Zum Sprechen einladen
+status-not-a-stage = Kein Bühnenkanal

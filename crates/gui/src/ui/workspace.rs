@@ -112,6 +112,21 @@ pub enum ChannelKind {
     Category,
     /// A thread, rendered nested under its parent channel.
     Thread,
+    /// A voice channel with an audience. Joined like a voice channel, but you
+    /// are listening until a moderator invites you to speak - so it is its own
+    /// kind rather than a flag on Voice, and the menu can say so.
+    Stage,
+}
+
+impl ChannelKind {
+    /// Whether clicking this joins a call.
+    ///
+    /// A stage is joined exactly like a voice channel. Comparing against
+    /// `Voice` alone is how a stage becomes a channel you can see and not
+    /// enter, which is the bug this exists to prevent.
+    pub fn joins_voice(self) -> bool {
+        matches!(self, Self::Voice | Self::Stage)
+    }
 }
 
 impl ChannelKind {
@@ -119,6 +134,7 @@ impl ChannelKind {
         match self {
             ChannelKind::Text => "#",
             ChannelKind::Voice => "♪",
+            ChannelKind::Stage => "◎",
             ChannelKind::Forum => "▤",
             ChannelKind::Category => "",
             ChannelKind::Thread => "\u{2937}",
@@ -210,6 +226,8 @@ pub enum Prompt {
     WidgetChannel,
     /// A new scheduled event, typed as one line of fields.
     NewEvent,
+    /// A stage's topic. Empty ends the stage.
+    StageTopic(Id<marker::ChannelMarker>),
     /// A new name for the open guild.
     GuildName,
     /// A path to an image to use as the guild icon.
@@ -236,6 +254,7 @@ impl Prompt {
             Prompt::WelcomeDescription => "Welcome description",
             Prompt::WidgetChannel => "Widget invite channel",
             Prompt::NewEvent => "New event",
+            Prompt::StageTopic(_) => "Stage topic",
             Prompt::GuildName => "Rename server",
             Prompt::GuildIcon => "Server icon",
             Prompt::ChannelTopic(_) => "Channel topic",
@@ -258,6 +277,7 @@ impl Prompt {
             Prompt::WelcomeDescription => "Shown to people arriving - empty clears it",
             Prompt::WidgetChannel => "Channel name - empty means no invite",
             Prompt::NewEvent => "name | start | end | where - times as 2026-09-01T19:00:00Z",
+            Prompt::StageTopic(_) => "What the session is about - empty ends the stage",
             Prompt::GuildName => "Server name",
             Prompt::GuildIcon => "Path to a PNG, JPEG, GIF or WebP",
             Prompt::ChannelTopic(_) => "Topic - empty clears it",
@@ -1004,6 +1024,9 @@ pub struct Workspace {
     /// Privacy and safety. No fetch of its own - the values arrive with READY,
     /// so the panel is either open or not.
     pub privacy_open: bool,
+    /// The stage running in the channel whose topic is being edited, if any.
+    /// Decides which of Discord's three stage endpoints the form uses.
+    pub stage_running: Option<concord::discord::StageInstance>,
     pub access: Option<AccessView>,
     pub account: Option<AccountView>,
     /// A role's permissions, once opened.
@@ -1153,6 +1176,7 @@ impl Workspace {
             soundboard: None,
             connections: None,
             privacy_open: false,
+            stage_running: None,
             access: None,
             account: None,
             permission_grid: None,
@@ -1893,6 +1917,7 @@ impl Workspace {
             Prompt::WelcomeDescription => self.set_welcome_description(text),
             Prompt::WidgetChannel => self.set_widget_channel(&text),
             Prompt::NewEvent => self.create_event(&text),
+            Prompt::StageTopic(channel_id) => self.submit_stage_topic(channel_id, &text),
             Prompt::GuildName => self.rename_guild(text),
             Prompt::GuildIcon => self.set_guild_icon(text),
             Prompt::ChannelTopic(channel_id) => self.set_channel_topic(channel_id, text),
@@ -4212,7 +4237,7 @@ impl Workspace {
                     },
                 ]
             }
-            ContextSubject::Channel(_) => vec![
+            ContextSubject::Channel(channel_id) => vec![
                 overlay::ContextItem {
                     label: t!("action-open-in-new-tab"),
                     disabled_reason: None,
@@ -4227,6 +4252,23 @@ impl Workspace {
                     label: t!("action-delete-channel"),
                     disabled_reason: (!manage).then(|| t!("status-no-permission")),
                     destructive: true,
+                },
+                // Only on a stage, where they mean something: on an ordinary
+                // voice channel there is no audience to ask to leave.
+                overlay::ContextItem {
+                    label: t!("action-ask-to-speak"),
+                    disabled_reason: (!self.is_stage_channel(channel_id))
+                        .then(|| t!("status-not-a-stage")),
+                    destructive: false,
+                },
+                overlay::ContextItem {
+                    label: t!("action-stage-topic"),
+                    disabled_reason: if !self.is_stage_channel(channel_id) {
+                        Some(t!("status-not-a-stage"))
+                    } else {
+                        (!manage).then(|| t!("status-no-permission"))
+                    },
+                    destructive: false,
                 },
             ],
             ContextSubject::Guild(guild_id) => vec![overlay::ContextItem {
@@ -4251,6 +4293,14 @@ impl Workspace {
                     label: t!("action-block"),
                     disabled_reason: None,
                     destructive: true,
+                },
+                // Last, after the destructive one, because it only does
+                // anything in a stage - Discord refuses it elsewhere - and a
+                // row that usually fails should not sit above one that works.
+                overlay::ContextItem {
+                    label: t!("action-invite-to-speak"),
+                    disabled_reason: None,
+                    destructive: false,
                 },
             ],
         }
@@ -4295,10 +4345,16 @@ impl Workspace {
             (ContextSubject::Channel(channel_id), 2) => {
                 self.deleting_channel = Some(channel_id);
             }
+            (ContextSubject::Channel(channel_id), 3) => self.request_to_speak(channel_id),
+            (ContextSubject::Channel(channel_id), 4) => self.open_stage_topic(channel_id),
             (ContextSubject::Guild(guild_id), 0) => {
                 self.toggle_guild_direct_messages(guild_id);
             }
             (ContextSubject::Member(user_id), 0) => self.open_profile(user_id),
+            // Only does anything in a stage; elsewhere Discord refuses it,
+            // which is why the row is offered from the member menu rather than
+            // hidden behind a mode.
+            (ContextSubject::Member(user_id), 2) => self.invite_to_speak(user_id),
             (ContextSubject::Member(user_id), 1) => {
                 let label = self.friend_label(user_id);
                 self.friend_action(AppCommand::BlockUser { user_id, label });
@@ -5381,6 +5437,83 @@ impl Workspace {
             return;
         };
         handle.send(AppCommand::CreateRole { guild_id, name });
+    }
+
+    /// Whether this channel is a stage, which is what makes the stage rows
+    /// mean anything.
+    fn is_stage_channel(&self, channel_id: Id<marker::ChannelMarker>) -> bool {
+        self.model
+            .channels
+            .iter()
+            .any(|channel| channel.id == Some(channel_id) && channel.kind == ChannelKind::Stage)
+    }
+
+    /// Open the stage panel for a channel, and ask what is running there.
+    pub fn open_stage_topic(&mut self, channel_id: Id<marker::ChannelMarker>) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        self.stage_running = None;
+        handle.send(AppCommand::LoadStageInstance { channel_id });
+        self.prompt = Some((Prompt::StageTopic(channel_id), Composer::default()));
+    }
+
+    /// Start, change or end a stage, whichever fits.
+    ///
+    /// The rule is in the core, so both clients decide it alike: Discord's
+    /// start endpoint fails on a running stage and its patch fails on one that
+    /// is not, and the two are indistinguishable from the form alone.
+    fn submit_stage_topic(&mut self, channel_id: Id<marker::ChannelMarker>, topic: &str) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let running = self.stage_running.is_some();
+        let command = match concord::discord::stage_action_for(topic, running) {
+            concord::discord::StageAction::End => AppCommand::EndStageInstance {
+                channel_id,
+                label: self.channel_name(channel_id),
+            },
+            concord::discord::StageAction::ChangeTopic => AppCommand::ModifyStageTopic {
+                channel_id,
+                topic: topic.trim().to_owned(),
+            },
+            concord::discord::StageAction::Start => AppCommand::StartStageInstance {
+                channel_id,
+                topic: topic.trim().to_owned(),
+            },
+        };
+        handle.send(command);
+    }
+
+    /// Raise your hand in a stage.
+    pub fn request_to_speak(&mut self, channel_id: Id<marker::ChannelMarker>) {
+        let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
+            return;
+        };
+        handle.send(AppCommand::RequestToSpeak {
+            guild_id,
+            channel_id,
+            requesting: true,
+        });
+    }
+
+    /// Invite someone in the audience to speak.
+    pub fn invite_to_speak(&mut self, user_id: Id<marker::UserMarker>) {
+        let (Some(handle), Selection::Guild(guild_id)) = (&self.handle, self.nav.selection) else {
+            return;
+        };
+        // The stage you are in, since inviting someone up only makes sense
+        // there - and Discord addresses it by channel.
+        let Some((channel_id, _)) = self.voice_channel else {
+            return;
+        };
+        handle.send(AppCommand::SetStageSpeaker {
+            guild_id,
+            channel_id,
+            user_id,
+            speaking: true,
+            label: self.friend_label(user_id),
+        });
     }
 
     /// Create a scheduled event from one typed line.
@@ -7290,6 +7423,16 @@ impl Workspace {
                     view.error = Some(message.clone());
                 }
             }
+            AppEvent::StageInstanceLoaded { instance, .. } => {
+                self.stage_running = instance.clone();
+                // Seeded, so changing a topic is a correction rather than a
+                // retype - and so emptying it is a deliberate act.
+                if let (Some(instance), Some((Prompt::StageTopic(_), composer))) =
+                    (instance, self.prompt.as_mut())
+                {
+                    composer.set_text(&instance.topic);
+                }
+            }
             AppEvent::ScheduledEventsLoaded { guild_id, events } => {
                 if let Some(view) = &mut self.server_management
                     && view.guild_id == *guild_id
@@ -8220,7 +8363,7 @@ impl Workspace {
 
             // Text channels switch the view; voice channels join a call.
             let entry = match channel.id {
-                Some(channel_id) if channel.kind == ChannelKind::Voice => {
+                Some(channel_id) if channel.kind.joins_voice() => {
                     let name = channel.name.clone();
                     entry
                         .id(("channel", index))

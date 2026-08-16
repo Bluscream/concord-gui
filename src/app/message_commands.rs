@@ -532,6 +532,97 @@ pub(super) async fn set_event_interest(
     load_scheduled_events(client, guild_id).await;
 }
 
+type ChannelId = crate::discord::ids::Id<crate::discord::ids::marker::ChannelMarker>;
+
+pub(super) async fn load_stage_instance(client: DiscordClient, channel_id: ChannelId) {
+    match client.stage_instance(channel_id).await {
+        Ok(instance) => {
+            client
+                .publish_event(AppEvent::StageInstanceLoaded {
+                    channel_id,
+                    instance,
+                })
+                .await;
+        }
+        Err(error) => {
+            log_app_error("stage instance failed", &error);
+            client
+                .publish_event(AppEvent::StageRequestFailed {
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
+pub(super) async fn start_stage_instance(
+    client: DiscordClient,
+    channel_id: ChannelId,
+    topic: String,
+) {
+    if let Err(error) = client.start_stage_instance(channel_id, &topic).await {
+        report_moderation_failure(&client, "starting", &topic, &error).await;
+        return;
+    }
+    load_stage_instance(client, channel_id).await;
+}
+
+pub(super) async fn modify_stage_topic(
+    client: DiscordClient,
+    channel_id: ChannelId,
+    topic: String,
+) {
+    if let Err(error) = client.modify_stage_topic(channel_id, &topic).await {
+        report_moderation_failure(&client, "changing", &topic, &error).await;
+        return;
+    }
+    load_stage_instance(client, channel_id).await;
+}
+
+pub(super) async fn end_stage_instance(
+    client: DiscordClient,
+    channel_id: ChannelId,
+    label: String,
+) {
+    if let Err(error) = client.end_stage_instance(channel_id).await {
+        report_moderation_failure(&client, "ending", &label, &error).await;
+        return;
+    }
+    // Refetched so the panel stops showing a topic for a stage that is over.
+    load_stage_instance(client, channel_id).await;
+}
+
+pub(super) async fn request_to_speak(
+    client: DiscordClient,
+    guild_id: GuildId,
+    channel_id: ChannelId,
+    requesting: bool,
+) {
+    if let Err(error) = client
+        .request_to_speak(guild_id, channel_id, requesting)
+        .await
+    {
+        report_moderation_failure(&client, "changing", "your request to speak", &error).await;
+    }
+}
+
+pub(super) async fn set_stage_speaker(
+    client: DiscordClient,
+    guild_id: GuildId,
+    channel_id: ChannelId,
+    user_id: crate::discord::ids::Id<crate::discord::ids::marker::UserMarker>,
+    speaking: bool,
+    label: String,
+) {
+    if let Err(error) = client
+        .set_stage_speaker(guild_id, channel_id, user_id, speaking)
+        .await
+    {
+        let action = if speaking { "inviting" } else { "moving" };
+        report_moderation_failure(&client, action, &label, &error).await;
+    }
+}
+
 pub(super) async fn create_scheduled_event(
     client: DiscordClient,
     guild_id: GuildId,

@@ -40,6 +40,7 @@ mod invites;
 mod membership;
 mod privacy;
 mod sessions;
+mod stage;
 
 pub use account::{
     AccountEdit, BackupCode, MAX_USERNAME_CHARS, MIN_PASSWORD_CHARS, MIN_USERNAME_CHARS,
@@ -80,6 +81,10 @@ pub use roles::{MAX_ROLE_NAME_CHARS, RoleEdit};
 pub use sessions::{AuthSession, AuthorisedApp};
 pub use soundboard::{
     MAX_SOUND_NAME_CHARS, MIN_SOUND_NAME_CHARS, SoundboardSound, is_valid_sound_name,
+};
+pub use stage::{
+    MAX_STAGE_TOPIC_CHARS, StageAction, StageInstance, StagePrivacy, stage_action_for,
+    stage_topic_problem,
 };
 mod messages;
 mod moderation;

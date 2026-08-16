@@ -122,6 +122,17 @@ impl DashboardState {
                         "Audio settings",
                         ActionAvailability::Enabled,
                     ),
+                    // Only means anything in a stage, where there is an
+                    // audience to invite someone out of.
+                    ChannelActionItem::new(
+                        ChannelActionKind::InviteToSpeak,
+                        "Invite to speak",
+                        self.discord
+                            .cache
+                            .channel(*channel_id)
+                            .is_none_or(|channel| !channel.is_stage())
+                            .then(|| "not a stage channel".to_owned()),
+                    ),
                 ];
             }
             Some(ChannelActionMenuState::StreamTargets { .. }) => return Vec::new(),
@@ -202,6 +213,12 @@ impl DashboardState {
             (false, true) => "Mute category",
             (false, false) => "Mute channel",
         };
+
+        // A stage is a voice channel with an audience: you are listening until
+        // a moderator invites you up, so the two stage rows only appear where
+        // they mean something.
+        let is_stage = channel.is_stage();
+        let stage_reason = (!is_stage).then(|| "not a stage channel".to_owned());
 
         vec![
             ChannelActionItem::new(
@@ -291,6 +308,23 @@ impl DashboardState {
                 ChannelActionKind::ToggleMute,
                 mute_label,
                 ActionAvailability::Enabled,
+            ),
+            // Last, because a stage is rarer than the rows above and putting
+            // it among them shifts everything people already know the place of.
+            ChannelActionItem::new(
+                ChannelActionKind::RequestToSpeak,
+                "Ask to speak",
+                stage_reason.clone(),
+            ),
+            ChannelActionItem::new(
+                ChannelActionKind::ToggleStage,
+                "Start or end the stage",
+                stage_reason.or_else(|| {
+                    channel
+                        .guild_id
+                        .is_none_or(|guild_id| !self.discord.cache.can_manage_channels(guild_id))
+                        .then(|| "you do not have permission".to_owned())
+                }),
             ),
         ]
     }
@@ -440,6 +474,25 @@ impl DashboardState {
                         self.close_channel_action_menu();
                         self.toggle_current_voice_stream_command()
                     }
+                    ChannelActionKind::RequestToSpeak => {
+                        self.close_channel_action_menu();
+                        let guild_id = self.discord.cache.channel(channel_id)?.guild_id?;
+                        Some(AppCommand::RequestToSpeak {
+                            guild_id,
+                            channel_id,
+                            // Raising a hand; lowering it is the same action
+                            // again, which the stage panel offers once the
+                            // request is in.
+                            requesting: true,
+                        })
+                    }
+                    ChannelActionKind::ToggleStage => {
+                        self.close_channel_action_menu();
+                        // The stage topic is a field on the channel form, so
+                        // this opens that rather than a second form of its own.
+                        self.open_channel_settings(channel_id);
+                        Some(AppCommand::LoadStageInstance { channel_id })
+                    }
                     ChannelActionKind::CreateChannel => {
                         self.close_channel_action_menu();
                         self.open_channel_create();
@@ -525,7 +578,10 @@ impl DashboardState {
                         }
                     }
                     ChannelActionKind::WatchStream => None,
-                    ChannelActionKind::ParticipantAudioSettings => None,
+                    // Only reachable from the participant menu, which is a
+                    // different arm of this match.
+                    ChannelActionKind::ParticipantAudioSettings
+                    | ChannelActionKind::InviteToSpeak => None,
                 }
             }
             ChannelActionMenuState::ParticipantActions {
@@ -554,6 +610,17 @@ impl DashboardState {
                     ChannelActionKind::ParticipantAudioSettings => {
                         self.open_voice_participant_audio_popup(user_id, display_name);
                         None
+                    }
+                    ChannelActionKind::InviteToSpeak => {
+                        let guild_id = self.discord.cache.channel(channel_id)?.guild_id?;
+                        self.close_channel_action_menu();
+                        Some(AppCommand::SetStageSpeaker {
+                            guild_id,
+                            channel_id,
+                            user_id,
+                            speaking: true,
+                            label: display_name,
+                        })
                     }
                     _ => None,
                 }

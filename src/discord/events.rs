@@ -718,6 +718,14 @@ pub enum AppEvent {
     AuthSessionsLoadFailed {
         message: String,
     },
+    /// The live stage in a channel, or `None` when nobody has started one.
+    StageInstanceLoaded {
+        channel_id: Id<ChannelMarker>,
+        instance: Option<crate::discord::StageInstance>,
+    },
+    StageRequestFailed {
+        message: String,
+    },
     ScheduledEventsLoaded {
         guild_id: Id<GuildMarker>,
         events: Vec<crate::discord::ScheduledEvent>,
@@ -1102,6 +1110,8 @@ define_app_event_kinds! {
     ConnectionsLoaded: AppEvent::ConnectionsLoaded { .. },
     AuthSessionsLoaded: AppEvent::AuthSessionsLoaded { .. },
     AuthSessionsLoadFailed: AppEvent::AuthSessionsLoadFailed { .. },
+    StageInstanceLoaded: AppEvent::StageInstanceLoaded { .. },
+    StageRequestFailed: AppEvent::StageRequestFailed { .. },
     ScheduledEventsLoaded: AppEvent::ScheduledEventsLoaded { .. },
     GuildTemplatesLoaded: AppEvent::GuildTemplatesLoaded { .. },
     PruneCountLoaded: AppEvent::PruneCountLoaded { .. },
@@ -2184,6 +2194,8 @@ impl AppEventKind {
             | AppEventKind::SoundboardSoundPlayed
             | AppEventKind::SoundboardSoundsLoaded
             | AppEventKind::SoundboardSoundsLoadFailed
+            | AppEventKind::StageInstanceLoaded
+            | AppEventKind::StageRequestFailed
             | AppEventKind::ScheduledEventsLoaded
             | AppEventKind::GuildTemplatesLoaded
             | AppEventKind::PruneCountLoaded

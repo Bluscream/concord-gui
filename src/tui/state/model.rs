@@ -400,6 +400,12 @@ pub enum ChannelActionKind {
     ChannelPermissions,
     DeleteChannel,
     CreateChannel,
+    /// Raise or lower your hand in a stage.
+    RequestToSpeak,
+    /// Open a stage with a topic, or close the one running.
+    ToggleStage,
+    /// Invite someone in the audience to speak.
+    InviteToSpeak,
 }
 
 pub type ChannelActionItem = ActionItem<ChannelActionKind>;

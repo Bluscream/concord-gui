@@ -1189,7 +1189,7 @@ fn every_ui_action_is_handled_or_explicitly_declined() {
     // should be noticed here as well as by the compiler.
     assert_eq!(
         UiAction::ALL.len(),
-        62,
+        66,
         "UiAction changed upstream; revisit the keymap dispatcher"
     );
 }
@@ -1490,4 +1490,15 @@ fn closing_a_tab_moves_to_a_sensible_neighbour() {
     assert_eq!(next_active(2, 1, 1), 0);
     // Closing the only tab is not an index at all.
     assert_eq!(next_active(1, 0, 0), 0);
+}
+
+#[test]
+fn a_stage_is_joined_like_a_voice_channel() {
+    // Comparing against Voice alone is how a stage becomes a channel you can
+    // see and not enter - which is exactly what the core had before this, and
+    // what the new kind would reintroduce here if the check were left narrow.
+    assert!(ChannelKind::Voice.joins_voice());
+    assert!(ChannelKind::Stage.joins_voice());
+    assert!(!ChannelKind::Text.joins_voice());
+    assert!(!ChannelKind::Category.joins_voice());
 }

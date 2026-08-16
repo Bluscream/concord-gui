@@ -594,6 +594,49 @@ impl CommandDispatcher {
                 )
                 .await;
             }
+            AppCommand::LoadStageInstance { channel_id } => {
+                message_commands::load_stage_instance(self.client.clone(), channel_id).await;
+            }
+            AppCommand::StartStageInstance { channel_id, topic } => {
+                message_commands::start_stage_instance(self.client.clone(), channel_id, topic)
+                    .await;
+            }
+            AppCommand::ModifyStageTopic { channel_id, topic } => {
+                message_commands::modify_stage_topic(self.client.clone(), channel_id, topic).await;
+            }
+            AppCommand::EndStageInstance { channel_id, label } => {
+                message_commands::end_stage_instance(self.client.clone(), channel_id, label).await;
+            }
+            AppCommand::RequestToSpeak {
+                guild_id,
+                channel_id,
+                requesting,
+            } => {
+                message_commands::request_to_speak(
+                    self.client.clone(),
+                    guild_id,
+                    channel_id,
+                    requesting,
+                )
+                .await;
+            }
+            AppCommand::SetStageSpeaker {
+                guild_id,
+                channel_id,
+                user_id,
+                speaking,
+                label,
+            } => {
+                message_commands::set_stage_speaker(
+                    self.client.clone(),
+                    guild_id,
+                    channel_id,
+                    user_id,
+                    speaking,
+                    label,
+                )
+                .await;
+            }
             AppCommand::CreateScheduledEvent { guild_id, event } => {
                 message_commands::create_scheduled_event(self.client.clone(), guild_id, *event)
                     .await;

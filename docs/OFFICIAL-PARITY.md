@@ -284,7 +284,21 @@ while one in a channel must not have one - Discord ends that when the channel
 empties. The two also send different entity types, and transposing them fails
 with a message about a field the form never showed.
 
-Still missing: editing an existing event, stage channels, and discovery.
+Stage channels are joinable in both clients, which they were not: `is_voice`
+excluded them, so every permission check and every join path answered no and a
+stage was a channel you could see and not enter. The GUI has its own
+`ChannelKind`, where comparing against `Voice` alone would have reintroduced
+exactly that - so the check is `joins_voice`, with a test.
+
+Starting, retitling and ending a stage is one field in both clients. Which of
+Discord's three endpoints it uses is decided in the core: start rejects a
+running stage, patch rejects one that is not, and an emptied topic means end -
+and the three are indistinguishable from the form alone.
+
+Asking to speak and inviting someone up are in both clients too, on the channel
+and member menus.
+
+Still missing: editing an existing event, and discovery.
 
 ## Deliberately out of scope
 
@@ -317,7 +331,7 @@ forward so it is not built twice.
 8. **Members, onboarding, welcome screen, widget.**
 9. **Video** - camera on the voice connection, receiving remote video,
    pop-out windows, per-user mute and hide. Needs a real account to verify.
-10. **Editing events, stage channels, discovery.**
+10. **Editing events, discovery.**
 
 Then, and only then, the extras from AGENTS.md: offline-first, merged
 multi-account, and the rest.
