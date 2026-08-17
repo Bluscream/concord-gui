@@ -26,6 +26,7 @@ pub(in crate::tui::ui) fn render_voice_participant_audio_popup(
                 view.selected,
                 view.settings.volume.label(),
                 view.settings.muted,
+                view.settings.video_hidden,
             )
             .into_iter()
             .skip(first_line)
@@ -86,12 +87,15 @@ pub(in crate::tui::ui) fn voice_participant_audio_popup_lines(
     selected: VoiceParticipantAudioField,
     volume_label: String,
     muted: bool,
+    video_hidden: bool,
 ) -> Vec<Line<'static>> {
     let volume_selected = selected == VoiceParticipantAudioField::Volume;
     let muted_selected = selected == VoiceParticipantAudioField::Muted;
     let volume_style = selectable_popup_label_style(volume_selected, true);
     let detail_style = theme::current().style(theme::HighlightGroup::Description);
     let muted_style = selectable_popup_label_style(muted_selected, true);
+    let hidden_selected = selected == VoiceParticipantAudioField::VideoHidden;
+    let hidden_style = selectable_popup_label_style(hidden_selected, true);
 
     vec![
         selected_row_line(
@@ -115,6 +119,16 @@ pub(in crate::tui::ui) fn voice_participant_audio_popup_lines(
                 Span::styled("Muted", muted_style),
             ]),
             muted_selected,
+        ),
+        selected_row_line(
+            Line::from(vec![
+                selectable_popup_marker(hidden_selected),
+                Span::styled(if video_hidden { "[x] " } else { "[ ] " }, hidden_style),
+                // Named for what it hides, since a stream and a camera are two
+                // different things and this covers both.
+                Span::styled("Hide camera and screen", hidden_style),
+            ]),
+            hidden_selected,
         ),
     ]
 }

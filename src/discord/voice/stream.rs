@@ -3793,6 +3793,7 @@ mod tests {
             self_deaf: false,
             self_mute: false,
             self_stream: false,
+            self_video: false,
         }
     }
 

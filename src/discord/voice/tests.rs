@@ -1009,12 +1009,14 @@ fn voice_decode_state_applies_participant_settings_before_final_output_limit() {
             VoiceParticipantPlaybackSettings {
                 volume: VoiceParticipantVolumePercent::new(200),
                 muted: false,
+                video_hidden: false,
             },
         ),
         (
             Id::new(11),
             VoiceParticipantPlaybackSettings {
                 muted: true,
+                video_hidden: false,
                 ..VoiceParticipantPlaybackSettings::default()
             },
         ),

@@ -150,6 +150,9 @@ pub struct VoiceMember {
     pub muted: bool,
     pub deafened: bool,
     pub streaming: bool,
+    /// Whether their camera is on. Separate from `streaming`, which is a
+    /// shared screen - someone can be doing both at once.
+    pub on_camera: bool,
     pub speaking: bool,
 }
 
@@ -1055,6 +1058,9 @@ pub struct Workspace {
     /// Servers Discord will show anyone, for finding one without a link.
     pub discovered: Vec<concord::discord::DiscoverableGuild>,
     pub discovering: bool,
+    /// Whose camera and screen share to stop showing. Local only, like the
+    /// mute beside it - neither Discord nor the person is told.
+    pub video_hidden: std::collections::BTreeSet<Id<marker::UserMarker>>,
     /// The stage running in the channel whose topic is being edited, if any.
     /// Decides which of Discord's three stage endpoints the form uses.
     pub stage_running: Option<concord::discord::StageInstance>,
@@ -1209,6 +1215,7 @@ impl Workspace {
             privacy_open: false,
             discovered: Vec::new(),
             discovering: false,
+            video_hidden: std::collections::BTreeSet::new(),
             stage_running: None,
             access: None,
             account: None,
@@ -1830,14 +1837,18 @@ impl Workspace {
         };
     }
 
-    /// Set how loudly one participant is played, or mute them locally.
+    /// Set how loudly one participant is played, mute them, or stop showing
+    /// their camera and screen.
     ///
-    /// Local only: this changes playback here, not what anyone else hears.
+    /// Local only, all three: this changes what happens here, and neither
+    /// Discord nor the person is told. Hiding someone is a decision about your
+    /// own screen; telling them would make it a social act instead.
     fn set_participant_playback(
         &mut self,
         user_id: Id<marker::UserMarker>,
         volume: u16,
         muted: bool,
+        video_hidden: bool,
     ) {
         let Some(handle) = &self.handle else {
             return;
@@ -1847,6 +1858,7 @@ impl Workspace {
             settings: VoiceParticipantPlaybackSettings {
                 volume: VoiceParticipantVolumePercent::new(volume),
                 muted,
+                video_hidden,
             },
         });
     }
@@ -2662,6 +2674,9 @@ impl Workspace {
                     muted: self.self_mute,
                     deafened: self.self_deaf,
                     streaming: false,
+                    // Camera capture is not wired to this path yet, so
+                    // claiming one would show a feed that does not exist.
+                    on_camera: false,
                     speaking: !self.self_mute,
                 });
             }
@@ -4370,6 +4385,11 @@ impl Workspace {
                     disabled_reason: None,
                     destructive: false,
                 },
+                overlay::ContextItem {
+                    label: t!("action-hide-video"),
+                    disabled_reason: None,
+                    destructive: false,
+                },
             ],
         }
     }
@@ -4428,6 +4448,7 @@ impl Workspace {
             // which is why the row is offered from the member menu rather than
             // hidden behind a mode.
             (ContextSubject::Member(user_id), 2) => self.invite_to_speak(user_id),
+            (ContextSubject::Member(user_id), 3) => self.toggle_video_hidden(user_id),
             (ContextSubject::Member(user_id), 1) => {
                 let label = self.friend_label(user_id);
                 self.friend_action(AppCommand::BlockUser { user_id, label });
@@ -5020,6 +5041,24 @@ impl Workspace {
             code: template.code,
             label: template.name,
         });
+    }
+
+    /// Stop or resume showing someone's camera and screen share.
+    ///
+    /// Local only, like the mute beside it: neither Discord nor the person is
+    /// told. Hiding someone is a decision about your own screen, and telling
+    /// them would make it a social act instead.
+    pub fn toggle_video_hidden(&mut self, user_id: Id<marker::UserMarker>) {
+        let hidden = if self.video_hidden.contains(&user_id) {
+            self.video_hidden.remove(&user_id);
+            false
+        } else {
+            self.video_hidden.insert(user_id);
+            true
+        };
+        let volume = self.options.voice.voice_output_volume.value() as u16;
+        let muted = self.locally_muted.contains(&user_id);
+        self.set_participant_playback(user_id, volume, muted, hidden);
     }
 
     /// Join a discovered server by its vanity invite.
@@ -8780,6 +8819,7 @@ impl Workspace {
                         muted: participant.muted,
                         deafened: participant.deafened,
                         streaming: participant.streaming,
+                        on_camera: participant.on_camera,
                         speaking: participant.speaking,
                         id_seed: participant_id.get(),
                     },
@@ -8805,7 +8845,13 @@ impl Workspace {
                                 }
                                 let volume =
                                     workspace.options.voice.voice_output_volume.value() as u16;
-                                workspace.set_participant_playback(participant_id, volume, muted);
+                                let hidden = workspace.video_hidden.contains(&participant_id);
+                                workspace.set_participant_playback(
+                                    participant_id,
+                                    volume,
+                                    muted,
+                                    hidden,
+                                );
                                 cx.notify();
                             });
                         }

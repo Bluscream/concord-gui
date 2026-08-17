@@ -97,6 +97,9 @@ pub struct VoiceStateInfo {
     pub self_deaf: bool,
     pub self_mute: bool,
     pub self_stream: bool,
+    /// Whether their camera is on. Distinct from `self_stream`, which is a
+    /// shared screen: a participant can be doing either, both or neither.
+    pub self_video: bool,
 }
 
 #[cfg(test)]
@@ -118,6 +121,7 @@ impl VoiceStateInfo {
             self_deaf: false,
             self_mute: false,
             self_stream: false,
+            self_video: false,
         }
     }
 }
@@ -138,6 +142,7 @@ impl fmt::Debug for VoiceStateInfo {
             .field("self_deaf", &self.self_deaf)
             .field("self_mute", &self.self_mute)
             .field("self_stream", &self.self_stream)
+            .field("self_video", &self.self_video)
             .finish()
     }
 }

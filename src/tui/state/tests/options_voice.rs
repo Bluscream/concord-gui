@@ -442,6 +442,7 @@ fn voice_channel_participant_audio_controls_persist() {
     let volume_settings = VoiceParticipantPlaybackSettings {
         volume: VoiceParticipantVolumePercent::new(101),
         muted: false,
+        video_hidden: false,
     };
     assert_eq!(
         crate::tui::input::handle_key(
@@ -469,6 +470,7 @@ fn voice_channel_participant_audio_controls_persist() {
             user_id: Id::new(20),
             settings: VoiceParticipantPlaybackSettings {
                 muted: true,
+                video_hidden: false,
                 ..volume_settings
             },
         })
@@ -482,6 +484,7 @@ fn voice_channel_participant_audio_controls_persist() {
         saved.voice_participant_playback[0].settings,
         VoiceParticipantPlaybackSettings {
             muted: true,
+            video_hidden: false,
             ..volume_settings
         }
     );

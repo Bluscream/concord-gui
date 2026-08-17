@@ -426,6 +426,11 @@ fn voice_participant_label(
     if participant.self_stream {
         indicators.push_str(" 🔴");
     }
+    // A separate mark from the stream one: a camera and a shared screen are
+    // two different things, and someone can be doing both at once.
+    if participant.self_video {
+        indicators.push_str(" 📷");
+    }
     if participant.mute || participant.self_mute {
         indicators.push_str(" 🔇");
     }

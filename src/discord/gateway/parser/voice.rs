@@ -176,6 +176,10 @@ fn parse_voice_state_info(
             .get("self_stream")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        self_video: value
+            .get("self_video")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     })
 }
 
@@ -258,5 +262,40 @@ mod soundboard_effect_tests {
             clamped,
             AppEvent::SoundboardSoundPlayed { volume, .. } if volume == 1.0
         ));
+    }
+}
+
+#[cfg(test)]
+mod camera_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_camera_and_a_shared_screen_are_read_separately() {
+        // Someone can be doing either, both or neither. Conflating them would
+        // offer to watch a screen that is really a face, or hide a camera
+        // badge for someone who has one.
+        for (video, stream) in [(false, false), (true, false), (false, true), (true, true)] {
+            let value = json!({
+                "user_id": "1",
+                "channel_id": "2",
+                "self_video": video,
+                "self_stream": stream,
+            });
+            let parsed = parse_voice_state_info(&value, None).expect("should parse");
+
+            assert_eq!(parsed.self_video, video, "video for ({video}, {stream})");
+            assert_eq!(parsed.self_stream, stream, "stream for ({video}, {stream})");
+        }
+    }
+
+    #[test]
+    fn an_absent_camera_field_reads_as_off() {
+        // Older payloads omit it, and defaulting to on would put a camera
+        // badge on everyone in the channel.
+        let value = json!({ "user_id": "1", "channel_id": "2" });
+        let parsed = parse_voice_state_info(&value, None).expect("should parse");
+
+        assert!(!parsed.self_video);
     }
 }

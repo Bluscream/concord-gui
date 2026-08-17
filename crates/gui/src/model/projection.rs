@@ -377,6 +377,9 @@ pub fn voice_participants(
             muted: participant.mute || participant.self_mute,
             deafened: participant.deaf || participant.self_deaf,
             streaming: participant.self_stream,
+            // Separate from streaming: a camera and a shared screen are two
+            // different things, and someone can be doing both at once.
+            on_camera: participant.self_video,
             speaking: participant.speaking,
         })
         .collect()

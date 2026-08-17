@@ -2392,6 +2392,7 @@ mod tests {
             self_deaf: false,
             self_mute: false,
             self_stream: false,
+            self_video: false,
         }));
         state.apply(&VoiceRuntimeEvent::BroadcastStreamRequested(request()));
         state.apply(&VoiceRuntimeEvent::StreamCreate(StreamCreateInfo {
@@ -2538,6 +2539,7 @@ mod tests {
             self_deaf: false,
             self_mute: false,
             self_stream: false,
+            self_video: false,
         }));
         assert!(
             state

@@ -1,11 +1,15 @@
 use super::*;
 
-pub(super) const VOICE_PARTICIPANT_AUDIO_FIELD_COUNT: usize = 2;
+pub(super) const VOICE_PARTICIPANT_AUDIO_FIELD_COUNT: usize = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::tui) enum VoiceParticipantAudioField {
     Volume,
     Muted,
+    /// Whether to stop showing their camera and screen share. Separate from
+    /// mute: not wanting to see a face is not the same as not wanting to hear
+    /// a voice, and one control for both would make either impossible alone.
+    VideoHidden,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -29,7 +33,8 @@ impl VoiceParticipantAudioPopupState {
             .selected_for_len(VOICE_PARTICIPANT_AUDIO_FIELD_COUNT)
         {
             0 => VoiceParticipantAudioField::Volume,
-            _ => VoiceParticipantAudioField::Muted,
+            1 => VoiceParticipantAudioField::Muted,
+            _ => VoiceParticipantAudioField::VideoHidden,
         }
     }
 }
@@ -93,12 +98,17 @@ impl DashboardState {
 
     pub(in crate::tui) fn activate_voice_participant_audio_field(&mut self) -> Option<AppCommand> {
         let popup = self.popups.voice_participant_audio()?;
-        if popup.selected_field() != VoiceParticipantAudioField::Muted {
-            return None;
-        }
+        let field = popup.selected_field();
         let user_id = popup.user_id;
         let mut settings = self.voice_participant_playback_settings(user_id);
-        settings.muted = !settings.muted;
+        match field {
+            VoiceParticipantAudioField::Muted => settings.muted = !settings.muted,
+            VoiceParticipantAudioField::VideoHidden => {
+                settings.video_hidden = !settings.video_hidden;
+            }
+            // Volume is adjusted rather than toggled, and has its own keys.
+            VoiceParticipantAudioField::Volume => return None,
+        }
         Some(self.update_voice_participant_playback_settings(user_id, settings))
     }
 }

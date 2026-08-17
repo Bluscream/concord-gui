@@ -20,6 +20,12 @@ pub struct VoiceParticipantState {
     pub self_deaf: bool,
     pub self_mute: bool,
     pub self_stream: bool,
+    /// Whether their camera is on.
+    ///
+    /// Distinct from `self_stream`, which is sharing a screen or window: a
+    /// participant can be doing either, both or neither, and a client that
+    /// conflated the two would offer to watch a screen that is really a face.
+    pub self_video: bool,
     pub speaking: bool,
 }
 
@@ -106,6 +112,7 @@ pub(in crate::discord) struct VoiceState {
     self_deaf: bool,
     self_mute: bool,
     self_stream: bool,
+    self_video: bool,
     speaking: bool,
 }
 
@@ -342,6 +349,7 @@ impl DiscordState {
             self_deaf: state.self_deaf,
             self_mute: state.self_mute,
             self_stream: state.self_stream,
+            self_video: state.self_video,
             speaking: state.speaking,
         }
     }
@@ -457,6 +465,7 @@ impl DiscordState {
                     self_deaf: state.self_deaf,
                     self_mute: state.self_mute,
                     self_stream: state.self_stream,
+                    self_video: state.self_video,
                     speaking,
                 },
             );
@@ -592,6 +601,9 @@ impl crate::discord::state::caches::VoiceStateCache {
                     self_deaf: deafened,
                     self_mute: *muted,
                     self_stream: *streaming,
+                    // Fixtures have no camera: a synthetic face would be a
+                    // video feed the client cannot actually show.
+                    self_video: false,
                     speaking: *speaking,
                 },
             );

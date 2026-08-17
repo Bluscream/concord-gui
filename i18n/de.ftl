@@ -334,3 +334,4 @@ action-pick = Wählen
 action-unpick = Abwählen
 action-finish-onboarding = Einführung abschließen
 status-searching-discovery = Durchsuche Discords öffentliche Server...
+action-hide-video = Kamera und Bildschirm ausblenden

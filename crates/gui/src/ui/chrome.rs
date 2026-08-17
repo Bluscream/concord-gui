@@ -152,6 +152,10 @@ pub struct VoiceRow<'a> {
     pub muted: bool,
     pub deafened: bool,
     pub streaming: bool,
+    /// Whether their camera is on. Separate from `streaming`, which is a
+    /// shared screen - someone can be doing both at once, and one badge for
+    /// both would say the wrong thing about either.
+    pub on_camera: bool,
     pub speaking: bool,
     /// Distinguishes this row's element ids from every other participant's.
     pub id_seed: u64,
@@ -168,6 +172,7 @@ pub fn voice_participant_row(
         muted,
         deafened,
         streaming,
+        on_camera,
         speaking,
         id_seed,
     } = row_data;
@@ -192,6 +197,17 @@ pub fn voice_participant_row(
                 }))
                 .child(name.to_string()),
         )
+        .when(on_camera, |d| {
+            // A word rather than a camera glyph: the obvious one is outside
+            // the Basic Multilingual Plane and draws as an empty box in the
+            // font this ships, which a test here checks for.
+            d.child(
+                gpui::div()
+                    .px(px(space::XS))
+                    .text_color(rgb(active().text_muted))
+                    .child("cam"),
+            )
+        })
         .when(streaming, |d| {
             // "live" is the label; the click target is the whole badge, since
             // watching is the only thing a viewer wants from a live marker.

@@ -21,6 +21,12 @@ pub struct VoiceParticipantVolumePercent(u16);
 pub struct VoiceParticipantPlaybackSettings {
     pub volume: VoiceParticipantVolumePercent,
     pub muted: bool,
+    /// Whether to stop showing their camera and screen share.
+    ///
+    /// Local only, like the volume and mute beside it: Discord is not told,
+    /// and the person is not told either. Hiding someone is a decision about
+    /// your own screen, and telling them would make it a social act instead.
+    pub video_hidden: bool,
 }
 
 const MIN_MICROPHONE_SENSITIVITY_DB: i8 = -100;
@@ -182,5 +188,51 @@ impl VoiceParticipantVolumePercent {
 
     pub fn gain(self) -> f32 {
         f32::from(self.0) / 100.0
+    }
+}
+
+#[cfg(test)]
+mod playback_settings_tests {
+    use super::*;
+
+    #[test]
+    fn a_fresh_participant_is_audible_and_visible() {
+        // The defaults have to be the permissive ones: a client that started
+        // everyone muted and hidden would look broken rather than private.
+        let settings = VoiceParticipantPlaybackSettings::default();
+
+        assert!(!settings.muted);
+        assert!(!settings.video_hidden);
+        assert_eq!(settings.volume, VoiceParticipantVolumePercent::default(),);
+    }
+
+    #[test]
+    fn hiding_someone_is_independent_of_muting_them() {
+        // Two different wants - not wanting to see a camera is not the same as
+        // not wanting to hear a voice - and folding them together would make
+        // one impossible to have without the other.
+        let settings = VoiceParticipantPlaybackSettings {
+            video_hidden: true,
+            ..VoiceParticipantPlaybackSettings::default()
+        };
+
+        assert!(settings.video_hidden);
+        assert!(!settings.muted);
+    }
+
+    #[test]
+    fn settings_survive_the_config_round_trip() {
+        // These are written to config, so a field the deserialiser drops would
+        // silently forget a hidden camera between runs.
+        let settings = VoiceParticipantPlaybackSettings {
+            muted: true,
+            video_hidden: true,
+            ..VoiceParticipantPlaybackSettings::default()
+        };
+        let json = serde_json::to_string(&settings).expect("should serialise");
+        let back: VoiceParticipantPlaybackSettings =
+            serde_json::from_str(&json).expect("should deserialise");
+
+        assert_eq!(back, settings);
     }
 }
