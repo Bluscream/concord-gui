@@ -32,10 +32,12 @@ pub enum ServerPanelTab {
     /// answered them, the form for doing so. Until now the client detected
     /// onboarding and told people to go and finish it in the official app.
     Onboarding,
+    /// How the server lists itself in Discord's public directory.
+    Discovery,
 }
 
 impl ServerPanelTab {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Settings,
         Self::Invites,
         Self::Roles,
@@ -48,6 +50,7 @@ impl ServerPanelTab {
         Self::Templates,
         Self::Members,
         Self::Onboarding,
+        Self::Discovery,
     ];
 
     pub(in crate::tui) fn label(self) -> &'static str {
@@ -64,6 +67,7 @@ impl ServerPanelTab {
             Self::Templates => "Templates",
             Self::Members => "Members",
             Self::Onboarding => "Onboarding",
+            Self::Discovery => "Discovery",
         }
     }
 
@@ -89,6 +93,7 @@ impl ServerPanelTab {
             // ones already cached are shown at once; searching asks for more.
             Self::Members => Vec::new(),
             Self::Onboarding => vec![AppCommand::LoadOnboarding { guild_id }],
+            Self::Discovery => vec![AppCommand::LoadDiscoveryMetadata { guild_id }],
             Self::Membership => vec![
                 AppCommand::LoadWelcomeScreen { guild_id },
                 AppCommand::LoadGuildWidget { guild_id },
@@ -118,6 +123,31 @@ pub(in crate::tui) enum MembershipRow {
 
 /// Discord's own default prune window.
 const DEFAULT_PRUNE_DAYS: u16 = 30;
+
+/// The discovery tab's rows, in order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::tui) enum DiscoveryRow {
+    PrimaryCategory,
+    Keywords,
+    EmojiDiscoverability,
+    About,
+}
+
+pub(in crate::tui) const DISCOVERY_ROWS: [DiscoveryRow; 4] = [
+    DiscoveryRow::PrimaryCategory,
+    DiscoveryRow::Keywords,
+    DiscoveryRow::EmojiDiscoverability,
+    DiscoveryRow::About,
+];
+
+pub(in crate::tui) const fn discovery_label(row: DiscoveryRow) -> &'static str {
+    match row {
+        DiscoveryRow::PrimaryCategory => "Primary category",
+        DiscoveryRow::Keywords => "Search keywords",
+        DiscoveryRow::EmojiDiscoverability => "Findable by its emoji",
+        DiscoveryRow::About => "Description",
+    }
+}
 
 pub(in crate::tui) const fn membership_label(row: MembershipRow) -> &'static str {
     match row {
@@ -202,6 +232,8 @@ pub(in crate::tui) struct ServerManagementState {
     pub(super) onboarding: Option<crate::discord::Onboarding>,
     pub(super) onboarding_rows: Vec<crate::discord::OnboardingRow>,
     pub(super) onboarding_picked: Vec<u64>,
+    pub(super) discovery: Option<crate::discord::DiscoveryMetadata>,
+    pub(super) discovery_categories: Vec<crate::discord::DiscoveryCategory>,
     /// Set while the open tab's fetch is outstanding, so the popup can say so
     /// rather than looking like an empty list.
     pub(super) loading: bool,
@@ -265,6 +297,7 @@ impl ServerManagementState {
             ServerPanelTab::Templates => self.templates.len(),
             ServerPanelTab::Members => self.member_rows.len(),
             ServerPanelTab::Onboarding => self.onboarding_rows.len(),
+            ServerPanelTab::Discovery => DISCOVERY_ROWS.len(),
         }
     }
 
@@ -283,8 +316,8 @@ impl DashboardState {
         guild_id: Id<GuildMarker>,
         tab: ServerPanelTab,
     ) -> Option<AppCommand> {
-        self.popups
-            .set_modal(ModalPopup::ServerManagement(ServerManagementState {
+        self.popups.set_modal(ModalPopup::ServerManagement(Box::new(
+            ServerManagementState {
                 guild_id,
                 tab,
                 selection: SelectablePopupState::default(),
@@ -306,10 +339,13 @@ impl DashboardState {
                 onboarding: None,
                 onboarding_rows: Vec::new(),
                 onboarding_picked: Vec::new(),
+                discovery: None,
+                discovery_categories: Vec::new(),
                 loading: true,
                 error: None,
                 renaming: None,
-            }));
+            },
+        )));
         // Roles need no fetch, so opening on that tab fills from the snapshot
         // and asks for nothing.
         match tab {
@@ -378,6 +414,7 @@ impl DashboardState {
             // Read from the snapshot, so there is nothing to wait for.
             ServerPanelTab::Members => true,
             ServerPanelTab::Onboarding => state.onboarding.is_some(),
+            ServerPanelTab::Discovery => state.discovery.is_some(),
         };
         state.loading = !already_loaded;
         let guild_id = state.guild_id;
@@ -390,6 +427,64 @@ impl DashboardState {
             return None;
         }
         self.queue_tab_fetches(tab, guild_id)
+    }
+
+    /// The discovery tab's rows as label and value.
+    pub(in crate::tui) fn discovery_rows(&self) -> Vec<(String, String)> {
+        let Some(state) = self.popups.server_management() else {
+            return Vec::new();
+        };
+        let Some(metadata) = state.discovery.as_ref() else {
+            return Vec::new();
+        };
+        DISCOVERY_ROWS
+            .into_iter()
+            .map(|row| {
+                let value = match row {
+                    DiscoveryRow::PrimaryCategory => match metadata.primary_category_id {
+                        // Named rather than numbered: "49" is unreadable, and
+                        // without one the server is not listed at all.
+                        Some(id) => state
+                            .discovery_categories
+                            .iter()
+                            .find(|category| category.id == id)
+                            .map_or_else(|| format!("category {id}"), |c| c.name.clone()),
+                        None => "none - the server is not listed".to_owned(),
+                    },
+                    DiscoveryRow::Keywords => {
+                        if metadata.keywords.is_empty() {
+                            "none".to_owned()
+                        } else {
+                            metadata.keywords.join(", ")
+                        }
+                    }
+                    DiscoveryRow::EmojiDiscoverability => if metadata.emoji_discoverability_enabled
+                    {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                    .to_owned(),
+                    DiscoveryRow::About => metadata
+                        .about
+                        .clone()
+                        .unwrap_or_else(|| "not set".to_owned()),
+                };
+                (discovery_label(row).to_owned(), value)
+            })
+            .collect()
+    }
+
+    pub(in crate::tui) fn set_discovery_metadata(
+        &mut self,
+        metadata: crate::discord::DiscoveryMetadata,
+        categories: Vec<crate::discord::DiscoveryCategory>,
+    ) {
+        if let Some(state) = self.popups.server_management_mut() {
+            state.discovery = Some(metadata);
+            state.discovery_categories = categories;
+            state.loading = false;
+        }
     }
 
     /// Rebuild the onboarding rows from what has been picked.
@@ -1044,6 +1139,44 @@ impl DashboardState {
         let guild_id = state.guild_id;
 
         match state.tab {
+            ServerPanelTab::Discovery => {
+                let row = *DISCOVERY_ROWS.get(index)?;
+                let metadata = state.discovery.as_mut()?;
+                match row {
+                    DiscoveryRow::EmojiDiscoverability => {
+                        metadata.emoji_discoverability_enabled =
+                            !metadata.emoji_discoverability_enabled;
+                    }
+                    DiscoveryRow::PrimaryCategory => {
+                        // Cycles through the categories Discord allows as a
+                        // primary one, wrapping, plus "none" - which unlists
+                        // the server and has to be reachable.
+                        let primary: Vec<u32> = state
+                            .discovery_categories
+                            .iter()
+                            .filter(|category| category.is_primary)
+                            .map(|category| category.id)
+                            .collect();
+                        if primary.is_empty() {
+                            return None;
+                        }
+                        metadata.primary_category_id = match metadata.primary_category_id {
+                            None => primary.first().copied(),
+                            Some(current) => primary
+                                .iter()
+                                .position(|id| *id == current)
+                                .and_then(|at| primary.get(at + 1).copied()),
+                        };
+                    }
+                    // Both need text, which enter does not collect.
+                    DiscoveryRow::Keywords | DiscoveryRow::About => return None,
+                }
+                let metadata = metadata.clone();
+                Some(AppCommand::ModifyDiscoveryMetadata {
+                    guild_id,
+                    metadata: Box::new(metadata),
+                })
+            }
             ServerPanelTab::Onboarding => {
                 // Picking an answer. The rules for what that does live in the
                 // core, since a single-select question replaces its answer

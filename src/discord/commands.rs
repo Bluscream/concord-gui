@@ -656,6 +656,14 @@ pub enum AppCommand {
     LoadDiscoverableGuilds {
         query: String,
     },
+    /// How a server lists itself in discovery, and the categories available.
+    LoadDiscoveryMetadata {
+        guild_id: Id<GuildMarker>,
+    },
+    ModifyDiscoveryMetadata {
+        guild_id: Id<GuildMarker>,
+        metadata: Box<crate::discord::DiscoveryMetadata>,
+    },
     LoadOnboarding {
         guild_id: Id<GuildMarker>,
     },

@@ -761,6 +761,11 @@ pub(in crate::tui::ui) fn render_server_management(
                 .iter()
                 .map(|event| format!("{} - {}", event.name, event.summary()))
                 .collect(),
+            ServerPanelTab::Discovery => state
+                .discovery_rows()
+                .into_iter()
+                .map(|(label, value)| format!("{label}: {value}"))
+                .collect(),
             ServerPanelTab::Onboarding => state
                 .onboarding_rows()
                 .iter()
@@ -832,6 +837,7 @@ pub(in crate::tui::ui) fn render_server_management(
                 // than "none".
                 ServerPanelTab::Members => "No members loaded yet",
                 ServerPanelTab::Onboarding => "This server asks nothing of new members",
+                ServerPanelTab::Discovery => "Loading",
             };
             vec![Line::from(Span::styled(
                 empty.to_owned(),
@@ -917,6 +923,7 @@ pub(in crate::tui::ui) fn render_server_management(
                 ServerPanelTab::Templates => "tab, r reload, enter syncs, N new, d deletes",
                 ServerPanelTab::Members => "tab, / search, enter bans",
                 ServerPanelTab::Onboarding => "tab, enter picks an answer, S finishes",
+                ServerPanelTab::Discovery => "tab, enter cycles or toggles, e edits text",
                 ServerPanelTab::AuditLog => "tab to switch, r to reload",
             },
         ),

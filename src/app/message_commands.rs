@@ -488,6 +488,43 @@ pub(super) async fn load_discoverable_guilds(client: DiscordClient, query: Strin
     }
 }
 
+pub(super) async fn load_discovery_metadata(client: DiscordClient, guild_id: GuildId) {
+    match client.discovery_metadata(guild_id).await {
+        Ok(metadata) => {
+            // Categories come with it: the metadata names one by number, and a
+            // panel showing "49" rather than a name would be unreadable.
+            let categories = client.discovery_categories().await.unwrap_or_default();
+            client
+                .publish_event(AppEvent::DiscoveryMetadataLoaded {
+                    guild_id,
+                    metadata: Box::new(metadata),
+                    categories,
+                })
+                .await;
+        }
+        Err(error) => {
+            log_app_error("discovery metadata failed", &error);
+            client
+                .publish_event(AppEvent::MembershipRequestFailed {
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
+pub(super) async fn modify_discovery_metadata(
+    client: DiscordClient,
+    guild_id: GuildId,
+    metadata: crate::discord::DiscoveryMetadata,
+) {
+    if let Err(error) = client.modify_discovery_metadata(guild_id, &metadata).await {
+        report_moderation_failure(&client, "changing", "discovery settings", &error).await;
+        return;
+    }
+    load_discovery_metadata(client, guild_id).await;
+}
+
 pub(super) async fn load_onboarding(client: DiscordClient, guild_id: GuildId) {
     match client.onboarding(guild_id).await {
         Ok(onboarding) => {

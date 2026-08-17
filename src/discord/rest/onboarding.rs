@@ -202,24 +202,32 @@ impl DiscordRest {
     /// Answer the questions and finish onboarding.
     ///
     /// `prompts_seen` and `responses_seen` are Discord's own bookkeeping: it
-    /// wants to know which questions were shown, not only which were answered,
-    /// and refuses the submission without them.
+    /// wants to know *when* each question and answer was shown, as Unix
+    /// milliseconds - not merely that they were. An earlier version sent
+    /// `true` for each, which is the wrong type for the field.
     pub async fn submit_onboarding(
         &self,
         guild_id: Id<GuildMarker>,
         onboarding: &Onboarding,
         picked: &[u64],
     ) -> Result<()> {
+        // Now, since the form has just been on screen. Discord only records
+        // these; it does not check them against anything.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_millis());
+        let now = u64::try_from(now).unwrap_or(u64::MAX);
+
         let seen: serde_json::Map<String, serde_json::Value> = onboarding
             .questions
             .iter()
-            .map(|question| (question.id.to_string(), json!(true)))
+            .map(|question| (question.id.to_string(), json!(now)))
             .collect();
         let options_seen: serde_json::Map<String, serde_json::Value> = onboarding
             .questions
             .iter()
             .flat_map(|question| question.options.iter())
-            .map(|option| (option.id.to_string(), json!(true)))
+            .map(|option| (option.id.to_string(), json!(now)))
             .collect();
 
         self.send_unit(

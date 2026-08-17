@@ -333,6 +333,27 @@ impl DiscordClient {
         self.rest.discoverable_guilds(query).await
     }
 
+    pub async fn discovery_metadata(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+    ) -> Result<crate::discord::DiscoveryMetadata> {
+        self.rest.discovery_metadata(guild_id).await
+    }
+
+    pub async fn modify_discovery_metadata(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+        metadata: &crate::discord::DiscoveryMetadata,
+    ) -> Result<()> {
+        self.rest
+            .modify_discovery_metadata(guild_id, metadata)
+            .await
+    }
+
+    pub async fn discovery_categories(&self) -> Result<Vec<crate::discord::DiscoveryCategory>> {
+        self.rest.discovery_categories().await
+    }
+
     pub async fn onboarding(
         &self,
         guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,

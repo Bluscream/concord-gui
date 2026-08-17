@@ -217,6 +217,14 @@ fn push_dashboard_effect(event: AppEvent, ctx: &mut EffectContext<'_>) {
             ctx.state.set_discovered_guilds(guilds);
             return;
         }
+        AppEvent::DiscoveryMetadataLoaded {
+            metadata,
+            categories,
+            ..
+        } => {
+            ctx.state.set_discovery_metadata(*metadata, categories);
+            return;
+        }
         AppEvent::OnboardingLoaded { onboarding, .. } => {
             ctx.state.set_onboarding(*onboarding);
             return;

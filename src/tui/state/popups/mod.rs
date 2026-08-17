@@ -158,7 +158,9 @@ define_modal_popups! {
     StickerPicker(StickerPickerState),
     RolePicker(RolePickerState),
     BanList(BanListState),
-    ServerManagement(ServerManagementState),
+    // Boxed: this state carries thirteen tabs' worth of lists and is far the
+    // largest variant, so inline it would set the size of every popup.
+    ServerManagement(Box<ServerManagementState>),
     Soundboard(SoundboardState),
     PermissionGrid(PermissionGridState),
     ChannelEdit(ChannelEditState),

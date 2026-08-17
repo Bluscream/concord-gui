@@ -282,6 +282,22 @@ Without it, `crates/gui/src/demo.rs` is not compiled either - and its match over
 command added to the core with no offline answer. Thirty-three had accumulated
 behind the missing feature flag before this was noticed.
 
+## Checking an endpoint against the references
+
+`../.references/` holds open-source Discord clients and
+`official-internals/userdoccers` holds the community API documentation. Checking
+a guessed endpoint against them has caught real errors that no test here could:
+
+- `/discoverable-guilds` takes no `query`. Searching is a separate route,
+  `/discoverable-guilds/search`, so a query sent to the listing route was
+  silently ignored and returned the default list - a search that appeared to
+  match everything.
+- `onboarding_prompts_seen` and `onboarding_responses_seen` map ids to Unix
+  millisecond timestamps, not booleans. `true` is the wrong type for the field.
+
+Both were shipped and both looked right. Check the shape before writing the
+struct, not after.
+
 ## Permission bits
 
 The client keeps named constants for the permissions it checks, and

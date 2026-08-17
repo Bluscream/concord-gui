@@ -32,6 +32,7 @@ mod channel_management;
 mod connection;
 mod connections;
 mod discovery;
+mod discovery_metadata;
 mod events;
 mod forum;
 mod guild_management;
@@ -54,6 +55,7 @@ pub use channel_management::{
 };
 pub use connections::{Connection, ConnectionVisibility};
 pub use discovery::DiscoverableGuild;
+pub use discovery_metadata::{DiscoveryCategory, DiscoveryMetadata, DiscoveryMetadataProblem};
 pub use events::{
     EventLocation, EventStatus, GuildTemplate, NewEvent, NewEventLocation, NewEventProblem,
     ScheduledEvent, parse_new_event,

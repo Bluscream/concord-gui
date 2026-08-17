@@ -11,8 +11,10 @@ use crate::discord::ids::{Id, marker::GuildMarker};
 
 use super::DiscordRest;
 
-/// Discord's cap on one page of results.
+/// Discord's cap on one page of results, for both endpoints.
 pub const MAX_DISCOVERY_LIMIT: u16 = 48;
+/// Discord's cap on a search query.
+pub const MAX_DISCOVERY_QUERY_CHARS: usize = 100;
 
 /// One server as discovery lists it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -73,10 +75,6 @@ impl DiscoverableGuild {
 struct DiscoveryResponse {
     #[serde(default)]
     guilds: Vec<GuildBody>,
-    /// Some Discord builds answer with a bare array instead; handled by the
-    /// caller rather than here.
-    #[serde(default)]
-    hits: Option<Vec<GuildBody>>,
 }
 
 #[derive(Deserialize)]
@@ -110,22 +108,30 @@ fn to_guilds(bodies: Vec<GuildBody>) -> Vec<DiscoverableGuild> {
 
 impl DiscordRest {
     /// Servers Discord will show to anyone, optionally matching a query.
+    ///
+    /// Two endpoints, not one with a parameter: the listing route ignores a
+    /// query outright, so searching through it would silently return the
+    /// default list and look like a search that matched everything.
     pub async fn discoverable_guilds(&self, query: &str) -> Result<Vec<DiscoverableGuild>> {
         let query = query.trim();
         let url = if query.is_empty() {
+            // The plain listing returns only verified and partnered servers.
             format!("https://discord.com/api/v9/discoverable-guilds?limit={MAX_DISCOVERY_LIMIT}")
         } else {
             format!(
-                "https://discord.com/api/v9/discoverable-guilds?limit={MAX_DISCOVERY_LIMIT}&query={}",
-                urlencoding(query)
+                "https://discord.com/api/v9/discoverable-guilds/search?limit={MAX_DISCOVERY_LIMIT}&query={}",
+                urlencoding(
+                    &query
+                        .chars()
+                        .take(MAX_DISCOVERY_QUERY_CHARS)
+                        .collect::<String>()
+                )
             )
         };
 
         let response: DiscoveryResponse =
             self.send_json(self.raw_http.get(url), "discovery").await?;
-        // Discord has answered under both names; taking whichever is present
-        // beats picking one and finding out later which build we are talking to.
-        Ok(to_guilds(response.hits.unwrap_or(response.guilds)))
+        Ok(to_guilds(response.guilds))
     }
 }
 

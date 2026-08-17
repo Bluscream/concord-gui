@@ -1056,7 +1056,9 @@ fn handle_command(
         // Server administration a fixture cannot answer honestly either: each
         // reports what Discord holds, and a demo number would be a guess
         // presented as a fact - a prune count most of all.
-        AppCommand::LoadDiscoverableGuilds { .. }
+        AppCommand::LoadDiscoveryMetadata { .. }
+        | AppCommand::ModifyDiscoveryMetadata { .. }
+        | AppCommand::LoadDiscoverableGuilds { .. }
         | AppCommand::LoadOnboarding { .. }
         | AppCommand::SubmitOnboarding { .. }
         | AppCommand::BulkBanMembers { .. }

@@ -237,6 +237,10 @@ pub enum Prompt {
     BulkBan,
     /// The short line beside a voice channel's name.
     VoiceStatus(Id<marker::ChannelMarker>),
+    /// Discovery search keywords, comma separated.
+    DiscoveryKeywords,
+    /// The server's long description in discovery.
+    DiscoveryAbout,
     /// A new name for the open guild.
     GuildName,
     /// A path to an image to use as the guild icon.
@@ -267,6 +271,8 @@ impl Prompt {
             Prompt::EditEvent(_) => "Edit event",
             Prompt::BulkBan => "Ban by user id",
             Prompt::VoiceStatus(_) => "Voice status",
+            Prompt::DiscoveryKeywords => "Search keywords",
+            Prompt::DiscoveryAbout => "Discovery description",
             Prompt::GuildName => "Rename server",
             Prompt::GuildIcon => "Server icon",
             Prompt::ChannelTopic(_) => "Channel topic",
@@ -293,6 +299,8 @@ impl Prompt {
             Prompt::EditEvent(_) => "name | start | end | where - times as 2026-09-01T19:00:00Z",
             Prompt::BulkBan => "User ids, separated by anything - spaces, commas, newlines",
             Prompt::VoiceStatus(_) => "What is happening in there - empty clears it",
+            Prompt::DiscoveryKeywords => "Comma separated, at most 10",
+            Prompt::DiscoveryAbout => "Shown on the server's discovery page",
             Prompt::GuildName => "Server name",
             Prompt::GuildIcon => "Path to a PNG, JPEG, GIF or WebP",
             Prompt::ChannelTopic(_) => "Topic - empty clears it",
@@ -712,10 +720,11 @@ pub enum ServerTab {
     Templates,
     Members,
     Onboarding,
+    Discovery,
 }
 
 impl ServerTab {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Settings,
         Self::Invites,
         Self::Roles,
@@ -728,6 +737,7 @@ impl ServerTab {
         Self::Templates,
         Self::Members,
         Self::Onboarding,
+        Self::Discovery,
     ];
 
     pub fn label(self) -> String {
@@ -744,6 +754,7 @@ impl ServerTab {
             Self::Templates => t!("label-templates"),
             Self::Members => t!("label-members"),
             Self::Onboarding => t!("label-onboarding"),
+            Self::Discovery => t!("label-discovery"),
         }
     }
 
@@ -757,6 +768,7 @@ impl ServerTab {
             // All three are read from the snapshot rather than fetched.
             Self::Settings | Self::Roles | Self::Members => Vec::new(),
             Self::Onboarding => vec![AppCommand::LoadOnboarding { guild_id }],
+            Self::Discovery => vec![AppCommand::LoadDiscoveryMetadata { guild_id }],
             Self::Invites => vec![AppCommand::LoadGuildInvites { guild_id }],
             Self::Emoji => vec![AppCommand::LoadGuildEmojis { guild_id }],
             Self::Sounds => vec![AppCommand::LoadSoundboardSounds {
@@ -803,6 +815,8 @@ pub struct ServerManagementView {
     pub member_query: String,
     pub onboarding: Option<concord::discord::Onboarding>,
     pub onboarding_picked: Vec<u64>,
+    pub discovery: Option<concord::discord::DiscoveryMetadata>,
+    pub discovery_categories: Vec<concord::discord::DiscoveryCategory>,
     pub events: Vec<concord::discord::ScheduledEvent>,
     pub templates: Vec<concord::discord::GuildTemplate>,
     /// The guild's settings as label and value, read from the snapshot.
@@ -1966,6 +1980,8 @@ impl Workspace {
             Prompt::EditEvent(event_id) => self.submit_event_edit(event_id, &text),
             Prompt::BulkBan => self.submit_bulk_ban(&text),
             Prompt::VoiceStatus(channel_id) => self.set_voice_status(channel_id, &text),
+            Prompt::DiscoveryKeywords => self.set_discovery_text(Some(text), None),
+            Prompt::DiscoveryAbout => self.set_discovery_text(None, Some(text)),
             Prompt::GuildName => self.rename_guild(text),
             Prompt::GuildIcon => self.set_guild_icon(text),
             Prompt::ChannelTopic(channel_id) => self.set_channel_topic(channel_id, text),
@@ -5078,6 +5094,144 @@ impl Workspace {
         self.resolve_invite(&code);
     }
 
+    /// The discovery tab's rows as label and value.
+    fn discovery_rows(&self) -> Vec<(String, String)> {
+        let Some(view) = &self.server_management else {
+            return Vec::new();
+        };
+        let Some(metadata) = view.discovery.as_ref() else {
+            return Vec::new();
+        };
+        vec![
+            (
+                t!("label-primary-category"),
+                match metadata.primary_category_id {
+                    // Named rather than numbered, and "none" says the server
+                    // is not listed at all - which the other fields do not.
+                    Some(id) => view
+                        .discovery_categories
+                        .iter()
+                        .find(|category| category.id == id)
+                        .map_or_else(|| format!("category {id}"), |c| c.name.clone()),
+                    None => t!("status-not-listed"),
+                },
+            ),
+            (
+                t!("label-keywords"),
+                if metadata.keywords.is_empty() {
+                    t!("state-none")
+                } else {
+                    metadata.keywords.join(", ")
+                },
+            ),
+            (
+                t!("label-emoji-discoverability"),
+                if metadata.emoji_discoverability_enabled {
+                    t!("state-on")
+                } else {
+                    t!("state-off")
+                },
+            ),
+            (
+                t!("label-about"),
+                metadata
+                    .about
+                    .clone()
+                    .unwrap_or_else(|| t!("state-not-set")),
+            ),
+        ]
+    }
+
+    /// Set the keywords or the description, whichever was typed.
+    fn set_discovery_text(&mut self, keywords: Option<String>, about: Option<String>) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(view) = &mut self.server_management else {
+            return;
+        };
+        let guild_id = view.guild_id;
+        let Some(metadata) = view.discovery.as_mut() else {
+            return;
+        };
+        if let Some(keywords) = keywords {
+            metadata.keywords = keywords
+                .split(',')
+                .map(|keyword| keyword.trim().to_owned())
+                .filter(|keyword| !keyword.is_empty())
+                .collect();
+        }
+        if let Some(about) = about {
+            // Empty clears it, which is a real thing to want.
+            metadata.about = (!about.trim().is_empty()).then(|| about.trim().to_owned());
+        }
+        // Refused here rather than by Discord, whose rejection does not name
+        // the field that was wrong.
+        if let Some(problem) = metadata.problem() {
+            self.model.status_line = problem.message();
+            return;
+        }
+        let metadata = metadata.clone();
+        handle.send(AppCommand::ModifyDiscoveryMetadata {
+            guild_id,
+            metadata: Box::new(metadata),
+        });
+    }
+
+    /// Act on a discovery row.
+    pub fn activate_discovery_row(&mut self, index: usize) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(view) = &mut self.server_management else {
+            return;
+        };
+        let guild_id = view.guild_id;
+        let categories = view.discovery_categories.clone();
+        let Some(metadata) = view.discovery.as_mut() else {
+            return;
+        };
+        match index {
+            0 => {
+                // Cycles the categories Discord allows as primary, plus
+                // "none" - which unlists the server and must be reachable.
+                let primary: Vec<u32> = categories
+                    .iter()
+                    .filter(|category| category.is_primary)
+                    .map(|category| category.id)
+                    .collect();
+                if primary.is_empty() {
+                    return;
+                }
+                metadata.primary_category_id = match metadata.primary_category_id {
+                    None => primary.first().copied(),
+                    Some(current) => primary
+                        .iter()
+                        .position(|id| *id == current)
+                        .and_then(|at| primary.get(at + 1).copied()),
+                };
+            }
+            2 => {
+                metadata.emoji_discoverability_enabled = !metadata.emoji_discoverability_enabled;
+            }
+            // Keywords and the description need text, through their prompts.
+            1 => {
+                self.prompt = Some((Prompt::DiscoveryKeywords, Composer::default()));
+                return;
+            }
+            3 => {
+                self.prompt = Some((Prompt::DiscoveryAbout, Composer::default()));
+                return;
+            }
+            _ => return,
+        }
+        let metadata = metadata.clone();
+        handle.send(AppCommand::ModifyDiscoveryMetadata {
+            guild_id,
+            metadata: Box::new(metadata),
+        });
+    }
+
     /// The onboarding form as rows, rebuilt from what has been picked.
     fn onboarding_rows(&self) -> Vec<concord::discord::OnboardingRow> {
         let Some(view) = &self.server_management else {
@@ -5359,6 +5513,8 @@ impl Workspace {
             member_query: String::new(),
             onboarding: None,
             onboarding_picked: Vec::new(),
+            discovery: None,
+            discovery_categories: Vec::new(),
             events: Vec::new(),
             templates: Vec::new(),
             loading: true,
@@ -5455,6 +5611,7 @@ impl Workspace {
             ServerTab::Templates => !view.templates.is_empty(),
             ServerTab::Members => true,
             ServerTab::Onboarding => view.onboarding.is_some(),
+            ServerTab::Discovery => view.discovery.is_some(),
         };
         view.loading = !already_loaded;
         let guild_id = view.guild_id;
@@ -7809,6 +7966,20 @@ impl Workspace {
                 self.discovering = false;
                 self.discovered = guilds.clone();
             }
+            AppEvent::DiscoveryMetadataLoaded {
+                guild_id,
+                metadata,
+                categories,
+            } => {
+                if let Some(view) = &mut self.server_management
+                    && view.guild_id == *guild_id
+                {
+                    view.loading = false;
+                    view.error = None;
+                    view.discovery = Some((**metadata).clone());
+                    view.discovery_categories = categories.clone();
+                }
+            }
             AppEvent::OnboardingLoaded {
                 guild_id,
                 onboarding,
@@ -9552,6 +9723,7 @@ impl Workspace {
             let membership = self.membership_rows();
             let members = self.server_member_rows();
             let onboarding = self.onboarding_rows();
+            let discovery = self.discovery_rows();
             let (rows, empty_label) = match view.tab {
                 ServerTab::Events => (
                     view.events
@@ -9575,6 +9747,19 @@ impl Workspace {
                         })
                         .collect::<Vec<_>>(),
                     t!("status-no-events"),
+                ),
+                ServerTab::Discovery => (
+                    discovery
+                        .iter()
+                        .map(|(label, value)| overlay::ServerRow {
+                            primary: label.clone(),
+                            secondary: Some(value.clone()),
+                            action: None,
+                            secondary_action: Some(t!("action-change")),
+                            tertiary_action: None,
+                        })
+                        .collect::<Vec<_>>(),
+                    t!("status-loading"),
                 ),
                 ServerTab::Onboarding => (
                     onboarding
@@ -9848,7 +10033,8 @@ impl Workspace {
                                 ServerTab::AuditLog
                                 | ServerTab::Settings
                                 | ServerTab::Membership
-                                | ServerTab::Onboarding => {}
+                                | ServerTab::Onboarding
+                                | ServerTab::Discovery => {}
                             }
                             cx.notify();
                         });
@@ -9868,6 +10054,7 @@ impl Workspace {
                                 ServerTab::Events => workspace.start_event_edit(index),
                                 ServerTab::Members => workspace.open_listed_member(index),
                                 ServerTab::Onboarding => workspace.pick_onboarding_answer(index),
+                                ServerTab::Discovery => workspace.activate_discovery_row(index),
                                 ServerTab::Templates => workspace.sync_template(index),
                                 // Only the name is editable here; verification
                                 // and boosts are shown but not changed yet.

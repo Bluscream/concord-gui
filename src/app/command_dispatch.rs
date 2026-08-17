@@ -720,6 +720,17 @@ impl CommandDispatcher {
             AppCommand::LoadDiscoverableGuilds { query } => {
                 message_commands::load_discoverable_guilds(self.client.clone(), query).await;
             }
+            AppCommand::LoadDiscoveryMetadata { guild_id } => {
+                message_commands::load_discovery_metadata(self.client.clone(), guild_id).await;
+            }
+            AppCommand::ModifyDiscoveryMetadata { guild_id, metadata } => {
+                message_commands::modify_discovery_metadata(
+                    self.client.clone(),
+                    guild_id,
+                    *metadata,
+                )
+                .await;
+            }
             AppCommand::LoadOnboarding { guild_id } => {
                 message_commands::load_onboarding(self.client.clone(), guild_id).await;
             }

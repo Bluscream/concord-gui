@@ -400,8 +400,15 @@ below. The command sweep in `docs/PARITY.md` reports nothing unreachable.
    done: a camera is distinguished from a shared screen, and hiding either is
    a per-user setting beside volume and mute. The media path itself is not,
    and it needs a real account to verify.
-2. **Owner-facing discovery metadata** - which category a server lists itself
-   under, and its keywords. Browsing and joining discoverable servers is done.
+Discovery metadata is a tab on the server panel in both clients: primary
+category, search keywords, emoji discoverability and the long description.
+Every cap is checked before the request, because Discord enforces all four and
+its rejection does not name the field that was wrong.
+
+The endpoint replaces rather than merges, so every field is sent - an omitted
+one is reset to its default rather than left alone, which Discord's own note
+says outright. Without a primary category the server is not listed at all, and
+the row says so rather than showing a blank.
 
 Then, and only then, the extras from AGENTS.md: offline-first, merged
 multi-account, and the rest.
