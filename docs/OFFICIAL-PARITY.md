@@ -392,18 +392,16 @@ forward so it is not built twice.
 2. **Roles and permissions.** The permission editor is shared by role editing
    and per-channel overwrites, so both land together, and channel reordering
    comes with them.
-3. **Guild settings** - name, icon, verification, system and AFK channels.
-4. **Context menus.** Not a feature so much as how people reach the features
-   that already exist; the TUI's work is mouse routing, the GUI's is the menus.
-5. **Expression management** - one panel for emoji, stickers and sounds, which
-   finishes soundboard rename/delete and sticker management at the same time.
-6. **AutoMod.**
-7. **Account settings** - credentials, 2FA, sessions, authorised apps.
-   Password and 2FA fields are the user's to drive, never the agent's.
-8. **Members, onboarding, welcome screen, widget.**
-9. **Video** - camera on the voice connection, receiving remote video,
-   pop-out windows, per-user mute and hide. Needs a real account to verify.
-10. **Discovery.**
+Every numbered item on this list is now done, in both clients, except the two
+below. The command sweep in `docs/PARITY.md` reports nothing unreachable.
+
+1. **Video capture and playback** - sending your own camera and decoding
+   someone else's, plus pop-out windows for a feed. The state around video is
+   done: a camera is distinguished from a shared screen, and hiding either is
+   a per-user setting beside volume and mute. The media path itself is not,
+   and it needs a real account to verify.
+2. **Owner-facing discovery metadata** - which category a server lists itself
+   under, and its keywords. Browsing and joining discoverable servers is done.
 
 Then, and only then, the extras from AGENTS.md: offline-first, merged
 multi-account, and the rest.
