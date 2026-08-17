@@ -628,3 +628,72 @@ mod tests {
         assert_eq!(revision_value(5), 5);
     }
 }
+
+#[cfg(test)]
+mod hydration_tests {
+    use super::*;
+
+    /// The whole point, end to end: what a run wrote, the next run reads.
+    ///
+    /// Two stores over one file rather than one store used twice, because the
+    /// question is whether it survives the process, not whether a pool is
+    /// consistent with itself.
+    #[tokio::test]
+    async fn what_one_run_cached_the_next_run_reads() {
+        let dir = std::env::temp_dir().join(format!("concord-hydration-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("cache.db");
+        let backend = StorageBackend::Sqlite { path };
+
+        {
+            let first = Store::open(&backend).await.expect("first run should open");
+            first
+                .upsert_guild(&CachedGuild {
+                    id: "7".to_owned(),
+                    name: Some("Rustaceans".to_owned()),
+                    revision: 1,
+                    ..CachedGuild::default()
+                })
+                .await
+                .expect("write");
+            first
+                .upsert_message(&CachedMessage {
+                    id: "100".to_owned(),
+                    channel_id: "c".to_owned(),
+                    content: Some("still here".to_owned()),
+                    revision: 0,
+                    ..CachedMessage::default()
+                })
+                .await
+                .expect("write");
+        }
+
+        let second = Store::open(&backend).await.expect("second run should open");
+        let guilds = second.guilds().await.expect("read");
+        assert_eq!(guilds.len(), 1, "the sidebar would be empty on restart");
+        assert_eq!(guilds[0].name.as_deref(), Some("Rustaceans"));
+
+        let messages = second.recent_messages("c", 10).await.expect("read");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].content.as_deref(), Some("still here"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_store_whose_directory_does_not_exist_is_created() {
+        // Every first run is this case, and one that failed here would never
+        // cache anything at all.
+        let dir = std::env::temp_dir().join(format!("concord-fresh-{}/nested", std::process::id()));
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap_or(&dir));
+
+        let store = Store::open(&StorageBackend::Sqlite {
+            path: dir.join("cache.db"),
+        })
+        .await
+        .expect("a first run should create its store");
+        assert!(store.guilds().await.expect("read").is_empty());
+
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap_or(&dir));
+    }
+}

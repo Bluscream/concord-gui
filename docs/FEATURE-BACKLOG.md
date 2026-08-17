@@ -241,8 +241,19 @@ Still to do, in order:
    keep whichever landed first. A guild uses Discord's `version` where the
    parsed event carries one, which it does not yet - zero until then, meaning
    every write wins.
-3. **Read at startup, before the gateway.** The point of the whole thing.
-   `DiscordState` fills from the store, then the gateway corrects it.
+3. ~~**Read at startup, before the gateway.**~~ Done for guilds. Replayed as
+   ordinary events rather than written into state directly, so the front ends
+   draw cached data through the same path as live data and there is no second
+   rendering path to keep in step.
+
+   Cached guilds arrive with no channels, members or roles, because none of
+   those are cached yet. Inventing empty ones would be worse than an empty
+   sidebar: a channel list that is wrong looks like a bug, one that is absent
+   looks like loading.
+
+   Messages are cached and still not replayed - the channel view fills from
+   the gateway. That is the next thing worth doing, and it needs a decision
+   about what a cached message looks like next to a live one.
 4. **Deletion.** Tombstones are in the schema and nothing writes them.
 5. **Eviction.** The in-memory caches evict by LRU; a disk store needs a size
    or age bound or it grows forever.

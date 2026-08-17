@@ -83,6 +83,10 @@ impl Session {
             }
             client
         };
+        // After the store opens and before the gateway task starts, so what
+        // was cached is on screen while READY is still in flight.
+        #[cfg(feature = "storage")]
+        client.hydrate_from_store().await;
         let effects = client.take_effects();
         let snapshots = client.subscribe_snapshots();
         let (commands_tx, commands_rx) = mpsc::channel(64);

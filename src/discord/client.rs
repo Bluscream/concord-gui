@@ -309,6 +309,58 @@ impl DiscordClient {
         }
     }
 
+    /// Fill state from the cache, before the gateway has answered.
+    ///
+    /// Replayed as ordinary events rather than written into state directly, so
+    /// the front ends draw cached data through the same path as live data and
+    /// there is no second rendering path to keep in step.
+    ///
+    /// The guilds arrive with no channels, members or roles: those are not
+    /// cached yet, and inventing empty ones would be worse than an empty
+    /// sidebar - a channel list that is wrong looks like a bug, one that is
+    /// absent looks like loading. The gateway replaces all of it within
+    /// seconds.
+    ///
+    /// Re-caching what was just read is harmless: the revision is unchanged,
+    /// so each write is the same row it came from.
+    #[cfg(feature = "storage")]
+    pub async fn hydrate_from_store(&self) {
+        let Some(store) = self.store.clone() else {
+            return;
+        };
+        let Ok(guilds) = store.guilds().await else {
+            return;
+        };
+
+        for guild in guilds {
+            let Ok(guild_id) = guild.id.parse::<u64>() else {
+                continue;
+            };
+            self.publish_event(AppEvent::GuildCreate {
+                guild_id: crate::discord::ids::Id::new(guild_id),
+                name: guild.name.unwrap_or_default(),
+                member_count: None,
+                owner_id: guild
+                    .owner_id
+                    .and_then(|id| id.parse::<u64>().ok())
+                    .map(crate::discord::ids::Id::new),
+                boost_tier: crate::discord::GuildBoostTier::default(),
+                boost_count: 0,
+                verification_level: None,
+                mfa_level: None,
+                features: None,
+                onboarding: None,
+                channels: Vec::new(),
+                members: Vec::new(),
+                presences: Vec::new(),
+                roles: None,
+                emojis: Vec::new(),
+                stickers: Vec::new(),
+            })
+            .await;
+        }
+    }
+
     /// Write what an event says to the offline cache.
     ///
     /// Spawned rather than awaited: a slow or unreachable store must not hold
