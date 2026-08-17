@@ -395,11 +395,14 @@ forward so it is not built twice.
 Every numbered item on this list is now done, in both clients, except the two
 below. The command sweep in `docs/PARITY.md` reports nothing unreachable.
 
-1. **Video capture and playback** - sending your own camera and decoding
-   someone else's, plus pop-out windows for a feed. The state around video is
-   done: a camera is distinguished from a shared screen, and hiding either is
-   a per-user setting beside volume and mute. The media path itself is not,
-   and it needs a real account to verify.
+1. **Receiving video** - decoding someone else's camera or screen and drawing
+   it, plus pop-out windows for a feed. Sending is done: cameras are
+   enumerated over v4l2, share the encode and RTP path with screen capture,
+   and are now announced as `type: "video"` rather than `"screen"` - Discord's
+   clients decide layout and quality from that field. The receive side reads
+   the stream and its counters but decodes no frames.
+
+   None of the sending path has run against a real account.
 Discovery metadata is a tab on the server panel in both clients: primary
 category, search keywords, emoji discoverability and the long description.
 Every cap is checked before the request, because Discord enforces all four and

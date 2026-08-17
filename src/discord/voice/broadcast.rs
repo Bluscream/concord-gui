@@ -1147,6 +1147,19 @@ fn parse_broadcast_video_ssrcs(value: &Value) -> Result<BroadcastVideoSsrcs, Str
     })
 }
 
+/// What Discord calls the stream being published.
+///
+/// A camera and a shared screen are different types on the wire, and sending
+/// "screen" for a camera announces the wrong thing about the feed - Discord's
+/// own clients decide layout and quality from it. Taken from the capture
+/// target rather than fixed, which it used to be.
+fn stream_kind(target: &super::StreamCaptureTarget) -> &'static str {
+    match target.kind {
+        super::StreamCaptureTargetKind::Camera => "video",
+        _ => "screen",
+    }
+}
+
 fn stream_broadcast_identify_payload(session: &StreamBroadcastGatewaySession) -> String {
     json!({
         "op": 0,
@@ -1158,7 +1171,7 @@ fn stream_broadcast_identify_payload(session: &StreamBroadcastGatewaySession) ->
             "token": session.token,
             "video": true,
             "streams": [{
-                "type": "screen",
+                "type": stream_kind(&session.request.target),
                 "rid": STREAM_RID,
                 "quality": 100,
             }],
@@ -3346,5 +3359,38 @@ mod tests {
             one_byte_rtp_extension(&rtx, RTP_EXTENSION_REPAIRED_RID),
             Some(STREAM_RID.as_bytes())
         );
+    }
+}
+
+#[cfg(test)]
+mod stream_kind_tests {
+    use super::*;
+    use crate::discord::voice::{StreamCaptureTarget, StreamCaptureTargetKind};
+
+    fn target(kind: StreamCaptureTargetKind) -> StreamCaptureTarget {
+        StreamCaptureTarget {
+            kind,
+            id: 0,
+            title: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_camera_is_announced_as_video_and_a_screen_as_screen() {
+        // Different types on the wire. Discord's own clients decide layout and
+        // quality from this, so a camera sent as "screen" announces the wrong
+        // thing about a feed that otherwise works.
+        assert_eq!(
+            stream_kind(&target(StreamCaptureTargetKind::Camera)),
+            "video"
+        );
+
+        for kind in [
+            StreamCaptureTargetKind::Display,
+            StreamCaptureTargetKind::Window,
+            StreamCaptureTargetKind::Portal,
+        ] {
+            assert_eq!(stream_kind(&target(kind)), "screen", "{kind:?}");
+        }
     }
 }
