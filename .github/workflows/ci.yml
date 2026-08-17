@@ -66,6 +66,47 @@ jobs:
       - name: dist config check
         run: cargo dist plan
 
+  musl-check:
+    name: musl all-features
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Run inside a native musl environment because cross-checking from glibc
+      # does not provide the PipeWire, ALSA, and VA-API libraries for this target.
+      - name: check all features on musl
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace:ro" \
+            --volume /workspace/target \
+            --workdir /workspace \
+            rust:1.90-alpine3.22 \
+            sh -c '
+              set -eu
+              apk add --no-cache \
+                alsa-lib-dev \
+                build-base \
+                clang20-dev \
+                cmake \
+                libva-dev \
+                libx11-dev \
+                libxi-dev \
+                libxtst-dev \
+                linux-headers \
+                nasm \
+                pipewire-dev \
+                pkgconf \
+                pulseaudio-dev \
+                wayland-dev \
+                zstd-dev
+
+              # Bindgen loads libclang at build time, so the build scripts must
+              # use the Alpine dynamic musl runtime instead of static CRT linking.
+              RUSTFLAGS="-C target-feature=-crt-static" \
+                cargo check --locked --all-features
+            '
+
   platform-encoder-check:
     name: native encoder (${{ matrix.name }})
     strategy:
@@ -104,8 +145,8 @@ jobs:
 
   release-cache-plan:
     name: plan release cache warm
-    needs: [check, platform-encoder-check]
-    if: ${{ needs.check.result == 'success' && needs.platform-encoder-check.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    needs: [check, musl-check, platform-encoder-check]
+    if: ${{ needs.check.result == 'success' && needs.musl-check.result == 'success' && needs.platform-encoder-check.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     continue-on-error: true
     runs-on: ubuntu-24.04
     outputs:
