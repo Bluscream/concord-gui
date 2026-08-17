@@ -11,24 +11,7 @@ const DMA_BUF_SYNC_READ: u64 = 1 << 0;
 const DMA_BUF_SYNC_START: u64 = 0 << 2;
 const DMA_BUF_SYNC_END: u64 = 1 << 2;
 const DMA_BUF_READY_TIMEOUT_MS: libc::c_int = 1_000;
-
-// Linux's generic _IOW('b', 0, struct dma_buf_sync) encoding. These are the
-// architectures supported by Concord's release targets. Other Linux targets
-// use the generic encoding unless their kernel ABI overrides it.
-#[cfg(any(
-    target_arch = "mips",
-    target_arch = "mips64",
-    target_arch = "powerpc",
-    target_arch = "powerpc64"
-))]
-const DMA_BUF_IOCTL_SYNC: libc::c_ulong = 0x8008_6200;
-#[cfg(not(any(
-    target_arch = "mips",
-    target_arch = "mips64",
-    target_arch = "powerpc",
-    target_arch = "powerpc64"
-)))]
-const DMA_BUF_IOCTL_SYNC: libc::c_ulong = 0x4008_6200;
+const DMA_BUF_IOCTL_TYPE: u32 = b'b' as u32;
 
 pub(super) struct DmaBufMapping {
     pointer: NonNull<u8>,
@@ -195,8 +178,12 @@ fn wait_for_dma_buf(fd: RawFd) -> Result<(), String> {
 
 fn dma_buf_sync(fd: RawFd, flags: u64) -> io::Result<()> {
     let sync = DmaBufSync { flags };
+    // `libc` selects both the target's ioctl encoding and its request type.
+    // musl uses `c_int` here while glibc uses `c_ulong`, so a typed integer
+    // constant is not portable between the two C libraries.
+    let request = libc::_IOW::<DmaBufSync>(DMA_BUF_IOCTL_TYPE, 0);
     loop {
-        if unsafe { libc::ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync) } == 0 {
+        if unsafe { libc::ioctl(fd, request, &sync) } == 0 {
             return Ok(());
         }
         let error = io::Error::last_os_error();
