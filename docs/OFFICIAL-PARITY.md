@@ -392,8 +392,10 @@ forward so it is not built twice.
 2. **Roles and permissions.** The permission editor is shared by role editing
    and per-channel overwrites, so both land together, and channel reordering
    comes with them.
-Every numbered item on this list is now done, in both clients, except the two
-below. The command sweep in `docs/PARITY.md` reports nothing unreachable.
+Every numbered item on this list is now done, in both clients, except the one
+below. A wider comparison against every documented API route - not just this
+plan - is in `docs/FEATURE-BACKLOG.md`, which found 391 unused routes and about
+seventy features worth building. The command sweep in `docs/PARITY.md` reports nothing unreachable.
 
 1. **Receiving video** - decoding someone else's camera or screen and drawing
    it, plus pop-out windows for a feed. Sending is done: cameras are
