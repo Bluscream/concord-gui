@@ -69,6 +69,7 @@ pub(super) struct SettingsState {
     // Not editable in the TUI: kept only so saving unrelated options round-trips
     // the user's Rich Presence choice instead of resetting it to the default.
     pub(super) presence_options: PresenceOptions,
+    pub(super) storage_options: crate::config::StorageOptions,
     pub(super) warning_options: crate::config::WarningOptions,
     /// Tab state written by the GUI. Held so a TUI save does not discard it.
     pub(super) ui_state_open_tabs: Vec<crate::discord::Id<crate::discord::marker::ChannelMarker>>,
@@ -376,6 +377,7 @@ impl DashboardState {
             notifications: self.options.notification_options.clone(),
             voice: self.options.voice_options.clone(),
             presence: self.options.presence_options,
+            storage: self.options.storage_options.clone(),
             warnings: self.options.warning_options,
         })
     }

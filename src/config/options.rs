@@ -245,6 +245,35 @@ pub struct AppOptions {
     pub voice: VoiceOptions,
     pub presence: PresenceOptions,
     pub warnings: WarningOptions,
+    pub storage: StorageOptions,
+}
+
+/// Where cached Discord data is kept between runs.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
+pub struct StorageOptions {
+    /// A connection string, or empty for the default file beside the client's
+    /// other state.
+    ///
+    /// A MariaDB or MySQL URL points several clients at one cache, which is
+    /// the reason this is configurable: `mariadb://192.168.2.10:3333/discord`.
+    pub dsn: String,
+    /// Whether to cache at all. Off means the client starts blank every time,
+    /// which is what it did before this existed.
+    pub enabled: bool,
+}
+
+impl Default for StorageOptions {
+    fn default() -> Self {
+        Self {
+            // Empty means the file beside the client's other state, which
+            // needs no setup and is what most people want.
+            dsn: String::new(),
+            // On by default: the point is that a restart shows something
+            // immediately, and a cache nobody turns on never does.
+            enabled: true,
+        }
+    }
 }
 
 /// Which risk warnings the user has chosen not to see again.

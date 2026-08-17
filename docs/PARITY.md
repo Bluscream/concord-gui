@@ -323,6 +323,31 @@ Caps that Discord documents but does not serve - name lengths, sticker size,
 keyword counts - stay compiled in. Those are documentation, not configuration,
 and pretending to fetch them would suggest they can change under us.
 
+## Two clients on one store
+
+`src/storage/concurrent.rs` states the argument in full; the short version is
+that this is not the general distributed-write problem and should not be solved
+like one.
+
+Discord is the single writer. Neither client invents data - both cache what one
+server told them, and that server stamps what it sends. So:
+
+- **Duplicates** are answered by the primary key, because every entity carries
+  an id Discord assigned. Checking whether a row exists before inserting would
+  be both unnecessary and a race, since another client can write between the
+  read and the insert.
+- **Stale writes** are answered by a revision guard inside the upsert. Guilds
+  and channels carry Discord's monotonic `version`; the guard is in the SQL
+  rather than in a read-then-write for the same reason as above.
+- **Deletes** need a tombstone, because the two rules above do not stop a
+  client with stale state re-inserting a row another client has just learned is
+  gone. A tombstone is lifted only by a higher revision, which is what makes a
+  genuine re-creation still work.
+
+The clock never comes from a client. Two clients disagree about the time by
+however far their clocks differ, and a cache resolving conflicts by local
+timestamp would let the more wrong one win.
+
 ## Permission bits
 
 The client keeps named constants for the permissions it checks, and

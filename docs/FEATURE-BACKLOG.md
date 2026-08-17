@@ -205,6 +205,42 @@ Ordered by how often a daily user would meet it.
 70. **Accessibility: reduced motion, larger text, screen-reader labels.** The
     setting for screen-reader *detection* is done; the accommodations are not.
 
+## Offline-first storage
+
+A cache that survives a restart, so the client draws something immediately
+rather than waiting out a READY payload - and nothing at all with no network.
+Two backends: a file beside the client's other state, or a MariaDB or MySQL
+server several clients on a network can share.
+
+Landed:
+
+- `storage::dsn` - the connection string. `mariadb://192.168.2.10:3333/discord`,
+  `sqlite:///path`, or a bare path. A password may contain an `@`.
+- `storage::schema` - flat tables for users, guilds, channels and messages, in
+  both dialects. Flat rather than blobs: a shared store is one another client
+  reads, and that only works if the columns mean something without this
+  codebase.
+- `storage::concurrent` - what happens when two clients write. See below.
+- `[storage]` in the config, on by default with an empty DSN meaning the local
+  file.
+
+Still to do, in order:
+
+1. **A driver.** Nothing connects yet - the schema and the rules exist, the
+   `sqlx` (or `rusqlite` plus a MySQL crate) dependency does not. This is the
+   next commit and the largest one.
+2. **Write on gateway events.** Every upsert already has its statement; what is
+   missing is calling it as `GUILD_CREATE`, `MESSAGE_CREATE` and the rest
+   arrive.
+3. **Read at startup, before the gateway.** The point of the whole thing.
+   `DiscordState` fills from the store, then the gateway corrects it.
+4. **Deletion.** Tombstones are in the schema and nothing writes them.
+5. **Eviction.** The in-memory caches evict by LRU; a disk store needs a size
+   or age bound or it grows forever.
+6. **Migrations.** `SCHEMA_VERSION` exists and nothing reads it. A shared store
+   may be in use by a client that knows a different version, so a newer schema
+   must be left alone rather than migrated backwards.
+
 ## What to do first
 
 Stickers (16) are done. Next by the same measure: webhooks (17) and

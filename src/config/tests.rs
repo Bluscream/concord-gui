@@ -7,8 +7,9 @@ use super::{
     AppOptions, BorderShape, BorderSurface, ComposerOptions, CredentialOptions,
     CredentialStoreMode, DisplayOptions, HighlightGroup, ImagePreviewQualityPreset,
     ImageProtocolPreference, KeymapBinding, KeymapFileOptions, KeymapOptions, NotificationOptions,
-    PresenceOptions, ThemeOptions, VoiceOptions, WarningOptions, load_keymap_options_from_path,
-    load_options_from_path, parse_app_options, parse_theme_options, save_options_to_path,
+    PresenceOptions, StorageOptions, ThemeOptions, VoiceOptions, WarningOptions,
+    load_keymap_options_from_path, load_options_from_path, parse_app_options, parse_theme_options,
+    save_options_to_path,
 };
 use crate::discord::{MicrophoneSensitivityDb, VoiceParticipantVolumePercent, VoiceVolumePercent};
 
@@ -733,6 +734,10 @@ fn options_save_and_load_round_trip() {
             suppress_friend_action: false,
             suppress_prune_members: false,
             suppress_bulk_ban: false,
+        },
+        storage: StorageOptions {
+            dsn: "mariadb://192.168.2.10:3333/discord".to_owned(),
+            enabled: true,
         },
     };
 
