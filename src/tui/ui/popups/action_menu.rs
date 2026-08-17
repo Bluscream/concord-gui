@@ -761,6 +761,36 @@ pub(in crate::tui::ui) fn render_server_management(
                 .iter()
                 .map(|event| format!("{} - {}", event.name, event.summary()))
                 .collect(),
+            ServerPanelTab::Onboarding => state
+                .onboarding_rows()
+                .iter()
+                .map(|row| match row {
+                    // Indented under their question, and marked when picked:
+                    // a flat list of titles gives no sense of which answer
+                    // belongs to which question.
+                    crate::discord::OnboardingRow::Question {
+                        title,
+                        summary,
+                        unanswered,
+                    } => format!(
+                        "{title} ({summary}){}",
+                        if *unanswered {
+                            " - needs an answer"
+                        } else {
+                            ""
+                        }
+                    ),
+                    crate::discord::OnboardingRow::Option {
+                        title,
+                        summary,
+                        picked,
+                        ..
+                    } => format!(
+                        "   [{}] {title} - {summary}",
+                        if *picked { "x" } else { " " }
+                    ),
+                })
+                .collect(),
             ServerPanelTab::Members => state
                 .member_rows()
                 .iter()
@@ -801,6 +831,7 @@ pub(in crate::tui::ui) fn render_server_management(
                 // them, so an empty list here usually means "not yet" rather
                 // than "none".
                 ServerPanelTab::Members => "No members loaded yet",
+                ServerPanelTab::Onboarding => "This server asks nothing of new members",
             };
             vec![Line::from(Span::styled(
                 empty.to_owned(),
@@ -885,6 +916,7 @@ pub(in crate::tui::ui) fn render_server_management(
                 ServerPanelTab::Events => "tab, r reload, enter marks interested, N new, d cancels",
                 ServerPanelTab::Templates => "tab, r reload, enter syncs, N new, d deletes",
                 ServerPanelTab::Members => "tab, / search, enter bans",
+                ServerPanelTab::Onboarding => "tab, enter picks an answer, S finishes",
                 ServerPanelTab::AuditLog => "tab to switch, r to reload",
             },
         ),
@@ -896,9 +928,16 @@ pub(in crate::tui::ui) fn render_server_management(
         // The query goes in the title rather than as a row: a row for it would
         // shift every index below, and the selection is what decides which
         // member enter acts on.
-        match state.member_search_text() {
-            Some(query) => format!("{} matching \"{query}\" (esc ends the search)", tab.label()),
-            None => format!("{} ({hint})", tab.label()),
+        match (state.member_search_text(), tab) {
+            (Some(query), _) => {
+                format!("{} matching \"{query}\" (esc ends the search)", tab.label())
+            }
+            // Naming what is missing, since Discord's own rejection does not.
+            (None, ServerPanelTab::Onboarding) => match state.onboarding_unanswered().as_slice() {
+                [] => format!("{} (S finishes)", tab.label()),
+                missing => format!("{} (still needed: {})", tab.label(), missing.join(", ")),
+            },
+            (None, _) => format!("{} ({hint})", tab.label()),
         },
         lines,
         state

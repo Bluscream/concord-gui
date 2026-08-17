@@ -717,6 +717,22 @@ impl CommandDispatcher {
                 )
                 .await;
             }
+            AppCommand::LoadOnboarding { guild_id } => {
+                message_commands::load_onboarding(self.client.clone(), guild_id).await;
+            }
+            AppCommand::SubmitOnboarding {
+                guild_id,
+                onboarding,
+                picked,
+            } => {
+                message_commands::submit_onboarding(
+                    self.client.clone(),
+                    guild_id,
+                    *onboarding,
+                    picked,
+                )
+                .await;
+            }
             AppCommand::LoadWelcomeScreen { guild_id } => {
                 message_commands::load_welcome_screen(self.client.clone(), guild_id).await;
             }

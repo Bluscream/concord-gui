@@ -213,6 +213,10 @@ fn push_dashboard_effect(event: AppEvent, ctx: &mut EffectContext<'_>) {
             ctx.state.set_stage_instance(instance);
             return;
         }
+        AppEvent::OnboardingLoaded { onboarding, .. } => {
+            ctx.state.set_onboarding(*onboarding);
+            return;
+        }
         AppEvent::ScheduledEventsLoaded { events, .. } => {
             ctx.state.set_scheduled_events(events);
             return;

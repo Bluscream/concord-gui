@@ -708,10 +708,11 @@ pub enum ServerTab {
     Events,
     Templates,
     Members,
+    Onboarding,
 }
 
 impl ServerTab {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Settings,
         Self::Invites,
         Self::Roles,
@@ -723,6 +724,7 @@ impl ServerTab {
         Self::Events,
         Self::Templates,
         Self::Members,
+        Self::Onboarding,
     ];
 
     pub fn label(self) -> String {
@@ -738,6 +740,7 @@ impl ServerTab {
             Self::Events => t!("label-events"),
             Self::Templates => t!("label-templates"),
             Self::Members => t!("label-members"),
+            Self::Onboarding => t!("label-onboarding"),
         }
     }
 
@@ -750,6 +753,7 @@ impl ServerTab {
         match self {
             // All three are read from the snapshot rather than fetched.
             Self::Settings | Self::Roles | Self::Members => Vec::new(),
+            Self::Onboarding => vec![AppCommand::LoadOnboarding { guild_id }],
             Self::Invites => vec![AppCommand::LoadGuildInvites { guild_id }],
             Self::Emoji => vec![AppCommand::LoadGuildEmojis { guild_id }],
             Self::Sounds => vec![AppCommand::LoadSoundboardSounds {
@@ -794,6 +798,8 @@ pub struct ServerManagementView {
     pub prune_count: Option<u64>,
     /// What the members tab is filtered by.
     pub member_query: String,
+    pub onboarding: Option<concord::discord::Onboarding>,
+    pub onboarding_picked: Vec<u64>,
     pub events: Vec<concord::discord::ScheduledEvent>,
     pub templates: Vec<concord::discord::GuildTemplate>,
     /// The guild's settings as label and value, read from the snapshot.
@@ -5000,6 +5006,60 @@ impl Workspace {
         });
     }
 
+    /// The onboarding form as rows, rebuilt from what has been picked.
+    fn onboarding_rows(&self) -> Vec<concord::discord::OnboardingRow> {
+        let Some(view) = &self.server_management else {
+            return Vec::new();
+        };
+        view.onboarding
+            .as_ref()
+            .map(|onboarding| onboarding.rows(&view.onboarding_picked))
+            .unwrap_or_default()
+    }
+
+    /// Pick or unpick an answer.
+    ///
+    /// The rules live in the core: a single-select question replaces its
+    /// answer rather than adding to it, and only its own answers are cleared.
+    pub fn pick_onboarding_answer(&mut self, index: usize) {
+        let rows = self.onboarding_rows();
+        let Some(option_id) = rows.get(index).and_then(|row| row.option_id()) else {
+            return;
+        };
+        let Some(view) = &mut self.server_management else {
+            return;
+        };
+        let Some(onboarding) = view.onboarding.as_ref() else {
+            return;
+        };
+        view.onboarding_picked = onboarding.toggled(&view.onboarding_picked, option_id);
+    }
+
+    /// Send the answers.
+    pub fn submit_onboarding(&mut self) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(view) = &self.server_management else {
+            return;
+        };
+        let Some(onboarding) = view.onboarding.clone() else {
+            return;
+        };
+        let unanswered = onboarding.unanswered(&view.onboarding_picked);
+        if !unanswered.is_empty() {
+            // Named rather than counted: Discord's own rejection does not say
+            // which question is missing.
+            self.model.status_line = unanswered.join(", ");
+            return;
+        }
+        handle.send(AppCommand::SubmitOnboarding {
+            guild_id: view.guild_id,
+            onboarding: Box::new(onboarding),
+            picked: view.onboarding_picked.clone(),
+        });
+    }
+
     /// The guild's members, filtered by the search box.
     ///
     /// Read from the snapshot on every draw rather than cached: the gateway
@@ -5225,6 +5285,8 @@ impl Workspace {
             prune_days: DEFAULT_PRUNE_DAYS,
             prune_count: None,
             member_query: String::new(),
+            onboarding: None,
+            onboarding_picked: Vec::new(),
             events: Vec::new(),
             templates: Vec::new(),
             loading: true,
@@ -5320,6 +5382,7 @@ impl Workspace {
             ServerTab::Events => !view.events.is_empty(),
             ServerTab::Templates => !view.templates.is_empty(),
             ServerTab::Members => true,
+            ServerTab::Onboarding => view.onboarding.is_some(),
         };
         view.loading = !already_loaded;
         let guild_id = view.guild_id;
@@ -7670,6 +7733,18 @@ impl Workspace {
                     composer.set_text(&instance.topic);
                 }
             }
+            AppEvent::OnboardingLoaded {
+                guild_id,
+                onboarding,
+            } => {
+                if let Some(view) = &mut self.server_management
+                    && view.guild_id == *guild_id
+                {
+                    view.loading = false;
+                    view.error = None;
+                    view.onboarding = Some((**onboarding).clone());
+                }
+            }
             AppEvent::ScheduledEventsLoaded { guild_id, events } => {
                 if let Some(view) = &mut self.server_management
                     && view.guild_id == *guild_id
@@ -9393,6 +9468,7 @@ impl Workspace {
 
             let membership = self.membership_rows();
             let members = self.server_member_rows();
+            let onboarding = self.onboarding_rows();
             let (rows, empty_label) = match view.tab {
                 ServerTab::Events => (
                     view.events
@@ -9416,6 +9492,50 @@ impl Workspace {
                         })
                         .collect::<Vec<_>>(),
                     t!("status-no-events"),
+                ),
+                ServerTab::Onboarding => (
+                    onboarding
+                        .iter()
+                        .map(|row| match row {
+                            concord::discord::OnboardingRow::Question {
+                                title,
+                                summary,
+                                unanswered,
+                            } => overlay::ServerRow {
+                                primary: title.clone(),
+                                secondary: Some(if *unanswered {
+                                    format!("{summary} - {}", t!("status-needs-an-answer"))
+                                } else {
+                                    summary.clone()
+                                }),
+                                // A question is not something you act on; its
+                                // answers below it are.
+                                action: None,
+                                secondary_action: None,
+                                tertiary_action: None,
+                            },
+                            concord::discord::OnboardingRow::Option {
+                                title,
+                                summary,
+                                picked,
+                                ..
+                            } => overlay::ServerRow {
+                                primary: format!(
+                                    "   {} {title}",
+                                    if *picked { "\u{25CF}" } else { "\u{25CB}" }
+                                ),
+                                secondary: Some(summary.clone()),
+                                action: None,
+                                secondary_action: Some(if *picked {
+                                    t!("action-unpick")
+                                } else {
+                                    t!("action-pick")
+                                }),
+                                tertiary_action: None,
+                            },
+                        })
+                        .collect::<Vec<_>>(),
+                    t!("status-no-onboarding"),
                 ),
                 ServerTab::Members => (
                     members
@@ -9589,6 +9709,7 @@ impl Workspace {
             let server_settings_label = t!("action-server-settings");
             let add_template_label = t!("action-new-template");
             let add_event_label = t!("action-new-event");
+            let finish_onboarding_label = t!("action-finish-onboarding");
             return Some(overlay::scrim().child(overlay::server_management_view(
                 overlay::ServerPanel {
                     tabs: &tabs,
@@ -9607,6 +9728,7 @@ impl Workspace {
                         ServerTab::Settings => Some(server_settings_label.as_str()),
                         ServerTab::Templates => Some(add_template_label.as_str()),
                         ServerTab::Events => Some(add_event_label.as_str()),
+                        ServerTab::Onboarding => Some(finish_onboarding_label.as_str()),
                         _ => None,
                     },
                 },
@@ -9638,10 +9760,12 @@ impl Workspace {
                                 // The settings list has no destructive action;
                                 // its rows are edited through the second one.
                                 // Pruning is destructive but goes through the
-                                // risk prompt, not this row action.
+                                // risk prompt, not this row action. Onboarding
+                                // has nothing destructive at all.
                                 ServerTab::AuditLog
                                 | ServerTab::Settings
-                                | ServerTab::Membership => {}
+                                | ServerTab::Membership
+                                | ServerTab::Onboarding => {}
                             }
                             cx.notify();
                         });
@@ -9660,6 +9784,7 @@ impl Workspace {
                                 ServerTab::Membership => workspace.activate_membership_row(index),
                                 ServerTab::Events => workspace.start_event_edit(index),
                                 ServerTab::Members => workspace.open_listed_member(index),
+                                ServerTab::Onboarding => workspace.pick_onboarding_answer(index),
                                 ServerTab::Templates => workspace.sync_template(index),
                                 // Only the name is editable here; verification
                                 // and boosts are shown but not changed yet.
@@ -9713,6 +9838,11 @@ impl Workspace {
                                     ServerTab::Roles => (Prompt::NewRole, Composer::default()),
                                     ServerTab::Templates => {
                                         (Prompt::NewTemplate, Composer::default())
+                                    }
+                                    ServerTab::Onboarding => {
+                                        workspace.submit_onboarding();
+                                        cx.notify();
+                                        return;
                                     }
                                     ServerTab::Events => (Prompt::NewEvent, Composer::default()),
                                     ServerTab::Settings => (Prompt::GuildIcon, Composer::default()),

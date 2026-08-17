@@ -326,6 +326,24 @@ impl DiscordClient {
             .await
     }
 
+    pub async fn onboarding(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+    ) -> Result<crate::discord::Onboarding> {
+        self.rest.onboarding(guild_id).await
+    }
+
+    pub async fn submit_onboarding(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+        onboarding: &crate::discord::Onboarding,
+        picked: &[u64],
+    ) -> Result<()> {
+        self.rest
+            .submit_onboarding(guild_id, onboarding, picked)
+            .await
+    }
+
     pub async fn scheduled_events(
         &self,
         guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,

@@ -651,6 +651,16 @@ pub enum AppCommand {
         code: String,
         label: String,
     },
+    /// What a server asks new members.
+    LoadOnboarding {
+        guild_id: Id<GuildMarker>,
+    },
+    /// Answer those questions and finish onboarding.
+    SubmitOnboarding {
+        guild_id: Id<GuildMarker>,
+        onboarding: Box<crate::discord::Onboarding>,
+        picked: Vec<u64>,
+    },
     LoadWelcomeScreen {
         guild_id: Id<GuildMarker>,
     },

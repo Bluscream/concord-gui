@@ -470,6 +470,45 @@ load_guild_panel!(
 /// Fetch a sound list. `None` asks for the default sounds.
 type GuildId = crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>;
 
+pub(super) async fn load_onboarding(client: DiscordClient, guild_id: GuildId) {
+    match client.onboarding(guild_id).await {
+        Ok(onboarding) => {
+            client
+                .publish_event(AppEvent::OnboardingLoaded {
+                    guild_id,
+                    onboarding: Box::new(onboarding),
+                })
+                .await;
+        }
+        Err(error) => {
+            log_app_error("onboarding failed", &error);
+            client
+                .publish_event(AppEvent::MembershipRequestFailed {
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
+pub(super) async fn submit_onboarding(
+    client: DiscordClient,
+    guild_id: GuildId,
+    onboarding: crate::discord::Onboarding,
+    picked: Vec<u64>,
+) {
+    if let Err(error) = client
+        .submit_onboarding(guild_id, &onboarding, &picked)
+        .await
+    {
+        report_moderation_failure(&client, "finishing", "onboarding", &error).await;
+        return;
+    }
+    client
+        .publish_event(AppEvent::OnboardingCompleted { guild_id })
+        .await;
+}
+
 pub(super) async fn load_scheduled_events(client: DiscordClient, guild_id: GuildId) {
     match client.scheduled_events(guild_id).await {
         Ok(events) => {

@@ -99,9 +99,12 @@ impl fmt::Display for GuildParticipationRestriction {
                 formatter,
                 "complete the server's membership screening in the official Discord app"
             ),
+            // No longer "use the official app": the onboarding tab on the
+            // server panel answers these questions, which is the whole reason
+            // that tab exists.
             Self::OnboardingIncomplete => write!(
                 formatter,
-                "complete the server's onboarding in the official Discord app"
+                "answer the server's onboarding questions on its Onboarding tab"
             ),
             Self::EmailVerificationRequired => {
                 write!(formatter, "verify the Discord account email")

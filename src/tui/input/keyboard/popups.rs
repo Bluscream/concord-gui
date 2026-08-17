@@ -959,6 +959,10 @@ fn handle_server_management_key(state: &mut DashboardState, key: KeyEvent) -> Op
         KeyCode::Char('K') => return state.move_selected_role(true),
         KeyCode::Char('J') => return state.move_selected_role(false),
         KeyCode::Char('/') => state.start_member_search(),
+        // Finishing onboarding, which enter deliberately does not do: enter
+        // picks an answer, and the form is only complete once every required
+        // question has one.
+        KeyCode::Char('S') => return state.submit_onboarding(),
         KeyCode::Char('N') => {
             state.start_role_create();
             state.start_template_create();

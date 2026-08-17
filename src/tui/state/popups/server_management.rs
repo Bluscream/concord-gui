@@ -28,10 +28,14 @@ pub enum ServerPanelTab {
     Events,
     Templates,
     Members,
+    /// The questions this server asks new members - and, when you have not
+    /// answered them, the form for doing so. Until now the client detected
+    /// onboarding and told people to go and finish it in the official app.
+    Onboarding,
 }
 
 impl ServerPanelTab {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Settings,
         Self::Invites,
         Self::Roles,
@@ -43,6 +47,7 @@ impl ServerPanelTab {
         Self::Events,
         Self::Templates,
         Self::Members,
+        Self::Onboarding,
     ];
 
     pub(in crate::tui) fn label(self) -> &'static str {
@@ -58,6 +63,7 @@ impl ServerPanelTab {
             Self::Events => "Events",
             Self::Templates => "Templates",
             Self::Members => "Members",
+            Self::Onboarding => "Onboarding",
         }
     }
 
@@ -82,6 +88,7 @@ impl ServerPanelTab {
             // Members arrive over the gateway rather than by request, and the
             // ones already cached are shown at once; searching asks for more.
             Self::Members => Vec::new(),
+            Self::Onboarding => vec![AppCommand::LoadOnboarding { guild_id }],
             Self::Membership => vec![
                 AppCommand::LoadWelcomeScreen { guild_id },
                 AppCommand::LoadGuildWidget { guild_id },
@@ -192,6 +199,9 @@ pub(in crate::tui) struct ServerManagementState {
     pub(super) member_rows: Vec<crate::discord::MemberRow>,
     /// What is being searched for, while the field is open.
     pub(super) member_query: Option<TextInputState>,
+    pub(super) onboarding: Option<crate::discord::Onboarding>,
+    pub(super) onboarding_rows: Vec<crate::discord::OnboardingRow>,
+    pub(super) onboarding_picked: Vec<u64>,
     /// Set while the open tab's fetch is outstanding, so the popup can say so
     /// rather than looking like an empty list.
     pub(super) loading: bool,
@@ -254,6 +264,7 @@ impl ServerManagementState {
             ServerPanelTab::Events => self.events.len(),
             ServerPanelTab::Templates => self.templates.len(),
             ServerPanelTab::Members => self.member_rows.len(),
+            ServerPanelTab::Onboarding => self.onboarding_rows.len(),
         }
     }
 
@@ -292,6 +303,9 @@ impl DashboardState {
                 templates: Vec::new(),
                 member_rows: Vec::new(),
                 member_query: None,
+                onboarding: None,
+                onboarding_rows: Vec::new(),
+                onboarding_picked: Vec::new(),
                 loading: true,
                 error: None,
                 renaming: None,
@@ -363,6 +377,7 @@ impl DashboardState {
             ServerPanelTab::Templates => !state.templates.is_empty(),
             // Read from the snapshot, so there is nothing to wait for.
             ServerPanelTab::Members => true,
+            ServerPanelTab::Onboarding => state.onboarding.is_some(),
         };
         state.loading = !already_loaded;
         let guild_id = state.guild_id;
@@ -375,6 +390,67 @@ impl DashboardState {
             return None;
         }
         self.queue_tab_fetches(tab, guild_id)
+    }
+
+    /// Rebuild the onboarding rows from what has been picked.
+    pub(in crate::tui) fn refresh_onboarding_rows(&mut self) {
+        let Some(state) = self.popups.server_management_mut() else {
+            return;
+        };
+        let Some(onboarding) = state.onboarding.as_ref() else {
+            return;
+        };
+        state.onboarding_rows = onboarding.rows(&state.onboarding_picked);
+    }
+
+    pub(in crate::tui) fn set_onboarding(&mut self, onboarding: crate::discord::Onboarding) {
+        if let Some(state) = self.popups.server_management_mut() {
+            state.onboarding = Some(onboarding);
+            state.loading = false;
+        }
+        self.refresh_onboarding_rows();
+    }
+
+    pub(in crate::tui) fn onboarding_rows(&self) -> &[crate::discord::OnboardingRow] {
+        self.popups
+            .server_management()
+            .map_or(&[], |state| state.onboarding_rows.as_slice())
+    }
+
+    /// Which required questions still have no answer, for the line under the
+    /// form. Discord's own rejection does not say which one is missing.
+    pub(in crate::tui) fn onboarding_unanswered(&self) -> Vec<String> {
+        self.popups
+            .server_management()
+            .and_then(|state| {
+                state.onboarding.as_ref().map(|onboarding| {
+                    onboarding
+                        .unanswered(&state.onboarding_picked)
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect()
+                })
+            })
+            .unwrap_or_default()
+    }
+
+    /// Send the answers.
+    pub fn submit_onboarding(&mut self) -> Option<AppCommand> {
+        let state = self.popups.server_management()?;
+        if state.tab != ServerPanelTab::Onboarding {
+            return None;
+        }
+        let onboarding = state.onboarding.clone()?;
+        // Refused here rather than by Discord, whose rejection does not name
+        // the question that is missing.
+        if !onboarding.unanswered(&state.onboarding_picked).is_empty() {
+            return None;
+        }
+        Some(AppCommand::SubmitOnboarding {
+            guild_id: state.guild_id,
+            onboarding: Box::new(onboarding),
+            picked: state.onboarding_picked.clone(),
+        })
     }
 
     /// Read the member list from the snapshot, filtered by the open search.
@@ -968,6 +1044,16 @@ impl DashboardState {
         let guild_id = state.guild_id;
 
         match state.tab {
+            ServerPanelTab::Onboarding => {
+                // Picking an answer. The rules for what that does live in the
+                // core, since a single-select question replaces its answer
+                // rather than adding to it.
+                let option_id = state.onboarding_rows.get(index)?.option_id()?;
+                let onboarding = state.onboarding.as_ref()?;
+                state.onboarding_picked = onboarding.toggled(&state.onboarding_picked, option_id);
+                self.refresh_onboarding_rows();
+                None
+            }
             ServerPanelTab::Members => {
                 // Banning from here, which is the one thing a settings member
                 // list is for that the member pane is not.

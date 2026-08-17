@@ -1021,6 +1021,8 @@ impl DiscordState {
             | AppEvent::InviteCreated { .. }
             | AppEvent::StageInstanceLoaded { .. }
             | AppEvent::StageRequestFailed { .. }
+            | AppEvent::OnboardingLoaded { .. }
+            | AppEvent::OnboardingCompleted { .. }
             | AppEvent::ScheduledEventsLoaded { .. }
             | AppEvent::GuildTemplatesLoaded { .. }
             | AppEvent::MembersBulkBanned { .. }

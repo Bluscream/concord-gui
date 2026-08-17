@@ -726,6 +726,13 @@ pub enum AppEvent {
     StageRequestFailed {
         message: String,
     },
+    OnboardingLoaded {
+        guild_id: Id<GuildMarker>,
+        onboarding: Box<crate::discord::Onboarding>,
+    },
+    OnboardingCompleted {
+        guild_id: Id<GuildMarker>,
+    },
     ScheduledEventsLoaded {
         guild_id: Id<GuildMarker>,
         events: Vec<crate::discord::ScheduledEvent>,
@@ -1119,6 +1126,8 @@ define_app_event_kinds! {
     AuthSessionsLoadFailed: AppEvent::AuthSessionsLoadFailed { .. },
     StageInstanceLoaded: AppEvent::StageInstanceLoaded { .. },
     StageRequestFailed: AppEvent::StageRequestFailed { .. },
+    OnboardingLoaded: AppEvent::OnboardingLoaded { .. },
+    OnboardingCompleted: AppEvent::OnboardingCompleted { .. },
     ScheduledEventsLoaded: AppEvent::ScheduledEventsLoaded { .. },
     GuildTemplatesLoaded: AppEvent::GuildTemplatesLoaded { .. },
     MembersBulkBanned: AppEvent::MembersBulkBanned { .. },
@@ -2204,6 +2213,8 @@ impl AppEventKind {
             | AppEventKind::SoundboardSoundsLoadFailed
             | AppEventKind::StageInstanceLoaded
             | AppEventKind::StageRequestFailed
+            | AppEventKind::OnboardingLoaded
+            | AppEventKind::OnboardingCompleted
             | AppEventKind::ScheduledEventsLoaded
             | AppEventKind::GuildTemplatesLoaded
             | AppEventKind::MembersBulkBanned

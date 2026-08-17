@@ -837,6 +837,12 @@ fn the_server_panel_only_fetches_a_tab_it_has_not_seen() {
     // Members read the snapshot, so this fetches nothing either.
     assert_eq!(state.next_server_tab(), None);
 
+    assert_eq!(
+        state.next_server_tab(),
+        Some(AppCommand::LoadOnboarding { guild_id })
+    );
+    state.set_onboarding(crate::discord::Onboarding::default());
+
     // Wrapping round lands on settings, which reads the snapshot and so
     // fetches nothing either.
     assert_eq!(state.next_server_tab(), None);

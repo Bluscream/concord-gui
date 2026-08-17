@@ -271,7 +271,27 @@ The search query goes in the panel title rather than as a row in the list. A
 row for it would shift every index below, and the selection is what decides
 which member enter acts on.
 
-Still missing: onboarding questions, new-member actions, and membership screening - which the
+Onboarding is a tab on the server panel in both clients, and it answers the
+questions rather than only listing them. That is the point: until now the
+client detected onboarding as a participation restriction and told people to go
+and finish it in the official Discord app, which is the one thing this client
+exists not to say. That message now points at the tab.
+
+Each answer says what it grants - roles, channels, or neither. Onboarding is
+the one place a client hands out roles on your behalf, and doing that silently
+would be the wrong shape.
+
+The picking rules are in the core because Discord's are not obvious: a
+single-select question replaces its answer rather than adding to it, and only
+its own answers are cleared - a filter that was not scoped to the question
+would silently blank the rest of the form. A question row is not selectable,
+since an index that did not distinguish the two would let enter "pick" a
+question title and look like it worked.
+
+An incomplete form names the questions still missing. Discord rejects the
+submission with a message that does not.
+
+Still missing, new-member actions, and membership screening - which the
 client detects as a participation restriction but can neither configure nor
 complete.
 

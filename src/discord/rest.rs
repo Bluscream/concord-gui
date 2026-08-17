@@ -73,6 +73,7 @@ pub use membership::{
 };
 pub use messages::MAX_MESSAGE_STICKERS;
 pub use moderation::{GuildBanInfo, MAX_BAN_DELETE_MESSAGE_SECONDS, parse_user_id_list};
+pub use onboarding::{Onboarding, OnboardingOption, OnboardingQuestion, OnboardingRow};
 pub use privacy::{
     DmScanLevel, FriendDiscovery, FriendSources, PrivacyEdit, PrivacySetting, PrivacyState,
 };
@@ -89,6 +90,7 @@ pub use stage::{
 mod messages;
 mod moderation;
 mod notification_settings;
+mod onboarding;
 mod polls;
 mod presence;
 mod profile;
