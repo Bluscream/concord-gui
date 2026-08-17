@@ -298,6 +298,31 @@ a guessed endpoint against them has caught real errors that no test here could:
 Both were shipped and both looked right. Check the shape before writing the
 struct, not after.
 
+## Values Discord serves
+
+Some of what this client needs is Discord's to decide rather than ours. Those
+live in `src/discord/remote_config.rs` behind three layers, in this order: what
+Discord last told us and we wrote to disk, then a fresh fetch, then a
+compiled-in default.
+
+The defaults are what Discord serves today, not placeholders - a first run with
+no network behaves exactly as it would with one. That is the point: the
+fallback is a working client, not a degraded one.
+
+The gateway URL is why this exists. Discord's own guidance is that clients
+cache it and refetch only when the cached one fails, so the reader never
+touches the network and the fetcher runs once at gateway start. A fetch that
+fails leaves the cache stale on purpose, so the next start retries rather than
+waiting a day.
+
+A URL Discord returns that is not a websocket URL is refused rather than
+cached: writing one would break every start until the cache expired, which is
+worse than never updating.
+
+Caps that Discord documents but does not serve - name lengths, sticker size,
+keyword counts - stay compiled in. Those are documentation, not configuration,
+and pretending to fetch them would suggest they can change under us.
+
 ## Permission bits
 
 The client keeps named constants for the permissions it checks, and

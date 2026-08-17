@@ -116,7 +116,17 @@ pub(crate) struct GatewayRuntime {
 /// dispatch shapes line up with everything `parse_user_account_event` already
 /// understands. Discord's browser client uses the stateful `zlib-stream`
 /// transport mode, which keeps large READY payloads bounded on the wire.
-const GATEWAY_URL: &str = "wss://gateway.discord.gg/?v=9&encoding=json&compress=zlib-stream";
+const GATEWAY_QUERY: &str = "v=9&encoding=json&compress=zlib-stream";
+
+/// Where to connect, from what Discord last told us.
+///
+/// Discord's own guidance is that clients cache this and refetch only when the
+/// cached URL fails to connect, so this reads the cache rather than the
+/// network. The query is this client's protocol version rather than anything
+/// Discord served, which is why it is added here and not stored.
+fn gateway_url() -> String {
+    crate::discord::remote_config::load().gateway_websocket_url(GATEWAY_QUERY)
+}
 
 /// Bitmask Discord checks before delivering user-account-only payloads such as
 /// `READY_SUPPLEMENTAL.merged_presences.friends` and per-friend
@@ -883,7 +893,7 @@ impl SessionState {
                 || self.last_sequence.is_some();
             self.clear();
             return GatewayConnectionPlan {
-                url: GATEWAY_URL.to_owned(),
+                url: gateway_url(),
                 handshake: GatewayHandshake::Identify,
                 recovery_warning: had_partial_resume_state.then(|| {
                     "Gateway resume state is incomplete; starting a new session".to_owned()
@@ -912,7 +922,7 @@ impl SessionState {
             Err(error) => {
                 self.clear();
                 GatewayConnectionPlan {
-                    url: GATEWAY_URL.to_owned(),
+                    url: gateway_url(),
                     handshake: GatewayHandshake::Identify,
                     recovery_warning: Some(error),
                 }

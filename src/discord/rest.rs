@@ -42,6 +42,7 @@ mod invites;
 mod membership;
 mod phone;
 mod privacy;
+mod remote;
 mod sessions;
 mod stage;
 mod stickers;

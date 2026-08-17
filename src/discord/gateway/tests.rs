@@ -1,7 +1,7 @@
 use super::{
-    ConnectionOutcome, GATEWAY_SEND_LIMIT, GATEWAY_SEND_WINDOW, GATEWAY_URL, GatewayCommand,
-    GatewayHandshake, GatewayPresence, GatewaySendWindow, GatewaySender, GatewaySessionResources,
-    GatewayZlibDecoder, GuildMemberRequestKind, GuildMemberRequestScheduler, HeartbeatAckState,
+    ConnectionOutcome, GATEWAY_SEND_LIMIT, GATEWAY_SEND_WINDOW, GatewayCommand, GatewayHandshake,
+    GatewayPresence, GatewaySendWindow, GatewaySender, GatewaySessionResources, GatewayZlibDecoder,
+    GuildMemberRequestKind, GuildMemberRequestScheduler, HeartbeatAckState,
     MAX_PENDING_GUILD_MEMBER_REQUESTS, SessionState, SubscriptionDeduper,
     USER_ACCOUNT_CAPABILITIES, build_identify_payload, build_resume_payload, close_code_outcome,
     create_stream_payload, delete_stream_payload, direct_message_subscribe_payload,
@@ -359,8 +359,8 @@ fn guild_member_id_hydration_displaces_searches_instead_of_dropping_ids() {
 #[test]
 fn gateway_handshake_headers_match_shared_fingerprint() {
     let fingerprint = ClientFingerprint::new(CLIENT_BUILD_NUMBER);
-    let request =
-        gateway_request(super::GATEWAY_URL, &fingerprint).expect("gateway request should be valid");
+    let request = gateway_request(&super::gateway_url(), &fingerprint)
+        .expect("gateway request should be valid");
     let headers = request.headers();
 
     assert_eq!(
@@ -395,7 +395,7 @@ fn gateway_handshake_headers_match_shared_fingerprint() {
 fn gateway_connection_plan_pairs_the_endpoint_with_the_required_handshake() {
     let mut initial = SessionState::default();
     let initial_plan = initial.next_connection();
-    assert_eq!(initial_plan.url, GATEWAY_URL);
+    assert_eq!(initial_plan.url, super::gateway_url());
     assert_eq!(initial_plan.handshake, GatewayHandshake::Identify);
     assert!(initial_plan.recovery_warning.is_none());
 
@@ -449,7 +449,7 @@ fn invalid_resume_endpoints_clear_the_session_and_reidentify() {
 
         let plan = session.next_connection();
 
-        assert_eq!(plan.url, GATEWAY_URL, "{invalid_url}");
+        assert_eq!(plan.url, super::gateway_url(), "{invalid_url}");
         assert_eq!(plan.handshake, GatewayHandshake::Identify, "{invalid_url}");
         assert!(plan.recovery_warning.is_some(), "{invalid_url}");
         assert!(!session.can_resume(), "{invalid_url}");

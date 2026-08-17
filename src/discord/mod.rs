@@ -30,6 +30,7 @@ mod presence;
 mod profile;
 pub mod qr_auth;
 mod read;
+pub(crate) mod remote_config;
 mod request_lifecycle;
 mod rest;
 mod rpc;
@@ -125,6 +126,7 @@ pub use profile::{
     FriendStatus, MutualGuildInfo, RelationshipInfo, RelationshipUpdateInfo, UserProfileInfo,
 };
 pub use read::ReadStateInfo;
+pub use remote_config::RemoteConfig;
 pub(crate) use request_lifecycle::GuildMemberSearchSurface;
 pub use rest::{
     AFK_TIMEOUTS, AccountEdit, AuditLogAction, AuditLogEntryInfo, AuthSession, AuthorisedApp,

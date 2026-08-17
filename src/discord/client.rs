@@ -293,6 +293,11 @@ impl DiscordClient {
         let voice_events_tx = self.voice_events_tx.clone();
         let voice_status_publisher = voice::VoiceStatusPublisher::new(self.event_publisher.clone());
         let stream_preview_uploader = voice::StreamPreviewUploader::new(self.rest.clone());
+        // Refreshed here rather than at construction: it needs an async
+        // context, runs once, and nothing on the path to a first message waits
+        // on it - the cached or compiled-in URL is already correct.
+        let config_rest = self.rest.clone();
+        tokio::spawn(async move { config_rest.refresh_remote_config().await });
         if let Some(voice_events) = self
             .voice_events_rx
             .lock()
