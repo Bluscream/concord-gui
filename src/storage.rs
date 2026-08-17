@@ -10,7 +10,11 @@
 pub mod concurrent;
 pub mod dsn;
 pub mod schema;
+#[cfg(feature = "storage")]
+pub mod store;
 
 pub use concurrent::{Absence, Revision, should_write};
 pub use dsn::{DsnProblem, StorageBackend};
 pub use schema::{Dialect, SCHEMA_VERSION};
+#[cfg(feature = "storage")]
+pub use store::{CachedGuild, CachedMessage, CachedUser, Store};

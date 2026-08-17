@@ -226,12 +226,14 @@ Landed:
 
 Still to do, in order:
 
-1. **A driver.** Nothing connects yet - the schema and the rules exist, the
-   `sqlx` (or `rusqlite` plus a MySQL crate) dependency does not. This is the
-   next commit and the largest one.
-2. **Write on gateway events.** Every upsert already has its statement; what is
-   missing is calling it as `GUILD_CREATE`, `MESSAGE_CREATE` and the rest
-   arrive.
+1. ~~**A driver.**~~ Done. `sqlx` with its `any` driver, so the backend stays a
+   runtime choice: a shared store is something somebody points an already-built
+   client at. Behind a `storage` feature, on by default - a build that never
+   caches should not pay for a database driver.
+2. **Write on gateway events.** The store reads and writes; what is missing is
+   calling it as `GUILD_CREATE`, `MESSAGE_CREATE` and the rest arrive. Needs a
+   revision for each: Discord's `version` where there is one, and for messages
+   the id, which is monotonic and never changes.
 3. **Read at startup, before the gateway.** The point of the whole thing.
    `DiscordState` fills from the store, then the gateway corrects it.
 4. **Deletion.** Tombstones are in the schema and nothing writes them.
