@@ -834,6 +834,9 @@ fn the_server_panel_only_fetches_a_tab_it_has_not_seen() {
     );
     state.set_guild_templates(Vec::new());
 
+    // Members read the snapshot, so this fetches nothing either.
+    assert_eq!(state.next_server_tab(), None);
+
     // Wrapping round lands on settings, which reads the snapshot and so
     // fetches nothing either.
     assert_eq!(state.next_server_tab(), None);
@@ -1525,9 +1528,12 @@ fn every_server_tab_that_needs_a_fetch_asks_for_one() {
         asked.extend(state.open_server_management(guild_id, tab));
         asked.extend(state.drain_pending_commands());
 
-        // Settings and roles arrive with the guild and are read from the
-        // snapshot, so they are the only two that ask for nothing.
-        let snapshot_tab = matches!(tab, ServerPanelTab::Settings | ServerPanelTab::Roles);
+        // Settings, roles and members are read from the snapshot rather than
+        // fetched, so they are the ones that ask for nothing.
+        let snapshot_tab = matches!(
+            tab,
+            ServerPanelTab::Settings | ServerPanelTab::Roles | ServerPanelTab::Members
+        );
         assert_eq!(
             asked.is_empty(),
             snapshot_tab,

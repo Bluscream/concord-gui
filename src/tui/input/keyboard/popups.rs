@@ -889,6 +889,21 @@ fn handle_search_popup_key(state: &mut DashboardState, key: KeyEvent) -> Option<
 
 /// Tab cycles the three lists; the rest is ordinary selection.
 fn handle_server_management_key(state: &mut DashboardState, key: KeyEvent) -> Option<AppCommand> {
+    // While searching, the keyboard belongs to the field: every printable key
+    // is part of the query rather than a shortcut.
+    if state.is_member_search_open() {
+        match state.key_bindings().composer_action(key) {
+            ComposerAction::Submit | ComposerAction::Close => state.cancel_member_search(),
+            ComposerAction::ClearInput => {
+                state.edit_member_search(TextEditAction::DeleteToLineStart)
+            }
+            ComposerAction::EditText(action) => state.edit_member_search(action),
+            ComposerAction::InsertChar(value) => state.insert_member_search_char(value),
+            _ => {}
+        }
+        return None;
+    }
+
     // While renaming, the keyboard belongs to the field: navigation keys are
     // cursor movement, and 'r' is a letter rather than reload.
     if state
@@ -943,6 +958,7 @@ fn handle_server_management_key(state: &mut DashboardState, key: KeyEvent) -> Op
         // wins a conflict, so it is not folded into enter.
         KeyCode::Char('K') => return state.move_selected_role(true),
         KeyCode::Char('J') => return state.move_selected_role(false),
+        KeyCode::Char('/') => state.start_member_search(),
         KeyCode::Char('N') => {
             state.start_role_create();
             state.start_template_create();

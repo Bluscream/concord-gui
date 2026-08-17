@@ -27,10 +27,11 @@ pub enum ServerPanelTab {
     Membership,
     Events,
     Templates,
+    Members,
 }
 
 impl ServerPanelTab {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Settings,
         Self::Invites,
         Self::Roles,
@@ -41,6 +42,7 @@ impl ServerPanelTab {
         Self::Membership,
         Self::Events,
         Self::Templates,
+        Self::Members,
     ];
 
     pub(in crate::tui) fn label(self) -> &'static str {
@@ -55,6 +57,7 @@ impl ServerPanelTab {
             Self::Membership => "Membership",
             Self::Events => "Events",
             Self::Templates => "Templates",
+            Self::Members => "Members",
         }
     }
 
@@ -76,6 +79,9 @@ impl ServerPanelTab {
             Self::AuditLog => vec![AppCommand::LoadGuildAuditLog { guild_id }],
             Self::Events => vec![AppCommand::LoadScheduledEvents { guild_id }],
             Self::Templates => vec![AppCommand::LoadGuildTemplates { guild_id }],
+            // Members arrive over the gateway rather than by request, and the
+            // ones already cached are shown at once; searching asks for more.
+            Self::Members => Vec::new(),
             Self::Membership => vec![
                 AppCommand::LoadWelcomeScreen { guild_id },
                 AppCommand::LoadGuildWidget { guild_id },
@@ -183,6 +189,9 @@ pub(in crate::tui) struct ServerManagementState {
     pub(super) prune_count: Option<u64>,
     pub(super) events: Vec<crate::discord::ScheduledEvent>,
     pub(super) templates: Vec<crate::discord::GuildTemplate>,
+    pub(super) member_rows: Vec<crate::discord::MemberRow>,
+    /// What is being searched for, while the field is open.
+    pub(super) member_query: Option<TextInputState>,
     /// Set while the open tab's fetch is outstanding, so the popup can say so
     /// rather than looking like an empty list.
     pub(super) loading: bool,
@@ -244,6 +253,7 @@ impl ServerManagementState {
             ServerPanelTab::Membership => MEMBERSHIP_ROWS.len(),
             ServerPanelTab::Events => self.events.len(),
             ServerPanelTab::Templates => self.templates.len(),
+            ServerPanelTab::Members => self.member_rows.len(),
         }
     }
 
@@ -280,6 +290,8 @@ impl DashboardState {
                 prune_count: None,
                 events: Vec::new(),
                 templates: Vec::new(),
+                member_rows: Vec::new(),
+                member_query: None,
                 loading: true,
                 error: None,
                 renaming: None,
@@ -289,6 +301,7 @@ impl DashboardState {
         match tab {
             ServerPanelTab::Roles => self.fill_server_roles(),
             ServerPanelTab::Settings => self.fill_guild_settings(),
+            ServerPanelTab::Members => self.fill_member_rows(),
             _ => {}
         }
         self.queue_tab_fetches(tab, guild_id)
@@ -348,6 +361,8 @@ impl DashboardState {
             ServerPanelTab::Membership => state.welcome.is_some() && state.widget.is_some(),
             ServerPanelTab::Events => !state.events.is_empty(),
             ServerPanelTab::Templates => !state.templates.is_empty(),
+            // Read from the snapshot, so there is nothing to wait for.
+            ServerPanelTab::Members => true,
         };
         state.loading = !already_loaded;
         let guild_id = state.guild_id;
@@ -360,6 +375,79 @@ impl DashboardState {
             return None;
         }
         self.queue_tab_fetches(tab, guild_id)
+    }
+
+    /// Read the member list from the snapshot, filtered by the open search.
+    ///
+    /// Refilled on every keystroke rather than cached: the list comes from
+    /// state that the gateway keeps changing, and a cached copy would show
+    /// members who have since left.
+    pub(in crate::tui) fn fill_member_rows(&mut self) {
+        let Some(state) = self.popups.server_management() else {
+            return;
+        };
+        let query = state
+            .member_query
+            .as_ref()
+            .map_or(String::new(), |input| input.value().to_owned());
+        let rows = self.discord.cache.member_rows(state.guild_id, &query);
+        if let Some(state) = self.popups.server_management_mut() {
+            state.member_rows = rows;
+            state.selection = SelectablePopupState::default();
+        }
+    }
+
+    /// Start searching the member list.
+    pub fn start_member_search(&mut self) {
+        if let Some(state) = self.popups.server_management_mut()
+            && state.tab == ServerPanelTab::Members
+        {
+            state.member_query = Some(TextInputState::default());
+        }
+    }
+
+    pub fn is_member_search_open(&self) -> bool {
+        self.popups
+            .server_management()
+            .is_some_and(|state| state.member_query.is_some())
+    }
+
+    pub fn member_search_text(&self) -> Option<&str> {
+        self.popups
+            .server_management()
+            .and_then(|state| state.member_query.as_ref())
+            .map(TextInputState::value)
+    }
+
+    pub fn edit_member_search(&mut self, action: crate::tui::text_input::TextEditAction) {
+        if let Some(state) = self.popups.server_management_mut()
+            && let Some(input) = state.member_query.as_mut()
+        {
+            input.apply_edit_action(action);
+        }
+        self.fill_member_rows();
+    }
+
+    pub fn insert_member_search_char(&mut self, value: char) {
+        if let Some(state) = self.popups.server_management_mut()
+            && let Some(input) = state.member_query.as_mut()
+        {
+            input.insert_char(value);
+        }
+        self.fill_member_rows();
+    }
+
+    pub fn cancel_member_search(&mut self) {
+        if let Some(state) = self.popups.server_management_mut() {
+            state.member_query = None;
+        }
+        self.fill_member_rows();
+    }
+
+    pub(in crate::tui) fn member_rows(&self) -> &[crate::discord::MemberRow] {
+        self.popups
+            .server_management()
+            .map_or(&[], |state| state.member_rows.as_slice())
     }
 
     /// Move the highlighted role up or down.
@@ -880,6 +968,17 @@ impl DashboardState {
         let guild_id = state.guild_id;
 
         match state.tab {
+            ServerPanelTab::Members => {
+                // Banning from here, which is the one thing a settings member
+                // list is for that the member pane is not.
+                let member = state.member_rows.get(index)?;
+                Some(AppCommand::BanMember {
+                    guild_id,
+                    user_id: member.user_id,
+                    label: member.name.clone(),
+                    delete_message_seconds: 0,
+                })
+            }
             ServerPanelTab::Events => {
                 let event = state.events.get(index)?;
                 // Enter says you are coming rather than cancelling: interest

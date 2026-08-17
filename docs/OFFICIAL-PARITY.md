@@ -257,8 +257,21 @@ Discord bans who it can and reports the rest, so a partial success is normal
 rather than an error - and an absent failure list means everyone succeeded, not
 nobody, which is the most alarming way to be wrong about a mass ban.
 
-Still missing: browsing and searching members from settings, onboarding
-questions, new-member actions, and membership screening - which the
+Members are a tab on the server panel in both clients, read from the snapshot
+rather than fetched - the gateway keeps the list changing, and a cached copy
+would show members who have since left. Searching matches display name,
+username and nickname, because people search for whichever of the three they
+know.
+
+A member whose roles Discord never sent says so rather than "no roles": an
+omitted list is not an empty one, and the row would otherwise be describing the
+fetch rather than the member.
+
+The search query goes in the panel title rather than as a row in the list. A
+row for it would shift every index below, and the selection is what decides
+which member enter acts on.
+
+Still missing: onboarding questions, new-member actions, and membership screening - which the
 client detects as a participation restriction but can neither configure nor
 complete.
 

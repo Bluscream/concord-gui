@@ -876,3 +876,192 @@ fn role_display_order(left: &RoleState, right: &RoleState) -> std::cmp::Ordering
         .cmp(&left.position)
         .then(left.id.get().cmp(&right.id.get()))
 }
+
+/// One member as the settings list shows them.
+///
+/// A flat row rather than the full member state: the panel needs a name, a
+/// role count and whether they are a bot, and building that in each client is
+/// how the two would come to disagree about what a member looks like.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MemberRow {
+    pub user_id: Id<UserMarker>,
+    pub name: String,
+    pub is_bot: bool,
+    pub role_count: usize,
+    /// Whether Discord has actually said what roles they have. An omitted
+    /// list is not an empty one, and a row claiming "no roles" for a member
+    /// nobody has fetched would be describing the fetch, not the member.
+    pub roles_known: bool,
+}
+
+impl MemberRow {
+    pub fn summary(&self) -> String {
+        let mut parts = Vec::new();
+        if self.is_bot {
+            parts.push("bot".to_owned());
+        }
+        if self.roles_known {
+            parts.push(match self.role_count {
+                0 => "no roles".to_owned(),
+                1 => "1 role".to_owned(),
+                count => format!("{count} roles"),
+            });
+        } else {
+            parts.push("roles not loaded".to_owned());
+        }
+        parts.join(" - ")
+    }
+}
+
+impl DiscordState {
+    /// Every member of a guild, sorted by name, optionally filtered.
+    ///
+    /// Sorted here rather than in each client so the two agree on the order,
+    /// and case-insensitively because a list that puts every capitalised name
+    /// first reads as broken rather than as sorted.
+    pub fn member_rows(&self, guild_id: Id<GuildMarker>, query: &str) -> Vec<MemberRow> {
+        let query = query.trim().to_lowercase();
+        let mut rows: Vec<MemberRow> = self
+            .members_for_guild(guild_id)
+            .into_iter()
+            .filter(|member| {
+                if query.is_empty() {
+                    return true;
+                }
+                // Nickname and username as well as display name: people search
+                // for whichever of the three they know.
+                let fields = [
+                    Some(member.display_name.as_str()),
+                    member.username.as_deref(),
+                    member.nickname.as_deref(),
+                ];
+                fields
+                    .into_iter()
+                    .flatten()
+                    .any(|field| field.to_lowercase().contains(&query))
+            })
+            .map(|member| MemberRow {
+                user_id: member.user_id,
+                name: member.display_name.clone(),
+                is_bot: member.is_bot,
+                role_count: member.role_ids.len(),
+                roles_known: member.role_ids_known,
+            })
+            .collect();
+        rows.sort_by(|left, right| {
+            left.name
+                .to_lowercase()
+                .cmp(&right.name.to_lowercase())
+                // Ties broken by id so the order is stable between redraws;
+                // otherwise two members sharing a name would swap places.
+                .then(left.user_id.get().cmp(&right.user_id.get()))
+        });
+        rows
+    }
+}
+
+#[cfg(test)]
+mod member_row_tests {
+    use super::*;
+
+    fn row(role_count: usize, roles_known: bool, is_bot: bool) -> MemberRow {
+        MemberRow {
+            user_id: Id::new(1),
+            name: "someone".to_owned(),
+            is_bot,
+            role_count,
+            roles_known,
+        }
+    }
+
+    #[test]
+    fn a_member_whose_roles_never_arrived_says_so_rather_than_none() {
+        // An omitted role list is not an empty one, and "no roles" would be
+        // describing the fetch rather than the member.
+        assert!(row(0, false, false).summary().contains("not loaded"));
+        assert!(row(0, true, false).summary().contains("no roles"));
+    }
+
+    #[test]
+    fn role_counts_read_as_english() {
+        assert!(row(1, true, false).summary().contains("1 role"));
+        assert!(row(2, true, false).summary().contains("2 roles"));
+    }
+
+    #[test]
+    fn a_bot_is_marked_as_one() {
+        assert!(row(1, true, true).summary().starts_with("bot"));
+        assert!(!row(1, true, false).summary().contains("bot"));
+    }
+}
+
+#[cfg(test)]
+mod member_filter_tests {
+    use super::*;
+
+    #[test]
+    fn a_search_matches_any_of_the_three_names_a_member_has() {
+        // People search for whichever of display name, username or nickname
+        // they happen to know, and matching only one of the three makes the
+        // box look broken for the other two.
+        let member = GuildMemberState {
+            username: Some("someone_else".to_owned()),
+            nickname: Some("Sam".to_owned()),
+            ..GuildMemberState::test(Id::new(1), "Display Name")
+        };
+        let fields = [
+            Some(member.display_name.as_str()),
+            member.username.as_deref(),
+            member.nickname.as_deref(),
+        ];
+
+        for query in ["display", "someone", "sam"] {
+            assert!(
+                fields
+                    .into_iter()
+                    .flatten()
+                    .any(|field| field.to_lowercase().contains(query)),
+                "{query:?} should match"
+            );
+        }
+    }
+
+    #[test]
+    fn sorting_is_case_insensitive_and_stable() {
+        // A list that puts every capitalised name first reads as broken, and
+        // two members sharing a name must not swap places between redraws.
+        let mut rows = [
+            MemberRow {
+                user_id: Id::new(2),
+                name: "bob".to_owned(),
+                is_bot: false,
+                role_count: 0,
+                roles_known: true,
+            },
+            MemberRow {
+                user_id: Id::new(1),
+                name: "bob".to_owned(),
+                is_bot: false,
+                role_count: 0,
+                roles_known: true,
+            },
+            MemberRow {
+                user_id: Id::new(3),
+                name: "Alice".to_owned(),
+                is_bot: false,
+                role_count: 0,
+                roles_known: true,
+            },
+        ];
+        rows.sort_by(|left, right| {
+            left.name
+                .to_lowercase()
+                .cmp(&right.name.to_lowercase())
+                .then(left.user_id.get().cmp(&right.user_id.get()))
+        });
+
+        assert_eq!(rows[0].name, "Alice", "capitals sorted separately");
+        assert_eq!(rows[1].user_id, Id::new(1), "ties are not stable");
+        assert_eq!(rows[2].user_id, Id::new(2));
+    }
+}

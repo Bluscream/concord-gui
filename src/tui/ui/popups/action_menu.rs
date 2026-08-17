@@ -761,6 +761,11 @@ pub(in crate::tui::ui) fn render_server_management(
                 .iter()
                 .map(|event| format!("{} - {}", event.name, event.summary()))
                 .collect(),
+            ServerPanelTab::Members => state
+                .member_rows()
+                .iter()
+                .map(|member| format!("{} - {}", member.name, member.summary()))
+                .collect(),
             ServerPanelTab::Templates => state
                 .guild_templates()
                 .iter()
@@ -792,6 +797,10 @@ pub(in crate::tui::ui) fn render_server_management(
                 ServerPanelTab::Membership => "Loading",
                 ServerPanelTab::Events => "No scheduled events",
                 ServerPanelTab::Templates => "No templates",
+                // Members arrive over the gateway as the client learns about
+                // them, so an empty list here usually means "not yet" rather
+                // than "none".
+                ServerPanelTab::Members => "No members loaded yet",
             };
             vec![Line::from(Span::styled(
                 empty.to_owned(),
@@ -860,6 +869,9 @@ pub(in crate::tui::ui) fn render_server_management(
         // to be edited from the client that reads it - so the hint changes.
         None => (
             lines,
+            // The query goes in the hint rather than in the list: a row for it
+            // would shift every index below it, and the selection is what
+            // decides which member enter acts on.
             match tab {
                 ServerPanelTab::Invites => "tab to switch, r to reload, enter to revoke",
                 ServerPanelTab::Settings => "tab to switch, enter to change, a for the icon",
@@ -872,6 +884,7 @@ pub(in crate::tui::ui) fn render_server_management(
                 }
                 ServerPanelTab::Events => "tab, r reload, enter marks interested, N new, d cancels",
                 ServerPanelTab::Templates => "tab, r reload, enter syncs, N new, d deletes",
+                ServerPanelTab::Members => "tab, / search, enter bans",
                 ServerPanelTab::AuditLog => "tab to switch, r to reload",
             },
         ),
@@ -880,7 +893,13 @@ pub(in crate::tui::ui) fn render_server_management(
     render_action_menu(
         frame,
         area,
-        format!("{} ({hint})", tab.label()),
+        // The query goes in the title rather than as a row: a row for it would
+        // shift every index below, and the selection is what decides which
+        // member enter acts on.
+        match state.member_search_text() {
+            Some(query) => format!("{} matching \"{query}\" (esc ends the search)", tab.label()),
+            None => format!("{} ({hint})", tab.label()),
+        },
         lines,
         state
             .popup_list_scroll(SelectablePopupTarget::ServerManagement)

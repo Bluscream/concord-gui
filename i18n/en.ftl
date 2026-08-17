@@ -327,3 +327,5 @@ action-move-up = Move up
 action-move-down = Move down
 action-voice-status = Voice status
 status-not-a-voice-channel = Not a voice channel
+label-members = Members
+status-no-members-loaded = No members loaded yet

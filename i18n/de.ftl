@@ -325,3 +325,5 @@ action-move-up = Nach oben
 action-move-down = Nach unten
 action-voice-status = Sprachstatus
 status-not-a-voice-channel = Kein Sprachkanal
+label-members = Mitglieder
+status-no-members-loaded = Noch keine Mitglieder geladen

@@ -101,7 +101,7 @@ pub use guild::{
     CustomEmojiInfo, GuildFolder, GuildOnboardingInfo, GuildOnboardingMode, GuildVerificationLevel,
 };
 pub use ids::{Id, marker};
-pub use member::{MemberInfo, MemberOnboardingStatus, RoleInfo};
+pub use member::{MemberInfo, MemberOnboardingStatus, MemberRow, RoleInfo};
 pub use message::{
     AttachmentInfo, AttachmentMediaType, AttachmentUpdate, EmbedFieldInfo, EmbedInfo,
     InlinePreviewInfo, MESSAGE_FLAG_SUPPRESS_EMBEDS, MentionInfo, MessageInfo,

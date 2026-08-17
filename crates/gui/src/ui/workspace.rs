@@ -707,10 +707,11 @@ pub enum ServerTab {
     Membership,
     Events,
     Templates,
+    Members,
 }
 
 impl ServerTab {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Settings,
         Self::Invites,
         Self::Roles,
@@ -721,6 +722,7 @@ impl ServerTab {
         Self::Membership,
         Self::Events,
         Self::Templates,
+        Self::Members,
     ];
 
     pub fn label(self) -> String {
@@ -735,6 +737,7 @@ impl ServerTab {
             Self::Membership => t!("label-membership"),
             Self::Events => t!("label-events"),
             Self::Templates => t!("label-templates"),
+            Self::Members => t!("label-members"),
         }
     }
 
@@ -745,7 +748,8 @@ impl ServerTab {
     /// snapshot rather than asked for.
     fn load(self, guild_id: Id<marker::GuildMarker>) -> Vec<AppCommand> {
         match self {
-            Self::Settings | Self::Roles => Vec::new(),
+            // All three are read from the snapshot rather than fetched.
+            Self::Settings | Self::Roles | Self::Members => Vec::new(),
             Self::Invites => vec![AppCommand::LoadGuildInvites { guild_id }],
             Self::Emoji => vec![AppCommand::LoadGuildEmojis { guild_id }],
             Self::Sounds => vec![AppCommand::LoadSoundboardSounds {
@@ -788,6 +792,8 @@ pub struct ServerManagementView {
     /// `None` until the count has arrived - not the same as zero, and a panel
     /// showing them alike would offer to prune nobody.
     pub prune_count: Option<u64>,
+    /// What the members tab is filtered by.
+    pub member_query: String,
     pub events: Vec<concord::discord::ScheduledEvent>,
     pub templates: Vec<concord::discord::GuildTemplate>,
     /// The guild's settings as label and value, read from the snapshot.
@@ -4994,6 +5000,43 @@ impl Workspace {
         });
     }
 
+    /// The guild's members, filtered by the search box.
+    ///
+    /// Read from the snapshot on every draw rather than cached: the gateway
+    /// keeps changing it, and a cached copy would list members who have left.
+    fn server_member_rows(&self) -> Vec<concord::discord::MemberRow> {
+        let (Some(view), Some(state)) = (&self.server_management, &self.last_state) else {
+            return Vec::new();
+        };
+        state.member_rows(view.guild_id, &view.member_query)
+    }
+
+    pub fn ban_listed_member(&mut self, index: usize) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(view) = &self.server_management else {
+            return;
+        };
+        let rows = self.server_member_rows();
+        let Some(member) = rows.get(index) else {
+            return;
+        };
+        handle.send(AppCommand::BanMember {
+            guild_id: view.guild_id,
+            user_id: member.user_id,
+            label: member.name.clone(),
+            delete_message_seconds: 0,
+        });
+    }
+
+    pub fn open_listed_member(&mut self, index: usize) {
+        let rows = self.server_member_rows();
+        if let Some(member) = rows.get(index) {
+            self.open_profile(member.user_id);
+        }
+    }
+
     /// The membership tab's rows as label and value.
     fn membership_rows(&self) -> Vec<(String, String)> {
         let Some(view) = &self.server_management else {
@@ -5181,6 +5224,7 @@ impl Workspace {
             widget: None,
             prune_days: DEFAULT_PRUNE_DAYS,
             prune_count: None,
+            member_query: String::new(),
             events: Vec::new(),
             templates: Vec::new(),
             loading: true,
@@ -5275,6 +5319,7 @@ impl Workspace {
             ServerTab::Membership => view.welcome.is_some() && view.widget.is_some(),
             ServerTab::Events => !view.events.is_empty(),
             ServerTab::Templates => !view.templates.is_empty(),
+            ServerTab::Members => true,
         };
         view.loading = !already_loaded;
         let guild_id = view.guild_id;
@@ -9347,6 +9392,7 @@ impl Workspace {
                 .collect();
 
             let membership = self.membership_rows();
+            let members = self.server_member_rows();
             let (rows, empty_label) = match view.tab {
                 ServerTab::Events => (
                     view.events
@@ -9370,6 +9416,21 @@ impl Workspace {
                         })
                         .collect::<Vec<_>>(),
                     t!("status-no-events"),
+                ),
+                ServerTab::Members => (
+                    members
+                        .iter()
+                        .map(|member| overlay::ServerRow {
+                            primary: member.name.clone(),
+                            secondary: Some(member.summary()),
+                            action: Some(t!("action-ban")),
+                            secondary_action: Some(t!("action-view-profile")),
+                            tertiary_action: None,
+                        })
+                        .collect::<Vec<_>>(),
+                    // Members arrive over the gateway as the client learns
+                    // about them, so empty usually means "not yet".
+                    t!("status-no-members-loaded"),
                 ),
                 ServerTab::Templates => (
                     view.templates
@@ -9572,6 +9633,7 @@ impl Workspace {
                                 ServerTab::Sounds => workspace.delete_sound(index),
                                 ServerTab::AutoMod => workspace.delete_automod_rule(index),
                                 ServerTab::Events => workspace.remove_event(index),
+                                ServerTab::Members => workspace.ban_listed_member(index),
                                 ServerTab::Templates => workspace.delete_template(index),
                                 // The settings list has no destructive action;
                                 // its rows are edited through the second one.
@@ -9597,6 +9659,7 @@ impl Workspace {
                                 ServerTab::AutoMod => workspace.toggle_automod_rule(index),
                                 ServerTab::Membership => workspace.activate_membership_row(index),
                                 ServerTab::Events => workspace.start_event_edit(index),
+                                ServerTab::Members => workspace.open_listed_member(index),
                                 ServerTab::Templates => workspace.sync_template(index),
                                 // Only the name is editable here; verification
                                 // and boosts are shown but not changed yet.
@@ -12103,7 +12166,11 @@ mod membership_tab_tests {
         let guild_id = Id::new(1);
         for tab in ServerTab::ALL {
             let fetches = tab.load(guild_id);
-            let snapshot_tab = matches!(tab, ServerTab::Settings | ServerTab::Roles);
+            // Settings, roles and members are read from the snapshot.
+            let snapshot_tab = matches!(
+                tab,
+                ServerTab::Settings | ServerTab::Roles | ServerTab::Members
+            );
             assert_eq!(
                 fetches.is_empty(),
                 snapshot_tab,

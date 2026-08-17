@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 
 pub use list::GuildMemberListEntry;
 pub(in crate::discord) use list::GuildMemberListState;
-pub use state::{GuildMemberState, RoleState, TypingUserState};
+pub use state::{GuildMemberState, MemberRow, RoleState, TypingUserState};
 pub(in crate::discord) use state::{
     role_map, role_state, selected_member_role_color, selected_role_ids_color,
 };
