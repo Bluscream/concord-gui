@@ -734,6 +734,10 @@ pub enum AppEvent {
         metadata: Box<crate::discord::DiscoveryMetadata>,
         categories: Vec<crate::discord::DiscoveryCategory>,
     },
+    GuildStickersLoaded {
+        guild_id: Id<GuildMarker>,
+        stickers: Vec<crate::discord::GuildSticker>,
+    },
     OnboardingLoaded {
         guild_id: Id<GuildMarker>,
         onboarding: Box<crate::discord::Onboarding>,
@@ -1136,6 +1140,7 @@ define_app_event_kinds! {
     StageRequestFailed: AppEvent::StageRequestFailed { .. },
     DiscoverableGuildsLoaded: AppEvent::DiscoverableGuildsLoaded { .. },
     DiscoveryMetadataLoaded: AppEvent::DiscoveryMetadataLoaded { .. },
+    GuildStickersLoaded: AppEvent::GuildStickersLoaded { .. },
     OnboardingLoaded: AppEvent::OnboardingLoaded { .. },
     OnboardingCompleted: AppEvent::OnboardingCompleted { .. },
     ScheduledEventsLoaded: AppEvent::ScheduledEventsLoaded { .. },
@@ -2225,6 +2230,7 @@ impl AppEventKind {
             | AppEventKind::StageRequestFailed
             | AppEventKind::DiscoverableGuildsLoaded
             | AppEventKind::DiscoveryMetadataLoaded
+            | AppEventKind::GuildStickersLoaded
             | AppEventKind::OnboardingLoaded
             | AppEventKind::OnboardingCompleted
             | AppEventKind::ScheduledEventsLoaded

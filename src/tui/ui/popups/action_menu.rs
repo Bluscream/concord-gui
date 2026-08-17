@@ -761,6 +761,11 @@ pub(in crate::tui::ui) fn render_server_management(
                 .iter()
                 .map(|event| format!("{} - {}", event.name, event.summary()))
                 .collect(),
+            ServerPanelTab::Stickers => state
+                .guild_stickers()
+                .iter()
+                .map(|sticker| format!("{} - {}", sticker.name, sticker.summary()))
+                .collect(),
             ServerPanelTab::Discovery => state
                 .discovery_rows()
                 .into_iter()
@@ -838,6 +843,7 @@ pub(in crate::tui::ui) fn render_server_management(
                 ServerPanelTab::Members => "No members loaded yet",
                 ServerPanelTab::Onboarding => "This server asks nothing of new members",
                 ServerPanelTab::Discovery => "Loading",
+                ServerPanelTab::Stickers => "No stickers in this server",
             };
             vec![Line::from(Span::styled(
                 empty.to_owned(),
@@ -893,6 +899,14 @@ pub(in crate::tui::ui) fn render_server_management(
                 vec![Line::from(Span::raw(format!("Channel: {}", input.value())))],
                 "channel name - enter sets it, empty means no invite, esc cancels",
             ),
+            crate::tui::state::EmojiEdit::StickerRename(_) => (
+                vec![Line::from(Span::raw(format!("Name: {}", input.value())))],
+                "enter renames the sticker, esc cancels",
+            ),
+            crate::tui::state::EmojiEdit::NewSticker => (
+                vec![Line::from(Span::raw(format!("Sticker: {}", input.value())))],
+                "name | tags | path - PNG, APNG, GIF or Lottie JSON under 500 KiB",
+            ),
             crate::tui::state::EmojiEdit::NewTemplate => (
                 vec![Line::from(Span::raw(format!("Name: {}", input.value())))],
                 "enter creates the template, esc cancels",
@@ -914,6 +928,7 @@ pub(in crate::tui::ui) fn render_server_management(
                 ServerPanelTab::Settings => "tab to switch, enter to change, a for the icon",
                 ServerPanelTab::Roles => "tab, N new, p permissions, K/J move, enter delete",
                 ServerPanelTab::Emoji => "tab, r reload, a add, n rename, enter delete",
+                ServerPanelTab::Stickers => "tab, r reload, N add, n rename, enter delete",
                 ServerPanelTab::Sounds => "tab, r reload, n rename, enter delete",
                 ServerPanelTab::AutoMod => "tab, r reload, enter on/off, d delete",
                 ServerPanelTab::Membership => {

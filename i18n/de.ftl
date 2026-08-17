@@ -342,3 +342,4 @@ label-emoji-discoverability = Über Emojis auffindbar
 label-about = Beschreibung
 status-not-listed = keine - der Server wird nicht gelistet
 state-none = keine
+action-add-sticker = Sticker hinzufügen

@@ -34,10 +34,11 @@ pub enum ServerPanelTab {
     Onboarding,
     /// How the server lists itself in Discord's public directory.
     Discovery,
+    Stickers,
 }
 
 impl ServerPanelTab {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Settings,
         Self::Invites,
         Self::Roles,
@@ -51,6 +52,7 @@ impl ServerPanelTab {
         Self::Members,
         Self::Onboarding,
         Self::Discovery,
+        Self::Stickers,
     ];
 
     pub(in crate::tui) fn label(self) -> &'static str {
@@ -68,6 +70,7 @@ impl ServerPanelTab {
             Self::Members => "Members",
             Self::Onboarding => "Onboarding",
             Self::Discovery => "Discovery",
+            Self::Stickers => "Stickers",
         }
     }
 
@@ -94,6 +97,7 @@ impl ServerPanelTab {
             Self::Members => Vec::new(),
             Self::Onboarding => vec![AppCommand::LoadOnboarding { guild_id }],
             Self::Discovery => vec![AppCommand::LoadDiscoveryMetadata { guild_id }],
+            Self::Stickers => vec![AppCommand::LoadGuildStickers { guild_id }],
             Self::Membership => vec![
                 AppCommand::LoadWelcomeScreen { guild_id },
                 AppCommand::LoadGuildWidget { guild_id },
@@ -184,6 +188,11 @@ pub enum EmojiEdit {
     NewRole,
     /// A name for a new server template.
     NewTemplate,
+    /// A new name for the sticker at this index.
+    StickerRename(usize),
+    /// `name | tags | path` for a sticker to upload. One line for the same
+    /// reason a new event is one line: the panel has one field.
+    NewSticker,
     /// The line shown to people arriving at the server.
     WelcomeDescription,
     /// The channel the widget's invite points at, by name.
@@ -234,6 +243,7 @@ pub(in crate::tui) struct ServerManagementState {
     pub(super) onboarding_picked: Vec<u64>,
     pub(super) discovery: Option<crate::discord::DiscoveryMetadata>,
     pub(super) discovery_categories: Vec<crate::discord::DiscoveryCategory>,
+    pub(super) stickers: Vec<crate::discord::GuildSticker>,
     /// Set while the open tab's fetch is outstanding, so the popup can say so
     /// rather than looking like an empty list.
     pub(super) loading: bool,
@@ -298,6 +308,7 @@ impl ServerManagementState {
             ServerPanelTab::Members => self.member_rows.len(),
             ServerPanelTab::Onboarding => self.onboarding_rows.len(),
             ServerPanelTab::Discovery => DISCOVERY_ROWS.len(),
+            ServerPanelTab::Stickers => self.stickers.len(),
         }
     }
 
@@ -341,6 +352,7 @@ impl DashboardState {
                 onboarding_picked: Vec::new(),
                 discovery: None,
                 discovery_categories: Vec::new(),
+                stickers: Vec::new(),
                 loading: true,
                 error: None,
                 renaming: None,
@@ -415,6 +427,7 @@ impl DashboardState {
             ServerPanelTab::Members => true,
             ServerPanelTab::Onboarding => state.onboarding.is_some(),
             ServerPanelTab::Discovery => state.discovery.is_some(),
+            ServerPanelTab::Stickers => !state.stickers.is_empty(),
         };
         state.loading = !already_loaded;
         let guild_id = state.guild_id;
@@ -473,6 +486,22 @@ impl DashboardState {
                 (discovery_label(row).to_owned(), value)
             })
             .collect()
+    }
+
+    pub(in crate::tui) fn guild_stickers(&self) -> &[crate::discord::GuildSticker] {
+        self.popups
+            .server_management()
+            .map_or(&[], |state| state.stickers.as_slice())
+    }
+
+    pub(in crate::tui) fn set_guild_stickers(
+        &mut self,
+        stickers: Vec<crate::discord::GuildSticker>,
+    ) {
+        if let Some(state) = self.popups.server_management_mut() {
+            state.stickers = stickers;
+            state.loading = false;
+        }
     }
 
     pub(in crate::tui) fn set_discovery_metadata(
@@ -851,6 +880,34 @@ impl DashboardState {
                 }
                 return Some(AppCommand::ModifyGuildWidget { guild_id, widget });
             }
+            EmojiEdit::StickerRename(index) => {
+                let sticker_id = self.popups.server_management()?.stickers.get(index)?.id;
+                if text.is_empty() {
+                    return None;
+                }
+                return Some(AppCommand::RenameSticker {
+                    guild_id,
+                    sticker_id,
+                    name: text,
+                });
+            }
+            EmojiEdit::NewSticker => {
+                let mut parts = text.split('|').map(str::trim);
+                let name = parts.next().unwrap_or_default().to_owned();
+                let tags = parts.next().unwrap_or_default().to_owned();
+                // Anything after the second separator is part of the path,
+                // since a filename may itself contain one.
+                let path = parts.collect::<Vec<_>>().join(" | ");
+                if name.is_empty() || path.is_empty() {
+                    return None;
+                }
+                return Some(AppCommand::CreateSticker {
+                    guild_id,
+                    name,
+                    tags,
+                    path,
+                });
+            }
             EmojiEdit::NewTemplate => {
                 if text.is_empty() {
                     return None;
@@ -1139,6 +1196,17 @@ impl DashboardState {
         let guild_id = state.guild_id;
 
         match state.tab {
+            ServerPanelTab::Stickers => {
+                if index >= state.stickers.len() {
+                    return None;
+                }
+                let sticker = state.stickers.remove(index);
+                Some(AppCommand::DeleteSticker {
+                    guild_id,
+                    sticker_id: sticker.id,
+                    label: sticker.name,
+                })
+            }
             ServerPanelTab::Discovery => {
                 let row = *DISCOVERY_ROWS.get(index)?;
                 let metadata = state.discovery.as_mut()?;
@@ -1514,6 +1582,34 @@ impl DashboardState {
                 channels.iter().filter(|other| &other.name == name).count() == 1
             })
             .collect()
+    }
+
+    /// Start uploading a sticker, reusing the same field.
+    pub fn start_sticker_create(&mut self) {
+        if let Some(state) = self.popups.server_management_mut()
+            && state.tab == ServerPanelTab::Stickers
+        {
+            state.renaming = Some((EmojiEdit::NewSticker, TextInputState::default()));
+        }
+    }
+
+    /// Start renaming the highlighted sticker.
+    pub fn start_sticker_rename(&mut self) {
+        let Some(index) = self.selected_server_row() else {
+            return;
+        };
+        let Some(state) = self.popups.server_management_mut() else {
+            return;
+        };
+        if state.tab != ServerPanelTab::Stickers {
+            return;
+        }
+        let Some(current) = state.stickers.get(index).map(|s| s.name.clone()) else {
+            return;
+        };
+        let mut input = TextInputState::default();
+        input.set_value(current);
+        state.renaming = Some((EmojiEdit::StickerRename(index), input));
     }
 
     /// Start creating a server template, reusing the same field.

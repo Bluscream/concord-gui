@@ -849,6 +849,12 @@ fn the_server_panel_only_fetches_a_tab_it_has_not_seen() {
     );
     state.set_discovery_metadata(crate::discord::DiscoveryMetadata::default(), Vec::new());
 
+    assert_eq!(
+        state.next_server_tab(),
+        Some(AppCommand::LoadGuildStickers { guild_id })
+    );
+    state.set_guild_stickers(Vec::new());
+
     // Wrapping round lands on settings, which reads the snapshot and so
     // fetches nothing either.
     assert_eq!(state.next_server_tab(), None);

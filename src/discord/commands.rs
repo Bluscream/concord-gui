@@ -664,6 +664,26 @@ pub enum AppCommand {
         guild_id: Id<GuildMarker>,
         metadata: Box<crate::discord::DiscoveryMetadata>,
     },
+    LoadGuildStickers {
+        guild_id: Id<GuildMarker>,
+    },
+    /// Upload a sticker from a file on disk.
+    CreateSticker {
+        guild_id: Id<GuildMarker>,
+        name: String,
+        tags: String,
+        path: String,
+    },
+    RenameSticker {
+        guild_id: Id<GuildMarker>,
+        sticker_id: u64,
+        name: String,
+    },
+    DeleteSticker {
+        guild_id: Id<GuildMarker>,
+        sticker_id: u64,
+        label: String,
+    },
     LoadOnboarding {
         guild_id: Id<GuildMarker>,
     },

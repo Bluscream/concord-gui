@@ -344,3 +344,4 @@ label-emoji-discoverability = Findable by its emoji
 label-about = Description
 status-not-listed = none - the server is not listed
 state-none = none
+action-add-sticker = Add a sticker

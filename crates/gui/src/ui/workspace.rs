@@ -237,6 +237,10 @@ pub enum Prompt {
     BulkBan,
     /// The short line beside a voice channel's name.
     VoiceStatus(Id<marker::ChannelMarker>),
+    /// `name | tags | path` for a sticker to upload.
+    NewSticker,
+    /// A new name for the sticker at this index.
+    StickerRename(usize),
     /// Discovery search keywords, comma separated.
     DiscoveryKeywords,
     /// The server's long description in discovery.
@@ -271,6 +275,8 @@ impl Prompt {
             Prompt::EditEvent(_) => "Edit event",
             Prompt::BulkBan => "Ban by user id",
             Prompt::VoiceStatus(_) => "Voice status",
+            Prompt::NewSticker => "Add a sticker",
+            Prompt::StickerRename(_) => "Rename sticker",
             Prompt::DiscoveryKeywords => "Search keywords",
             Prompt::DiscoveryAbout => "Discovery description",
             Prompt::GuildName => "Rename server",
@@ -299,6 +305,8 @@ impl Prompt {
             Prompt::EditEvent(_) => "name | start | end | where - times as 2026-09-01T19:00:00Z",
             Prompt::BulkBan => "User ids, separated by anything - spaces, commas, newlines",
             Prompt::VoiceStatus(_) => "What is happening in there - empty clears it",
+            Prompt::NewSticker => "name | tags | path - PNG, APNG, GIF or Lottie under 500 KiB",
+            Prompt::StickerRename(_) => "Sticker name",
             Prompt::DiscoveryKeywords => "Comma separated, at most 10",
             Prompt::DiscoveryAbout => "Shown on the server's discovery page",
             Prompt::GuildName => "Server name",
@@ -721,10 +729,11 @@ pub enum ServerTab {
     Members,
     Onboarding,
     Discovery,
+    Stickers,
 }
 
 impl ServerTab {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Settings,
         Self::Invites,
         Self::Roles,
@@ -738,6 +747,7 @@ impl ServerTab {
         Self::Members,
         Self::Onboarding,
         Self::Discovery,
+        Self::Stickers,
     ];
 
     pub fn label(self) -> String {
@@ -755,6 +765,7 @@ impl ServerTab {
             Self::Members => t!("label-members"),
             Self::Onboarding => t!("label-onboarding"),
             Self::Discovery => t!("label-discovery"),
+            Self::Stickers => t!("label-stickers"),
         }
     }
 
@@ -769,6 +780,7 @@ impl ServerTab {
             Self::Settings | Self::Roles | Self::Members => Vec::new(),
             Self::Onboarding => vec![AppCommand::LoadOnboarding { guild_id }],
             Self::Discovery => vec![AppCommand::LoadDiscoveryMetadata { guild_id }],
+            Self::Stickers => vec![AppCommand::LoadGuildStickers { guild_id }],
             Self::Invites => vec![AppCommand::LoadGuildInvites { guild_id }],
             Self::Emoji => vec![AppCommand::LoadGuildEmojis { guild_id }],
             Self::Sounds => vec![AppCommand::LoadSoundboardSounds {
@@ -817,6 +829,7 @@ pub struct ServerManagementView {
     pub onboarding_picked: Vec<u64>,
     pub discovery: Option<concord::discord::DiscoveryMetadata>,
     pub discovery_categories: Vec<concord::discord::DiscoveryCategory>,
+    pub stickers: Vec<concord::discord::GuildSticker>,
     pub events: Vec<concord::discord::ScheduledEvent>,
     pub templates: Vec<concord::discord::GuildTemplate>,
     /// The guild's settings as label and value, read from the snapshot.
@@ -1980,6 +1993,8 @@ impl Workspace {
             Prompt::EditEvent(event_id) => self.submit_event_edit(event_id, &text),
             Prompt::BulkBan => self.submit_bulk_ban(&text),
             Prompt::VoiceStatus(channel_id) => self.set_voice_status(channel_id, &text),
+            Prompt::NewSticker => self.create_sticker(&text),
+            Prompt::StickerRename(index) => self.rename_sticker(index, text),
             Prompt::DiscoveryKeywords => self.set_discovery_text(Some(text), None),
             Prompt::DiscoveryAbout => self.set_discovery_text(None, Some(text)),
             Prompt::GuildName => self.rename_guild(text),
@@ -5094,6 +5109,81 @@ impl Workspace {
         self.resolve_invite(&code);
     }
 
+    /// Upload a sticker from one typed line.
+    fn create_sticker(&mut self, text: &str) {
+        let (Some(handle), Some(view)) = (&self.handle, &self.server_management) else {
+            return;
+        };
+        let mut parts = text.split('|').map(str::trim);
+        let name = parts.next().unwrap_or_default().to_owned();
+        let tags = parts.next().unwrap_or_default().to_owned();
+        // Anything after the second separator is part of the path, since a
+        // filename may itself contain one.
+        let path = parts.collect::<Vec<_>>().join(" | ");
+        if name.is_empty() || path.is_empty() {
+            return;
+        }
+        if let Some(problem) = concord::discord::sticker_name_problem(&name) {
+            self.model.status_line = problem.to_owned();
+            return;
+        }
+        handle.send(AppCommand::CreateSticker {
+            guild_id: view.guild_id,
+            name,
+            tags,
+            path,
+        });
+    }
+
+    pub fn start_sticker_rename(&mut self, index: usize) {
+        let Some(view) = &self.server_management else {
+            return;
+        };
+        let Some(sticker) = view.stickers.get(index) else {
+            return;
+        };
+        let mut text = Composer::default();
+        text.set_text(&sticker.name);
+        self.prompt = Some((Prompt::StickerRename(index), text));
+    }
+
+    fn rename_sticker(&mut self, index: usize, name: String) {
+        let (Some(handle), Some(view)) = (&self.handle, &self.server_management) else {
+            return;
+        };
+        let Some(sticker) = view.stickers.get(index) else {
+            return;
+        };
+        if let Some(problem) = concord::discord::sticker_name_problem(&name) {
+            self.model.status_line = problem.to_owned();
+            return;
+        }
+        handle.send(AppCommand::RenameSticker {
+            guild_id: view.guild_id,
+            sticker_id: sticker.id,
+            name,
+        });
+    }
+
+    pub fn delete_sticker(&mut self, index: usize) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(view) = &mut self.server_management else {
+            return;
+        };
+        if index >= view.stickers.len() {
+            return;
+        }
+        let guild_id = view.guild_id;
+        let sticker = view.stickers.remove(index);
+        handle.send(AppCommand::DeleteSticker {
+            guild_id,
+            sticker_id: sticker.id,
+            label: sticker.name,
+        });
+    }
+
     /// The discovery tab's rows as label and value.
     fn discovery_rows(&self) -> Vec<(String, String)> {
         let Some(view) = &self.server_management else {
@@ -5515,6 +5605,7 @@ impl Workspace {
             onboarding_picked: Vec::new(),
             discovery: None,
             discovery_categories: Vec::new(),
+            stickers: Vec::new(),
             events: Vec::new(),
             templates: Vec::new(),
             loading: true,
@@ -5612,6 +5703,7 @@ impl Workspace {
             ServerTab::Members => true,
             ServerTab::Onboarding => view.onboarding.is_some(),
             ServerTab::Discovery => view.discovery.is_some(),
+            ServerTab::Stickers => !view.stickers.is_empty(),
         };
         view.loading = !already_loaded;
         let guild_id = view.guild_id;
@@ -7980,6 +8072,15 @@ impl Workspace {
                     view.discovery_categories = categories.clone();
                 }
             }
+            AppEvent::GuildStickersLoaded { guild_id, stickers } => {
+                if let Some(view) = &mut self.server_management
+                    && view.guild_id == *guild_id
+                {
+                    view.loading = false;
+                    view.error = None;
+                    view.stickers = stickers.clone();
+                }
+            }
             AppEvent::OnboardingLoaded {
                 guild_id,
                 onboarding,
@@ -9748,6 +9849,19 @@ impl Workspace {
                         .collect::<Vec<_>>(),
                     t!("status-no-events"),
                 ),
+                ServerTab::Stickers => (
+                    view.stickers
+                        .iter()
+                        .map(|sticker| overlay::ServerRow {
+                            primary: sticker.name.clone(),
+                            secondary: Some(sticker.summary()),
+                            action: Some(t!("action-delete")),
+                            secondary_action: Some(t!("action-rename")),
+                            tertiary_action: None,
+                        })
+                        .collect::<Vec<_>>(),
+                    t!("status-no-stickers"),
+                ),
                 ServerTab::Discovery => (
                     discovery
                         .iter()
@@ -9978,6 +10092,7 @@ impl Workspace {
             let add_template_label = t!("action-new-template");
             let add_event_label = t!("action-new-event");
             let finish_onboarding_label = t!("action-finish-onboarding");
+            let add_sticker_label = t!("action-add-sticker");
             return Some(overlay::scrim().child(overlay::server_management_view(
                 overlay::ServerPanel {
                     tabs: &tabs,
@@ -9997,6 +10112,7 @@ impl Workspace {
                         ServerTab::Templates => Some(add_template_label.as_str()),
                         ServerTab::Events => Some(add_event_label.as_str()),
                         ServerTab::Onboarding => Some(finish_onboarding_label.as_str()),
+                        ServerTab::Stickers => Some(add_sticker_label.as_str()),
                         _ => None,
                     },
                 },
@@ -10024,6 +10140,7 @@ impl Workspace {
                                 ServerTab::AutoMod => workspace.delete_automod_rule(index),
                                 ServerTab::Events => workspace.remove_event(index),
                                 ServerTab::Members => workspace.ban_listed_member(index),
+                                ServerTab::Stickers => workspace.delete_sticker(index),
                                 ServerTab::Templates => workspace.delete_template(index),
                                 // The settings list has no destructive action;
                                 // its rows are edited through the second one.
@@ -10053,6 +10170,7 @@ impl Workspace {
                                 ServerTab::Membership => workspace.activate_membership_row(index),
                                 ServerTab::Events => workspace.start_event_edit(index),
                                 ServerTab::Members => workspace.open_listed_member(index),
+                                ServerTab::Stickers => workspace.start_sticker_rename(index),
                                 ServerTab::Onboarding => workspace.pick_onboarding_answer(index),
                                 ServerTab::Discovery => workspace.activate_discovery_row(index),
                                 ServerTab::Templates => workspace.sync_template(index),
@@ -10115,6 +10233,9 @@ impl Workspace {
                                         return;
                                     }
                                     ServerTab::Events => (Prompt::NewEvent, Composer::default()),
+                                    ServerTab::Stickers => {
+                                        (Prompt::NewSticker, Composer::default())
+                                    }
                                     ServerTab::Settings => (Prompt::GuildIcon, Composer::default()),
                                     _ => (Prompt::EmojiImage, Composer::default()),
                                 });

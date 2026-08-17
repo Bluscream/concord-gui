@@ -225,6 +225,10 @@ fn push_dashboard_effect(event: AppEvent, ctx: &mut EffectContext<'_>) {
             ctx.state.set_discovery_metadata(*metadata, categories);
             return;
         }
+        AppEvent::GuildStickersLoaded { stickers, .. } => {
+            ctx.state.set_guild_stickers(stickers);
+            return;
+        }
         AppEvent::OnboardingLoaded { onboarding, .. } => {
             ctx.state.set_onboarding(*onboarding);
             return;

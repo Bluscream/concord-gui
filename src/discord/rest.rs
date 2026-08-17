@@ -43,6 +43,7 @@ mod membership;
 mod privacy;
 mod sessions;
 mod stage;
+mod stickers;
 
 pub use account::{
     AccountEdit, BackupCode, MAX_USERNAME_CHARS, MIN_PASSWORD_CHARS, MIN_USERNAME_CHARS,
@@ -91,6 +92,7 @@ pub use stage::{
     MAX_STAGE_TOPIC_CHARS, StageAction, StageInstance, StagePrivacy, stage_action_for,
     stage_topic_problem,
 };
+pub use stickers::{GuildSticker, sticker_content_type, sticker_name_problem};
 mod messages;
 mod moderation;
 mod notification_settings;

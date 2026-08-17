@@ -945,7 +945,11 @@ fn handle_server_management_key(state: &mut DashboardState, key: KeyEvent) -> Op
         // Reload is worth a key of its own: these lists go stale the moment
         // somebody else changes something, and nothing tells this client.
         KeyCode::Char('r') => return state.reload_server_management(),
-        KeyCode::Char('n') => state.start_emoji_rename(),
+        KeyCode::Char('n') => {
+            // Each is a no-op on the tabs it does not belong to.
+            state.start_emoji_rename();
+            state.start_sticker_rename();
+        }
         // 'a' adds: an emoji on that tab, the icon on settings. Both are the
         // panel's one file-path field, told apart by which tab is open.
         KeyCode::Char('a') => {
@@ -964,6 +968,7 @@ fn handle_server_management_key(state: &mut DashboardState, key: KeyEvent) -> Op
         // question has one.
         KeyCode::Char('S') => return state.submit_onboarding(),
         KeyCode::Char('N') => {
+            state.start_sticker_create();
             state.start_role_create();
             state.start_template_create();
             state.start_event_create();

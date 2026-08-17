@@ -1,7 +1,6 @@
 # concord-gui — rewrite plan
 
-Replacing concord's terminal front-end with a native GPUI interface, while
-consuming the existing core unmodified.
+Making a GUI as alternative to concord's terminal front-end with a native GPUI interface
 
 ## Premise
 

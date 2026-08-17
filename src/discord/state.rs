@@ -1023,6 +1023,7 @@ impl DiscordState {
             | AppEvent::StageRequestFailed { .. }
             | AppEvent::DiscoverableGuildsLoaded { .. }
             | AppEvent::DiscoveryMetadataLoaded { .. }
+            | AppEvent::GuildStickersLoaded { .. }
             | AppEvent::OnboardingLoaded { .. }
             | AppEvent::OnboardingCompleted { .. }
             | AppEvent::ScheduledEventsLoaded { .. }

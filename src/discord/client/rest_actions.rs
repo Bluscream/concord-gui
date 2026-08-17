@@ -354,6 +354,40 @@ impl DiscordClient {
         self.rest.discovery_categories().await
     }
 
+    pub async fn guild_stickers(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+    ) -> Result<Vec<crate::discord::GuildSticker>> {
+        self.rest.guild_stickers(guild_id).await
+    }
+
+    pub async fn create_sticker(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+        name: &str,
+        tags: &str,
+        path: &str,
+    ) -> Result<()> {
+        self.rest.create_sticker(guild_id, name, tags, path).await
+    }
+
+    pub async fn rename_sticker(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+        sticker_id: u64,
+        name: &str,
+    ) -> Result<()> {
+        self.rest.rename_sticker(guild_id, sticker_id, name).await
+    }
+
+    pub async fn delete_sticker(
+        &self,
+        guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,
+        sticker_id: u64,
+    ) -> Result<()> {
+        self.rest.delete_sticker(guild_id, sticker_id).await
+    }
+
     pub async fn onboarding(
         &self,
         guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,

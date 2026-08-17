@@ -95,8 +95,9 @@ Ordered by how often a daily user would meet it.
 
 ### Server administration
 
-16. **Stickers** - `GET`/`POST /guilds/{}/stickers`, and edit and delete. The
-    only expression type with no management at all; emoji and sounds are done.
+16. ~~**Stickers**~~ - done, in both clients. Upload is multipart rather than a
+    data URI, unlike emoji: Discord accepts Lottie JSON here, which is not an
+    image and has no sensible data-URI content type.
 17. **Webhooks** - `GET`/`POST /channels/{}/webhooks`, `GET /guilds/{}/webhooks`,
     and edit and delete. Entirely absent.
 18. **Integrations** - `GET /guilds/{}/integrations`, delete and sync. Which bots
@@ -205,7 +206,14 @@ Ordered by how often a daily user would meet it.
 
 ## What to do first
 
-The three that are missing and would be noticed within a day of real use:
-stickers (16), webhooks (17) and pinned-message browsing (1). Reporting (54) is
-the one to do on principle rather than frequency - it is a safety feature, and
-its absence is the kind a client should not ship with.
+Stickers (16) are done. Next by the same measure: webhooks (17) and
+pinned-message browsing (1). Reporting (54) is the one to do on principle
+rather than frequency - it is a safety feature, and its absence is the kind a
+client should not ship with.
+
+The mobile-only group (1-5) belongs in the core even though neither front end
+here will surface all of it: a future mobile GUI would need it, and a core that
+only serves the clients in this repository is a core that has to be reopened
+later. `scripts/unreachable-commands.py` will report those commands as
+unreachable, which is correct and should be recorded in its allow-list with the
+reason, not silenced.

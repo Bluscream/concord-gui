@@ -305,6 +305,21 @@ impl StickerFormat {
         }
     }
 
+    /// How the format reads in a management list.
+    ///
+    /// An unrecognised format reads as PNG, for the reason `from_wire` gives:
+    /// it is the safest guess for rendering. That does mean a management row
+    /// can name a format the sticker does not have, which is the cost of not
+    /// carrying the raw value through.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Png => "PNG",
+            Self::Apng => "animated PNG",
+            Self::Lottie => "Lottie",
+            Self::Gif => "GIF",
+        }
+    }
+
     /// Whether this can be shown as an image at all.
     pub const fn is_image(self) -> bool {
         !matches!(self, Self::Lottie)

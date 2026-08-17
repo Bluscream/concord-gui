@@ -731,6 +731,34 @@ impl CommandDispatcher {
                 )
                 .await;
             }
+            AppCommand::LoadGuildStickers { guild_id } => {
+                message_commands::load_guild_stickers(self.client.clone(), guild_id).await;
+            }
+            AppCommand::CreateSticker {
+                guild_id,
+                name,
+                tags,
+                path,
+            } => {
+                message_commands::create_sticker(self.client.clone(), guild_id, name, tags, path)
+                    .await;
+            }
+            AppCommand::RenameSticker {
+                guild_id,
+                sticker_id,
+                name,
+            } => {
+                message_commands::rename_sticker(self.client.clone(), guild_id, sticker_id, name)
+                    .await;
+            }
+            AppCommand::DeleteSticker {
+                guild_id,
+                sticker_id,
+                label,
+            } => {
+                message_commands::delete_sticker(self.client.clone(), guild_id, sticker_id, label)
+                    .await;
+            }
             AppCommand::LoadOnboarding { guild_id } => {
                 message_commands::load_onboarding(self.client.clone(), guild_id).await;
             }

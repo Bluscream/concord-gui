@@ -525,6 +525,62 @@ pub(super) async fn modify_discovery_metadata(
     load_discovery_metadata(client, guild_id).await;
 }
 
+pub(super) async fn load_guild_stickers(client: DiscordClient, guild_id: GuildId) {
+    match client.guild_stickers(guild_id).await {
+        Ok(stickers) => {
+            client
+                .publish_event(AppEvent::GuildStickersLoaded { guild_id, stickers })
+                .await;
+        }
+        Err(error) => {
+            log_app_error("stickers failed", &error);
+            client
+                .publish_event(AppEvent::MembershipRequestFailed {
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
+pub(super) async fn create_sticker(
+    client: DiscordClient,
+    guild_id: GuildId,
+    name: String,
+    tags: String,
+    path: String,
+) {
+    if let Err(error) = client.create_sticker(guild_id, &name, &tags, &path).await {
+        report_moderation_failure(&client, "uploading", &name, &error).await;
+        return;
+    }
+    load_guild_stickers(client, guild_id).await;
+}
+
+pub(super) async fn rename_sticker(
+    client: DiscordClient,
+    guild_id: GuildId,
+    sticker_id: u64,
+    name: String,
+) {
+    if let Err(error) = client.rename_sticker(guild_id, sticker_id, &name).await {
+        report_moderation_failure(&client, "renaming", &name, &error).await;
+        return;
+    }
+    load_guild_stickers(client, guild_id).await;
+}
+
+pub(super) async fn delete_sticker(
+    client: DiscordClient,
+    guild_id: GuildId,
+    sticker_id: u64,
+    label: String,
+) {
+    if let Err(error) = client.delete_sticker(guild_id, sticker_id).await {
+        report_moderation_failure(&client, "deleting", &label, &error).await;
+    }
+}
+
 pub(super) async fn load_onboarding(client: DiscordClient, guild_id: GuildId) {
     match client.onboarding(guild_id).await {
         Ok(onboarding) => {
