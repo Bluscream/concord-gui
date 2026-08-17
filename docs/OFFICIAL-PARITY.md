@@ -376,9 +376,9 @@ Core work whose interface has not been built yet. A legitimate intermediate
 state, but only while it is written down - `docs/PARITY.md` has the sweep that
 regenerates this list, and the two must be kept in step.
 
-- `ReorderChannels`, `ReorderRoles` - both want drag-and-drop or a move
-  control, which neither client has a pattern for yet. The REST side sends all
-  moved rows in one request, since position decides who wins a permission
-  conflict and a sequence of single moves would briefly hand out the wrong
-  permissions.
-- `SetVoiceChannelStatus` - small, and grouped with the other smaller gaps.
+Nothing. Every command the core defines is reachable from both clients.
+
+Roles and channels move by nudging rather than dragging: `K`/`J` on the roles
+tab, `<leader> m k` / `<leader> m j` on the channel list, and buttons in the
+GUI. Only the two rows that changed are sent, since sending the whole list
+writes an audit entry for every row that did not move.

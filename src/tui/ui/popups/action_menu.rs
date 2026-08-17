@@ -863,7 +863,7 @@ pub(in crate::tui::ui) fn render_server_management(
             match tab {
                 ServerPanelTab::Invites => "tab to switch, r to reload, enter to revoke",
                 ServerPanelTab::Settings => "tab to switch, enter to change, a for the icon",
-                ServerPanelTab::Roles => "tab to switch, N new, p permissions, enter delete",
+                ServerPanelTab::Roles => "tab, N new, p permissions, K/J move, enter delete",
                 ServerPanelTab::Emoji => "tab, r reload, a add, n rename, enter delete",
                 ServerPanelTab::Sounds => "tab, r reload, n rename, enter delete",
                 ServerPanelTab::AutoMod => "tab, r reload, enter on/off, d delete",

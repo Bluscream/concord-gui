@@ -11,6 +11,33 @@ use super::ModalPopup;
 use super::{ChannelActionMenuState, SelectablePopupState, SelectablePopupTarget};
 
 impl DashboardState {
+    /// Move a channel up or down among its siblings.
+    ///
+    /// Siblings only: a channel moved past its category boundary would leave
+    /// the category, which is a different action from reordering within one.
+    pub fn move_channel(&mut self, channel_id: Id<ChannelMarker>, up: bool) -> Option<AppCommand> {
+        let channel = self.discord.cache.channel(channel_id)?;
+        let guild_id = channel.guild_id?;
+        let parent = channel.parent_id;
+        let ordered: Vec<_> = self
+            .discord
+            .cache
+            .channels_for_guild(Some(guild_id))
+            .into_iter()
+            .filter(|sibling| sibling.parent_id == parent && !sibling.is_category())
+            .map(|sibling| sibling.id)
+            .collect();
+        let index = ordered.iter().position(|id| *id == channel_id)?;
+        let positions = crate::discord::moved_positions(&ordered, index, up);
+        if positions.is_empty() {
+            return None;
+        }
+        Some(AppCommand::ReorderChannels {
+            guild_id,
+            positions,
+        })
+    }
+
     pub(in crate::tui) fn open_selected_channel_actions(&mut self) {
         if let Some(menu) = self.selected_channel_action_context() {
             self.popups.set_modal(ModalPopup::ChannelActionMenu(menu));

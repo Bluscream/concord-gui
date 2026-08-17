@@ -239,3 +239,117 @@ mod tests {
         assert_eq!(name.chars().count(), MAX_ROLE_NAME_CHARS);
     }
 }
+
+/// Move one item in an ordered list, returning every position that changed.
+///
+/// Discord takes a whole set of positions rather than a move, and it decides
+/// permission conflicts by position - so the intermediate states of a sequence
+/// of single moves would briefly hand out the wrong permissions. Sending them
+/// together avoids that.
+///
+/// Generic over the id because roles and channels have the same problem and
+/// the same endpoint shape; writing it twice is how the two would drift.
+pub fn moved_positions<T: Copy + Eq>(ordered: &[T], index: usize, up: bool) -> Vec<(T, u32)> {
+    if index >= ordered.len() {
+        return Vec::new();
+    }
+    let swap_with = if up {
+        // Already at the top, so there is nowhere to go. Returning an empty
+        // list rather than the unchanged order means no request is sent at
+        // all, instead of one that writes the same positions back.
+        match index.checked_sub(1) {
+            Some(target) => target,
+            None => return Vec::new(),
+        }
+    } else {
+        let target = index + 1;
+        if target >= ordered.len() {
+            return Vec::new();
+        }
+        target
+    };
+
+    let mut moved = ordered.to_vec();
+    moved.swap(index, swap_with);
+
+    // Only the two that changed. Sending the whole list would work, but it
+    // writes an audit-log entry for every row that did not move.
+    moved
+        .into_iter()
+        .enumerate()
+        .filter(|(position, id)| ordered.get(*position) != Some(id))
+        .map(|(position, id)| (id, u32::try_from(position).unwrap_or(u32::MAX)))
+        .collect()
+}
+
+#[cfg(test)]
+mod reorder_tests {
+    use super::*;
+
+    #[test]
+    fn moving_up_swaps_with_the_row_above() {
+        let ordered = ['a', 'b', 'c'];
+        assert_eq!(moved_positions(&ordered, 1, true), vec![('b', 0), ('a', 1)]);
+    }
+
+    #[test]
+    fn moving_down_swaps_with_the_row_below() {
+        let ordered = ['a', 'b', 'c'];
+        assert_eq!(
+            moved_positions(&ordered, 1, false),
+            vec![('c', 1), ('b', 2)]
+        );
+    }
+
+    #[test]
+    fn only_the_two_rows_that_moved_are_sent() {
+        // Sending the whole list works, but writes an audit-log entry for
+        // every row that did not move - which buries the one that did.
+        let ordered = ['a', 'b', 'c', 'd', 'e'];
+        assert_eq!(moved_positions(&ordered, 3, true).len(), 2);
+    }
+
+    #[test]
+    fn moving_off_either_end_sends_nothing() {
+        // No request at all, rather than one that writes the same positions
+        // back - which would be an audit entry saying nothing happened.
+        let ordered = ['a', 'b', 'c'];
+        assert!(moved_positions(&ordered, 0, true).is_empty());
+        assert!(moved_positions(&ordered, 2, false).is_empty());
+        assert!(moved_positions(&ordered, 9, true).is_empty());
+    }
+
+    #[test]
+    fn a_single_row_list_cannot_move() {
+        let ordered = ['a'];
+        assert!(moved_positions(&ordered, 0, true).is_empty());
+        assert!(moved_positions(&ordered, 0, false).is_empty());
+    }
+
+    #[test]
+    fn up_then_down_returns_to_the_original_order() {
+        // The two must be exact inverses, or repeated nudging would drift the
+        // list somewhere nobody asked for.
+        let ordered = ['a', 'b', 'c', 'd'];
+        let mut current = ordered.to_vec();
+        for (id, position) in moved_positions(&current, 2, true) {
+            let from = current
+                .iter()
+                .position(|c| *c == id)
+                .expect("id is present");
+            let item = current.remove(from);
+            current.insert(position as usize, item);
+        }
+        assert_eq!(current, vec!['a', 'c', 'b', 'd']);
+
+        for (id, position) in moved_positions(&current, 1, false) {
+            let from = current
+                .iter()
+                .position(|c| *c == id)
+                .expect("id is present");
+            let item = current.remove(from);
+            current.insert(position as usize, item);
+        }
+        assert_eq!(current, ordered.to_vec());
+    }
+}

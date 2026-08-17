@@ -939,6 +939,10 @@ fn handle_server_management_key(state: &mut DashboardState, key: KeyEvent) -> Op
         }
         // 'n' means a new role on the roles tab and a rename on emoji; both
         // are the panel's one text field, told apart by which tab is open.
+        // Moving a role, which is a permission change: position decides who
+        // wins a conflict, so it is not folded into enter.
+        KeyCode::Char('K') => return state.move_selected_role(true),
+        KeyCode::Char('J') => return state.move_selected_role(false),
         KeyCode::Char('N') => {
             state.start_role_create();
             state.start_template_create();

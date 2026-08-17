@@ -169,6 +169,11 @@ pub fn apply(workspace: &mut Workspace, action: UiAction, cx: &mut Context<Works
         UiAction::OpenPrivacy => workspace.open_privacy(),
         UiAction::OpenAccess => workspace.open_access(),
         UiAction::OpenAccount => workspace.open_account(),
+        UiAction::MoveChannelUp | UiAction::MoveChannelDown => {
+            if let Some(channel_id) = workspace.nav.channel {
+                workspace.move_channel(channel_id, action == UiAction::MoveChannelUp);
+            }
+        }
 
         // ---- panels -------------------------------------------------------
         UiAction::OpenNotificationInbox => workspace.open_inbox(),

@@ -247,6 +247,15 @@ neither; `CreateChannelInvite` and `RenameEmoji` were later reachable only from
 the GUI; `DeleteAutoModRule` was GUI-only while the TUI's AutoMod tab could
 only toggle. All were found this way rather than by noticing.
 
+It also finds a second thing the variant check cannot: a function that builds a
+command but that nothing calls. The variant is still mentioned, so the sweep
+would report the client as reaching it, and clippy stays quiet because these
+functions are `pub` and so never dead code. Both `mark_event_interest` and
+`move_role` sat orphaned this way after a button was rewired.
+
+Verify the check still works by orphaning a call on purpose and running it -
+a check nobody has seen fail is a check nobody should trust.
+
 This replaced a pair of shell one-liners whose regex was `^    [A-Z][A-Za-z]+ \{`
 - which matches only struct variants. Three unit variants (`LoadConnections`,
 `ModifyConnection`, `DeleteConnection`) sat unreachable without the check

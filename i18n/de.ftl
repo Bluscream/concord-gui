@@ -321,3 +321,7 @@ status-not-a-stage = Kein Bühnenkanal
 warning-bulk-ban = Dies sperrt alle Ausgewählten in einer Anfrage. Discord sperrt, wen es kann, und meldet den Rest - ein Fehler wirkt also auf alle, bevor eine Antwort zurückkommt.
 status-no-user-ids = Darin sind keine Benutzer-IDs
 action-bulk-ban = Nach ID sperren
+action-move-up = Nach oben
+action-move-down = Nach unten
+action-voice-status = Sprachstatus
+status-not-a-voice-channel = Kein Sprachkanal

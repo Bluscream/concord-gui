@@ -45,6 +45,44 @@ def reaches(client_path: str, variant: str) -> bool:
     return bool(found)
 
 
+def orphaned_senders(client_path: str) -> list[str]:
+    """Functions that build a command but that nothing calls.
+
+    The variant check above cannot see these: the command is still mentioned,
+    so the sweep reports the client as reaching it. Clippy cannot either, since
+    these functions are `pub` and so never dead code. Both `mark_event_interest`
+    and `move_role` sat orphaned this way after a button was rewired.
+    """
+    orphans = []
+    for path in subprocess.run(
+        f"grep -rl 'AppCommand::' {client_path} --include=*.rs",
+        shell=True, capture_output=True, text=True,
+    ).stdout.split():
+        # Tests build commands to assert on them; that is not a send path.
+        if "demo.rs" in path or "/tests/" in path or path.endswith("tests.rs"):
+            continue
+        source = open(path).read()
+        # Everything from the first #[cfg(test)] onward is test code.
+        source = source.split("#[cfg(test)]")[0]
+        # Only functions that name a command; the rest are not senders.
+        for name, body in re.findall(
+            r"\n    (?:pub )?fn ([a-z_]+)\s*\([^)]*\)[^{]*\{(.*?)\n    \}",
+            source, re.S,
+        ):
+            if "AppCommand::" not in body:
+                continue
+            # A call, or a bare reference - a function passed as a pointer is
+            # reached just as surely as one that is called outright.
+            calls = subprocess.run(
+                f"grep -rn '[.:]{name}\\b' {client_path} --include=*.rs"
+                f" | grep -v ' fn {name}'",
+                shell=True, capture_output=True, text=True,
+            ).stdout.strip()
+            if not calls:
+                orphans.append(f"{path.split('/')[-1]}::{name}")
+    return orphans
+
+
 def main() -> int:
     problems = []
     for variant in variants():
@@ -56,6 +94,10 @@ def main() -> int:
         elif not all(reached.values()):
             only = next(name for name, ok in reached.items() if ok)
             problems.append(f"{only} only: {variant}")
+
+    for client, path in CLIENTS.items():
+        for orphan in orphaned_senders(path):
+            problems.append(f"{client} builds a command nowhere calls: {orphan}")
 
     for problem in problems:
         print(problem)

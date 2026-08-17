@@ -323,3 +323,7 @@ status-not-a-stage = Not a stage channel
 warning-bulk-ban = This bans everyone selected in one request. Discord bans who it can and reports the rest, so a mistake here is applied to all of them before anything comes back.
 status-no-user-ids = No user ids in that
 action-bulk-ban = Ban by id
+action-move-up = Move up
+action-move-down = Move down
+action-voice-status = Voice status
+status-not-a-voice-channel = Not a voice channel

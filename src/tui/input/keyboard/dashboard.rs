@@ -181,6 +181,12 @@ pub(super) fn execute_ui_action(
         UiAction::OpenPrivacy => state.open_privacy(),
         UiAction::OpenAccess => state.open_access(),
         UiAction::OpenAccount => state.open_account(),
+        UiAction::MoveChannelUp | UiAction::MoveChannelDown => {
+            let up = action == UiAction::MoveChannelUp;
+            return state
+                .selected_channel_id()
+                .and_then(|channel_id| state.move_channel(channel_id, up));
+        }
         UiAction::VoiceLeave => return state.leave_current_voice_channel_command(),
         _ => {}
     }

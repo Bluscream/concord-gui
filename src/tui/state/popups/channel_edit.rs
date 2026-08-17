@@ -34,6 +34,10 @@ pub enum ChannelField {
     Slowmode,
     Nsfw,
     UserLimit,
+    /// The short line beside a voice channel's name - what is happening in it
+    /// right now. Not the channel topic: this one is transient, and Discord
+    /// clears it when the channel empties.
+    VoiceStatus,
     /// A stage's topic: what the live session is about.
     ///
     /// Not the channel's topic. A stage channel has both - the channel's
@@ -53,6 +57,7 @@ impl ChannelField {
             // Named for what it is, so it is not mistaken for the channel
             // topic two rows above it.
             Self::StageTopic => "Stage topic (empty ends the stage)",
+            Self::VoiceStatus => "Voice status (empty clears it)",
         }
     }
 }
@@ -65,6 +70,7 @@ pub(in crate::tui) struct ChannelEditState {
     /// The live stage's topic, for a stage channel. Separate from the channel
     /// topic above, which describes the room rather than the session.
     pub(super) stage_topic: TextInputState,
+    pub(super) voice_status: TextInputState,
     /// Whether a stage is already running here.
     ///
     /// Decides between starting and changing: Discord's start endpoint fails
@@ -99,6 +105,7 @@ impl ChannelEditState {
             ChannelField::Slowmode => self.slowmode.value().to_owned(),
             ChannelField::UserLimit => self.user_limit.value().to_owned(),
             ChannelField::StageTopic => self.stage_topic.value().to_owned(),
+            ChannelField::VoiceStatus => self.voice_status.value().to_owned(),
             ChannelField::Nsfw => if self.nsfw { "yes" } else { "no" }.to_owned(),
         }
     }
@@ -110,6 +117,7 @@ impl ChannelEditState {
             ChannelField::Slowmode => Some(&mut self.slowmode),
             ChannelField::UserLimit => Some(&mut self.user_limit),
             ChannelField::StageTopic => Some(&mut self.stage_topic),
+            ChannelField::VoiceStatus => Some(&mut self.voice_status),
             ChannelField::Nsfw => None,
         }
     }
@@ -133,6 +141,7 @@ impl DashboardState {
                 name: TextInputState::default(),
                 topic: TextInputState::default(),
                 stage_topic: TextInputState::default(),
+                voice_status: TextInputState::default(),
                 stage_running: false,
                 slowmode: TextInputState::default(),
                 user_limit: TextInputState::default(),
@@ -165,6 +174,9 @@ impl DashboardState {
         let mut fields = vec![ChannelField::Name];
         if channel.is_voice() {
             fields.push(ChannelField::UserLimit);
+            // Only a voice channel has one, so it appears here rather than
+            // being an always-present control that does nothing elsewhere.
+            fields.push(ChannelField::VoiceStatus);
             if channel.is_stage() {
                 fields.push(ChannelField::StageTopic);
             }
@@ -181,6 +193,7 @@ impl DashboardState {
                 name,
                 topic,
                 stage_topic: TextInputState::default(),
+                voice_status: TextInputState::default(),
                 stage_running: false,
                 slowmode,
                 user_limit,
@@ -323,7 +336,21 @@ impl DashboardState {
             .and_then(|index| values.get(index).cloned());
         // Read before the popup closes: which endpoint to use depends on it.
         let running = state.stage_running;
+        let voice_status = fields
+            .iter()
+            .position(|field| *field == ChannelField::VoiceStatus)
+            .and_then(|index| values.get(index).cloned());
         self.close_channel_edit();
+
+        if let (Some(status), ChannelEditPurpose::Edit { channel_id }) = (voice_status, &purpose) {
+            let status = status.trim().to_owned();
+            self.enqueue_pending_command(AppCommand::SetVoiceChannelStatus {
+                channel_id: *channel_id,
+                // Empty clears it, which is a real thing to want and distinct
+                // from leaving the status alone.
+                status: (!status.is_empty()).then_some(status),
+            });
+        }
 
         if let (Some(topic), ChannelEditPurpose::Edit { channel_id }) = (stage_topic, &purpose) {
             let topic = topic.trim().to_owned();
@@ -429,9 +456,9 @@ impl DashboardState {
                         edit.user_limit = Some(limit);
                     }
                 }
-                // Not part of the channel edit: a stage topic is a separate
-                // endpoint, and is sent alongside rather than folded in.
-                ChannelField::StageTopic => {}
+                // Neither is part of the channel edit: both are separate
+                // endpoints, and are sent alongside rather than folded in.
+                ChannelField::StageTopic | ChannelField::VoiceStatus => {}
                 ChannelField::Nsfw => {
                     if nsfw != channel.nsfw.unwrap_or(false) {
                         edit.nsfw = Some(nsfw);

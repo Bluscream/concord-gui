@@ -131,6 +131,10 @@ define_ui_actions! {
     OpenPrivacy => ("Privacy and safety", &[&[Leader, Char('y')]], None),
     OpenAccess => ("Sessions and apps", &[&[Leader, Char('k')]], None),
     OpenAccount => ("Account settings", &[&[Leader, Char('u')]], None),
+    // On the list rather than in the action menu: a reorder is a nudge you
+    // repeat, and reopening a menu between each one is the wrong shape.
+    MoveChannelUp => ("Move channel up", &[&[Leader, Char('m'), Char('k')]], None),
+    MoveChannelDown => ("Move channel down", &[&[Leader, Char('m'), Char('j')]], None),
     VoiceLeave => ("leave voice", &[&[Leader, Char('v'), Char('l')]], None),
 }
 

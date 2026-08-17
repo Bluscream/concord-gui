@@ -362,6 +362,36 @@ impl DashboardState {
         self.queue_tab_fetches(tab, guild_id)
     }
 
+    /// Move the highlighted role up or down.
+    ///
+    /// Position decides which role wins a permission conflict, so this is a
+    /// permission change rather than a cosmetic one - which is why it is on
+    /// its own keys rather than folded into enter.
+    pub fn move_selected_role(&mut self, up: bool) -> Option<AppCommand> {
+        let index = self.selected_server_row()?;
+        let state = self.popups.server_management_mut()?;
+        if state.tab != ServerPanelTab::Roles {
+            return None;
+        }
+        let guild_id = state.guild_id;
+        let ordered: Vec<_> = state.roles.iter().map(|role| role.id).collect();
+        let positions = crate::discord::moved_positions(&ordered, index, up);
+        if positions.is_empty() {
+            return None;
+        }
+
+        // Moved locally too, so the list does not sit still until the refetch
+        // arrives - which reads as a key that did nothing.
+        let swap_with = if up { index - 1 } else { index + 1 };
+        state.roles.swap(index, swap_with);
+        state.selection.select(swap_with);
+
+        Some(AppCommand::ReorderRoles {
+            guild_id,
+            positions,
+        })
+    }
+
     /// Delete the highlighted AutoMod rule.
     ///
     /// Separate from enter, which toggles: deleting throws away the keyword

@@ -77,7 +77,7 @@ pub use privacy::{
     DmScanLevel, FriendDiscovery, FriendSources, PrivacyEdit, PrivacySetting, PrivacyState,
 };
 pub use relationships::friend_request_target;
-pub use roles::{MAX_ROLE_NAME_CHARS, RoleEdit};
+pub use roles::{MAX_ROLE_NAME_CHARS, RoleEdit, moved_positions};
 pub use sessions::{AuthSession, AuthorisedApp};
 pub use soundboard::{
     MAX_SOUND_NAME_CHARS, MIN_SOUND_NAME_CHARS, SoundboardSound, is_valid_sound_name,

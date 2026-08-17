@@ -232,6 +232,8 @@ pub enum Prompt {
     EditEvent(u64),
     /// User ids to ban in one request.
     BulkBan,
+    /// The short line beside a voice channel's name.
+    VoiceStatus(Id<marker::ChannelMarker>),
     /// A new name for the open guild.
     GuildName,
     /// A path to an image to use as the guild icon.
@@ -261,6 +263,7 @@ impl Prompt {
             Prompt::StageTopic(_) => "Stage topic",
             Prompt::EditEvent(_) => "Edit event",
             Prompt::BulkBan => "Ban by user id",
+            Prompt::VoiceStatus(_) => "Voice status",
             Prompt::GuildName => "Rename server",
             Prompt::GuildIcon => "Server icon",
             Prompt::ChannelTopic(_) => "Channel topic",
@@ -286,6 +289,7 @@ impl Prompt {
             Prompt::StageTopic(_) => "What the session is about - empty ends the stage",
             Prompt::EditEvent(_) => "name | start | end | where - times as 2026-09-01T19:00:00Z",
             Prompt::BulkBan => "User ids, separated by anything - spaces, commas, newlines",
+            Prompt::VoiceStatus(_) => "What is happening in there - empty clears it",
             Prompt::GuildName => "Server name",
             Prompt::GuildIcon => "Path to a PNG, JPEG, GIF or WebP",
             Prompt::ChannelTopic(_) => "Topic - empty clears it",
@@ -1932,6 +1936,7 @@ impl Workspace {
             Prompt::StageTopic(channel_id) => self.submit_stage_topic(channel_id, &text),
             Prompt::EditEvent(event_id) => self.submit_event_edit(event_id, &text),
             Prompt::BulkBan => self.submit_bulk_ban(&text),
+            Prompt::VoiceStatus(channel_id) => self.set_voice_status(channel_id, &text),
             Prompt::GuildName => self.rename_guild(text),
             Prompt::GuildIcon => self.set_guild_icon(text),
             Prompt::ChannelTopic(channel_id) => self.set_channel_topic(channel_id, text),
@@ -4278,6 +4283,25 @@ impl Workspace {
                     destructive: false,
                 },
                 overlay::ContextItem {
+                    label: t!("action-move-up"),
+                    disabled_reason: (!manage).then(|| t!("status-no-permission")),
+                    destructive: false,
+                },
+                overlay::ContextItem {
+                    label: t!("action-move-down"),
+                    disabled_reason: (!manage).then(|| t!("status-no-permission")),
+                    destructive: false,
+                },
+                overlay::ContextItem {
+                    label: t!("action-voice-status"),
+                    disabled_reason: if !self.is_voice_channel(channel_id) {
+                        Some(t!("status-not-a-voice-channel"))
+                    } else {
+                        (!manage).then(|| t!("status-no-permission"))
+                    },
+                    destructive: false,
+                },
+                overlay::ContextItem {
                     label: t!("action-stage-topic"),
                     disabled_reason: if !self.is_stage_channel(channel_id) {
                         Some(t!("status-not-a-stage"))
@@ -4362,7 +4386,12 @@ impl Workspace {
                 self.deleting_channel = Some(channel_id);
             }
             (ContextSubject::Channel(channel_id), 3) => self.request_to_speak(channel_id),
-            (ContextSubject::Channel(channel_id), 4) => self.open_stage_topic(channel_id),
+            (ContextSubject::Channel(channel_id), 4) => self.move_channel(channel_id, true),
+            (ContextSubject::Channel(channel_id), 5) => self.move_channel(channel_id, false),
+            (ContextSubject::Channel(channel_id), 6) => {
+                self.prompt = Some((Prompt::VoiceStatus(channel_id), Composer::default()));
+            }
+            (ContextSubject::Channel(channel_id), 7) => self.open_stage_topic(channel_id),
             (ContextSubject::Guild(guild_id), 0) => {
                 self.toggle_guild_direct_messages(guild_id);
             }
@@ -4813,6 +4842,80 @@ impl Workspace {
     }
 
     /// Open the server-management panel on the given tab.
+    /// Move a role up or down.
+    ///
+    /// Position decides which role wins a permission conflict, so this is a
+    /// permission change rather than a cosmetic one.
+    pub fn move_role(&mut self, index: usize, up: bool) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let Some(view) = &mut self.server_management else {
+            return;
+        };
+        let guild_id = view.guild_id;
+        let ordered: Vec<_> = view.roles.iter().map(|role| role.id).collect();
+        let positions = concord::discord::moved_positions(&ordered, index, up);
+        if positions.is_empty() {
+            return;
+        }
+        // Moved locally too, so the list does not sit still until the refetch
+        // arrives - which reads as a button that did nothing.
+        let swap_with = if up { index - 1 } else { index + 1 };
+        view.roles.swap(index, swap_with);
+        handle.send(AppCommand::ReorderRoles {
+            guild_id,
+            positions,
+        });
+    }
+
+    /// Move a channel up or down among its siblings.
+    ///
+    /// Siblings only: a channel moved past its category boundary would leave
+    /// the category, which is a different action from reordering within one.
+    pub fn move_channel(&mut self, channel_id: Id<marker::ChannelMarker>, up: bool) {
+        let (Some(handle), Selection::Guild(guild_id), Some(state)) =
+            (&self.handle, self.nav.selection, &self.last_state)
+        else {
+            return;
+        };
+        let Some(channel) = state.channel(channel_id) else {
+            return;
+        };
+        let parent = channel.parent_id;
+        let ordered: Vec<_> = state
+            .channels_for_guild(Some(guild_id))
+            .into_iter()
+            .filter(|sibling| sibling.parent_id == parent && !sibling.is_category())
+            .map(|sibling| sibling.id)
+            .collect();
+        let Some(index) = ordered.iter().position(|id| *id == channel_id) else {
+            return;
+        };
+        let positions = concord::discord::moved_positions(&ordered, index, up);
+        if positions.is_empty() {
+            return;
+        }
+        handle.send(AppCommand::ReorderChannels {
+            guild_id,
+            positions,
+        });
+    }
+
+    /// Set the short line beside a voice channel's name.
+    fn set_voice_status(&mut self, channel_id: Id<marker::ChannelMarker>, text: &str) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let status = text.trim().to_owned();
+        handle.send(AppCommand::SetVoiceChannelStatus {
+            channel_id,
+            // Empty clears it, which is a real thing to want and distinct from
+            // leaving the status alone.
+            status: (!status.is_empty()).then_some(status),
+        });
+    }
+
     /// Cancel an event still to come, or delete one already finished.
     ///
     /// Cancelling first: Discord keeps a cancelled event visible so people who
@@ -5453,6 +5556,14 @@ impl Workspace {
             return;
         };
         handle.send(AppCommand::CreateRole { guild_id, name });
+    }
+
+    /// Whether this channel takes a voice status, which only a voice one does.
+    fn is_voice_channel(&self, channel_id: Id<marker::ChannelMarker>) -> bool {
+        self.model
+            .channels
+            .iter()
+            .any(|channel| channel.id == Some(channel_id) && channel.kind.joins_voice())
     }
 
     /// Whether this channel is a stage, which is what makes the stage rows
@@ -9323,7 +9434,12 @@ impl Workspace {
                             )),
                             action: Some(t!("action-delete")),
                             secondary_action: Some(t!("action-permissions")),
-                            tertiary_action: None,
+                            // Position decides which role wins a permission
+                            // conflict, so moving one is a permission change.
+                            // Up only: moving a role down is moving the one
+                            // below it up, and two buttons on every row for
+                            // one idea is a row nobody reads.
+                            tertiary_action: Some(t!("action-move-up")),
                         })
                         .collect(),
                     t!("status-no-roles"),
@@ -9504,9 +9620,10 @@ impl Workspace {
                     let tab = view.tab;
                     move |index, cx: &mut gpui::App| {
                         entity.update(cx, |workspace, cx| {
-                            // Only events have a third action.
-                            if tab == ServerTab::Events {
-                                workspace.mark_event_interest(index);
+                            match tab {
+                                ServerTab::Events => workspace.mark_event_interest(index),
+                                ServerTab::Roles => workspace.move_role(index, true),
+                                _ => {}
                             }
                             cx.notify();
                         });
