@@ -70,7 +70,19 @@ impl Session {
         auth_session: DiscordAuthSession,
         warnings: Vec<String>,
     ) -> Result<Self> {
-        let client = DiscordClient::new_with_auth_session(token, auth_session)?;
+        let client = {
+            // Only the storage build mutates it, and a build without that
+            // feature would warn about a `mut` nothing uses.
+            #[cfg_attr(not(feature = "storage"), allow(unused_mut))]
+            let mut client = DiscordClient::new_with_auth_session(token, auth_session)?;
+            // Opened before the gateway, so the first events already have
+            // somewhere to go rather than being the ones that get dropped.
+            #[cfg(feature = "storage")]
+            if let Ok(options) = config::load_options() {
+                client.open_store(&options.storage).await;
+            }
+            client
+        };
         let effects = client.take_effects();
         let snapshots = client.subscribe_snapshots();
         let (commands_tx, commands_rx) = mpsc::channel(64);

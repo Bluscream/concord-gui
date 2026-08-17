@@ -81,6 +81,12 @@ pub struct DiscordClient {
     token: String,
     fingerprint: Arc<ClientFingerprint>,
     rest: DiscordRest,
+    /// The offline cache, when one opened. `None` when caching is off or the
+    /// store could not be reached - the client worked without one before this
+    /// existed, and refusing to start because a shared server is down would
+    /// make the optional backend worse than no backend.
+    #[cfg(feature = "storage")]
+    store: Option<std::sync::Arc<crate::storage::Store>>,
     effects_rx: Arc<Mutex<Option<mpsc::Receiver<SequencedAppEvent>>>>,
     snapshots_tx: watch::Sender<SnapshotRevision>,
     state: Arc<RwLock<DiscordState>>,
@@ -162,6 +168,8 @@ impl DiscordClient {
             token,
             fingerprint,
             rest,
+            #[cfg(feature = "storage")]
+            store: None,
             effects_rx: Arc::new(Mutex::new(Some(effects_rx))),
             snapshots_tx,
             state,
@@ -248,7 +256,85 @@ impl DiscordClient {
         {
             self.spawn_soundboard_playback(*sound_id, *volume);
         }
+        // Cached here for the same reason: the one funnel every event passes
+        // through, so the two front ends cannot drift about what is on disk.
+        #[cfg(feature = "storage")]
+        self.cache_event(&event);
         self.event_publisher.publish(event).await;
+    }
+
+    /// Open the offline cache, if one is configured.
+    ///
+    /// Separate from construction because it is async and may block on a
+    /// network round trip to a shared server. A store that will not open is
+    /// left as `None` rather than reported: the client worked without one
+    /// before this existed, and refusing to start because somebody's MariaDB
+    /// is down would make the optional backend worse than no backend.
+    #[cfg(feature = "storage")]
+    pub async fn open_store(&mut self, options: &crate::config::StorageOptions) {
+        if !options.enabled {
+            return;
+        }
+        let backend = if options.dsn.trim().is_empty() {
+            let Some(path) = crate::support::paths::state_dir().map(|dir| dir.join("cache.db"))
+            else {
+                return;
+            };
+            crate::storage::StorageBackend::Sqlite { path }
+        } else {
+            match crate::storage::StorageBackend::parse(&options.dsn) {
+                Ok(backend) => backend,
+                Err(problem) => {
+                    // Named rather than swallowed: a typo in a connection
+                    // string is a thing somebody can fix, unlike a store that
+                    // is simply unreachable.
+                    crate::logging::error(
+                        "storage",
+                        format!("could not read the storage setting: {problem}"),
+                    );
+                    return;
+                }
+            }
+        };
+
+        match crate::storage::Store::open(&backend).await {
+            Ok(store) => {
+                crate::logging::debug("storage", format!("caching to {backend}"));
+                self.store = Some(std::sync::Arc::new(store));
+            }
+            Err(error) => crate::logging::debug(
+                "storage",
+                format!("no cache this run, {backend} could not be opened: {error}"),
+            ),
+        }
+    }
+
+    /// Write what an event says to the offline cache.
+    ///
+    /// Spawned rather than awaited: a slow or unreachable store must not hold
+    /// up the event, which the in-memory state has already taken. A cache is
+    /// an optimisation, and one that blocked the client would be worse than
+    /// none.
+    #[cfg(feature = "storage")]
+    fn cache_event(&self, event: &AppEvent) {
+        let Some(store) = self.store.clone() else {
+            return;
+        };
+        let writes = crate::storage::persist::writes_for(event);
+        if writes.is_empty() {
+            return;
+        }
+        tokio::spawn(async move {
+            for write in writes {
+                if let Err(error) = store.apply(&write).await {
+                    // Logged once and dropped. Retrying would need a queue,
+                    // and the next event carrying the same entity rewrites it
+                    // anyway - the cache is allowed to be behind.
+                    crate::logging::debug("storage", format!("could not cache an event: {error}"));
+                    break;
+                }
+            }
+        });
     }
 
     fn spawn_soundboard_playback(&self, sound_id: u64, volume: f64) {

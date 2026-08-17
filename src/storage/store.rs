@@ -44,9 +44,21 @@ pub struct CachedMessage {
 }
 
 /// The cache.
+///
+/// `Debug` prints the dialect and nothing else: a pool holds the connection
+/// string, and for a shared store that string carries a password.
 pub struct Store {
     pool: AnyPool,
     dialect: Dialect,
+}
+
+impl std::fmt::Debug for Store {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Store")
+            .field("dialect", &self.dialect)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Store {
@@ -250,6 +262,25 @@ impl Store {
         // oldest-first because that is reading order.
         messages.reverse();
         Ok(messages)
+    }
+
+    /// Apply what an event asked for.
+    ///
+    /// Errors are returned rather than logged here so the caller decides: a
+    /// cache write that fails is not a reason to drop the event, which the
+    /// in-memory state has already taken.
+    pub async fn apply(&self, write: &super::persist::Write) -> Result<(), sqlx::Error> {
+        use super::persist::Write;
+        match write {
+            Write::User(user) => self.upsert_user(user).await,
+            Write::Guild(guild) => self.upsert_guild(guild).await,
+            Write::Message(message) => self.upsert_message(message).await,
+            Write::Tombstone {
+                table,
+                id,
+                revision,
+            } => self.tombstone(table, id, *revision).await,
+        }
     }
 
     /// Mark a row deleted rather than removing it.
@@ -485,6 +516,84 @@ mod tests {
 
         store.upsert_user(&user(1, "sam")).await.expect("write");
         assert!(store.user("1").await.expect("read").is_some());
+    }
+
+    #[tokio::test]
+    async fn applying_a_message_write_caches_the_author_too() {
+        // End to end: the translation says both, and the store takes both.
+        let store = store().await;
+        let message = crate::discord::MessageInfo {
+            message_id: crate::discord::ids::Id::new(100),
+            channel_id: crate::discord::ids::Id::new(200),
+            author_id: crate::discord::ids::Id::new(300),
+            author: "sam".to_owned(),
+            content: Some("hello".to_owned()),
+            ..Default::default()
+        };
+        for write in super::super::persist::message_writes(&message) {
+            store.apply(&write).await.expect("apply");
+        }
+
+        assert_eq!(
+            store
+                .user("300")
+                .await
+                .expect("read")
+                .expect("row")
+                .username,
+            Some("sam".to_owned())
+        );
+        assert_eq!(
+            store.recent_messages("200", 10).await.expect("read").len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn an_edit_replaces_the_message_it_edits() {
+        // The revision rule and the guard together, which is where a mistake
+        // in either would show as an edit that silently did not stick.
+        let store = store().await;
+        let original = CachedMessage {
+            id: "1".to_owned(),
+            channel_id: "c".to_owned(),
+            content: Some("before".to_owned()),
+            revision: super::super::persist::message_revision(None),
+            ..CachedMessage::default()
+        };
+        let edited = CachedMessage {
+            content: Some("after".to_owned()),
+            edited_timestamp: Some("2026-09-01T19:00:00+00:00".to_owned()),
+            revision: super::super::persist::message_revision(Some("2026-09-01T19:00:00+00:00")),
+            ..original.clone()
+        };
+
+        store.upsert_message(&original).await.expect("write");
+        store.upsert_message(&edited).await.expect("write");
+
+        let messages = store.recent_messages("c", 10).await.expect("read");
+        assert_eq!(messages[0].content.as_deref(), Some("after"));
+
+        // And the original arriving late does not undo the edit, which is the
+        // case two clients make likely.
+        store.upsert_message(&original).await.expect("write");
+        let messages = store.recent_messages("c", 10).await.expect("read");
+        assert_eq!(
+            messages[0].content.as_deref(),
+            Some("after"),
+            "a late original undid an edit"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_store_never_prints_its_connection_string() {
+        // For a shared backend that string carries a password, and `{:?}` on
+        // the client that holds the store is what a debug log formats.
+        let store = store().await;
+        let printed = format!("{store:?}");
+        assert!(printed.contains("Store"));
+        assert!(!printed.contains("password"));
+        assert!(!printed.contains("mysql://"));
     }
 
     #[test]

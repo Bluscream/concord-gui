@@ -230,10 +230,17 @@ Still to do, in order:
    runtime choice: a shared store is something somebody points an already-built
    client at. Behind a `storage` feature, on by default - a build that never
    caches should not pay for a database driver.
-2. **Write on gateway events.** The store reads and writes; what is missing is
-   calling it as `GUILD_CREATE`, `MESSAGE_CREATE` and the rest arrive. Needs a
-   revision for each: Discord's `version` where there is one, and for messages
-   the id, which is monotonic and never changes.
+2. ~~**Write on gateway events.**~~ Done for messages, their authors, guilds
+   and message deletes, hooked into `publish_event` - the one funnel every
+   event passes through, so the two front ends cannot drift about what is on
+   disk. Channels and members still write nothing.
+
+   Revisions come from Discord, never from a client's clock. A message uses
+   the digits of its edit timestamp, because an id is monotonic but never
+   changes, so an edit would tie with the message it edits and the guard would
+   keep whichever landed first. A guild uses Discord's `version` where the
+   parsed event carries one, which it does not yet - zero until then, meaning
+   every write wins.
 3. **Read at startup, before the gateway.** The point of the whole thing.
    `DiscordState` fills from the store, then the gateway corrects it.
 4. **Deletion.** Tombstones are in the schema and nothing writes them.
