@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.11] - 2026-08-17
+
+### Bug Fixes
+
+- _(linux)_ Restore portable DMA-BUF ioctl handling by @chojs23
+
+### Features
+
+- X11 broadcasting (#324) by @chojs23
+
+### Miscellaneous Tasks
+
+- Add an all-features musl compile check by @chojs23
+- Fix the musl CI target volume mount by @chojs23
+
+### Performance
+
+- _(capture)_ Import linear DMA-BUF through EGL instead of reading it on the CPU (#317) in [#317](https://github.com/chojs23/concord/pull/317) by @4EEZE
+
+### New Contributors
+
+- @4EEZE made their first contribution in [#317](https://github.com/chojs23/concord/pull/317)
+
 ## [2.5.10] - 2026-08-15
 
 ### Bug Fixes
