@@ -79,7 +79,8 @@ jobs:
         run: |
           docker run --rm \
             --volume "$GITHUB_WORKSPACE:/workspace:ro" \
-            --volume /workspace/target \
+            --volume /target \
+            --env CARGO_TARGET_DIR=/target \
             --workdir /workspace \
             rust:1.90-alpine3.22 \
             sh -c '
