@@ -652,6 +652,10 @@ pub enum AppCommand {
         label: String,
     },
     /// What a server asks new members.
+    /// Servers Discord will show to anyone, optionally matching a query.
+    LoadDiscoverableGuilds {
+        query: String,
+    },
     LoadOnboarding {
         guild_id: Id<GuildMarker>,
     },

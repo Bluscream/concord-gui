@@ -31,6 +31,7 @@ mod automod;
 mod channel_management;
 mod connection;
 mod connections;
+mod discovery;
 mod events;
 mod forum;
 mod guild_management;
@@ -52,6 +53,7 @@ pub use channel_management::{
     MAX_VOICE_USER_LIMIT, NewChannelKind, OverwriteTarget,
 };
 pub use connections::{Connection, ConnectionVisibility};
+pub use discovery::DiscoverableGuild;
 pub use events::{
     EventLocation, EventStatus, GuildTemplate, NewEvent, NewEventLocation, NewEventProblem,
     ScheduledEvent, parse_new_event,

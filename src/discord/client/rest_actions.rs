@@ -326,6 +326,13 @@ impl DiscordClient {
             .await
     }
 
+    pub async fn discoverable_guilds(
+        &self,
+        query: &str,
+    ) -> Result<Vec<crate::discord::DiscoverableGuild>> {
+        self.rest.discoverable_guilds(query).await
+    }
+
     pub async fn onboarding(
         &self,
         guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,

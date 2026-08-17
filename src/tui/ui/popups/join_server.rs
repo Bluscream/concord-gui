@@ -16,12 +16,12 @@ pub(in crate::tui::ui) fn render_join_server(
         return;
     };
 
-    let lines = join_server_lines(join);
+    let lines = join_server_lines(join, state.selected_discovered_index());
     let popup = join_server_popup_area(area, lines.len());
     render_modal_paragraph(frame, popup, "Join a server", lines);
 }
 
-fn join_server_lines(join: &JoinServerState) -> Vec<Line<'static>> {
+fn join_server_lines(join: &JoinServerState, selected: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
     match join.preview() {
@@ -88,11 +88,42 @@ fn join_server_lines(join: &JoinServerState) -> Vec<Line<'static>> {
                 )
             } else {
                 Span::styled(
-                    "Paste an invite link or code - Enter look up | Esc cancel".to_owned(),
+                    "Invite link or code - Enter look up | Tab search Discord | Esc cancel"
+                        .to_owned(),
                     theme::current().style(theme::HighlightGroup::Hint),
                 )
             };
             lines.push(Line::from(hint));
+
+            // The public list, for finding a server nobody has sent you a
+            // link to - the one way in that does not need an invite first.
+            if join.is_discovering() {
+                lines.push(Line::from(Span::styled(
+                    "Searching Discord's public servers...".to_owned(),
+                    theme::current().style(theme::HighlightGroup::Loading),
+                )));
+            } else if !join.discovered().is_empty() {
+                lines.push(Line::from(""));
+                for (index, guild) in join.discovered().iter().enumerate() {
+                    lines.push(Line::from(Span::styled(
+                        format!(
+                            "{} {} - {}",
+                            if index == selected { ">" } else { " " },
+                            guild.name,
+                            guild.summary()
+                        ),
+                        theme::current().style(if index == selected {
+                            theme::HighlightGroup::Strong
+                        } else {
+                            theme::HighlightGroup::Normal
+                        }),
+                    )));
+                }
+                lines.push(Line::from(Span::styled(
+                    "Up/Down choose | F2 join the highlighted server".to_owned(),
+                    theme::current().style(theme::HighlightGroup::Hint),
+                )));
+            }
         }
     }
 

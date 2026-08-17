@@ -333,3 +333,4 @@ status-needs-an-answer = braucht eine Antwort
 action-pick = Wählen
 action-unpick = Abwählen
 action-finish-onboarding = Einführung abschließen
+status-searching-discovery = Durchsuche Discords öffentliche Server...

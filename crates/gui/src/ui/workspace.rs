@@ -1052,6 +1052,9 @@ pub struct Workspace {
     /// Privacy and safety. No fetch of its own - the values arrive with READY,
     /// so the panel is either open or not.
     pub privacy_open: bool,
+    /// Servers Discord will show anyone, for finding one without a link.
+    pub discovered: Vec<concord::discord::DiscoverableGuild>,
+    pub discovering: bool,
     /// The stage running in the channel whose topic is being edited, if any.
     /// Decides which of Discord's three stage endpoints the form uses.
     pub stage_running: Option<concord::discord::StageInstance>,
@@ -1204,6 +1207,8 @@ impl Workspace {
             soundboard: None,
             connections: None,
             privacy_open: false,
+            discovered: Vec::new(),
+            discovering: false,
             stage_running: None,
             access: None,
             account: None,
@@ -1956,7 +1961,18 @@ impl Workspace {
             Prompt::EmojiImage => self.create_emoji(text),
             Prompt::NewChannel => self.create_channel(text),
             Prompt::ChannelName(channel_id) => self.rename_channel(channel_id, text),
-            Prompt::InviteCode => self.resolve_invite(&text),
+            Prompt::InviteCode => {
+                // A link resolves; anything else is treated as a search of
+                // Discord's public list. People have one or the other, and
+                // asking which before they type is a question with no good
+                // answer.
+                if concord::discord::invite_code_from(&text).is_some() {
+                    self.resolve_invite(&text);
+                } else if let Some(handle) = &self.handle {
+                    self.discovering = true;
+                    handle.send(AppCommand::LoadDiscoverableGuilds { query: text });
+                }
+            }
             Prompt::ForumPostTitle => {
                 // The body is the composer's content, so a post is written the
                 // same way a message is and the title is the only extra step.
@@ -5006,6 +5022,23 @@ impl Workspace {
         });
     }
 
+    /// Join a discovered server by its vanity invite.
+    ///
+    /// Through the ordinary invite path rather than a discovery endpoint of
+    /// its own: that path is already written and tested, and a server with no
+    /// vanity code cannot be joined from here - which its row says.
+    pub fn join_discovered_guild(&mut self, index: usize) {
+        let Some(code) = self
+            .discovered
+            .get(index)
+            .and_then(|guild| guild.vanity_url_code.clone())
+        else {
+            return;
+        };
+        self.discovered.clear();
+        self.resolve_invite(&code);
+    }
+
     /// The onboarding form as rows, rebuilt from what has been picked.
     fn onboarding_rows(&self) -> Vec<concord::discord::OnboardingRow> {
         let Some(view) = &self.server_management else {
@@ -7733,6 +7766,10 @@ impl Workspace {
                     composer.set_text(&instance.topic);
                 }
             }
+            AppEvent::DiscoverableGuildsLoaded { guilds } => {
+                self.discovering = false;
+                self.discovered = guilds.clone();
+            }
             AppEvent::OnboardingLoaded {
                 guild_id,
                 onboarding,
@@ -10040,10 +10077,34 @@ impl Workspace {
 
         if let Some((prompt, text)) = &self.prompt {
             let (title, placeholder) = (prompt.title(), prompt.placeholder());
+            // The public list sits under the invite box, so a name typed there
+            // finds something rather than failing as a bad invite.
+            let discovery = matches!(prompt, Prompt::InviteCode).then(|| {
+                let rows: Vec<overlay::DiscoveryRow> = self
+                    .discovered
+                    .iter()
+                    .map(|guild| overlay::DiscoveryRow {
+                        name: guild.name.clone(),
+                        summary: guild.summary(),
+                        joinable: guild.is_joinable(),
+                    })
+                    .collect();
+                overlay::discovery_results(&rows, self.discovering, {
+                    let entity = entity.clone();
+                    move |index, cx: &mut gpui::App| {
+                        entity.update(cx, |workspace, cx| {
+                            workspace.join_discovered_guild(index);
+                            cx.notify();
+                        });
+                    }
+                })
+            });
+
             return Some(overlay::scrim().child(overlay::text_prompt_view(
                 title,
                 placeholder,
                 text.text(),
+                discovery,
                 {
                     let entity = entity.clone();
                     move |cx: &mut gpui::App| {
@@ -10148,6 +10209,7 @@ impl Workspace {
                 "Custom status",
                 "What are you up to?",
                 text.text(),
+                None,
                 {
                     let entity = entity.clone();
                     move |cx: &mut gpui::App| {
@@ -10174,6 +10236,7 @@ impl Workspace {
                 "Rename folder",
                 "Type a name",
                 name.text(),
+                None,
                 {
                     let entity = entity.clone();
                     move |cx: &mut gpui::App| {

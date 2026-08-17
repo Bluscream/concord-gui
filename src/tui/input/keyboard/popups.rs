@@ -1171,6 +1171,18 @@ fn handle_sticker_picker_key(state: &mut DashboardState, key: KeyEvent) -> Optio
 /// Reuses the composer's key mapping so editing behaves the way every other
 /// text field in this client does, including any rebinding in keymap.toml.
 fn handle_join_server_key(state: &mut DashboardState, key: KeyEvent) -> Option<AppCommand> {
+    // Searching Discord's public list, and joining what it found. Taken before
+    // the composer mapping, which would read these as text.
+    match key.code {
+        KeyCode::Tab => return state.search_discoverable_guilds(),
+        KeyCode::Down | KeyCode::Up => {
+            state.move_discovered_selection(key.code == KeyCode::Down);
+            return None;
+        }
+        KeyCode::F(2) => return state.join_selected_discovered_guild(),
+        _ => {}
+    }
+
     match state.key_bindings().composer_action(key) {
         ComposerAction::Submit => return state.submit_join_server(),
         ComposerAction::Close => state.close_join_server(),

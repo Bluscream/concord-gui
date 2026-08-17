@@ -335,3 +335,4 @@ status-needs-an-answer = needs an answer
 action-pick = Pick
 action-unpick = Unpick
 action-finish-onboarding = Finish onboarding
+status-searching-discovery = Searching Discord's public servers...

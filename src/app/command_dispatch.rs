@@ -717,6 +717,9 @@ impl CommandDispatcher {
                 )
                 .await;
             }
+            AppCommand::LoadDiscoverableGuilds { query } => {
+                message_commands::load_discoverable_guilds(self.client.clone(), query).await;
+            }
             AppCommand::LoadOnboarding { guild_id } => {
                 message_commands::load_onboarding(self.client.clone(), guild_id).await;
             }

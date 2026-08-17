@@ -470,6 +470,24 @@ load_guild_panel!(
 /// Fetch a sound list. `None` asks for the default sounds.
 type GuildId = crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>;
 
+pub(super) async fn load_discoverable_guilds(client: DiscordClient, query: String) {
+    match client.discoverable_guilds(&query).await {
+        Ok(guilds) => {
+            client
+                .publish_event(AppEvent::DiscoverableGuildsLoaded { guilds })
+                .await;
+        }
+        Err(error) => {
+            log_app_error("discovery failed", &error);
+            client
+                .publish_event(AppEvent::MembershipRequestFailed {
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
 pub(super) async fn load_onboarding(client: DiscordClient, guild_id: GuildId) {
     match client.onboarding(guild_id).await {
         Ok(onboarding) => {

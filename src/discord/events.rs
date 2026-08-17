@@ -726,6 +726,9 @@ pub enum AppEvent {
     StageRequestFailed {
         message: String,
     },
+    DiscoverableGuildsLoaded {
+        guilds: Vec<crate::discord::DiscoverableGuild>,
+    },
     OnboardingLoaded {
         guild_id: Id<GuildMarker>,
         onboarding: Box<crate::discord::Onboarding>,
@@ -1126,6 +1129,7 @@ define_app_event_kinds! {
     AuthSessionsLoadFailed: AppEvent::AuthSessionsLoadFailed { .. },
     StageInstanceLoaded: AppEvent::StageInstanceLoaded { .. },
     StageRequestFailed: AppEvent::StageRequestFailed { .. },
+    DiscoverableGuildsLoaded: AppEvent::DiscoverableGuildsLoaded { .. },
     OnboardingLoaded: AppEvent::OnboardingLoaded { .. },
     OnboardingCompleted: AppEvent::OnboardingCompleted { .. },
     ScheduledEventsLoaded: AppEvent::ScheduledEventsLoaded { .. },
@@ -2213,6 +2217,7 @@ impl AppEventKind {
             | AppEventKind::SoundboardSoundsLoadFailed
             | AppEventKind::StageInstanceLoaded
             | AppEventKind::StageRequestFailed
+            | AppEventKind::DiscoverableGuildsLoaded
             | AppEventKind::OnboardingLoaded
             | AppEventKind::OnboardingCompleted
             | AppEventKind::ScheduledEventsLoaded

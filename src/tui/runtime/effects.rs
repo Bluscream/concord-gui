@@ -213,6 +213,10 @@ fn push_dashboard_effect(event: AppEvent, ctx: &mut EffectContext<'_>) {
             ctx.state.set_stage_instance(instance);
             return;
         }
+        AppEvent::DiscoverableGuildsLoaded { guilds } => {
+            ctx.state.set_discovered_guilds(guilds);
+            return;
+        }
         AppEvent::OnboardingLoaded { onboarding, .. } => {
             ctx.state.set_onboarding(*onboarding);
             return;

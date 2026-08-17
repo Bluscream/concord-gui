@@ -354,7 +354,23 @@ field would silently rewrite another.
 A channel event seeds no place and no end time, because Discord ignores both
 there - showing them would invite typing something that goes nowhere.
 
-Still missing: discovery.
+Discovery is in the join-server prompt in both clients: type a link and it
+resolves, type anything else and it searches Discord's public list. People have
+one or the other, and asking which before they type is a question with no good
+answer. It is the only way into a server that does not need someone to hand you
+a link first.
+
+Joining goes through the ordinary invite path using the server's vanity code,
+rather than a discovery endpoint of its own - that path is already written and
+tested, and a second one guessed at would ship something that silently fails. A
+server with no vanity code cannot be joined from here, and its row says so
+rather than showing a dead button.
+
+Member counts are described as "about", because Discord's own field says
+approximate and a bare number reads as exact.
+
+Still missing: the owner-facing discovery metadata - which category a server
+lists itself under, and its keywords.
 
 ## Deliberately out of scope
 

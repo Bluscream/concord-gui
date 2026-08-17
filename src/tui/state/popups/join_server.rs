@@ -24,6 +24,12 @@ pub(in crate::tui) struct JoinServerState {
     preview: Option<InvitePreview>,
     /// Why the invite could not be used.
     error: Option<String>,
+    /// Servers Discord will show anyone, for finding one without a link.
+    /// Everything else here needs someone to hand you an invite first.
+    discovered: Vec<crate::discord::DiscoverableGuild>,
+    discovering: bool,
+    /// Which discovered server is highlighted.
+    selected: usize,
 }
 
 impl JoinServerState {
@@ -33,6 +39,14 @@ impl JoinServerState {
 
     pub(in crate::tui) fn preview(&self) -> Option<&InvitePreview> {
         self.preview.as_ref()
+    }
+
+    pub(in crate::tui) fn discovered(&self) -> &[crate::discord::DiscoverableGuild] {
+        &self.discovered
+    }
+
+    pub(in crate::tui) fn is_discovering(&self) -> bool {
+        self.discovering
     }
 
     pub(in crate::tui) fn error(&self) -> Option<&str> {
@@ -104,6 +118,68 @@ impl DashboardState {
     ///
     /// One key does both steps: resolve what was typed, then join what was
     /// resolved. Two separate keys would mean explaining which is which.
+    /// Search Discord's public server list for whatever has been typed.
+    ///
+    /// The same field as the invite box: what people have is either a link or
+    /// a name, and asking which before they type is a question with no good
+    /// answer.
+    pub fn search_discoverable_guilds(&mut self) -> Option<AppCommand> {
+        let state = self.popups.join_server_mut()?;
+        let query = state.input.value().trim().to_owned();
+        state.discovering = true;
+        state.error = None;
+        Some(AppCommand::LoadDiscoverableGuilds { query })
+    }
+
+    pub(in crate::tui) fn set_discovered_guilds(
+        &mut self,
+        guilds: Vec<crate::discord::DiscoverableGuild>,
+    ) {
+        if let Some(state) = self.popups.join_server_mut() {
+            state.discovered = guilds;
+            state.discovering = false;
+            // Reset rather than clamped: a new search is a new list, and
+            // keeping the old row highlighted would point at something else.
+            state.selected = 0;
+        }
+    }
+
+    /// Move through the discovered servers.
+    pub fn move_discovered_selection(&mut self, down: bool) {
+        let Some(state) = self.popups.join_server_mut() else {
+            return;
+        };
+        let count = state.discovered.len();
+        if count == 0 {
+            return;
+        }
+        state.selected = if down {
+            (state.selected + 1) % count
+        } else {
+            (state.selected + count - 1) % count
+        };
+    }
+
+    pub(in crate::tui) fn selected_discovered_index(&self) -> usize {
+        self.popups.join_server().map_or(0, |state| state.selected)
+    }
+
+    pub fn join_selected_discovered_guild(&mut self) -> Option<AppCommand> {
+        self.join_discovered_guild(self.selected_discovered_index())
+    }
+
+    /// Join a discovered server by its vanity invite.
+    ///
+    /// Through the ordinary invite path rather than a discovery endpoint of
+    /// its own: that path is already written and tested, and a server with no
+    /// vanity code cannot be joined from here - which its row says.
+    pub fn join_discovered_guild(&mut self, index: usize) -> Option<AppCommand> {
+        let state = self.popups.join_server()?;
+        let guild = state.discovered.get(index)?;
+        let code = guild.vanity_url_code.clone()?;
+        Some(AppCommand::ResolveInvite { code })
+    }
+
     pub fn submit_join_server(&mut self) -> Option<AppCommand> {
         let state = self.popups.join_server_mut()?;
 

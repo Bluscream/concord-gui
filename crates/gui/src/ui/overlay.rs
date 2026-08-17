@@ -349,10 +349,14 @@ pub fn text_prompt_view(
     title: &str,
     placeholder: &str,
     current: &str,
+    // Extra content under the field. Only the invite prompt has any - the
+    // public server list, so a name typed there finds something.
+    extra: Option<Div>,
     on_submit: impl Fn(&mut gpui::App) + 'static,
     on_cancel: impl Fn(&mut gpui::App) + 'static,
 ) -> Div {
     panel(title, 380.)
+        .children(extra)
         .child(
             gpui::div()
                 .px(px(space::LG))
@@ -2050,6 +2054,80 @@ pub fn account_view(
                 actions.close,
             )),
     )
+}
+
+/// One server from Discord's public list.
+pub struct DiscoveryRow {
+    pub name: String,
+    pub summary: String,
+    /// Whether it can be joined from here at all. A server with no vanity
+    /// invite cannot, which the row says rather than showing a dead button.
+    pub joinable: bool,
+}
+
+/// Discord's public server list, under the invite box.
+pub fn discovery_results(
+    rows: &[DiscoveryRow],
+    searching: bool,
+    on_join: impl Fn(usize, &mut gpui::App) + Clone + 'static,
+) -> Div {
+    let mut list = column().w_full().max_h(px(240.));
+
+    if searching {
+        return list.child(
+            gpui::div()
+                .px(px(space::LG))
+                .py(px(space::MD))
+                .text_size(px(scaled(text::SM)))
+                .text_color(rgb(active().text_subtle))
+                .child(t!("status-searching-discovery")),
+        );
+    }
+
+    for (index, entry) in rows.iter().enumerate() {
+        let join = on_join.clone();
+        list = list.child(
+            row()
+                .id(("discovery-row", index))
+                .w_full()
+                .px(px(space::LG))
+                .py(px(space::XS))
+                .gap(px(space::SM))
+                .items_center()
+                .child(
+                    column()
+                        .flex_1()
+                        .child(
+                            gpui::div()
+                                .text_size(px(scaled(text::SM)))
+                                .text_color(rgb(active().text))
+                                .child(entry.name.clone()),
+                        )
+                        .child(
+                            gpui::div()
+                                .text_size(px(scaled(text::XS)))
+                                .text_color(rgb(active().text_subtle))
+                                .child(entry.summary.clone()),
+                        ),
+                )
+                .when(entry.joinable, |r| {
+                    r.child(
+                        gpui::div()
+                            .id(("discovery-join", index))
+                            .px(px(space::SM))
+                            .py(px(space::XS))
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .text_size(px(scaled(text::XS)))
+                            .text_color(rgb(active().text_muted))
+                            .hover(|style| style.bg(rgb(active().surface_hover)))
+                            .on_click(move |_event, _window, cx| join(index, cx))
+                            .child(t!("action-join")),
+                    )
+                }),
+        );
+    }
+    list
 }
 
 /// One entry in a context menu.
