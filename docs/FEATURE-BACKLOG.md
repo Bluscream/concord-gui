@@ -47,12 +47,13 @@ Things the mobile client has that desktop does not. All are missing here.
    `/cancel`. The mirror of what this client already does: it *shows* a code for
    another device to scan. Scanning one means becoming the authorising device,
    which needs a camera and a confirmation step naming the device being let in.
-2. **Phone number as a credential** - `POST /users/@me/phone`, `/phone/reverify`,
-   `DELETE /users/@me/phone`, `POST /phone-verifications/verify`, `/resend`.
-   Needed for servers whose verification level demands a verified phone; this
-   client currently reports that as a restriction it cannot lift.
-3. **SMS two-factor** - `POST /users/@me/mfa/sms/enable`, `/disable`. Beside the
-   TOTP enrolment that is already done.
+2. ~~**Phone number as a credential**~~ - in the core, no front end. Three
+   steps, not one: Discord sends a code, the code is exchanged for a token, and
+   only then does the number attach, with the account password as well. A
+   client modelling it as a single call would appear to work and leave the
+   number unattached.
+3. ~~**SMS two-factor**~~ - in the core, no front end. Needs an attached phone,
+   which is why it lives beside it.
 4. **Push notification registration** - `POST /users/@me/devices`,
    `PUT /users/@me/devices/sync`. Only meaningful with a push service, so this
    is the one item here that may never apply to a desktop build.
@@ -214,6 +215,6 @@ client should not ship with.
 The mobile-only group (1-5) belongs in the core even though neither front end
 here will surface all of it: a future mobile GUI would need it, and a core that
 only serves the clients in this repository is a core that has to be reopened
-later. `scripts/unreachable-commands.py` will report those commands as
-unreachable, which is correct and should be recorded in its allow-list with the
-reason, not silenced.
+later. `scripts/unreachable-commands.py` reports them under `core only` with the front
+end that would use each, so an entry that stops being true is a wrong sentence
+somebody can read rather than a silent exemption.

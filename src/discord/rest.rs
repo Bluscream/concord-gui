@@ -40,6 +40,7 @@ mod guild_settings;
 mod guilds;
 mod invites;
 mod membership;
+mod phone;
 mod privacy;
 mod sessions;
 mod stage;
@@ -79,6 +80,7 @@ pub use membership::{
 pub use messages::MAX_MESSAGE_STICKERS;
 pub use moderation::{GuildBanInfo, MAX_BAN_DELETE_MESSAGE_SECONDS, parse_user_id_list};
 pub use onboarding::{Onboarding, OnboardingOption, OnboardingQuestion, OnboardingRow};
+pub use phone::{PhoneChangeReason, PhoneVerificationToken, phone_number_problem};
 pub use privacy::{
     DmScanLevel, FriendDiscovery, FriendSources, PrivacyEdit, PrivacySetting, PrivacyState,
 };

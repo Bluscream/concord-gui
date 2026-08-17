@@ -731,6 +731,44 @@ impl CommandDispatcher {
                 )
                 .await;
             }
+            AppCommand::SendPhoneCode { phone, reason } => {
+                let result = self.client.send_phone_code(&phone, reason).await;
+                message_commands::phone_request(self.client.clone(), "your phone number", result)
+                    .await;
+            }
+            AppCommand::SendPhoneCodeAgain { phone } => {
+                let result = self.client.resend_phone_code(&phone).await;
+                message_commands::phone_request(self.client.clone(), "your phone number", result)
+                    .await;
+            }
+            AppCommand::AttachPhone {
+                phone,
+                code,
+                password,
+                reason,
+            } => {
+                let result = self
+                    .client
+                    .attach_phone(&phone, &code, &password, reason)
+                    .await;
+                message_commands::phone_request(self.client.clone(), "your phone number", result)
+                    .await;
+            }
+            AppCommand::ReverifyPhone { phone, code } => {
+                let result = self.client.reverify_phone(&phone, &code).await;
+                message_commands::phone_request(self.client.clone(), "your phone number", result)
+                    .await;
+            }
+            AppCommand::RemovePhone { password } => {
+                let result = self.client.remove_phone(&password).await;
+                message_commands::phone_request(self.client.clone(), "your phone number", result)
+                    .await;
+            }
+            AppCommand::SetSmsMfa { enabled, password } => {
+                let result = self.client.set_sms_mfa(enabled, &password).await;
+                message_commands::phone_request(self.client.clone(), "SMS two-factor", result)
+                    .await;
+            }
             AppCommand::LoadGuildStickers { guild_id } => {
                 message_commands::load_guild_stickers(self.client.clone(), guild_id).await;
             }

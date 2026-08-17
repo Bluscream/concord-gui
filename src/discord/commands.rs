@@ -664,6 +664,37 @@ pub enum AppCommand {
         guild_id: Id<GuildMarker>,
         metadata: Box<crate::discord::DiscoveryMetadata>,
     },
+    // Mobile-only. Neither front end here surfaces these, but a mobile GUI
+    // would need them, and a core that only serves the clients in this
+    // repository is one that has to be reopened later.
+    /// Step one of attaching a phone number: send a code to it.
+    SendPhoneCode {
+        phone: String,
+        reason: crate::discord::PhoneChangeReason,
+    },
+    SendPhoneCodeAgain {
+        phone: String,
+    },
+    /// Steps two and three together: exchange the code for a token and attach
+    /// the number with it. One command because the token is single-use and
+    /// useless to a client between the two.
+    AttachPhone {
+        phone: String,
+        code: String,
+        password: crate::discord::Secret,
+        reason: crate::discord::PhoneChangeReason,
+    },
+    ReverifyPhone {
+        phone: String,
+        code: String,
+    },
+    RemovePhone {
+        password: crate::discord::Secret,
+    },
+    SetSmsMfa {
+        enabled: bool,
+        password: crate::discord::Secret,
+    },
     LoadGuildStickers {
         guild_id: Id<GuildMarker>,
     },

@@ -1056,7 +1056,13 @@ fn handle_command(
         // Server administration a fixture cannot answer honestly either: each
         // reports what Discord holds, and a demo number would be a guess
         // presented as a fact - a prune count most of all.
-        AppCommand::LoadGuildStickers { .. }
+        AppCommand::SendPhoneCode { .. }
+        | AppCommand::SendPhoneCodeAgain { .. }
+        | AppCommand::AttachPhone { .. }
+        | AppCommand::ReverifyPhone { .. }
+        | AppCommand::RemovePhone { .. }
+        | AppCommand::SetSmsMfa { .. }
+        | AppCommand::LoadGuildStickers { .. }
         | AppCommand::CreateSticker { .. }
         | AppCommand::RenameSticker { .. }
         | AppCommand::DeleteSticker { .. }

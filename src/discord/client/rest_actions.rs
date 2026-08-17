@@ -354,6 +354,52 @@ impl DiscordClient {
         self.rest.discovery_categories().await
     }
 
+    pub async fn send_phone_code(
+        &self,
+        phone: &str,
+        reason: crate::discord::PhoneChangeReason,
+    ) -> Result<()> {
+        self.rest.send_phone_code(phone, reason).await
+    }
+
+    pub async fn resend_phone_code(&self, phone: &str) -> Result<()> {
+        self.rest.resend_phone_code(phone).await
+    }
+
+    /// Exchange the code for a token and attach the number with it.
+    ///
+    /// One call because the token is single-use and useless to a caller
+    /// between the two steps.
+    pub async fn attach_phone(
+        &self,
+        phone: &str,
+        code: &str,
+        password: &crate::discord::Secret,
+        reason: crate::discord::PhoneChangeReason,
+    ) -> Result<()> {
+        let token = self.rest.verify_phone_code(phone, code).await?;
+        self.rest
+            .attach_phone(phone, &token, password, reason)
+            .await
+    }
+
+    pub async fn reverify_phone(&self, phone: &str, code: &str) -> Result<()> {
+        let token = self.rest.verify_phone_code(phone, code).await?;
+        self.rest.reverify_phone(phone, &token).await
+    }
+
+    pub async fn remove_phone(&self, password: &crate::discord::Secret) -> Result<()> {
+        self.rest.remove_phone(password).await
+    }
+
+    pub async fn set_sms_mfa(
+        &self,
+        enabled: bool,
+        password: &crate::discord::Secret,
+    ) -> Result<()> {
+        self.rest.set_sms_mfa(enabled, password).await
+    }
+
     pub async fn guild_stickers(
         &self,
         guild_id: crate::discord::ids::Id<crate::discord::ids::marker::GuildMarker>,

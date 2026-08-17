@@ -525,6 +525,16 @@ pub(super) async fn modify_discovery_metadata(
     load_discovery_metadata(client, guild_id).await;
 }
 
+pub(super) async fn phone_request(
+    client: DiscordClient,
+    what: &'static str,
+    result: crate::Result<()>,
+) {
+    if let Err(error) = result {
+        report_moderation_failure(&client, "changing", what, &error).await;
+    }
+}
+
 pub(super) async fn load_guild_stickers(client: DiscordClient, guild_id: GuildId) {
     match client.guild_stickers(guild_id).await {
         Ok(stickers) => {

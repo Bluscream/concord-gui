@@ -19,6 +19,23 @@ CLIENTS = {"tui": "src/tui", "gui": "crates/gui/src"}
 # An allow-list rather than silence: each entry has to say who does build it and
 # who sends it, and a wrong entry is then a wrong sentence somebody can read -
 # which is better than a check that quietly skips things.
+# Commands the core carries for a front end this repository does not have.
+#
+# A separate list from BUILT_IN_CORE: those are reachable and the sweep simply
+# cannot see it. These genuinely are not reachable, on purpose - the core is
+# meant to serve a future mobile GUI too, and a core that only serves the two
+# clients here is one that has to be reopened later. Each entry says which
+# front end would use it, so an entry that stops being true is a wrong sentence
+# somebody can read rather than a silent exemption.
+MOBILE_ONLY = {
+    "SendPhoneCode": "phone as a credential - mobile",
+    "SendPhoneCodeAgain": "phone as a credential - mobile",
+    "AttachPhone": "phone as a credential - mobile",
+    "ReverifyPhone": "phone as a credential - mobile",
+    "RemovePhone": "phone as a credential - mobile",
+    "SetSmsMfa": "SMS two-factor, needs an attached phone - mobile",
+}
+
 BUILT_IN_CORE = {
     # AccountForm::submit() builds it; both panels call that and send the
     # result. Naming the variant in a client would mean duplicating the
@@ -86,7 +103,7 @@ def orphaned_senders(client_path: str) -> list[str]:
 def main() -> int:
     problems = []
     for variant in variants():
-        if variant in BUILT_IN_CORE:
+        if variant in BUILT_IN_CORE or variant in MOBILE_ONLY:
             continue
         reached = {name: reaches(path, variant) for name, path in CLIENTS.items()}
         if not any(reached.values()):
@@ -104,6 +121,8 @@ def main() -> int:
     # Named, so an allow-list entry cannot quietly outlive its reason.
     for variant, why in sorted(BUILT_IN_CORE.items()):
         print(f"allowed: {variant} - {why}")
+    for variant, why in sorted(MOBILE_ONLY.items()):
+        print(f"core only: {variant} - {why}")
     print(f"-- {len(variants())} commands checked, {len(problems)} problems")
     return 1 if problems else 0
 
