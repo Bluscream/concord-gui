@@ -227,10 +227,31 @@ pub struct RenderedText {
     pub emoji_slots: Vec<InlineEmojiSlot>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::tui) enum EmojiImageSize {
+    Compact,
+    Standalone,
+}
+
+impl EmojiImageSize {
+    pub(in crate::tui) const fn width(self) -> u16 {
+        match self {
+            Self::Compact => 2,
+            Self::Standalone => 4,
+        }
+    }
+
+    pub(in crate::tui) const fn height(self) -> u16 {
+        match self {
+            Self::Compact => 1,
+            Self::Standalone => 2,
+        }
+    }
+}
+
 /// `byte_start..byte_start+byte_len` holds the `:name:` textual fallback.
-/// the renderer overwrites it with spaces and blits the image only once the
-/// cache has a protocol for `url`. `display_width` equals `byte_len` because
-/// Discord emoji names are ASCII-only.
+/// The renderer overwrites it with spaces and blits the image only once the
+/// cache has a protocol for `url`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InlineEmojiSlot {
     pub byte_start: usize,

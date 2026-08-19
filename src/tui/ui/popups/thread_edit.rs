@@ -375,7 +375,10 @@ pub(super) fn tag_emoji_text(
     }
     if custom_emoji_url.is_some() {
         if thumbnail_ready {
-            return format!(" {}", " ".repeat(usize::from(EMOJI_REACTION_IMAGE_WIDTH)));
+            return format!(
+                " {}",
+                " ".repeat(usize::from(EmojiImageSize::Compact.width()))
+            );
         }
         if let Some(label) = custom_emoji_label {
             return format!(" {label}");

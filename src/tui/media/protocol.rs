@@ -5,6 +5,7 @@ use ratatui_image::{
     picker::{Picker, ProtocolType},
 };
 
+use crate::tui::text::EmojiImageSize;
 use crate::{config::ImageProtocolPreference, logging};
 
 pub(super) const AVATAR_PREVIEW_WIDTH: u16 = 4;
@@ -17,9 +18,6 @@ const DISCORD_AVATAR_CDN_PREFIX: &str = "https://cdn.discordapp.com/avatars/";
 const DISCORD_GUILD_CDN_PREFIX: &str = "https://cdn.discordapp.com/guilds/";
 const DISCORD_AVATAR_MIN_SIZE: u64 = 16;
 const DISCORD_AVATAR_MAX_SIZE: u64 = 1024;
-pub(super) const EMOJI_REACTION_THUMB_WIDTH: u16 = 2;
-pub(super) const EMOJI_REACTION_THUMB_HEIGHT: u16 = 1;
-
 pub(in crate::tui) fn query_image_picker(
     protocol_preference: ImageProtocolPreference,
 ) -> Option<Picker> {
@@ -318,13 +316,13 @@ fn fit_image_to_canvas(image: &DynamicImage, width: u32, height: u32) -> Dynamic
 pub(super) fn emoji_protocol(
     picker: &Picker,
     img: &DynamicImage,
+    image_size: EmojiImageSize,
 ) -> Option<ratatui_image::protocol::Protocol> {
     let (font_width, font_height) = picker_font_size(picker);
-    let canvas_w = u32::from(EMOJI_REACTION_THUMB_WIDTH) * u32::from(font_width);
-    let canvas_h = u32::from(font_height);
+    let canvas_w = u32::from(image_size.width()) * u32::from(font_width);
+    let canvas_h = u32::from(image_size.height()) * u32::from(font_height);
 
-    let max_h = (canvas_h * 3 / 4).max(1);
-    let scaled = img.resize(canvas_w, max_h, FilterType::Lanczos3);
+    let scaled = img.resize(canvas_w, canvas_h, FilterType::Lanczos3);
     let scaled_rgba = scaled.to_rgba8();
 
     let x_off = ((canvas_w.saturating_sub(scaled_rgba.width())) / 2) as i64;
@@ -336,7 +334,7 @@ pub(super) fn emoji_protocol(
     picker
         .new_protocol(
             DynamicImage::ImageRgba8(canvas),
-            Size::new(EMOJI_REACTION_THUMB_WIDTH, EMOJI_REACTION_THUMB_HEIGHT),
+            Size::new(image_size.width(), image_size.height()),
             Resize::Fit(None),
         )
         .ok()

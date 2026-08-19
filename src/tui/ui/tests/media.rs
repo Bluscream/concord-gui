@@ -37,7 +37,7 @@ fn loaded_custom_emoji_message_uses_image_width() {
 
         assert_eq!(line_texts(&lines), vec!["  text"]);
         assert_eq!(lines[0].image_slots[0].col, 0);
-        assert_eq!(lines[0].image_slots[0].display_width, 2);
+        assert_eq!(lines[0].image_slots[0].image_size, EmojiImageSize::Compact);
     }
 }
 

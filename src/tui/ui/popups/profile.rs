@@ -73,6 +73,7 @@ pub(in crate::tui::ui) fn render_user_profile_popup(
                     row_in_list: *line_idx as isize - scroll_position as isize,
                     col: text_area.x as isize,
                     max_width: u16::MAX,
+                    image_size: crate::tui::text::EmojiImageSize::Compact,
                     url: url.clone(),
                 }),
         );

@@ -39,20 +39,20 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::discord::{MessageState, ReplyInfo};
+use crate::discord::{MessageState, ReplyInfo, unicode_emoji_image_url};
 use crate::tui::{
     state::{DashboardState, apply_discord_foreground, discord_role_mention_background},
     text::{
-        InlineEmojiSlot, RenderedText, TextHighlight, TextHighlightKind, detected_url_ranges,
-        truncate_text,
+        EmojiImageSize, InlineEmojiSlot, RenderedText, TextHighlight, TextHighlightKind,
+        detected_url_ranges, truncate_display_width, truncate_text,
     },
     theme,
 };
 
 const EDITED_MARKER: &str = " (edited)";
-pub(in crate::tui) const EMOJI_REACTION_IMAGE_WIDTH: u16 = 2;
 
 pub(in crate::tui) fn wrap_plain_text_at_words(value: &str, width: usize) -> Vec<String> {
     wrap_text_with_metadata(value, &[], &[], width)
@@ -86,7 +86,7 @@ pub(in crate::tui) struct MessageContentImageSlot {
     pub(in crate::tui) col: u16,
     pub(in crate::tui) byte_start: usize,
     pub(in crate::tui) byte_len: usize,
-    pub(in crate::tui) display_width: u16,
+    pub(in crate::tui) image_size: EmojiImageSize,
     pub(in crate::tui) url: String,
 }
 
@@ -361,6 +361,7 @@ pub(in crate::tui) fn format_message_content_sections_with_loaded_custom_emoji_u
         lines.push(line);
     }
 
+    let mut last_standalone_emoji_row = None;
     let standalone_content = (!renders_poll_card)
         .then(|| display_text_with_stickers(message.content.as_deref(), &message.sticker_names))
         .flatten();
@@ -372,13 +373,29 @@ pub(in crate::tui) fn format_message_content_sections_with_loaded_custom_emoji_u
             &message.mention_roles,
             &value,
         );
-        lines.extend(wrap_markdown_message_lines_with_loaded_custom_emoji_urls(
-            state,
-            rendered,
-            width,
-            theme::current().style(theme::HighlightGroup::MessageBody),
-            loaded_custom_emoji_urls,
-        ));
+        let body_style = theme::current().style(theme::HighlightGroup::MessageBody);
+        if state.show_custom_emoji()
+            && let Some(standalone_emojis) = standalone_emojis(&rendered)
+        {
+            let emoji_lines = format_standalone_emoji_lines(
+                standalone_emojis,
+                width,
+                body_style,
+                loaded_custom_emoji_urls,
+            );
+            last_standalone_emoji_row = Some(
+                lines.len() + emoji_lines.len() - usize::from(EmojiImageSize::Standalone.height()),
+            );
+            lines.extend(emoji_lines);
+        } else {
+            lines.extend(wrap_markdown_message_lines_with_loaded_custom_emoji_urls(
+                state,
+                rendered,
+                width,
+                body_style,
+                loaded_custom_emoji_urls,
+            ));
+        }
     }
     lines.extend(format_embed_lines(
         &message.embeds,
@@ -418,12 +435,111 @@ pub(in crate::tui) fn format_message_content_sections_with_loaded_custom_emoji_u
     }
 
     if message.edited_timestamp.is_some() {
-        append_edited_marker(&mut lines, width);
+        if let Some(line_index) = last_standalone_emoji_row {
+            append_standalone_emoji_edited_marker(&mut lines, line_index, width);
+        } else {
+            append_edited_marker(&mut lines, width);
+        }
     }
 
     let reaction_lines =
         format_message_reaction_lines(&message.reactions, width, state.show_custom_emoji());
     (lines, reaction_lines)
+}
+
+/// Discord treats emoji-only messages as media rather than inline text. Keep
+/// that decision in the formatter so scroll metrics reserve every second image
+/// row before the image protocols finish loading.
+struct StandaloneEmoji {
+    fallback: String,
+    url: String,
+}
+
+fn standalone_emojis(rendered: &RenderedText) -> Option<Vec<StandaloneEmoji>> {
+    let mut emojis = Vec::new();
+    let mut cursor = 0;
+
+    for slot in &rendered.emoji_slots {
+        if slot.byte_start < cursor || slot.byte_start > rendered.text.len() {
+            return None;
+        }
+        push_standalone_unicode_emojis(rendered.text.get(cursor..slot.byte_start)?, &mut emojis)?;
+
+        let slot_end = slot.byte_start.checked_add(slot.byte_len)?;
+        let fallback = rendered.text.get(slot.byte_start..slot_end)?;
+        emojis.push(StandaloneEmoji {
+            fallback: fallback.to_owned(),
+            url: slot.url.clone(),
+        });
+        cursor = slot_end;
+    }
+
+    push_standalone_unicode_emojis(rendered.text.get(cursor..)?, &mut emojis)?;
+    (!emojis.is_empty()).then_some(emojis)
+}
+
+fn push_standalone_unicode_emojis(value: &str, output: &mut Vec<StandaloneEmoji>) -> Option<()> {
+    for grapheme in value.graphemes(true) {
+        if grapheme.chars().all(char::is_whitespace) {
+            continue;
+        }
+        output.push(StandaloneEmoji {
+            fallback: grapheme.to_owned(),
+            url: unicode_emoji_image_url(grapheme)?,
+        });
+    }
+    Some(())
+}
+
+fn standalone_emoji_fallback_cell(fallback: &str) -> String {
+    let cell_width = usize::from(EmojiImageSize::Standalone.width());
+    let mut cell = truncate_display_width(fallback, cell_width);
+    cell.push_str(&" ".repeat(cell_width.saturating_sub(cell.width())));
+    cell
+}
+
+fn format_standalone_emoji_lines(
+    emojis: Vec<StandaloneEmoji>,
+    width: usize,
+    style: Style,
+    loaded_custom_emoji_urls: &[String],
+) -> Vec<MessageContentLine> {
+    let image_width = usize::from(EmojiImageSize::Standalone.width());
+    let emojis_per_row = (width / image_width).max(1);
+    let mut lines = Vec::new();
+
+    for row in emojis.chunks(emojis_per_row) {
+        let mut text = String::new();
+        let mut image_slots = Vec::with_capacity(row.len());
+        for (index, emoji) in row.iter().enumerate() {
+            let image_ready = loaded_custom_emoji_urls.iter().any(|url| url == &emoji.url);
+            let cell = if image_ready {
+                " ".repeat(image_width)
+            } else {
+                standalone_emoji_fallback_cell(&emoji.fallback)
+            };
+            let byte_start = text.len();
+            let byte_len = cell.len();
+            text.push_str(&cell);
+            image_slots.push(MessageContentImageSlot {
+                col: u16::try_from(index.saturating_mul(image_width)).unwrap_or(u16::MAX),
+                byte_start,
+                byte_len,
+                image_size: EmojiImageSize::Standalone,
+                url: emoji.url.clone(),
+            });
+        }
+        lines.push(
+            MessageContentLine::styled_text(text, style, Vec::new()).with_image_slots(image_slots),
+        );
+        lines.push(MessageContentLine::styled_text(
+            String::new(),
+            style,
+            Vec::new(),
+        ));
+    }
+
+    lines
 }
 
 fn append_edited_marker(lines: &mut Vec<MessageContentLine>, width: usize) {
@@ -440,6 +556,31 @@ fn append_edited_marker(lines: &mut Vec<MessageContentLine>, width: usize) {
         marker_style,
         Vec::new(),
     ));
+}
+
+fn append_standalone_emoji_edited_marker(
+    lines: &mut Vec<MessageContentLine>,
+    line_index: usize,
+    width: usize,
+) {
+    let marker_style = theme::current().style(theme::HighlightGroup::Edited);
+    let marker_width = EDITED_MARKER.width();
+    if let Some(line) = lines.get_mut(line_index)
+        && line.text.width().saturating_add(marker_width) <= width
+    {
+        line.append_styled_suffix(EDITED_MARKER, marker_style);
+        return;
+    }
+
+    // The row immediately after the emoji is occupied by the image. Insert a
+    // separate marker below it instead of letting the image cover the text.
+    let marker_index = line_index
+        .saturating_add(usize::from(EmojiImageSize::Standalone.height()))
+        .min(lines.len());
+    lines.insert(
+        marker_index,
+        MessageContentLine::styled_text(EDITED_MARKER.trim().to_owned(), marker_style, Vec::new()),
+    );
 }
 
 fn wrap_rendered_text_lines_with_loaded_custom_emoji_urls(
@@ -571,7 +712,7 @@ fn rendered_text_with_loaded_custom_emoji_placeholders(
         output.push_str(&text[cursor..start]);
         let new_start = output.len();
         if loaded_custom_emoji_urls.iter().any(|url| url == &slot.url) {
-            let placeholder = " ".repeat(usize::from(EMOJI_REACTION_IMAGE_WIDTH));
+            let placeholder = " ".repeat(usize::from(EmojiImageSize::Compact.width()));
             output.push_str(&placeholder);
             replacements.push(LoadedEmojiReplacement {
                 start,
@@ -582,7 +723,7 @@ fn rendered_text_with_loaded_custom_emoji_placeholders(
             slot_updates[index] = Some(InlineEmojiSlot {
                 byte_start: new_start,
                 byte_len: placeholder.len(),
-                display_width: EMOJI_REACTION_IMAGE_WIDTH,
+                display_width: EmojiImageSize::Compact.width(),
                 url: slot.url.clone(),
             });
         } else {
@@ -719,7 +860,7 @@ fn emoji_slots_to_image_slots(
             col,
             byte_start: slot.byte_start,
             byte_len: slot.byte_len,
-            display_width: slot.display_width,
+            image_size: EmojiImageSize::Compact,
             url: slot.url.clone(),
         });
     }

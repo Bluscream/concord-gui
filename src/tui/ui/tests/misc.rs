@@ -857,6 +857,155 @@ fn grouped_continuation_custom_emoji_image_uses_body_row() {
 }
 
 #[test]
+fn standalone_custom_emoji_reserves_a_large_two_row_image() {
+    let state = seed_channel_message(DashboardState::new(), Id::new(1), "  <:solo:42>  ");
+    let message = state.messages()[0];
+    let url = "https://cdn.discordapp.com/emojis/42.png".to_owned();
+
+    let fallback_lines =
+        format_message_content_lines_with_loaded_custom_emoji_urls(message, &state, 80, &[]);
+    assert_eq!(fallback_lines.len(), 2);
+    assert_eq!(fallback_lines[0].text.width(), 4);
+    assert_eq!(fallback_lines[0].image_slots.len(), 1);
+    assert_eq!(
+        fallback_lines[0].image_slots[0].image_size,
+        EmojiImageSize::Standalone
+    );
+    assert!(fallback_lines[1].text.is_empty());
+
+    let loaded_lines =
+        format_message_content_lines_with_loaded_custom_emoji_urls(message, &state, 80, &[url]);
+    assert_eq!(loaded_lines.len(), 2);
+    assert_eq!(loaded_lines[0].text, "    ");
+    assert_eq!(state.message_base_line_count_for_width(message, 80), 3);
+
+    let narrow_state = seed_channel_message(
+        DashboardState::new(),
+        Id::new(2),
+        "<:a_very_long_custom_emoji_name:42>",
+    );
+    let narrow_message = narrow_state.messages()[0];
+    let fallback_lines = format_message_content_lines_with_loaded_custom_emoji_urls(
+        narrow_message,
+        &narrow_state,
+        8,
+        &[],
+    );
+    let loaded_lines = format_message_content_lines_with_loaded_custom_emoji_urls(
+        narrow_message,
+        &narrow_state,
+        8,
+        &["https://cdn.discordapp.com/emojis/42.png".to_owned()],
+    );
+    assert_eq!(fallback_lines.len(), 2);
+    assert_eq!(loaded_lines.len(), 2);
+}
+
+#[test]
+fn emoji_only_messages_enlarge_unicode_and_custom_emoji() {
+    let state = seed_channel_message(DashboardState::new(), Id::new(1), "  😀 <:wave:42> ❤️  ");
+    let message = state.messages()[0];
+    let urls = [
+        "https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.3/assets/72x72/1f600.png".to_owned(),
+        "https://cdn.discordapp.com/emojis/42.png".to_owned(),
+        "https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.3/assets/72x72/2764.png".to_owned(),
+    ];
+    let lines =
+        format_message_content_lines_with_loaded_custom_emoji_urls(message, &state, 12, &urls);
+
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].text, "            ");
+    assert!(lines[1].text.is_empty());
+    assert_eq!(lines[0].image_slots.len(), 3);
+    assert_eq!(
+        lines[0]
+            .image_slots
+            .iter()
+            .map(|slot| (slot.col, slot.image_size, slot.url.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (0, EmojiImageSize::Standalone, urls[0].as_str()),
+            (4, EmojiImageSize::Standalone, urls[1].as_str()),
+            (8, EmojiImageSize::Standalone, urls[2].as_str()),
+        ]
+    );
+}
+
+#[test]
+fn emoji_only_messages_wrap_large_grapheme_sequences_by_cell_width() {
+    let state = seed_channel_message(DashboardState::new(), Id::new(1), "👍🏽 👨‍❤️‍👨 🇰🇷 #️⃣");
+    let message = state.messages()[0];
+    let lines = format_message_content_lines_with_loaded_custom_emoji_urls(message, &state, 8, &[]);
+
+    assert_eq!(lines.len(), 4);
+    assert_eq!(lines[0].image_slots.len(), 2);
+    assert!(lines[1].text.is_empty());
+    assert_eq!(lines[2].image_slots.len(), 2);
+    assert!(lines[3].text.is_empty());
+    assert!(
+        lines
+            .iter()
+            .flat_map(|line| &line.image_slots)
+            .all(|slot| slot.image_size == EmojiImageSize::Standalone)
+    );
+}
+
+#[test]
+fn emoji_mixed_with_text_keeps_the_existing_rendering() {
+    let cases = [
+        (
+            "hello <:inline:42>",
+            vec!["https://cdn.discordapp.com/emojis/42.png".to_owned()],
+            1,
+        ),
+        ("hello 😀", Vec::new(), 0),
+    ];
+
+    for (content, loaded_urls, expected_slots) in cases {
+        let state = seed_channel_message(DashboardState::new(), Id::new(1), content);
+        let lines = format_message_content_lines_with_loaded_custom_emoji_urls(
+            state.messages()[0],
+            &state,
+            80,
+            &loaded_urls,
+        );
+
+        assert_eq!(lines.len(), 1, "{content}");
+        assert_eq!(lines[0].image_slots.len(), expected_slots, "{content}");
+        assert!(
+            lines[0]
+                .image_slots
+                .iter()
+                .all(|slot| slot.image_size == EmojiImageSize::Compact)
+        );
+    }
+}
+
+#[test]
+fn edited_marker_stays_outside_the_standalone_emoji_image_rows() {
+    let state = seed_channel_message_fixture(
+        DashboardState::new(),
+        MessageCreateFixture {
+            message_id: Id::new(1),
+            content: Some("<:solo:42>".to_owned()),
+            edited_timestamp: Some("2026-08-19T00:00:00Z".to_owned()),
+            ..guild_message_create_fixture()
+        },
+    );
+    let lines = format_message_content_lines_with_loaded_custom_emoji_urls(
+        state.messages()[0],
+        &state,
+        8,
+        &["https://cdn.discordapp.com/emojis/42.png".to_owned()],
+    );
+
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[0].text, "    ");
+    assert!(lines[1].text.is_empty());
+    assert_eq!(lines[2].text, "(edited)");
+}
+
+#[test]
 fn horizontal_truncation_skips_the_offset_and_fits_the_width() {
     for (text, offset, width, expected) in [("abcdef", 2, 4, "cdef"), ("가나다abc", 2, 6, "나...")]
     {

@@ -11,6 +11,7 @@ use super::{
     preview::ImagePreviewKey,
     work::{MediaWorkError, MediaWorkResult, media_image_job_permits, media_image_work_permits},
 };
+use crate::tui::text::EmojiImageSize;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::tui) enum MediaProtocolBuildTarget {
@@ -26,6 +27,7 @@ pub(in crate::tui) enum MediaProtocolBuildTarget {
     Emoji {
         url: String,
         frame_index: usize,
+        image_size: EmojiImageSize,
     },
 }
 
@@ -82,11 +84,16 @@ impl MediaProtocolBuildJob {
         url: String,
         generation: u64,
         frame_index: usize,
+        image_size: EmojiImageSize,
         picker: Picker,
         image: Arc<DynamicImage>,
     ) -> Self {
         Self {
-            target: MediaProtocolBuildTarget::Emoji { url, frame_index },
+            target: MediaProtocolBuildTarget::Emoji {
+                url,
+                frame_index,
+                image_size,
+            },
             generation,
             picker,
             image,
@@ -142,10 +149,11 @@ pub(in crate::tui) fn build_media_protocol(job: MediaProtocolBuildJob) -> MediaP
                 MediaWorkError::Failed("image protocol dimensions unavailable".to_owned())
             })
         }
-        MediaProtocolBuildTarget::Emoji { .. } => emoji_protocol(&job.picker, &job.image)
-            .ok_or_else(|| {
+        MediaProtocolBuildTarget::Emoji { image_size, .. } => {
+            emoji_protocol(&job.picker, &job.image, *image_size).ok_or_else(|| {
                 MediaWorkError::Failed("emoji protocol dimensions unavailable".to_owned())
-            }),
+            })
+        }
     };
     MediaProtocolBuildResult {
         target: job.target,

@@ -16,7 +16,7 @@ use crate::discord::{
 };
 
 use super::super::{
-    message::format::{EMOJI_REACTION_IMAGE_WIDTH, format_attachment_summary, wrap_text_lines},
+    message::format::{format_attachment_summary, wrap_text_lines},
     state::{
         ChannelPaneEntry, ChannelPaneRow, CommandPickerEntry, ComposerLock, DashboardState,
         EmojiPickerEntry, FocusPane, GuildPaneEntry, LocalUploadPreviewView,
@@ -25,7 +25,7 @@ use super::super::{
         presence_marker, primary_compact_activity,
     },
     text::{
-        format_byte_size, sanitize_for_display_width, truncate_display_width,
+        EmojiImageSize, format_byte_size, sanitize_for_display_width, truncate_display_width,
         truncate_display_width_from,
     },
 };

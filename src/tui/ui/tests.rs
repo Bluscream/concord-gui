@@ -81,7 +81,7 @@ use crate::{
             MentionPickerTarget, MessageActionItem, MessageActionKind, PollVotePickerItem,
             SelectablePopupTarget, ThreadCardImagePreview, presence_style,
         },
-        text::{TextHighlightKind, truncate_display_width_from},
+        text::{EmojiImageSize, TextHighlightKind, truncate_display_width_from},
         ui::{MouseTarget, mouse_target_at},
     },
 };

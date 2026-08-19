@@ -1039,6 +1039,12 @@ That said, Concord is not an official Discord client. Using unofficial clients, 
 
 Any issues, pull requests, and feedback are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
 
+## Third-party assets
+
+Unicode emoji images are provided by [Twemoji](https://github.com/jdecked/twemoji),
+Copyright 2020 Twitter, Inc. and other contributors, under the
+[CC-BY 4.0 license](https://creativecommons.org/licenses/by/4.0/).
+
 ## License
 
 Concord is licensed under GPL-3.0-only.

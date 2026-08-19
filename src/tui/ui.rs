@@ -16,7 +16,7 @@ use unicode_width::UnicodeWidthStr;
 use super::state::{DisplayOptionGauge, MemberEntry};
 use super::{
     message::format::{
-        EMOJI_REACTION_IMAGE_WIDTH, MessageContentLine, ReactionLayout, embed_color,
+        MessageContentLine, ReactionLayout, embed_color,
         format_message_content_sections_with_loaded_custom_emoji_urls, format_message_relative_age,
         lay_out_reaction_chips_with_custom_emoji_images, reaction_line_spans, wrap_text_lines,
     },
@@ -29,7 +29,7 @@ use super::{
         SelectablePopupSnapshot, SelectablePopupTarget, ThreadActionItem, apply_discord_foreground,
         normal_text_style, presence_marker, presence_style,
     },
-    text::truncate_display_width,
+    text::{EmojiImageSize, truncate_display_width},
 };
 use crate::discord::{
     ActivityInfo, ChannelState, ChannelUnreadState, ChannelVisibilityStats, FriendStatus,

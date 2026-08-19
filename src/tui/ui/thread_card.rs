@@ -326,7 +326,7 @@ fn thread_card_tag_text(tag: &AppliedForumTag) -> String {
     if let Some(emoji) = tag.unicode_emoji.as_deref() {
         format!("# {emoji} {}", tag.name)
     } else if tag.custom_emoji_url.is_some() {
-        let placeholder = " ".repeat(usize::from(EMOJI_REACTION_IMAGE_WIDTH));
+        let placeholder = " ".repeat(usize::from(EmojiImageSize::Compact.width()));
         format!("# {placeholder} {}", tag.name)
     } else {
         format!("# {}", tag.name)
@@ -769,6 +769,7 @@ pub(super) fn render_thread_card_reaction_emojis(
                 row_in_list: row as isize,
                 col: list_left + content_start + slot_col as isize,
                 max_width: inner_width.saturating_sub(slot_col) as u16,
+                image_size: EmojiImageSize::Compact,
                 url: slot.url,
             });
         }
@@ -817,7 +818,7 @@ fn thread_card_tag_image_slots(
         // record it when the truncated chip still includes that gap.
         if let Some(url) = tag.custom_emoji_url.as_deref() {
             let emoji_col = chip_start.saturating_add("# ".width());
-            if emoji_col + usize::from(EMOJI_REACTION_IMAGE_WIDTH) <= used_width {
+            if emoji_col + usize::from(EmojiImageSize::Compact.width()) <= used_width {
                 slots.push((emoji_col, url.to_owned()));
             }
         }
@@ -864,6 +865,7 @@ pub(super) fn render_thread_card_tag_emojis(
                 row_in_list: row as isize,
                 col: list_left + content_start + slot_col as isize,
                 max_width: inner_width.saturating_sub(slot_col) as u16,
+                image_size: EmojiImageSize::Compact,
                 url,
             });
         }

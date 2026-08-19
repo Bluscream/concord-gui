@@ -141,6 +141,7 @@ pub(in crate::tui::ui) fn render_members(
                     row_in_list: *line_idx as isize - scroll as isize,
                     col: content_area.x as isize + *column as isize,
                     max_width: u16::MAX,
+                    image_size: crate::tui::text::EmojiImageSize::Compact,
                     url: url.clone(),
                 }),
         );

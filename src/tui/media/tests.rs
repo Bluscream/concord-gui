@@ -24,6 +24,7 @@ use crate::{
     tui::{
         message::time::test_message_id_for_unix_millis,
         state::{DashboardState, FocusPane},
+        text::EmojiImageSize,
         ui::ImagePreviewLayout,
     },
 };
@@ -356,6 +357,7 @@ fn image_preview_quality_does_not_change_avatar_or_custom_emoji_requests() {
         visible_emoji_image_targets(&state),
         vec![EmojiImageTarget {
             url: "https://cdn.discordapp.com/emojis/50.png".to_owned(),
+            image_size: EmojiImageSize::Compact,
         }]
     );
 }
@@ -1457,6 +1459,7 @@ fn media_decode_queue_pressure_retries_all_consumers() {
 
     let emoji_target = EmojiImageTarget {
         url: "https://cdn.discordapp.com/emojis/1.gif".to_owned(),
+        image_size: EmojiImageSize::Compact,
     };
     let mut emojis = EmojiImageCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
     emojis.cache.entries.insert(
@@ -1646,7 +1649,10 @@ fn media_decoder_samples_long_animations_across_the_full_timeline() {
 #[test]
 fn emoji_animation_clock_runs_only_while_the_image_is_visible() {
     let url = "https://cdn.discordapp.com/emojis/42.webp?animated=true".to_owned();
-    let target = EmojiImageTarget { url: url.clone() };
+    let target = EmojiImageTarget {
+        url: url.clone(),
+        image_size: EmojiImageSize::Compact,
+    };
     let mut cache = EmojiImageCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
     cache.cache.entries.insert(
         url.clone(),
@@ -1702,7 +1708,7 @@ fn emoji_animation_clock_runs_only_while_the_image_is_visible() {
             image,
             protocols,
             ..
-        }) if image.current_frame_index() == 1 && protocols.len() == 2
+        }) if image.current_frame_index() == 1 && protocols.compact.len() == 2
     ));
 
     let loop_deadline = cache
@@ -1716,7 +1722,7 @@ fn emoji_animation_clock_runs_only_while_the_image_is_visible() {
             image,
             protocols,
             ..
-        }) if image.current_frame_index() == 0 && protocols.len() == 2
+        }) if image.current_frame_index() == 0 && protocols.compact.len() == 2
     ));
 
     cache.sync_animation_visibility(&[], loop_deadline);
@@ -1907,8 +1913,95 @@ fn emoji_image_targets_include_visible_custom_reactions() {
         targets,
         vec![EmojiImageTarget {
             url: "https://cdn.discordapp.com/emojis/50.png".to_owned(),
+            image_size: EmojiImageSize::Compact,
         }]
     );
+}
+
+#[test]
+fn emoji_image_targets_deduplicate_and_promote_emoji_only_message_slots() {
+    let mut state = state_with_image_messages(0, &[]);
+    push_media_message(
+        &mut state,
+        MessageCreateFixture {
+            message_id: Id::new(1),
+            content: Some(" 😀 <:solo:50> ❤️ ".to_owned()),
+            reactions: vec![ReactionInfo::test(ReactionEmoji::Custom {
+                id: Id::new(50),
+                name: Some("solo".to_owned()),
+                animated: false,
+            })],
+            ..guild_message_create_fixture()
+        },
+    );
+
+    assert_eq!(
+        visible_emoji_image_targets(&state),
+        vec![
+            EmojiImageTarget {
+                url: "https://cdn.discordapp.com/emojis/50.png".to_owned(),
+                image_size: EmojiImageSize::Standalone,
+            },
+            EmojiImageTarget {
+                url: "https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.3/assets/72x72/1f600.png"
+                    .to_owned(),
+                image_size: EmojiImageSize::Standalone,
+            },
+            EmojiImageTarget {
+                url: "https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.3/assets/72x72/2764.png"
+                    .to_owned(),
+                image_size: EmojiImageSize::Standalone,
+            },
+        ]
+    );
+}
+
+#[test]
+fn standalone_emoji_cache_builds_compact_and_large_protocols() {
+    let url = "https://cdn.discordapp.com/emojis/50.png".to_owned();
+    let target = EmojiImageTarget {
+        url: url.clone(),
+        image_size: EmojiImageSize::Standalone,
+    };
+    let mut cache = EmojiImageCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
+    cache.cache.entries.insert(
+        url.clone(),
+        EmojiImageEntry::Decoding {
+            generation: 1,
+            last_used: 1,
+        },
+    );
+    cache.store_decoded(
+        url,
+        1,
+        decode_media_image_bytes(&encoded_png(32, 32)).map_err(MediaWorkError::Failed),
+    );
+
+    assert!(cache.render_state(std::slice::from_ref(&target)).is_empty());
+    let results = cache
+        .take_protocol_jobs()
+        .into_iter()
+        .map(build_media_protocol)
+        .collect::<Vec<_>>();
+    let mut sizes = results
+        .iter()
+        .filter_map(|result| match result.target {
+            MediaProtocolBuildTarget::Emoji { image_size, .. } => Some(image_size),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    sizes.sort_by_key(|size| size.height());
+    assert_eq!(
+        sizes,
+        vec![EmojiImageSize::Compact, EmojiImageSize::Standalone]
+    );
+    for result in results {
+        cache.store_protocol(result);
+    }
+
+    let rendered = cache.render_state(std::slice::from_ref(&target));
+    assert_eq!(rendered.len(), 1);
+    assert!(rendered[0].standalone_protocol.is_some());
 }
 
 #[test]
@@ -1936,7 +2029,13 @@ fn emoji_image_targets_include_visible_composer_custom_emoji_picker_candidates()
 
         let targets = visible_emoji_image_targets(&state);
 
-        assert_eq!(targets, vec![EmojiImageTarget { url: expected_url }]);
+        assert_eq!(
+            targets,
+            vec![EmojiImageTarget {
+                url: expected_url,
+                image_size: EmojiImageSize::Compact,
+            }]
+        );
     }
 }
 
@@ -1959,6 +2058,7 @@ fn emoji_image_targets_include_confirmed_composer_custom_emoji() {
         targets,
         vec![EmojiImageTarget {
             url: "https://cdn.discordapp.com/emojis/60.png".to_owned(),
+            image_size: EmojiImageSize::Compact,
         }]
     );
 }
@@ -2007,6 +2107,7 @@ fn emoji_image_targets_include_visible_non_selected_dm_activity() {
         targets,
         vec![EmojiImageTarget {
             url: "https://cdn.discordapp.com/emojis/70.png".to_owned(),
+            image_size: EmojiImageSize::Compact,
         }]
     );
 }
@@ -2072,6 +2173,7 @@ fn emoji_image_targets_include_visible_forum_preview_custom_reactions() {
         targets,
         vec![EmojiImageTarget {
             url: "https://cdn.discordapp.com/emojis/50.png".to_owned(),
+            image_size: EmojiImageSize::Compact,
         }]
     );
 }
@@ -2318,6 +2420,7 @@ fn emoji_image_targets_include_visible_forum_post_custom_tag_emoji() {
         targets,
         vec![EmojiImageTarget {
             url: "https://cdn.discordapp.com/emojis/77.webp?animated=true".to_owned(),
+            image_size: EmojiImageSize::Compact,
         }]
     );
 }
@@ -2327,6 +2430,7 @@ fn emoji_image_cache_skips_requests_without_image_protocol() {
     let mut cache = EmojiImageCache::new(None);
     let target = EmojiImageTarget {
         url: "https://cdn.discordapp.com/emojis/50.png".to_owned(),
+        image_size: EmojiImageSize::Compact,
     };
 
     let requests = cache.next_requests(std::slice::from_ref(&target));

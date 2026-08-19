@@ -450,7 +450,7 @@ fn reaction_emoji_cell(
             .custom_image_url()
             .is_some_and(|url| ready_urls.iter().any(|ready| ready == &url));
     if thumbnail_ready {
-        " ".repeat(usize::from(EMOJI_REACTION_IMAGE_WIDTH))
+        " ".repeat(usize::from(EmojiImageSize::Compact.width()))
     } else {
         reaction_emoji_label(emoji, show_custom_emoji)
     }
@@ -763,7 +763,9 @@ fn format_emoji_reaction_item(
         }
         crate::discord::ReactionEmoji::Custom { .. } if thumbnail_ready => format!(
             "{}{}",
-            " ".repeat(usize::from(EMOJI_REACTION_IMAGE_WIDTH.saturating_add(1))),
+            " ".repeat(usize::from(
+                EmojiImageSize::Compact.width().saturating_add(1),
+            )),
             reaction.label
         ),
         crate::discord::ReactionEmoji::Custom { name, .. } => name

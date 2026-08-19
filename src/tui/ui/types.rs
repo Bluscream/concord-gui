@@ -35,6 +35,7 @@ pub struct AvatarImage<'a> {
 pub struct EmojiImage<'a> {
     pub url: String,
     pub protocol: &'a Protocol,
+    pub standalone_protocol: Option<&'a Protocol>,
 }
 
 #[derive(Clone, Copy)]

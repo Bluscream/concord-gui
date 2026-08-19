@@ -576,7 +576,8 @@ pub(in crate::tui::ui) fn emoji_picker_lines(
 
 fn emoji_picker_entry_prefix_width(entry: &EmojiPickerEntry, custom_image_ready: bool) -> usize {
     if entry.custom_image_url.is_some() {
-        usize::from(custom_image_ready) * usize::from(EMOJI_REACTION_IMAGE_WIDTH.saturating_add(1))
+        usize::from(custom_image_ready)
+            * usize::from(EmojiImageSize::Compact.width().saturating_add(1))
     } else {
         entry.emoji.as_str().width().saturating_add(1)
     }
@@ -590,7 +591,9 @@ fn emoji_picker_entry_prefix(
     if entry.custom_image_url.is_some() {
         if custom_image_ready {
             vec![Span::styled(
-                " ".repeat(usize::from(EMOJI_REACTION_IMAGE_WIDTH.saturating_add(1))),
+                " ".repeat(usize::from(
+                    EmojiImageSize::Compact.width().saturating_add(1),
+                )),
                 row_style,
             )]
         } else {
@@ -758,7 +761,7 @@ fn composer_display_input(
             .iter()
             .any(|url| url == &completion.url)
         {
-            let placeholder = " ".repeat(usize::from(EMOJI_REACTION_IMAGE_WIDTH));
+            let placeholder = " ".repeat(usize::from(EmojiImageSize::Compact.width()));
             input.push_str(&placeholder);
             replacements.push(ComposerEmojiReplacement {
                 start,
@@ -812,6 +815,7 @@ fn render_composer_custom_emoji_images(
                 .saturating_sub(vertical_scroll as isize),
             col: area.x as isize + 1 + column as isize,
             max_width: u16::MAX,
+            image_size: crate::tui::text::EmojiImageSize::Compact,
             url: completion.url,
         });
     }
