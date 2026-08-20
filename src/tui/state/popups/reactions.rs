@@ -325,25 +325,25 @@ impl DashboardState {
     }
 
     pub fn push_emoji_reaction_filter_char(&mut self, value: char) {
-        let favorites = self.options.reaction_options.favorite_emojis.clone();
+        let favorites = &self.options.reaction_options.favorite_emojis;
         if let Some(picker) = self.popups.emoji_reaction_picker_mut()
             && let Some(filter) = &mut picker.filter
         {
             filter.push(value);
             picker.filtered_items =
-                filter_emoji_reaction_items_from_slice(&picker.items, filter, &favorites);
+                filter_emoji_reaction_items_from_slice(&picker.items, filter, favorites);
             picker.selection.select(0);
         }
     }
 
     pub fn pop_emoji_reaction_filter_char(&mut self) {
-        let favorites = self.options.reaction_options.favorite_emojis.clone();
+        let favorites = &self.options.reaction_options.favorite_emojis;
         if let Some(picker) = self.popups.emoji_reaction_picker_mut()
             && let Some(filter) = &mut picker.filter
         {
             filter.pop();
             picker.filtered_items =
-                filter_emoji_reaction_items_from_slice(&picker.items, filter, &favorites);
+                filter_emoji_reaction_items_from_slice(&picker.items, filter, favorites);
             picker.selection.select(0);
         }
     }

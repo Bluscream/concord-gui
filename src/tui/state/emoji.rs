@@ -39,9 +39,11 @@ pub(super) fn remaining_unicode_emoji_reaction_items(
 }
 
 pub(super) fn is_quick_unicode_emoji(value: &str, favorites: &[String]) -> bool {
-    effective_quick_unicode_emojis(favorites)
-        .iter()
-        .any(|emoji| emoji == value)
+    if favorites.is_empty() {
+        DEFAULT_QUICK_UNICODE_EMOJIS.contains(&value)
+    } else {
+        favorites.iter().any(|emoji| emoji == value)
+    }
 }
 
 fn unicode_emoji_reaction_item_from_emoji(emoji: &emojis::Emoji) -> EmojiReactionItem {
