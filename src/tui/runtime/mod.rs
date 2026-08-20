@@ -661,19 +661,25 @@ fn schedule_background_redraw(
 fn apply_clipboard_paste_result(state: &mut DashboardState, result: ClipboardPasteResult) {
     match result {
         Ok(Ok(data)) => {
-            let _ = apply_clipboard_paste_data(state, data);
+            if !apply_clipboard_paste_data(state, data) {
+                state.record_user_profile_avatar_clipboard_paste_failed();
+            }
         }
         Ok(Err(error)) => {
             logging::debug("clipboard", format!("clipboard paste unavailable: {error}"));
+            state.record_user_profile_avatar_clipboard_paste_failed();
         }
         Err(error) => {
             logging::debug("clipboard", format!("clipboard paste task failed: {error}"));
+            state.record_user_profile_avatar_clipboard_paste_failed();
         }
     }
 }
 
 fn apply_clipboard_paste_data(state: &mut DashboardState, data: ClipboardPasteData) -> bool {
-    if state.accepts_user_profile_avatar_paste() {
+    if state.accepts_user_profile_avatar_paste()
+        || state.is_user_profile_avatar_clipboard_paste_pending()
+    {
         if let Some(mut attachments) = data.file_attachments {
             if attachments.is_empty() {
                 return false;

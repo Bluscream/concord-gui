@@ -107,5 +107,6 @@ pub(super) struct UserProfilePopupText {
     pub(super) lines: Vec<Line<'static>>,
     pub(super) emoji_overlays: Vec<(usize, String)>,
     pub(super) cursor: Option<(usize, usize)>,
+    pub(super) reveal_rows: Option<std::ops::Range<usize>>,
     pub(super) picker_rows: Option<std::ops::Range<usize>>,
 }

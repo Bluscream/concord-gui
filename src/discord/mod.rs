@@ -112,7 +112,8 @@ pub use presence::{
     ActivitySecrets, ActivityTimestamps, PresenceStatus,
 };
 pub use profile::{
-    FriendStatus, MutualGuildInfo, RelationshipInfo, RelationshipUpdateInfo, UserProfileInfo,
+    FriendStatus, MutualFriendInfo, MutualGuildInfo, RelationshipInfo, RelationshipUpdateInfo,
+    UserProfileInfo,
 };
 pub use read::ReadStateInfo;
 pub(crate) use request_lifecycle::{

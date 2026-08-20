@@ -769,11 +769,15 @@ fn avatar_protocol_key_tracks_render_clipping() {
     );
     assert_ne!(
         AvatarProtocolKey::message_avatar(&full, false),
-        AvatarProtocolKey::profile_popup(false)
+        AvatarProtocolKey::profile_popup(PROFILE_POPUP_AVATAR_HEIGHT, 0, false)
     );
     assert_ne!(
         AvatarProtocolKey::message_avatar(&full, false),
         AvatarProtocolKey::message_avatar(&full, true)
+    );
+    assert_ne!(
+        AvatarProtocolKey::profile_popup(PROFILE_POPUP_AVATAR_HEIGHT, 0, false),
+        AvatarProtocolKey::profile_popup(PROFILE_POPUP_AVATAR_HEIGHT - 1, 1, false)
     );
 }
 

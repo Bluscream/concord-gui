@@ -31,8 +31,8 @@ use system::{
     format_chat_input_command_line, format_forwarded_snapshot, format_message_kind_line,
     format_system_message_lines,
 };
-pub(in crate::tui) use wrap::wrap_text_lines;
-use wrap::{highlights_for_range, styled_ranges_for_range, wrap_text_with_metadata};
+pub(in crate::tui) use wrap::{WrappedTextLine, wrap_text_lines, wrap_text_with_metadata};
+use wrap::{highlights_for_range, styled_ranges_for_range};
 
 use crate::discord::ids::{Id, marker::GuildMarker};
 use ratatui::{

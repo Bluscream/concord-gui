@@ -280,7 +280,7 @@ impl DashboardMediaRuntime {
     /// Inline previews reuse the exact renderer path (`plan.row` +
     /// `inline_image_preview_screen_area`), the viewer uses a coarse size-based
     /// fingerprint (it is a single centered image), avatars use their absolute
-    /// row, and the popup avatar uses (url, circular, popup area).
+    /// row, and the popup avatar uses its cropped visible area.
     fn resolve_placements(
         &self,
         state: &DashboardState,
@@ -349,12 +349,9 @@ impl DashboardMediaRuntime {
             );
         }
 
-        let popup_avatar = self.popup_avatar_url.as_ref().map(|url| {
-            (
-                url.clone(),
-                state.circular_avatars(),
-                ui::user_profile_popup_area(area),
-            )
+        let popup_avatar = self.popup_avatar_url.as_ref().and_then(|url| {
+            ui::user_profile_popup_avatar_viewport(area, state)
+                .map(|(avatar_area, _)| (url.clone(), state.circular_avatars(), avatar_area))
         });
         placements.set_popup_avatar(popup_avatar);
 
@@ -652,9 +649,12 @@ pub(super) fn draw_dashboard_frame(
         .emoji_images
         .render_state(&media_runtime.emoji_targets);
     let popup_avatar_url = media_runtime.popup_avatar_url.as_deref();
+    let popup_avatar_clip = ui::user_profile_popup_avatar_viewport(area, state)
+        .map(|(avatar_area, top_clip_rows)| (avatar_area.height, top_clip_rows));
     let (rendered_avatars, popup_avatar) = media_runtime.avatar_images.render_state_with_popup(
         &media_runtime.avatar_targets,
         popup_avatar_url,
+        popup_avatar_clip,
         state.circular_avatars(),
     );
     ui::render_with_message_viewport_plan(
@@ -734,9 +734,12 @@ pub(super) fn clear_image_surfaces_frame(
     } else {
         None
     };
+    let popup_avatar_clip = ui::user_profile_popup_avatar_viewport(area, state)
+        .map(|(avatar_area, top_clip_rows)| (avatar_area.height, top_clip_rows));
     let (rendered_avatars, popup_avatar) = media_runtime.avatar_images.render_state_with_popup(
         &unchanged_avatars,
         popup_avatar_url,
+        popup_avatar_clip,
         state.circular_avatars(),
     );
     ui::render_with_message_viewport_plan(

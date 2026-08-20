@@ -718,47 +718,134 @@ fn current_user_profile_settings_render_contract() {
     let texts = line_texts_from_ratatui(&lines);
     assert_eq!(lines[0].spans[0].content, "Neo Global");
 
-    let display_value = texts
+    let display_index = texts
         .iter()
         .position(|line| line.contains("Display name"))
-        .and_then(|index| lines.get(index + 1))
-        .expect("display name value should follow label");
-    let display_label = texts
-        .iter()
-        .position(|line| line.contains("Display name"))
-        .and_then(|index| lines.get(index))
-        .expect("display name label should exist");
-    let pronouns_value = texts
+        .expect("display name field should exist");
+    let pronouns_index = texts
         .iter()
         .position(|line| line.contains("Pronouns"))
-        .and_then(|index| lines.get(index + 1))
-        .expect("pronouns value should follow label");
-    let status_value = texts
+        .expect("pronouns field should exist");
+    let status_index = texts
         .iter()
         .position(|line| line.contains("Status"))
-        .and_then(|index| lines.get(index + 1))
-        .expect("status value should follow label");
+        .expect("status field should exist");
+    let display_line = &lines[display_index];
+    let pronouns_line = &lines[pronouns_index];
+    let status_line = &lines[status_index];
 
     assert_eq!(
-        display_label.spans[1].style.fg,
+        display_line.spans[1].style.fg,
         theme::current()
             .style(theme::HighlightGroup::ActiveField)
             .fg
     );
-    assert_eq!(display_value.spans[0].content, "  Neo Global");
+    assert_eq!(display_line.spans[2].content, " │ ");
+    assert_eq!(display_line.spans[3].content, "Neo Global");
     assert_eq!(
-        display_value.spans[0].style,
+        display_line.spans[3].style,
         theme::current().style(theme::HighlightGroup::ActiveField)
     );
-    assert_eq!(pronouns_value.spans[0].content, "  (empty)");
+    assert_eq!(pronouns_line.spans[3].content, "(not set)");
     assert!(
-        pronouns_value.spans[0]
+        pronouns_line.spans[3]
             .style
             .add_modifier
             .contains(Modifier::DIM)
     );
-    assert_eq!(status_value.spans[0].content, "  Do Not Disturb");
-    assert_eq!(status_value.spans[0].style.fg, Some(Color::Red));
+    assert_eq!(status_line.spans[3].content, "Do Not Disturb");
+    assert_eq!(status_line.spans[3].style.fg, Some(Color::Red));
+    assert!(
+        texts
+            .iter()
+            .any(|line| line.trim_start().starts_with("PROFILE"))
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|line| line.trim_start().starts_with("PRESENCE"))
+    );
+
+    let pronouns = "they/them or she/her depending on the day and context";
+    profile.pronouns = Some(pronouns.to_owned());
+    state.push_event(AppEvent::UserProfileLoaded {
+        guild_id: None,
+        profile: profile.clone(),
+    });
+    let wrapped_lines =
+        user_profile_popup_lines(&profile, &state, 60, PresenceStatus::DoNotDisturb);
+    let wrapped_texts = line_texts_from_ratatui(&wrapped_lines);
+    let wrapped_pronouns_index = wrapped_texts
+        .iter()
+        .position(|line| line.contains("Pronouns"))
+        .expect("pronouns field should render");
+    let rendered_pronouns = wrapped_lines[wrapped_pronouns_index..]
+        .iter()
+        .take_while(|line| !line.spans.is_empty())
+        .filter_map(|line| line.spans.last())
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert_eq!(rendered_pronouns, pronouns);
+    assert!(
+        wrapped_lines[wrapped_pronouns_index..]
+            .iter()
+            .take_while(|line| !line.spans.is_empty())
+            .count()
+            > 1,
+        "long pronouns should use continuation rows"
+    );
+
+    state.next_user_profile_settings_field();
+    state.next_user_profile_settings_field();
+    let avatar_text = line_texts_from_ratatui(&user_profile_popup_lines(
+        &profile,
+        &state,
+        60,
+        PresenceStatus::DoNotDisturb,
+    ))
+    .join("\n");
+    assert!(
+        avatar_text.contains("Avatar image path or paste image"),
+        "{avatar_text}"
+    );
+    assert!(
+        avatar_text.contains("[Ctrl+V] Paste image"),
+        "{avatar_text}"
+    );
+    state.previous_user_profile_settings_field();
+    state.previous_user_profile_settings_field();
+
+    profile.global_name = Some("x".repeat(38));
+    state.push_event(AppEvent::UserProfileLoaded {
+        guild_id: None,
+        profile: profile.clone(),
+    });
+    let _ = state.start_or_commit_user_profile_edit();
+    let exact_width_text = user_profile_popup_text(
+        &profile,
+        &state,
+        60,
+        PresenceStatus::DoNotDisturb,
+        &[],
+        &[],
+        false,
+    );
+    let exact_width_display_row = exact_width_text
+        .lines
+        .iter()
+        .position(|line| line.to_string().contains("Display name"))
+        .expect("display name should render at an exact value width");
+    assert_eq!(
+        exact_width_text.cursor,
+        Some((exact_width_display_row + 1, 22)),
+        "a cursor at the line width should move to an empty continuation row"
+    );
+    state.close_or_cancel_user_profile_popup();
+    profile.global_name = Some("Neo Global".to_owned());
+    state.push_event(AppEvent::UserProfileLoaded {
+        guild_id: None,
+        profile: profile.clone(),
+    });
 
     let _ = state.start_or_commit_user_profile_edit();
     let editing_lines =
@@ -769,7 +856,7 @@ fn current_user_profile_settings_render_contract() {
         .position(|line| line.contains("Display name"))
         .and_then(|index| editing_lines.get(index))
         .expect("editing label should exist");
-    assert_eq!(editing_label.spans[1].content, "Display name");
+    assert_eq!(editing_label.spans[1].content.trim_end(), "Display name");
     assert_eq!(
         editing_label.spans[1].style.fg,
         theme::current().style(theme::HighlightGroup::Editing).fg
@@ -781,29 +868,29 @@ fn current_user_profile_settings_render_contract() {
     let dirty_lines = user_profile_popup_lines(&profile, &state, 60, PresenceStatus::DoNotDisturb);
     let dirty_texts = line_texts_from_ratatui(&dirty_lines);
 
-    assert!(dirty_texts.iter().any(|line| line == "Unsaved changes."));
-    assert!(dirty_texts.iter().any(|line| line.contains("[s] save")));
-    assert!(dirty_texts.iter().any(|line| line.contains("[c] cancel")));
-    assert!(dirty_texts.iter().any(|line| line.contains("[o] sign out")));
-    assert!(
-        !dirty_texts
-            .iter()
-            .any(|line| line.contains("select/edit/commit"))
+    assert!(dirty_texts.iter().any(|line| line.contains("[s] Save")));
+    assert!(dirty_texts.iter().any(|line| line.contains("[q] Close")));
+    assert!(dirty_texts.iter().any(|line| line.contains("[o] Sign out")));
+    let sign_out_row = dirty_texts
+        .iter()
+        .position(|line| line.contains("[o] Sign out"))
+        .expect("sign-out action should render");
+    assert_eq!(
+        dirty_lines[sign_out_row].spans[2].style.fg,
+        Some(Color::Red)
     );
-
+    assert_eq!(
+        dirty_lines[sign_out_row].spans[1].style,
+        theme::current().style(theme::HighlightGroup::Shortcut)
+    );
     let narrow_lines = user_profile_popup_lines(&profile, &state, 24, PresenceStatus::DoNotDisturb);
     let narrow_texts = line_texts_from_ratatui(&narrow_lines);
-    assert!(narrow_texts.iter().any(|line| line.contains("[s] save")));
-    assert!(narrow_texts.iter().any(|line| line.contains("[c] cancel")));
+    assert!(narrow_texts.iter().any(|line| line.contains("[s] Save")));
+    assert!(narrow_texts.iter().any(|line| line.contains("[q] Close")));
     assert!(
         narrow_texts
             .iter()
-            .any(|line| line.contains("[o] sign out"))
-    );
-    assert!(
-        !narrow_texts
-            .iter()
-            .any(|line| line.contains("close/cancel"))
+            .any(|line| line.contains("[o] Sign out"))
     );
 
     state.next_user_profile_settings_field();
@@ -852,54 +939,133 @@ fn current_user_profile_settings_render_contract() {
 }
 
 #[test]
-fn current_user_profile_settings_show_sign_out_action() {
-    let profile = user_profile_info(10, "neo");
+fn current_user_profile_settings_viewport_and_feedback_contract() {
+    let user_id = Id::new(10);
+    let profile = user_profile_info(user_id.get(), "neo");
     let mut state = DashboardState::new();
     state.push_event(AppEvent::Ready {
         user: "neo".to_owned(),
-        user_id: Some(Id::new(10)),
+        user_id: Some(user_id),
     });
     state.push_event(AppEvent::UserProfileLoaded {
         guild_id: None,
-        profile: profile.clone(),
+        profile,
     });
     state.open_current_user_profile_popup();
 
-    let lines = user_profile_popup_lines(&profile, &state, 60, PresenceStatus::Online);
-    let texts = line_texts_from_ratatui(&lines);
-    let sign_out_index = texts
-        .iter()
-        .position(|line| line.contains("[o] sign out"))
-        .expect("sign-out action should render");
-
-    assert_eq!(lines[sign_out_index].spans[2].style.fg, Some(Color::Red));
-    assert_eq!(
-        lines[sign_out_index].spans[1].style,
-        theme::current().style(theme::HighlightGroup::Shortcut)
+    let initial_dump = render_dashboard_dump(100, 14, &mut state);
+    assert!(
+        initial_dump
+            .iter()
+            .any(|line| line.contains("› Display name")),
+        "initial selection should be visible:\n{}",
+        initial_dump.join("\n")
     );
-    let rendered = texts.join(" ");
-    assert!(rendered.contains("[o] sign out"));
+    assert!(
+        !initial_dump.iter().any(|line| line.contains("[s] Save")),
+        "actions below the viewport should not stay fixed:\n{}",
+        initial_dump.join("\n")
+    );
+    let initial_scroll = state.user_profile_popup_scroll();
+
+    for _ in 0..4 {
+        state.next_user_profile_settings_field();
+    }
+    let activity_dump = render_dashboard_dump(100, 14, &mut state);
+    assert!(
+        activity_dump.iter().any(|line| line.contains("› Activity")),
+        "selection below the viewport should be revealed:\n{}",
+        activity_dump.join("\n")
+    );
+    let activity_scroll = state.user_profile_popup_scroll();
+    assert!(activity_scroll > initial_scroll);
+
+    state.next_user_profile_settings_field();
+    let selected_action_dump = render_dashboard_dump(100, 14, &mut state);
+    assert!(
+        selected_action_dump
+            .iter()
+            .any(|line| line.contains("› [s] Save")),
+        "selecting Save should reveal its document row:\n{}",
+        selected_action_dump.join("\n")
+    );
+    for _ in 0..32 {
+        state.scroll_user_profile_popup_up();
+    }
+    let manually_scrolled_dump = render_dashboard_dump(100, 14, &mut state);
+    assert!(
+        !manually_scrolled_dump
+            .iter()
+            .any(|line| line.contains("[s] Save")),
+        "manual scrolling should move the action rows with the document:\n{}",
+        manually_scrolled_dump.join("\n")
+    );
+
+    for _ in 0..3 {
+        state.next_user_profile_settings_field();
+    }
+    let wrapped_selection_dump = render_dashboard_dump(100, 14, &mut state);
+    assert!(
+        wrapped_selection_dump
+            .iter()
+            .any(|line| line.contains("› Display name")),
+        "wrapping selection should reveal the first field again:\n{}",
+        wrapped_selection_dump.join("\n")
+    );
+    assert!(state.user_profile_popup_scroll() < activity_scroll);
+
+    let _ = state.start_or_commit_user_profile_edit();
+    state.insert_user_profile_edit_text("failed value");
+    let _ = state.start_or_commit_user_profile_edit();
+    for _ in 0..5 {
+        state.next_user_profile_settings_field();
+    }
+    assert!(state.save_user_profile_settings_command().is_some());
+    state.record_user_profile_update_failed(user_id, None, "profile validation rejected the value");
+    let failed_dump = render_dashboard_dump(100, 14, &mut state).join("\n");
+    assert!(
+        failed_dump.contains("Save failed: profile validation rejected the value"),
+        "{failed_dump}"
+    );
+    assert!(failed_dump.contains("› [s] Save"), "{failed_dump}");
+    assert!(!failed_dump.contains("Display name"), "{failed_dump}");
 }
 
 #[test]
-fn user_profile_popup_avatar_gutter_matches_geometry_in_narrow_layouts() {
+fn user_profile_popup_avatar_keeps_full_width_document_geometry() {
     let narrow_area = Rect::new(0, 0, 10, 20);
     let wide_area = Rect::new(0, 0, 80, 20);
+    let mut state = DashboardState::new();
 
-    assert!(!user_profile_popup_has_avatar(narrow_area, true));
+    assert!(!user_profile_popup_has_avatar(narrow_area, &state, true));
     assert_eq!(
-        user_profile_popup_text_geometry(narrow_area, false),
-        user_profile_popup_text_geometry(
-            narrow_area,
-            user_profile_popup_has_avatar(narrow_area, true),
-        )
+        user_profile_popup_text_geometry(narrow_area, &state),
+        (5, 16)
     );
 
-    assert!(user_profile_popup_has_avatar(wide_area, true));
-    assert_ne!(
-        user_profile_popup_text_geometry(wide_area, false),
-        user_profile_popup_text_geometry(wide_area, user_profile_popup_has_avatar(wide_area, true)),
+    assert!(user_profile_popup_has_avatar(wide_area, &state, true));
+    assert_eq!(
+        user_profile_popup_text_geometry(wide_area, &state),
+        (57, 16)
     );
+
+    state.open_user_profile_popup(Id::new(10), None);
+    state.set_user_profile_popup_view_height(1);
+    state.set_user_profile_popup_total_lines(10);
+    assert_eq!(
+        user_profile_popup_avatar_viewport(wide_area, &state),
+        Some((Rect::new(11, 2, 8, 4), 0))
+    );
+
+    state.scroll_user_profile_popup_down();
+    assert_eq!(
+        user_profile_popup_avatar_viewport(wide_area, &state),
+        Some((Rect::new(11, 2, 8, 3), 1))
+    );
+    for _ in 0..3 {
+        state.scroll_user_profile_popup_down();
+    }
+    assert_eq!(user_profile_popup_avatar_viewport(wide_area, &state), None);
 }
 
 #[test]
@@ -933,7 +1099,11 @@ fn user_profile_popup_renders_activity_section() {
     );
     let texts = line_texts_from_ratatui(&lines);
 
-    assert!(texts.iter().any(|line| line == "ACTIVITY"));
+    assert!(
+        texts
+            .iter()
+            .any(|line| line.trim_start().starts_with("ACTIVITY"))
+    );
     assert!(texts.iter().any(|line| line == "🦀 Coding hard"));
     assert!(texts.iter().any(|line| line == "♪ Spotify"));
     assert!(texts.iter().any(|line| line == "Bohemian Rhapsody"));
@@ -942,20 +1112,123 @@ fn user_profile_popup_renders_activity_section() {
 }
 
 #[test]
-fn user_profile_popup_lists_mutual_servers() {
+fn guild_user_profile_popup_renders_sectioned_profile() {
+    let guild_id = Id::new(42);
+    let user_id = Id::new(10);
+    let member_role_id = Id::new(20);
+    let admin_role_id = Id::new(30);
     let mut profile = user_profile_info(10, "neo");
+    profile.guild_nick = Some("Neo on Concord".to_owned());
+    profile.guild_pronouns = Some("they/them".to_owned());
+    profile.avatar_url = Some("https://cdn.discordapp.com/avatars/10/avatar.png".to_owned());
+    profile.bio = Some("Building a better terminal client.".to_owned());
+    profile.note = Some("Met in the Rust community.".to_owned());
+    profile.role_ids = vec![Id::new(guild_id.get()), member_role_id, admin_role_id];
+    profile.role_ids_present = true;
     profile.mutual_guilds = (1_u64..=3)
         .map(|id| MutualGuildInfo {
             guild_id: Id::new(id),
             nick: None,
         })
         .collect();
-    let state = DashboardState::new();
+    profile.mutual_friends_count = 4;
+    profile.mutual_friends = vec![
+        MutualFriendInfo {
+            user_id: Id::new(50),
+            username: "alice".to_owned(),
+            global_name: Some("Alice".to_owned()),
+        },
+        MutualFriendInfo {
+            user_id: Id::new(51),
+            username: "bob".to_owned(),
+            global_name: None,
+        },
+    ];
+    let mut state = DashboardState::new_with_options(
+        Default::default(),
+        Default::default(),
+        Default::default(),
+        Default::default(),
+        Default::default(),
+        KeymapOptions {
+            mappings: [("ClosePopup".to_owned(), KeymapBinding::one("x"))]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        },
+        Default::default(),
+    );
+    state.push_event(guild_create_event(GuildCreateFixture {
+        name: "Concord".to_owned(),
+        roles: vec![
+            RoleInfo {
+                position: 0,
+                ..RoleInfo::test(Id::new(guild_id.get()), "@everyone")
+            },
+            RoleInfo {
+                color: Some(0x00_AA_00),
+                position: 1,
+                ..RoleInfo::test(member_role_id, "Member")
+            },
+            RoleInfo {
+                color: Some(0xAA_00_00),
+                position: 2,
+                ..RoleInfo::test(admin_role_id, "Admin")
+            },
+        ],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+    state.push_event(AppEvent::UserProfileLoaded {
+        guild_id: Some(guild_id),
+        profile: profile.clone(),
+    });
+    state.open_user_profile_popup(user_id, Some(guild_id));
+
     let lines = user_profile_popup_lines(&profile, &state, 40, PresenceStatus::Online);
     let texts = line_texts_from_ratatui(&lines);
+    let rendered = texts.join("\n");
 
+    for section in ["SERVER PROFILE", "ABOUT ME", "NOTE", "SOCIAL"] {
+        assert!(
+            texts
+                .iter()
+                .any(|line| line.trim_start().starts_with(section)),
+            "{rendered}"
+        );
+    }
+    assert!(rendered.contains("Neo on Concord"), "{rendered}");
+    assert!(rendered.contains("@neo  ·  they/them"), "{rendered}");
+    assert!(rendered.contains("[Admin] [Member]"), "{rendered}");
+    assert!(!rendered.contains("@everyone"), "{rendered}");
     assert!(texts.iter().any(|line| line == "  • guild-1"));
     assert!(texts.iter().any(|line| line == "  • guild-3"));
+    assert!(rendered.contains("Mutual friends  4"), "{rendered}");
+    assert!(rendered.contains("• Alice  ·  @alice"), "{rendered}");
+    assert!(rendered.contains("• @bob"), "{rendered}");
+
+    let admin = lines
+        .iter()
+        .flat_map(|line| &line.spans)
+        .find(|span| span.content == "[Admin]")
+        .expect("admin role chip should render");
+    assert_eq!(admin.style.fg, Some(Color::Rgb(0xAA, 0, 0)));
+
+    let dump = render_dashboard_dump(80, 30, &mut state).join("\n");
+    assert!(dump.contains("Profile"), "{dump}");
+    assert!(dump.contains("Concord"), "{dump}");
+    assert!(!dump.contains("[x] Close"), "{dump}");
+    assert!(!dump.contains("Scroll"), "{dump}");
+    let identity_column = dump
+        .lines()
+        .find(|line| line.contains("Neo on Concord"))
+        .and_then(|line| line.find("Neo on Concord"))
+        .expect("identity should render beside the avatar");
+    let section_column = dump
+        .lines()
+        .find(|line| line.contains("SERVER PROFILE"))
+        .and_then(|line| line.find("SERVER PROFILE"))
+        .expect("server section should render below the avatar");
+    assert!(section_column < identity_column, "{dump}");
 
     let custom = theme::Theme::default()
         .with_style(
@@ -980,20 +1253,30 @@ fn user_profile_popup_lists_mutual_servers() {
         );
     theme::with_test_theme(custom, || {
         let cases = [
-            (FriendStatus::Friend, Color::Green, false),
-            (FriendStatus::IncomingRequest, Color::Yellow, false),
-            (FriendStatus::OutgoingRequest, Color::LightYellow, false),
-            (FriendStatus::Blocked, Color::Red, false),
-            (FriendStatus::None, Color::Blue, true),
+            (FriendStatus::Friend, "● Friend", Color::Green, false),
+            (
+                FriendStatus::IncomingRequest,
+                "● Incoming friend request",
+                Color::Yellow,
+                false,
+            ),
+            (
+                FriendStatus::OutgoingRequest,
+                "● Outgoing friend request",
+                Color::LightYellow,
+                false,
+            ),
+            (FriendStatus::Blocked, "● Blocked", Color::Red, false),
+            (FriendStatus::None, "● Not friends", Color::Blue, true),
         ];
-        for (relationship, expected, expect_dim) in cases {
+        for (relationship, label, expected, expect_dim) in cases {
             let mut profile = user_profile_info(10, "neo");
             profile.friend_status = relationship;
             let lines = user_profile_popup_lines(&profile, &state, 60, PresenceStatus::Online);
             let relationship = lines
                 .iter()
                 .flat_map(|line| &line.spans)
-                .find(|span| span.content.starts_with('●'))
+                .find(|span| span.content == label)
                 .expect("relationship badge should render");
             assert_eq!(relationship.style.fg, Some(expected));
             assert_eq!(
