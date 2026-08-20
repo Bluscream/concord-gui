@@ -285,7 +285,7 @@ These shortcuts act on the selected message when the Messages pane is focused.
 | Key | Action                     |
 | --- | -------------------------- |
 | `y` | Copy message text          |
-| `r` | Add or remove a reaction   |
+| `r` | Open the reaction picker   |
 | `R` | Reply                      |
 | `d` | Delete                     |
 | `e` | Edit                       |
@@ -367,6 +367,11 @@ hour_format_24 = true
 [composer]
 # Send custom emoji your account cannot use directly as image links.
 emojis_as_links = false
+
+[reactions]
+# Up to 10 unicode emoji pinned at the top of the reaction picker.
+# When unset or empty, Concord uses the built-in quick reactions.
+# favorite_emojis = ["🔥", "👍", "❤️", "😂", "🎉", "😮", "😢", "🙏", "👀", "💯"]
 
 [presence]
 # Relay Rich Presence from local apps as your activity.

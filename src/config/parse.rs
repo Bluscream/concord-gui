@@ -5,7 +5,7 @@ use crate::Result;
 
 use super::{
     AppOptions, BorderShape, BorderSurface, HighlightGroup, HighlightLinkOptions,
-    KeymapFileOptions, KeymapOptions, ThemeOptions, UiStateOptions,
+    KeymapFileOptions, KeymapOptions, ReactionOptions, ThemeOptions, UiStateOptions,
 };
 
 /// Parse `config.toml` tolerantly: a value with a wrong type or unknown variant
@@ -18,6 +18,10 @@ pub(super) fn parse_app_options(content: &str) -> Result<(AppOptions, Vec<String
     let options = AppOptions {
         display: section(&root, "display", &mut warnings),
         composer: section(&root, "composer", &mut warnings),
+        reactions: normalize_reaction_options(
+            section(&root, "reactions", &mut warnings),
+            &mut warnings,
+        ),
         credentials: section(&root, "credentials", &mut warnings),
         notifications: section(&root, "notifications", &mut warnings),
         voice: section(&root, "voice", &mut warnings),
@@ -25,6 +29,45 @@ pub(super) fn parse_app_options(content: &str) -> Result<(AppOptions, Vec<String
     };
 
     Ok((options, warnings))
+}
+
+fn normalize_reaction_options(
+    options: ReactionOptions,
+    warnings: &mut Vec<String>,
+) -> ReactionOptions {
+    let mut favorite_emojis = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut truncated = false;
+
+    for (index, raw) in options.favorite_emojis.into_iter().enumerate() {
+        let Some(emoji) = emojis::get(&raw) else {
+            warnings.push(format!(
+                "[reactions] favorite_emojis[{index}] = \"{raw}\" is not a valid unicode emoji and was ignored"
+            ));
+            continue;
+        };
+        let value = emoji.as_str().to_owned();
+        if !seen.insert(value.clone()) {
+            warnings.push(format!(
+                "[reactions] favorite_emojis[{index}] = \"{raw}\" duplicates an earlier entry and was ignored"
+            ));
+            continue;
+        }
+        if favorite_emojis.len() >= ReactionOptions::MAX_FAVORITE_EMOJIS {
+            truncated = true;
+            continue;
+        }
+        favorite_emojis.push(value);
+    }
+
+    if truncated {
+        warnings.push(format!(
+            "[reactions] favorite_emojis truncated to {} entries",
+            ReactionOptions::MAX_FAVORITE_EMOJIS
+        ));
+    }
+
+    ReactionOptions { favorite_emojis }
 }
 
 fn one_entry(key: &str, value: toml::Value) -> toml::Table {

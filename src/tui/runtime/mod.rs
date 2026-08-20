@@ -117,6 +117,7 @@ pub(super) async fn run_dashboard(
         ui_state_options,
     );
     state.apply_presence_options(options.presence);
+    state.apply_reaction_options(options.reactions);
     drop(snapshots.borrow_and_update());
     let initial_snapshot = client.current_discord_snapshot();
     let mut current_snapshot_revision = initial_snapshot.revision.global;

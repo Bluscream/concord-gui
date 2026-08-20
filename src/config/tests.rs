@@ -693,6 +693,7 @@ fn options_save_and_load_round_trip() {
             emojis_as_links: true,
             ping_on_reply: false,
         },
+        reactions: Default::default(),
         credentials: CredentialOptions {
             store: CredentialStoreMode::Plain,
         },
@@ -730,6 +731,7 @@ fn options_save_and_load_round_trip() {
 
     assert_eq!(loaded.display, options.display);
     assert_eq!(loaded.composer, options.composer);
+    assert_eq!(loaded.reactions, options.reactions);
     assert_eq!(loaded.notifications, options.notifications);
     assert_eq!(loaded.voice, options.voice);
     assert_eq!(loaded.presence, options.presence);
@@ -798,4 +800,53 @@ fn parse_keymap_options(toml: &str) -> KeymapOptions {
     toml::from_str::<KeymapFileOptions>(toml)
         .expect("keymap config should parse")
         .keymap
+}
+
+#[test]
+fn reaction_favorite_emojis_parse_and_normalize() {
+    let (options, warnings) = parse_app_options(
+        r#"[reactions]
+favorite_emojis = ["🔥", "not-an-emoji", "👍", "🔥", "❤️", "😂", "🎉", "😮", "😢", "🙏", "👀", "💯", "✨"]
+"#,
+    )
+    .expect("reactions config should parse");
+
+    assert_eq!(
+        options.reactions.favorite_emojis,
+        vec![
+            "🔥".to_owned(),
+            "👍".to_owned(),
+            "❤️".to_owned(),
+            "😂".to_owned(),
+            "🎉".to_owned(),
+            "😮".to_owned(),
+            "😢".to_owned(),
+            "🙏".to_owned(),
+            "👀".to_owned(),
+            "💯".to_owned(),
+        ]
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("not a valid unicode emoji"))
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("duplicates an earlier entry"))
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("truncated to 10 entries"))
+    );
+}
+
+#[test]
+fn reaction_favorite_emojis_default_empty() {
+    let (options, warnings) =
+        parse_app_options("[display]\n").expect("empty reactions should use defaults");
+    assert!(options.reactions.favorite_emojis.is_empty());
+    assert!(warnings.is_empty());
 }

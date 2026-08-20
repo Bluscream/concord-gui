@@ -43,6 +43,17 @@ impl Default for ComposerOptions {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ReactionOptions {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub favorite_emojis: Vec<String>,
+}
+
+impl ReactionOptions {
+    pub const MAX_FAVORITE_EMOJIS: usize = 10;
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct CredentialOptions {
@@ -225,6 +236,7 @@ impl Default for PresenceOptions {
 pub struct AppOptions {
     pub display: DisplayOptions,
     pub composer: ComposerOptions,
+    pub reactions: ReactionOptions,
     pub credentials: CredentialOptions,
     pub notifications: NotificationOptions,
     pub voice: VoiceOptions,
