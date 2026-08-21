@@ -19,7 +19,7 @@ use crate::{
         ActivityEmoji, ActivityInfo, ActivityKind, AppCommand, AppEvent, AttachmentInfo,
         ChannelInfo, ChannelRecipientInfo, CustomEmojiInfo, EmbedInfo, ForumPostDataInfo,
         MessageInfo, MessageSnapshotInfo, PresenceEventFields, PresenceStatus, ProfileAvatarUpload,
-        ReactionEmoji, ReactionInfo,
+        ReactionEmoji, ReactionInfo, StickerFormat, StickerInfo,
     },
     tui::{
         message::time::test_message_id_for_unix_millis,
@@ -1038,6 +1038,50 @@ fn image_preview_targets_include_forwarded_image_attachments() {
 }
 
 #[test]
+fn image_preview_targets_include_guild_stickers() {
+    let mut state = state_with_image_messages(0, &[]);
+    push_media_message(
+        &mut state,
+        MessageCreateFixture {
+            message_id: Id::new(1),
+            content: Some(String::new()),
+            stickers: vec![StickerInfo::new(Id::new(11), "Laugh", StickerFormat::Png)],
+            ..guild_message_create_fixture()
+        },
+    );
+
+    let targets = visible_image_preview_targets(&state, layout(12));
+
+    assert_eq!(target_message_ids(&targets), vec![Id::new(1)]);
+    assert_eq!(
+        targets[0].url,
+        "https://media.discordapp.net/stickers/11.png?size=160&passthrough=false"
+    );
+    assert_eq!(targets[0].filename, "Laugh");
+}
+
+#[test]
+fn image_preview_targets_skip_lottie_stickers() {
+    let mut state = state_with_image_messages(0, &[]);
+    push_media_message(
+        &mut state,
+        MessageCreateFixture {
+            message_id: Id::new(1),
+            content: Some(String::new()),
+            stickers: vec![StickerInfo::new(
+                Id::new(12),
+                "Wumpus",
+                StickerFormat::Lottie,
+            )],
+            ..guild_message_create_fixture()
+        },
+    );
+
+    let targets = visible_image_preview_targets(&state, layout(12));
+    assert!(targets.is_empty());
+}
+
+#[test]
 fn image_preview_targets_include_image_messages_in_scrolloff_context() {
     let mut state = state_with_image_messages(8, &[5, 6, 7]);
     state.focus_pane(FocusPane::Messages);
@@ -1563,12 +1607,13 @@ fn media_decoder_preserves_and_plays_gif_and_webp_animation_frames() {
     let gif_20_ms = encoded_two_frame_gif(20);
     let gif_30_ms = encoded_two_frame_gif(30);
     let gif_40_ms = encoded_two_frame_gif(40);
-    let cases: [(&str, &[u8]); 5] = [
+    let cases: [(&str, &[u8]); 6] = [
         ("10 ms GIF", &gif_10_ms),
         ("20 ms GIF", &gif_20_ms),
         ("30 ms GIF", &gif_30_ms),
         ("40 ms GIF", &gif_40_ms),
         ("WebP", include_bytes!("testdata/two-frame.webp")),
+        ("APNG", include_bytes!("testdata/two-frame.apng")),
     ];
 
     for (label, bytes) in cases {
@@ -1610,6 +1655,13 @@ fn media_decoder_preserves_and_plays_gif_and_webp_animation_frames() {
         Err(error) => error,
     };
     assert!(error.starts_with("decode failed at animation frame 2:"));
+}
+
+#[test]
+fn media_decoder_keeps_static_png_still() {
+    let image = decode_media_image_bytes(&encoded_png(2, 2)).expect("static PNG should decode");
+    assert!(!image.is_animated());
+    assert_eq!(image.frame_count(), 1);
 }
 
 #[test]
