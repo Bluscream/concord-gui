@@ -29,8 +29,8 @@ use crate::{
     },
 };
 
-use super::work::MediaWorkError;
 use super::*;
+use super::{decode::MAX_LOTTIE_JSON_BYTES, work::MediaWorkError};
 
 fn layout(list_height: usize) -> ImagePreviewLayout {
     ImagePreviewLayout {
@@ -1115,7 +1115,7 @@ fn image_preview_targets_include_guild_stickers() {
 }
 
 #[test]
-fn image_preview_targets_skip_lottie_stickers() {
+fn image_preview_targets_include_lottie_stickers() {
     let mut state = state_with_image_messages(0, &[]);
     push_media_message(
         &mut state,
@@ -1132,7 +1132,13 @@ fn image_preview_targets_skip_lottie_stickers() {
     );
 
     let targets = visible_image_preview_targets(&state, layout(12));
-    assert!(targets.is_empty());
+
+    assert_eq!(target_message_ids(&targets), vec![Id::new(1)]);
+    assert_eq!(
+        targets[0].url,
+        "https://cdn.discordapp.com/stickers/12.json"
+    );
+    assert_eq!(targets[0].filename, "Wumpus");
 }
 
 #[test]
@@ -1709,6 +1715,45 @@ fn media_decoder_preserves_and_plays_gif_and_webp_animation_frames() {
         Err(error) => error,
     };
     assert!(error.starts_with("decode failed at animation frame 2:"));
+}
+
+#[test]
+fn media_decoder_rasterizes_and_plays_lottie_animation_frames() {
+    let mut image = decode_media_image_bytes(include_bytes!("testdata/moving-square-lottie.json"))
+        .expect("Lottie animation should decode");
+
+    assert_eq!(image.frame_count(), 20);
+    assert!(image.is_animated());
+    assert_eq!(image.retained_bytes(), 16 * 16 * 4 * 20);
+
+    let first_frame = image.current_frame().to_rgba8();
+    let last_frame = image.frame_shared(image.frame_count() - 1).to_rgba8();
+    assert_ne!(first_frame, last_frame);
+
+    let started_at = Instant::now();
+    image.start_animation(started_at);
+    let first_deadline = image
+        .next_frame_deadline()
+        .expect("visible Lottie animation should schedule its next frame");
+    assert!(image.advance_frame(first_deadline));
+    assert_eq!(image.current_frame_index(), 1);
+}
+
+#[test]
+fn media_decoder_rejects_invalid_lottie_documents() {
+    let mut oversized = vec![b' '; MAX_LOTTIE_JSON_BYTES + 1];
+    oversized[0] = b'{';
+    let cases = [
+        ("malformed", br#"{"v":"5.7""#.as_slice()),
+        ("oversized", oversized.as_slice()),
+    ];
+
+    for (label, bytes) in cases {
+        let error = decode_media_image_bytes(bytes)
+            .err()
+            .unwrap_or_else(|| panic!("{label} Lottie document should fail"));
+        assert!(error.starts_with("decode failed:"), "{label}: {error}");
+    }
 }
 
 #[test]

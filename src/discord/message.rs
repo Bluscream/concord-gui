@@ -13,6 +13,7 @@ use crate::discord::ids::{
 };
 
 const STICKER_MEDIA_PROXY_BASE: &str = "https://media.discordapp.net/stickers";
+const STICKER_CDN_BASE: &str = "https://cdn.discordapp.com/stickers";
 const STICKER_PREVIEW_SIZE: u64 = 160;
 const STICKER_NATIVE_PIXEL_SIZE: u64 = 320;
 
@@ -82,14 +83,14 @@ impl StickerFormat {
     }
 
     pub fn is_animated(self) -> bool {
-        matches!(self, Self::Apng | Self::Gif)
+        matches!(self, Self::Apng | Self::Lottie | Self::Gif)
     }
 
-    fn extension(self) -> Option<&'static str> {
+    fn extension(self) -> &'static str {
         match self {
-            Self::Png | Self::Apng => Some("png"),
-            Self::Gif => Some("gif"),
-            Self::Lottie => None,
+            Self::Png | Self::Apng => "png",
+            Self::Lottie => "json",
+            Self::Gif => "gif",
         }
     }
 }
@@ -106,7 +107,7 @@ pub struct StickerInfo {
 impl StickerInfo {
     pub fn new(id: Id<StickerMarker>, name: impl Into<String>, format: StickerFormat) -> Self {
         let name = name.into();
-        let (url, proxy_url) = sticker_raster_urls(id, format);
+        let (url, proxy_url) = sticker_preview_urls(id, format);
         Self {
             id,
             name,
@@ -143,13 +144,14 @@ impl StickerInfo {
     }
 }
 
-fn sticker_raster_urls(
+fn sticker_preview_urls(
     id: Id<StickerMarker>,
     format: StickerFormat,
 ) -> (Option<String>, Option<String>) {
-    let Some(extension) = format.extension() else {
-        return (None, None);
-    };
+    let extension = format.extension();
+    if format == StickerFormat::Lottie {
+        return (Some(format!("{STICKER_CDN_BASE}/{id}.{extension}")), None);
+    }
     let passthrough = if format.is_animated() {
         "true"
     } else {
@@ -777,9 +779,15 @@ mod tests {
     }
 
     #[test]
-    fn lottie_sticker_has_no_raster_preview() {
+    fn lottie_sticker_uses_json_cdn_and_is_animated() {
         let sticker = StickerInfo::new(Id::new(12), "Wumpus", StickerFormat::Lottie);
-        assert!(sticker.inline_preview_info().is_none());
+        let preview = sticker
+            .inline_preview_info()
+            .expect("Lottie sticker should have an inline preview");
+
+        assert_eq!(preview.url, "https://cdn.discordapp.com/stickers/12.json");
+        assert_eq!(preview.proxy_url, None);
+        assert!(preview.animated);
     }
 
     #[test]
