@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.12] - 2026-08-21
+
+### Bug Fixes
+
+- Remove repeated allocations from emoji reaction filtering by @chojs23
+- Fix Rust 1.98 Clippy failures by @chojs23
+- _(tui)_ Synchronize animated media redraws by @chojs23
+- _(tui)_ Fix profile update picker row by @chojs23
+
+### Features
+
+- Enlarge all emoji in emoji-only messages by @chojs23
+- _(reactions)_ Customizing top 10 emojis in config.toml (#326) in [#326](https://github.com/chojs23/concord/pull/326) by @Wulgaren
+- Improve profile popup ui by @chojs23
+- _(theme)_ Add configurable unified selection markers to theme settings (#330) in [#330](https://github.com/chojs23/concord/pull/330) by @chojs23
+- _(tui)_ Preview guild stickers as inline media (#329) in [#329](https://github.com/chojs23/concord/pull/329) by @gandol
+- _(tui)_ Render Discord Lottie stickers inline by @chojs23
+
+### Miscellaneous Tasks
+
+- Remove cache warm by @chojs23
+
+### New Contributors
+
+- @gandol made their first contribution in [#329](https://github.com/chojs23/concord/pull/329)
+- @Wulgaren made their first contribution in [#326](https://github.com/chojs23/concord/pull/326)
+
 ## [2.5.11] - 2026-08-17
 
 ### Bug Fixes

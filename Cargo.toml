@@ -1,6 +1,6 @@
 [package]
 name = "concord"
-version = "2.5.11"
+version = "2.5.12"
 edition = "2024"
 rust-version = "1.90"
 description = "A terminal user interface client for Discord"
@@ -100,7 +100,10 @@ fast_image_resize = { version = "6.1.0", features = [
   "only_u8x4",
 ], optional = true }
 yuv = { version = "0.8.16", features = ["fast_mode"], optional = true }
-thorvg = { version = "0.5.1", default-features = false, features = ["vendored", "lottie"] }
+thorvg = { version = "0.5.1", default-features = false, features = [
+  "vendored",
+  "lottie",
+] }
 
 [features]
 default = ["voice-playback", "stream-broadcast"]
