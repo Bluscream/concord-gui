@@ -495,6 +495,7 @@ fn user_profile_settings_popup_text(
     ]));
     lines.push(Line::from(Span::raw(String::new())));
 
+    let mut picker_rows = None;
     match active_tab {
         UserProfileSettingsTab::Global => {
             push_section_header(&mut lines, "PROFILE", width);
@@ -521,11 +522,30 @@ fn user_profile_settings_popup_text(
                 &mut reveal_rows,
                 state,
                 width,
-                &[
-                    (UserProfileSettingsField::CurrentStatus, "Status"),
-                    (UserProfileSettingsField::ManualActivity, "Activity"),
-                ],
+                &[(UserProfileSettingsField::CurrentStatus, "Status")],
             );
+            let status_rows = state.user_profile_status_picker_rows();
+            if !status_rows.is_empty() {
+                let start = lines.len().saturating_add(2);
+                push_profile_status_picker_lines(&mut lines, width, &status_rows);
+                picker_rows = Some(start..start.saturating_add(status_rows.len()));
+            }
+
+            lines.push(Line::default());
+            push_profile_settings_field_lines(
+                &mut lines,
+                &mut cursor,
+                &mut reveal_rows,
+                state,
+                width,
+                &[(UserProfileSettingsField::ManualActivity, "Activity")],
+            );
+            let activity_rows = state.user_profile_activity_picker_rows();
+            if !activity_rows.is_empty() {
+                let start = lines.len().saturating_add(2);
+                push_profile_activity_picker_lines(&mut lines, width, &activity_rows);
+                picker_rows = Some(start..start.saturating_add(activity_rows.len()));
+            }
         }
         UserProfileSettingsTab::Guild => {
             push_section_header(&mut lines, "SERVER PROFILE", width);
@@ -552,21 +572,6 @@ fn user_profile_settings_popup_text(
 
     lines.push(Line::default());
     push_profile_settings_action_lines(&mut lines, &mut reveal_rows, state);
-
-    let mut picker_rows = None;
-    let status_rows = state.user_profile_status_picker_rows();
-    if !status_rows.is_empty() {
-        let start = lines.len().saturating_add(2);
-        push_profile_status_picker_lines(&mut lines, width, &status_rows);
-        picker_rows = Some(start..start.saturating_add(status_rows.len()));
-    }
-
-    let activity_rows = state.user_profile_activity_picker_rows();
-    if !activity_rows.is_empty() {
-        let start = lines.len().saturating_add(2);
-        push_profile_activity_picker_lines(&mut lines, width, &activity_rows);
-        picker_rows = Some(start..start.saturating_add(activity_rows.len()));
-    }
 
     UserProfilePopupText {
         lines,
