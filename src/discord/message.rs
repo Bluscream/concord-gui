@@ -207,9 +207,11 @@ pub struct EmbedInfo {
     pub image_width: Option<u64>,
     pub image_height: Option<u64>,
     pub image_flags: u64,
-    /// Animated image rendition recovered for a `gifv` embed when its provider
-    /// exposes only a video URL in Discord's payload.
+    /// Animated image rendition selected for a `gifv` embed. Some providers
+    /// require deriving it from the video URL, while others supply it as the
+    /// thumbnail.
     pub gifv_image_url: Option<String>,
+    pub gifv_image_proxy_url: Option<String>,
     pub video_url: Option<String>,
 }
 
@@ -238,6 +240,7 @@ impl EmbedInfo {
             image_height: None,
             image_flags: 0,
             gifv_image_url: None,
+            gifv_image_proxy_url: None,
             video_url: None,
         }
     }
@@ -687,7 +690,7 @@ impl EmbedInfo {
         if let Some(url) = self.gifv_image_url.as_deref() {
             return Some(InlinePreviewInfo {
                 url,
-                proxy_url: None,
+                proxy_url: self.gifv_image_proxy_url.as_deref(),
                 filename: "embed-gifv",
                 width: self.image_width.or(self.thumbnail_width),
                 height: self.image_height.or(self.thumbnail_height),

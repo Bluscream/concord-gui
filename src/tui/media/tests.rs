@@ -490,6 +490,60 @@ fn image_preview_targets_choose_embed_media_url() {
 }
 
 #[test]
+fn image_preview_targets_preserve_non_giphy_gifv_thumbnail_animation() {
+    let mut state = state_with_image_messages_and_display_options(
+        1,
+        &[],
+        DisplayOptions {
+            image_preview_quality: ImagePreviewQualityPreset::High,
+            ..DisplayOptions::default()
+        },
+    );
+    push_media_message(
+        &mut state,
+        MessageCreateFixture {
+            message_id: Id::new(2),
+            content: Some("https://klipy.com/gifs/sleep-l0T".to_owned()),
+            embeds: vec![EmbedInfo {
+                url: Some("https://klipy.com/gifs/sleep-l0T".to_owned()),
+                thumbnail_url: Some("https://static.klipy.com/media/thumbnail.webp".to_owned()),
+                thumbnail_proxy_url: Some(
+                    "https://images-ext-1.discordapp.net/external/cache/https/static.klipy.com/media/thumbnail.webp"
+                        .to_owned(),
+                ),
+                thumbnail_width: Some(498),
+                thumbnail_height: Some(279),
+                gifv_image_url: Some(
+                    "https://static.klipy.com/media/thumbnail.webp".to_owned(),
+                ),
+                gifv_image_proxy_url: Some(
+                    "https://images-ext-1.discordapp.net/external/cache/https/static.klipy.com/media/thumbnail.webp"
+                        .to_owned(),
+                ),
+                video_url: Some("https://static.klipy.com/media/video.mp4".to_owned()),
+                ..EmbedInfo::test()
+            }],
+            ..guild_message_create_fixture()
+        },
+    );
+
+    let target = visible_image_preview_targets(&state, layout(8))
+        .into_iter()
+        .next()
+        .expect("gifv thumbnail should produce an inline preview");
+
+    assert_eq!(
+        target.url,
+        concat!(
+            "https://images-ext-1.discordapp.net/external/cache/https/static.klipy.com/media/thumbnail.webp",
+            "?format=webp&animated=true&quality=lossless&width=498&height=279"
+        )
+    );
+    assert_eq!(target.filename, "embed-gifv");
+    assert!(!target.show_play_marker);
+}
+
+#[test]
 fn image_preview_targets_do_not_mark_plain_image_embed_thumbnail_as_playable() {
     let mut state = state_with_image_messages(1, &[]);
     push_media_message(

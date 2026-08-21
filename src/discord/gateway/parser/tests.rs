@@ -2798,6 +2798,47 @@ fn message_create_parser_builds_giphy_animation_url_for_gifv() {
 }
 
 #[test]
+fn message_create_parser_normalizes_non_giphy_gifv_thumbnail() {
+    let event = parse_message_create(&json!({
+        "id": "20",
+        "channel_id": "10",
+        "author": { "id": "30", "username": "neo" },
+        "content": "https://klipy.com/gifs/sleep-l0T",
+        "embeds": [{
+            "type": "gifv",
+            "url": "https://klipy.com/gifs/sleep-l0T",
+            "thumbnail": {
+                "url": "https://static.klipy.com/media/thumbnail.webp",
+                "proxy_url": "https://images-ext-1.discordapp.net/external/cache/https/static.klipy.com/media/thumbnail.webp",
+                "width": 498,
+                "height": 279,
+                "flags": 0
+            },
+            "video": {
+                "url": "https://static.klipy.com/media/video.mp4",
+                "width": 640,
+                "height": 358
+            }
+        }]
+    }))
+    .expect("message create should parse");
+
+    let AppEvent::MessageCreate { message } = event else {
+        panic!("expected message create event");
+    };
+    assert_eq!(
+        message.embeds[0].gifv_image_url.as_deref(),
+        Some("https://static.klipy.com/media/thumbnail.webp")
+    );
+    assert_eq!(
+        message.embeds[0].gifv_image_proxy_url.as_deref(),
+        Some(
+            "https://images-ext-1.discordapp.net/external/cache/https/static.klipy.com/media/thumbnail.webp"
+        )
+    );
+}
+
+#[test]
 fn message_create_parser_keeps_timestamp_only_embeds() {
     let event = parse_message_create(&json!({
         "id": "20",

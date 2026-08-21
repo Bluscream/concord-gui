@@ -199,10 +199,23 @@ fn parse_embed(value: &Value) -> Option<EmbedInfo> {
         .and_then(|video| video.get("url"))
         .and_then(Value::as_str)
         .map(str::to_owned);
-    let gifv_image_url = if embed_type.as_deref() == Some("gifv") {
-        video_url.as_deref().and_then(giphy_gifv_image_url)
+    let thumbnail_url = value
+        .get("thumbnail")
+        .and_then(|thumbnail| thumbnail.get("url"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let thumbnail_proxy_url = value
+        .get("thumbnail")
+        .and_then(|thumbnail| thumbnail.get("proxy_url"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let (gifv_image_url, gifv_image_proxy_url) = if embed_type.as_deref() == Some("gifv") {
+        match video_url.as_deref().and_then(giphy_gifv_image_url) {
+            Some(url) => (Some(url), None),
+            None => (thumbnail_url.clone(), thumbnail_proxy_url.clone()),
+        }
     } else {
-        None
+        (None, None)
     };
     let embed = EmbedInfo {
         color: value
@@ -238,16 +251,8 @@ fn parse_embed(value: &Value) -> Option<EmbedInfo> {
             .and_then(Value::as_str)
             .map(str::to_owned),
         url: value.get("url").and_then(Value::as_str).map(str::to_owned),
-        thumbnail_url: value
-            .get("thumbnail")
-            .and_then(|thumbnail| thumbnail.get("url"))
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        thumbnail_proxy_url: value
-            .get("thumbnail")
-            .and_then(|thumbnail| thumbnail.get("proxy_url"))
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        thumbnail_url,
+        thumbnail_proxy_url,
         thumbnail_width: value
             .get("thumbnail")
             .and_then(|thumbnail| thumbnail.get("width"))
@@ -285,6 +290,7 @@ fn parse_embed(value: &Value) -> Option<EmbedInfo> {
             .and_then(Value::as_u64)
             .unwrap_or_default(),
         gifv_image_url,
+        gifv_image_proxy_url,
         video_url,
     };
 
