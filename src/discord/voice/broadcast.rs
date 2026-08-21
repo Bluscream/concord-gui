@@ -2153,7 +2153,7 @@ fn parse_generic_nack(
         return Ok(());
     }
 
-    for entry in packet[12..].chunks_exact(4) {
+    for entry in packet[12..].as_chunks::<4>().0 {
         let packet_id = u16::from_be_bytes([entry[0], entry[1]]);
         let bitmask = u16::from_be_bytes([entry[2], entry[3]]);
         feedback.nack_sequences.push(packet_id);
@@ -2176,7 +2176,7 @@ fn parse_full_intra_request(
     if packet.len() < 12 || !(packet.len() - 12).is_multiple_of(8) {
         return Err("RTCP FIR packet has invalid feedback length".to_owned());
     }
-    feedback.request_keyframe |= packet[12..].chunks_exact(8).any(|entry| {
+    feedback.request_keyframe |= packet[12..].as_chunks::<8>().0.iter().any(|entry| {
         u32::from_be_bytes(entry[..4].try_into().expect("validated FIR media SSRC")) == video_ssrc
     });
     Ok(())
