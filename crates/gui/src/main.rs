@@ -92,53 +92,32 @@ fn main() {
     // tokio context because several dependencies spawn onto one from here.
     let _runtime_guard = runtime::enter();
 
-    let status = CoreStatus::probe();
-
-    // Reported once at startup. These are the first three questions any bug
-    // report needs answered, and asking a user to find their config path is
-    // worse than printing it.
-    eprintln!(
-        "concord-gui {} (core {})\n  config: {}\n  state:  {}\n  credential: {}",
-        env!("CARGO_PKG_VERSION"),
-        status.core_version,
-        status.config_path,
-        status.state_path,
-        if status.has_token {
-            "present"
-        } else {
-            "absent"
-        },
-    );
-
     let allow_multi = std::env::args().any(|arg| arg == "--multi-instance")
         || std::env::var("MULTI_INSTANCE").is_ok();
 
     if !allow_multi {
-        if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-            let socket_path = std::path::PathBuf::from(runtime_dir).join("concord-gui.sock");
-            if socket_path.exists() {
-                if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&socket_path) {
-                    use std::io::Write;
-                    let _ = stream.write_all(b"ACTIVATE");
-                    eprintln!("concord-gui is already running. Focused existing window (pass --multi-instance to force new instance).");
-                    return;
-                }
-                let _ = std::fs::remove_file(&socket_path);
+        let socket_path = std::env::var("XDG_RUNTIME_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::env::temp_dir())
+            .join("concord-gui.sock");
+
+        if socket_path.exists() {
+            if std::os::unix::net::UnixStream::connect(&socket_path).is_ok() {
+                eprintln!("concord-gui is already running. Exiting second instance.");
+                std::process::exit(0);
             }
-            if let Ok(listener) = std::os::unix::net::UnixListener::bind(&socket_path) {
-                listener.set_nonblocking(true).ok();
-                std::thread::spawn(move || {
-                    while let Ok((mut stream, _)) = listener.accept() {
+            let _ = std::fs::remove_file(&socket_path);
+        }
+        if let Ok(listener) = std::os::unix::net::UnixListener::bind(&socket_path) {
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    if let Ok(mut stream) = stream {
                         use std::io::Read;
                         let mut buf = [0u8; 16];
-                        if let Ok(n) = stream.read(&mut buf) {
-                            if &buf[..n] == b"ACTIVATE" {
-                                eprintln!("Received activation request from second instance.");
-                            }
-                        }
+                        let _ = stream.read(&mut buf);
                     }
-                });
-            }
+                }
+            });
         }
     }
 
