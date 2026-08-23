@@ -3835,7 +3835,12 @@ impl Workspace {
             Selection::DirectMessages => None,
         };
 
-        self.profile = Some((user_id, None));
+        let initial_view = self
+            .last_state
+            .as_ref()
+            .and_then(|state| projection::project_profile(state, user_id, guild_id));
+
+        self.profile = Some((user_id, initial_view));
 
         if let Some(handle) = &self.handle {
             handle.send(AppCommand::LoadUserProfile { user_id, guild_id });
@@ -6660,7 +6665,7 @@ impl Workspace {
         });
 
         let container = gpui::div()
-            .w_full()
+            .w(px(layout::MEMBERS))
             .h_full();
 
         match view {
@@ -8422,6 +8427,24 @@ impl Workspace {
                 // retry; a transient CDN failure should not be permanent.
                 self.requested_previews.remove(url);
                 self.model.status_line = format!("Preview failed: {message}");
+            }
+
+            AppEvent::UserProfileLoaded { profile, .. } => {
+                if let Some((user_id, target_view)) = &mut self.profile
+                    && *user_id == profile.user.id
+                {
+                    *target_view = Some(ProfileView {
+                        display_name: profile.user.global_name.clone().unwrap_or_else(|| profile.user.username.clone()),
+                        handle: profile.user.discriminator.as_deref().filter(|d| *d != "0").map(|d| format!("#{}", d)),
+                        avatar: profile.user.avatar.clone(),
+                        pronouns: profile.pronouns.clone(),
+                        bio: profile.bio.clone(),
+                        activities: Vec::new(),
+                        roles: profile.guild_member.as_ref().map(|m| m.roles.clone()).unwrap_or_default(),
+                        mutual_guilds: Vec::new(),
+                        loaded: true,
+                    });
+                }
             }
 
             AppEvent::UserProfileLoadFailed { message, .. } => {

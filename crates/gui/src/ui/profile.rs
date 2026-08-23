@@ -196,6 +196,7 @@ fn section(title: &'static str, body: String) -> Div {
         .child(label(title))
         .child(
             gpui::div()
+                .w_full()
                 .text_size(px(scaled(text::SM)))
                 .text_color(rgb(active().text))
                 .child(body),
