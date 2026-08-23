@@ -6654,9 +6654,14 @@ impl Workspace {
         let moderation = self.moderation_controls(user_id, cx);
         let friendship = self.friend_controls(user_id, cx);
 
+        let close_listener = cx.listener(|this, _, _, cx| {
+            this.close_popup();
+            cx.notify();
+        });
+
         match view {
             Some(view) => gpui::div()
-                .child(profile_view(view, self.options.display.circular_avatars))
+                .child(profile_view(view, self.options.display.circular_avatars, Some(close_listener.clone())))
                 .children(friendship)
                 .children(moderation),
             // The fetch is in flight. A skeleton with the id keeps the panel
@@ -6674,6 +6679,7 @@ impl Workspace {
                     loaded: false,
                 },
                 self.options.display.circular_avatars,
+                Some(close_listener),
             )),
         }
     }
@@ -7060,7 +7066,8 @@ impl Workspace {
                                 this.toggle_voice_flag(false);
                                 cx.notify();
                             }))
-                            .child(if mute { "\u{2298}" } else { "\u{25CB}" }),
+                            .child(if mute { "\u{2298}" } else { "\u{25CB}" })
+                            .tooltip(move |_window, cx| cx.new(|_| crate::ui::chrome::Tooltip::new(if mute { "Unmute Microphone" } else { "Mute Microphone" })).into()),
                     )
                     .child(
                         gpui::div()
@@ -7090,7 +7097,8 @@ impl Workspace {
                                 this.toggle_voice_flag(true);
                                 cx.notify();
                             }))
-                            .child(if deaf { "\u{2297}" } else { "\u{25D1}" }),
+                            .child(if deaf { "\u{2297}" } else { "\u{25D1}" })
+                            .tooltip(move |_window, cx| cx.new(|_| crate::ui::chrome::Tooltip::new(if deaf { "Undeafen Audio" } else { "Deafen Audio" })).into()),
                     )
                     .child(
                         gpui::div()
@@ -7111,7 +7119,8 @@ impl Workspace {
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.open_settings_window(cx);
                             }))
-                            .child("⚙"),
+                            .child("⚙")
+                            .tooltip(|_window, cx| cx.new(|_| crate::ui::chrome::Tooltip::new("User Settings")).into()),
                     ),
             )
     }
@@ -11548,7 +11557,8 @@ impl Workspace {
                     .on_click(cx.listener(|this, _event, _window, cx| {
                         this.editing_status = Some(Composer::default());
                         cx.notify();
-                    })),
+                    }))
+                    .tooltip(|_window, cx| cx.new(|_| crate::ui::chrome::Tooltip::new("Set custom status message")).into()),
             )
             // The activity sits next to the status because they are the two
             // halves of the same thing - what others see under your name.
@@ -11569,7 +11579,8 @@ impl Workspace {
                     .on_click(cx.listener(|this, _event, _window, cx| {
                         this.open_activity_editor();
                         cx.notify();
-                    })),
+                    }))
+                    .tooltip(|_window, cx| cx.new(|_| crate::ui::chrome::Tooltip::new("Set custom activity / rich presence")).into()),
             )
             .child(presence_dot(if self.model.connected {
                 Presence::Online

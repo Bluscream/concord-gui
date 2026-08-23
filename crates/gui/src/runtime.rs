@@ -37,6 +37,11 @@ fn shared() -> Option<&'static Runtime> {
                 .worker_threads(2)
                 .enable_all()
                 .thread_name("concord-bg")
+                .on_thread_start(|| {
+                    if let Some(runtime) = RUNTIME.get().and_then(|r| r.as_ref()) {
+                        let _ = runtime.handle().enter();
+                    }
+                })
                 .build()
                 .ok()
         })

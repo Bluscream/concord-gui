@@ -27,7 +27,10 @@ pub struct ProfileView {
     pub loaded: bool,
 }
 
-pub fn profile_view(profile: &ProfileView, circular_avatars: bool) -> Div {
+pub fn profile_view<F>(profile: &ProfileView, circular_avatars: bool, on_close: Option<F>) -> Div
+where
+    F: Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+{
     let mut panel = column()
         .w(px(layout::MEMBERS + 80.))
         .h_full()
@@ -36,15 +39,42 @@ pub fn profile_view(profile: &ProfileView, circular_avatars: bool) -> Div {
         .border_color(rgb(active().border))
         .overflow_hidden();
 
+    let mut header_col = column()
+        .w_full()
+        .p(px(space::LG))
+        .gap(px(space::SM))
+        .items_center()
+        .border_b_1()
+        .border_color(rgb(active().border));
+
+    if let Some(close_fn) = on_close {
+        header_col = header_col.child(
+            row()
+                .w_full()
+                .justify_end()
+                .child(
+                    gpui::div()
+                        .id("profile-close-btn")
+                        .w(px(24.))
+                        .h(px(24.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(layout::RADIUS))
+                        .cursor_pointer()
+                        .text_size(px(14.))
+                        .text_color(rgb(active().text_muted))
+                        .hover(|s| s.bg(rgb(active().surface_hover)).text_color(rgb(active().text)))
+                        .on_click(close_fn)
+                        .child("✕")
+                        .tooltip(|_window, cx| cx.new(|_| crate::ui::chrome::Tooltip::new("Close profile")).into())
+                )
+        );
+    }
+
     // Header: avatar, name, handle.
     panel = panel.child(
-        column()
-            .w_full()
-            .p(px(space::LG))
-            .gap(px(space::SM))
-            .items_center()
-            .border_b_1()
-            .border_color(rgb(active().border))
+        header_col
             .child(avatar_with_url(
                 64.,
                 &profile.display_name,

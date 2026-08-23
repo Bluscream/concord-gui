@@ -103,21 +103,27 @@ fn main() {
 
         if socket_path.exists() {
             if std::os::unix::net::UnixStream::connect(&socket_path).is_ok() {
-                eprintln!("concord-gui is already running. Exiting second instance.");
+                eprintln!("concord-gui is already running at {socket_path:?}. Exiting second instance.");
                 std::process::exit(0);
             }
             let _ = std::fs::remove_file(&socket_path);
         }
-        if let Ok(listener) = std::os::unix::net::UnixListener::bind(&socket_path) {
-            std::thread::spawn(move || {
-                for stream in listener.incoming() {
-                    if let Ok(mut stream) = stream {
-                        use std::io::Read;
-                        let mut buf = [0u8; 16];
-                        let _ = stream.read(&mut buf);
+        match std::os::unix::net::UnixListener::bind(&socket_path) {
+            Ok(listener) => {
+                eprintln!("Bound single-instance socket at {socket_path:?}");
+                std::thread::spawn(move || {
+                    for stream in listener.incoming() {
+                        if let Ok(mut stream) = stream {
+                            use std::io::Read;
+                            let mut buf = [0u8; 16];
+                            let _ = stream.read(&mut buf);
+                        }
                     }
-                }
-            });
+                });
+            }
+            Err(err) => {
+                eprintln!("Could not bind single-instance socket at {socket_path:?}: {err}");
+            }
         }
     }
 
@@ -125,6 +131,7 @@ fn main() {
     Application::new()
         .with_http_client(http::ReqwestClient::shared())
         .run(move |cx: &mut App| {
+            let _app_guard = runtime::enter();
             let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
 
             let window = cx
