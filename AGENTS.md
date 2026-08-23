@@ -328,6 +328,7 @@ Every icon needs a tooltip, and every tooltip goes through the catalogue. Use
   release; a shipped build should not carry synthetic state or accept the
   literal `test` token.
 - **Graphical Testing via Linux GUI MCP**:
+  - **MANDATORY**: ALWAYS use the registered `linux-gui` MCP tools (`list_windows`, `find_window`, `run_app`, `click`, `type_text`, `press_keys`, etc.) directly for all GUI interaction and testing. NEVER call raw python scripts or sub-process imports to emulate or bypass MCP tool calls.
   - Always check if an existing `concord-gui` window/process exists (`find_window` or `list_windows`) before launching a new instance, and kill lingering processes to prevent duplicate windows.
   - Launch using `run_app` with `executable: "distrobox"`, `args: ["enter", "arch", "--", "/path/to/concord-gui"]`, and explicit Wayland/KDE environment variables (`DISPLAY=:0`, `WAYLAND_DISPLAY=wayland-0`, `XDG_RUNTIME_DIR=/run/user/1000`, `RUST_LOG=debug`). Do not pass an auto-connect token argument if testing the login picker screen.
 - **Verify in release too.** A dead-code warning that only the release profile
