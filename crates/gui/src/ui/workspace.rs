@@ -12103,6 +12103,8 @@ impl Render for Workspace {
                             this.toggle_pane_filter();
                         } else if key == "tab" {
                             this.cycle_focus(!event.keystroke.modifiers.shift);
+                        } else if key == "escape" {
+                            this.close_popup();
                         } else if key == "q"
                             && event.keystroke.modifiers.control
                             && !event.keystroke.modifiers.shift
