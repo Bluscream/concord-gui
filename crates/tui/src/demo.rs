@@ -58,7 +58,14 @@ pub fn start(theme_warnings: Vec<String>) -> Result<Session> {
 
             let emissions = tokio::select! {
                 command = commands_rx.recv() => {
-                    let Some(command) = command else { break };
+                    let Some(command) = command else {
+                        // The front end dropped its sender, which is what a
+                        // clean quit looks like from here. Said out loud so a
+                        // log that simply stops is distinguishable from one
+                        // whose run died.
+                        concord::logging::info("demo", "command channel closed - shutting down");
+                        break;
+                    };
                     backend.handle(command)
                 }
                 // Only armed when something is scheduled, so an idle demo

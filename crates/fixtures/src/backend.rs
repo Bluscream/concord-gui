@@ -64,6 +64,13 @@ impl FakeBackend {
 
     /// Answer one command.
     pub fn handle(&mut self, command: AppCommand) -> Vec<Emission> {
+        // Traced here as well as in the real dispatcher, because a demo run
+        // does not use that one - the fake stands in its place. Without this,
+        // a traced demo session records events with nothing to explain them.
+        if concord::logging::trace_enabled() {
+            concord::logging::trace("command", format!("{command:?}"));
+        }
+
         let mut out = Vec::new();
         handle_command(
             &mut self.state,
@@ -72,6 +79,9 @@ impl FakeBackend {
             &mut self.history_pages,
             &mut self.pending,
         );
+        if concord::logging::trace_enabled() {
+            concord::logging::trace("fake", format!("answered with {} emission(s)", out.len()));
+        }
         out
     }
 
