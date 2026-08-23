@@ -1511,6 +1511,28 @@ enum FrameOutcome {
     Reidentify,
 }
 
+/// Blank out an account token in a frame about to be sent.
+///
+/// Textual rather than by parsing: this runs on a payload that is already
+/// serialised, and a trace that had to re-parse every frame to hide one field
+/// would cost more than it is worth.
+fn redact_token(payload: &str) -> String {
+    let Some(start) = payload.find("\"token\":\"") else {
+        return payload.to_owned();
+    };
+    let value_at = start + "\"token\":\"".len();
+    let Some(end) = payload[value_at..].find('"') else {
+        // A malformed frame is not worth guessing at, and printing it whole
+        // could print the token.
+        return "[unparsable frame, withheld]".to_owned();
+    };
+    format!(
+        "{}[redacted]{}",
+        &payload[..value_at],
+        &payload[value_at + end..]
+    )
+}
+
 async fn handle_frame(
     value: Value,
     session: &mut SessionState,
@@ -1518,6 +1540,15 @@ async fn handle_frame(
     resources: &mut GatewaySessionResources,
 ) -> FrameOutcome {
     let op = value.get("op").and_then(Value::as_u64).unwrap_or_default();
+    // Every frame the gateway sends, before this client has decided what it
+    // means. The payload is written whole under trace: a dispatch this build
+    // does not model yet appears here as itself, which is the only way to see
+    // one at all. It carries no credential - the token goes up in IDENTIFY,
+    // never down.
+    if logging::trace_enabled() {
+        let dispatch = value.get("t").and_then(Value::as_str).unwrap_or("-");
+        logging::trace("gateway", format!("<- op={op} t={dispatch} {value}"));
+    }
     match op {
         // Dispatch
         0 => {
@@ -2086,6 +2117,13 @@ async fn run_gateway_sender(
             .or_else(|| normal.pop_front())
             .expect("gateway send queue is not empty");
         window.record(Instant::now());
+        // Outbound frames too, so a trace shows both halves of a conversation.
+        // Redacted rather than skipped: IDENTIFY carries the account token,
+        // and a log that quietly omitted the frame would leave a gap exactly
+        // where somebody debugging a login needs to look.
+        if logging::trace_enabled() {
+            logging::trace("gateway", format!("-> {}", redact_token(&request.payload)));
+        }
         let result = {
             let mut writer = writer.lock().await;
             writer
@@ -2444,3 +2482,35 @@ fn activity_gateway_payload(activity: &ActivityInfo) -> Value {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::redact_token;
+
+    #[test]
+    fn an_identify_frame_never_carries_its_token_into_the_log() {
+        let frame = r#"{"op":2,"d":{"token":"hunter2.abc.def","properties":{}}}"#;
+        let traced = redact_token(frame);
+
+        assert!(!traced.contains("hunter2"), "got {traced}");
+        assert!(traced.contains("[redacted]"));
+        // The rest of the frame survives, which is the point of redacting
+        // rather than dropping it.
+        assert!(traced.contains(r#""op":2"#));
+        assert!(traced.contains("properties"));
+    }
+
+    #[test]
+    fn a_frame_with_no_token_is_untouched() {
+        let frame = r#"{"op":1,"d":42}"#;
+        assert_eq!(redact_token(frame), frame);
+    }
+
+    #[test]
+    fn a_truncated_frame_is_withheld_rather_than_guessed_at() {
+        // The failure that matters: an unterminated value could otherwise be
+        // printed whole, token and all.
+        let traced = redact_token(r#"{"op":2,"d":{"token":"hunter2"#);
+        assert!(!traced.contains("hunter2"), "got {traced}");
+    }
+}

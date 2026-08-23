@@ -46,6 +46,10 @@ impl ErrorLogEntry {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Level {
+    /// Everything that crosses a seam: each command dispatched, each event
+    /// published, each request sent and its reply. Off unless asked for, and
+    /// loud enough that it is only ever useful in a file.
+    Trace,
     Debug,
     /// Written whether or not debug logging is on, and not collected as an
     /// application error. For the handful of facts a log is useless without -
@@ -57,6 +61,7 @@ enum Level {
 impl Level {
     fn label(self) -> &'static str {
         match self {
+            Self::Trace => "TRACE",
             Self::Debug => "DEBUG",
             Self::Info => "INFO",
             Self::Error => "ERROR",
@@ -69,6 +74,7 @@ impl Level {
 struct FileLogger {
     path: Option<PathBuf>,
     debug_enabled: bool,
+    trace_enabled: bool,
 }
 
 impl FileLogger {
@@ -76,6 +82,7 @@ impl FileLogger {
         Self {
             path: log_path(),
             debug_enabled: debug_enabled(),
+            trace_enabled: trace_flag(),
         }
     }
 
@@ -108,7 +115,8 @@ impl FileLogger {
     fn should_write(&self, level: Level) -> bool {
         match level {
             Level::Error | Level::Info => true,
-            Level::Debug => self.debug_enabled,
+            Level::Debug => self.debug_enabled || self.trace_enabled,
+            Level::Trace => self.trace_enabled,
         }
     }
 }
@@ -128,6 +136,20 @@ pub fn debug(target: &str, message: impl AsRef<str>) {
 /// not one and would show up in the error list in the UI.
 pub fn info(target: &str, message: impl AsRef<str>) {
     logger().write(Level::Info, target, message.as_ref());
+}
+
+/// Whether the seams are being recorded.
+///
+/// Worth checking before building a trace line: formatting a hundred-variant
+/// command into a string costs something, and in the normal case it would be
+/// thrown away.
+pub fn trace_enabled() -> bool {
+    logger().trace_enabled
+}
+
+/// Record something crossing a seam.
+pub fn trace(target: &str, message: impl AsRef<str>) {
+    logger().write(Level::Trace, target, message.as_ref());
 }
 
 pub fn error(target: &str, message: impl AsRef<str>) {
@@ -182,6 +204,14 @@ fn log_path() -> Option<PathBuf> {
 
 fn debug_enabled() -> bool {
     env_flag("CONCORD_DEBUG")
+}
+
+/// Whether to record everything crossing a seam.
+///
+/// Implies debug: somebody who asked for every command and event did not mean
+/// to also switch the ordinary diagnostics off.
+fn trace_flag() -> bool {
+    env_flag("CONCORD_TRACE")
 }
 
 fn env_flag(name: &str) -> bool {
@@ -401,6 +431,7 @@ mod tests {
         let quiet = FileLogger {
             path: None,
             debug_enabled: false,
+            trace_enabled: false,
         };
 
         assert!(quiet.should_write(Level::Info));
@@ -476,6 +507,7 @@ mod tests {
         let normal_logger = FileLogger {
             path: None,
             debug_enabled: false,
+            trace_enabled: false,
         };
         assert!(!normal_logger.should_write(Level::Debug));
         assert!(normal_logger.should_write(Level::Error));

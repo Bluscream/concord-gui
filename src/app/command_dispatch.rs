@@ -66,6 +66,14 @@ impl CommandDispatcher {
     }
 
     pub(super) async fn dispatch(&self, command: AppCommand) {
+        // The one place every command passes through, so tracing here catches
+        // all of them rather than the ones somebody remembered to annotate.
+        // Safe to print whole: a credential inside one is a `Secret`, which
+        // redacts itself in `Debug`.
+        if crate::logging::trace_enabled() {
+            crate::logging::trace("command", format!("{command:?}"));
+        }
+
         if matches!(
             &command,
             AppCommand::RequestApplicationCommandAutocomplete { .. }

@@ -209,6 +209,16 @@ impl DiscordRest {
         let route = RequestRoute::from_request(&request);
         let rate_limit_route = RestRateLimitRoute::from_request(&request);
         let method = request.method().as_str().to_owned();
+        // Captured before the request is handed to the transport, which
+        // consumes it. Only under trace: this is the one place the whole
+        // endpoint is written down, and it is per-request noise otherwise.
+        let traced_url = crate::logging::trace_enabled().then(|| {
+            let url = request.url();
+            match url.query() {
+                Some(query) => format!("{}?{query}", url.path()),
+                None => url.path().to_owned(),
+            }
+        });
         if let Err(error) = self.request_safety.preflight(&route) {
             logging::debug(
                 "rest",
@@ -270,6 +280,9 @@ impl DiscordRest {
                 ),
             );
         }
+        if let Some(url) = &traced_url {
+            crate::logging::trace("rest", format!("-> {method} {url} action={label:?}"));
+        }
         let started_at = Instant::now();
         let response = match self.raw_http.execute(request).await {
             Ok(response) => response,
@@ -287,6 +300,16 @@ impl DiscordRest {
             }
         };
         let status = response.status();
+        if let Some(url) = &traced_url {
+            crate::logging::trace(
+                "rest",
+                format!(
+                    "<- {} {method} {url} elapsed_ms={}",
+                    status.as_u16(),
+                    duration_millis_ceil(started_at.elapsed())
+                ),
+            );
+        }
         logging::debug(
             "rest",
             format!(

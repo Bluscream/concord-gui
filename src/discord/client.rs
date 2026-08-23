@@ -291,6 +291,13 @@ impl DiscordClient {
     }
 
     pub async fn publish_event(&self, event: AppEvent) {
+        // Every event, gateway or injected, passes here. Traced before it is
+        // applied, so the log reads in the order things happened rather than
+        // in the order they finished.
+        if crate::logging::trace_enabled() {
+            crate::logging::trace("event", format!("{event:?}"));
+        }
+
         // Somebody else's soundboard sound arrives as an event saying what was
         // played, not as audio on the voice stream, so every client fetches and
         // plays it itself. Done here, at the one funnel every event passes

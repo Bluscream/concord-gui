@@ -442,3 +442,38 @@ CONCORD_TOKEN=demo cargo run
 One wrinkle worth knowing if you write a test against it: `Ready` mutates state
 without being delivered as an effect, so a test that waits on the effect stream
 for it will hang rather than fail. Watch the snapshot channel instead.
+
+## Tracing a run
+
+`CONCORD_TRACE=1` records everything that crosses a seam. Rust cannot log every
+function call without annotating every function, and the volume would bury the
+signal anyway - but four funnels carry effectively all of it, and each is the
+single place its kind of thing passes through:
+
+| Target | What it records |
+| --- | --- |
+| `command` | every `AppCommand` dispatched, whole |
+| `event` | every `AppEvent` published - gateway, injected or replayed |
+| `rest` | `-> METHOD /path?query` and `<- status ... elapsed_ms` per request |
+| `gateway` | every frame in and out, payload included |
+
+Trace implies debug: somebody who asked for every command did not mean to
+switch the ordinary diagnostics off.
+
+```
+CONCORD_TOKEN=demo CONCORD_TRACE=1 CONCORD_LOG_FILE=/tmp/concord.log \
+  cargo run -p concord-tui --features fixtures
+```
+
+### What is kept out
+
+A trace of a real session is a file worth being careful with. Two things are
+withheld and both are tested:
+
+- Credentials inside a command are `Secret`, which prints as `[redacted]`.
+- The account token in an outbound IDENTIFY is blanked by `redact_token`. A
+  frame it cannot parse is withheld entirely rather than printed on the guess
+  that it holds no token.
+
+Everything else is written as it is, including a gateway dispatch this build
+does not model yet - that being the only way to see one at all.
