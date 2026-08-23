@@ -32,7 +32,7 @@ where
     F: Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 {
     let mut panel = column()
-        .w(px(layout::MEMBERS + 80.))
+        .w_full()
         .h_full()
         .bg(rgb(active().surface_sunken))
         .border_l_1()

@@ -6659,14 +6659,18 @@ impl Workspace {
             cx.notify();
         });
 
+        let container = gpui::div()
+            .w_full()
+            .h_full();
+
         match view {
-            Some(view) => gpui::div()
+            Some(view) => container
                 .child(profile_view(view, self.options.display.circular_avatars, Some(close_listener.clone())))
                 .children(friendship)
                 .children(moderation),
             // The fetch is in flight. A skeleton with the id keeps the panel
             // from flashing empty.
-            None => gpui::div().child(profile_view(
+            None => container.child(profile_view(
                 &ProfileView {
                     display_name: user_id.get().to_string(),
                     handle: None,
