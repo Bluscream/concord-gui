@@ -7270,10 +7270,10 @@ impl Workspace {
     /// Whether the open channel is a thread, which decides if thread controls
     /// apply at all.
     fn in_thread(&self) -> bool {
-        self.model
-            .channels
-            .get(self.model.selected_channel)
-            .is_some_and(|channel| channel.kind == ChannelKind::Thread)
+        self.nav
+            .channel
+            .and_then(|id| self.last_state.as_ref().and_then(|s| s.channel(id)))
+            .is_some_and(|c| c.is_thread())
     }
 
     /// A DM or group DM with no call already running can be called.
@@ -10908,12 +10908,18 @@ impl Workspace {
 
     /// The ordinary message view.
     fn chat_content(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let channel_name = self
-            .model
-            .channels
-            .get(self.model.selected_channel)
+        let selected_channel_opt = self
+            .nav
+            .channel
+            .and_then(|id| self.last_state.as_ref().and_then(|s| s.channel(id)));
+
+        let channel_name = selected_channel_opt
             .map(|c| c.name.clone())
             .unwrap_or_default();
+
+        let channel_glyph = selected_channel_opt
+            .map(|c| if c.is_thread() { "\u{1F4AC}" } else { ChannelKind::Text.glyph() })
+            .unwrap_or_else(|| ChannelKind::Text.glyph());
 
         column()
             .flex_1()
@@ -10927,7 +10933,7 @@ impl Workspace {
                     .child(
                         gpui::div()
                             .text_color(rgb(active().text_subtle))
-                            .child(ChannelKind::Text.glyph()),
+                            .child(channel_glyph),
                     )
                     .child(
                         gpui::div()
@@ -10941,112 +10947,28 @@ impl Workspace {
                     .when(self.in_thread(), |header| {
                         header
                             .child(
-                                gpui::div()
-                                    .id("thread-follow")
-                                    .px(px(space::SM))
-                                    .py(px(space::XS))
-                                    .rounded(px(layout::RADIUS))
-                                    .cursor_pointer()
-                                    .text_size(px(scaled(text::XS)))
-                                    .text_color(rgb(active().text_muted))
-                                    .hover(|style| style.bg(rgb(active().surface_hover)))
-                                    .child("follow")
+                                icon_button("thread-follow", "\u{2606}", "Follow thread", false)
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.set_thread_followed(true);
                                         cx.notify();
                                     })),
                             )
                             .child(
-                                gpui::div()
-                                    .id("thread-notify-all")
-                                    .px(px(space::SM))
-                                    .py(px(space::XS))
-                                    .rounded(px(layout::RADIUS))
-                                    .cursor_pointer()
-                                    .text_size(px(scaled(text::XS)))
-                                    .text_color(rgb(active().text_muted))
-                                    .hover(|style| style.bg(rgb(active().surface_hover)))
-                                    .child("all")
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.set_thread_notification_level(2);
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                gpui::div()
-                                    .id("thread-notify-mentions")
-                                    .px(px(space::SM))
-                                    .py(px(space::XS))
-                                    .rounded(px(layout::RADIUS))
-                                    .cursor_pointer()
-                                    .text_size(px(scaled(text::XS)))
-                                    .text_color(rgb(active().text_muted))
-                                    .hover(|style| style.bg(rgb(active().surface_hover)))
-                                    .child("mentions")
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.set_thread_notification_level(4);
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                gpui::div()
-                                    .id("thread-notify-none")
-                                    .px(px(space::SM))
-                                    .py(px(space::XS))
-                                    .rounded(px(layout::RADIUS))
-                                    .cursor_pointer()
-                                    .text_size(px(scaled(text::XS)))
-                                    .text_color(rgb(active().text_muted))
-                                    .hover(|style| style.bg(rgb(active().surface_hover)))
-                                    .child("none")
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.set_thread_notification_level(8);
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                gpui::div()
-                                    .id("thread-mute")
-                                    .px(px(space::SM))
-                                    .py(px(space::XS))
-                                    .rounded(px(layout::RADIUS))
-                                    .cursor_pointer()
-                                    .text_size(px(scaled(text::XS)))
-                                    .text_color(rgb(active().text_muted))
-                                    .hover(|style| style.bg(rgb(active().surface_hover)))
-                                    .child("mute thread")
+                                icon_button("thread-mute", "\u{1F515}", "Mute thread notifications", false)
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.set_thread_muted(true);
                                         cx.notify();
                                     })),
                             )
                             .child(
-                                gpui::div()
-                                    .id("thread-pin")
-                                    .px(px(space::SM))
-                                    .py(px(space::XS))
-                                    .rounded(px(layout::RADIUS))
-                                    .cursor_pointer()
-                                    .text_size(px(scaled(text::XS)))
-                                    .text_color(rgb(active().text_muted))
-                                    .hover(|style| style.bg(rgb(active().surface_hover)))
-                                    .child("pin thread")
+                                icon_button("thread-pin", "\u{1F4D6}", "Pin thread", false)
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.set_thread_pinned(true);
                                         cx.notify();
                                     })),
                             )
                             .child(
-                                gpui::div()
-                                    .id("thread-rename")
-                                    .px(px(space::SM))
-                                    .py(px(space::XS))
-                                    .rounded(px(layout::RADIUS))
-                                    .cursor_pointer()
-                                    .text_size(px(scaled(text::XS)))
-                                    .text_color(rgb(active().text_muted))
-                                    .hover(|style| style.bg(rgb(active().surface_hover)))
-                                    .child("rename")
+                                icon_button("thread-rename", "\u{270F}", "Rename thread", false)
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.prompt =
                                             Some((Prompt::ThreadName, Composer::default()));
@@ -11054,48 +10976,21 @@ impl Workspace {
                                     })),
                             )
                             .child(
-                                gpui::div()
-                                    .id("thread-lock")
-                                    .px(px(space::SM))
-                                    .py(px(space::XS))
-                                    .rounded(px(layout::RADIUS))
-                                    .cursor_pointer()
-                                    .text_size(px(scaled(text::XS)))
-                                    .text_color(rgb(active().text_muted))
-                                    .hover(|style| style.bg(rgb(active().surface_hover)))
-                                    .child("lock")
+                                icon_button("thread-lock", "\u{1F512}", "Lock thread", false)
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.set_thread_locked(true);
                                         cx.notify();
                                     })),
                             )
                             .child(
-                                gpui::div()
-                                    .id("thread-delete")
-                                    .px(px(space::SM))
-                                    .py(px(space::XS))
-                                    .rounded(px(layout::RADIUS))
-                                    .cursor_pointer()
-                                    .text_size(px(scaled(text::XS)))
-                                    .text_color(rgb(active().danger))
-                                    .hover(|style| style.bg(rgb(active().surface_hover)))
-                                    .child("delete")
+                                icon_button("thread-delete", "\u{1F5D1}", "Delete thread", true)
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.delete_thread();
                                         cx.notify();
                                     })),
                             )
                             .child(
-                                gpui::div()
-                                    .id("thread-archive")
-                                    .px(px(space::SM))
-                                    .py(px(space::XS))
-                                    .rounded(px(layout::RADIUS))
-                                    .cursor_pointer()
-                                    .text_size(px(scaled(text::XS)))
-                                    .text_color(rgb(active().text_muted))
-                                    .hover(|style| style.bg(rgb(active().surface_hover)))
-                                    .child("archive")
+                                icon_button("thread-archive", "\u{1F4E6}", "Archive thread", false)
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.set_thread_archived(true);
                                         cx.notify();
@@ -11275,16 +11170,7 @@ impl Workspace {
                         let call_channel = self.nav.channel;
                         let call_name = channel_name.clone();
                         header.child(
-                            gpui::div()
-                                .id("dm-call")
-                                .px(px(space::SM))
-                                .py(px(space::XS))
-                                .rounded(px(layout::RADIUS))
-                                .cursor_pointer()
-                                .bg(rgb(active().surface_hover))
-                                .text_size(px(scaled(text::XS)))
-                                .text_color(rgb(active().success))
-                                .child("call")
+                            icon_button("dm-call", "\u{1F4DE}", "Start voice call", false)
                                 .on_click(cx.listener(move |this, _event, _window, cx| {
                                     if let Some(channel_id) = call_channel {
                                         this.join_voice(channel_id, call_name.clone());
@@ -11528,87 +11414,6 @@ impl Workspace {
             .border_color(rgb(active().border))
             .text_size(px(scaled(text::XS)))
             .text_color(rgb(active().text_subtle))
-            // Coloured dots rather than the words "online idle dnd invisible":
-            // the state is a colour everywhere else in the client, and the
-            // name belongs in a tooltip. Drawn rather than emoji - the obvious
-            // glyphs have no coverage in the shipped fonts and render as boxes.
-            .children(
-                [
-                    (
-                        "status-online",
-                        Presence::Online,
-                        PresenceStatus::Online,
-                        t!("presence-online"),
-                    ),
-                    (
-                        "status-idle",
-                        Presence::Idle,
-                        PresenceStatus::Idle,
-                        t!("presence-idle"),
-                    ),
-                    (
-                        "status-dnd",
-                        Presence::Dnd,
-                        PresenceStatus::DoNotDisturb,
-                        t!("presence-dnd"),
-                    ),
-                    (
-                        "status-invisible",
-                        Presence::Offline,
-                        PresenceStatus::Offline,
-                        t!("presence-invisible"),
-                    ),
-                ]
-                .map(|(id, presence, status, tooltip)| {
-                    presence_swatch(id, presence, tooltip, self.status == status).on_click(
-                        cx.listener(move |this, _event, _window, cx| {
-                            this.set_status(status);
-                            cx.notify();
-                        }),
-                    )
-                }),
-            )
-            .child(
-                gpui::div()
-                    .id("custom-status")
-                    .px(px(space::SM))
-                    .rounded(px(layout::RADIUS))
-                    .cursor_pointer()
-                    .text_color(rgb(active().text_subtle))
-                    .hover(|style| style.text_color(rgb(active().text)))
-                    .child(if self.custom_status.is_empty() {
-                        t!("action-set-status")
-                    } else {
-                        self.custom_status.clone()
-                    })
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.editing_status = Some(Composer::default());
-                        cx.notify();
-                    }))
-                    .tooltip(|_window, cx| cx.new(|_| crate::ui::chrome::Tooltip::new("Set custom status message")).into()),
-            )
-            // The activity sits next to the status because they are the two
-            // halves of the same thing - what others see under your name.
-            .child(
-                gpui::div()
-                    .id("set-activity")
-                    .px(px(space::SM))
-                    .rounded(px(layout::RADIUS))
-                    .cursor_pointer()
-                    .text_color(rgb(active().text_subtle))
-                    .hover(|style| style.text_color(rgb(active().text)))
-                    .child(match &self.current_activity {
-                        Some(activity) => {
-                            format!("{} {}", activity_kind_label(activity.kind), activity.name)
-                        }
-                        None => t!("action-set-activity"),
-                    })
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.open_activity_editor();
-                        cx.notify();
-                    }))
-                    .tooltip(|_window, cx| cx.new(|_| crate::ui::chrome::Tooltip::new("Set custom activity / rich presence")).into()),
-            )
             .child(presence_dot(if self.model.connected {
                 Presence::Online
             } else {
