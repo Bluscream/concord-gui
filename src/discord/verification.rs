@@ -131,7 +131,7 @@ impl fmt::Display for GuildParticipationRestriction {
 }
 
 impl DiscordState {
-    pub(crate) fn guild_participation_block(
+    pub fn guild_participation_block(
         &self,
         channel: &ChannelState,
     ) -> Option<GuildParticipationBlock> {

@@ -1,0 +1,18 @@
+[package]
+name = "concord-fixtures"
+version = "2.5.9"
+edition = "2024"
+rust-version = "1.90"
+description = "A fake Discord for the concord front ends to develop and test against"
+license = "GPL-3.0-only"
+publish = false
+
+# Not a dev-dependency of anything: a front end depends on this normally, with
+# its own `fixtures` feature deciding whether to. That is what lets you run the
+# real binary against a fake server rather than only reaching this from tests.
+[dependencies]
+concord = { path = "../..", features = ["fixtures"] }
+chrono = { version = "0.4.44", default-features = false, features = ["clock"] }
+# Generates the placeholder avatars and attachments, so a fake account looks
+# like an account rather than a wall of missing images.
+image = "0.25.10"

@@ -24,7 +24,7 @@ use concord::discord::{
 use concord::risk::RiskKind;
 use concord::t;
 use concord::token_store;
-use concord::tui::AttachmentViewerZoom;
+use concord_ui::model::AttachmentViewerZoom;
 use gpui::{
     ClipboardItem, Context, FocusHandle, KeyDownEvent, PathPromptOptions, Window, WindowHandle,
     prelude::*, px, rgb,
@@ -36,7 +36,7 @@ use crate::model::projection::{self, Navigation, Selection};
 use crate::notify;
 use crate::session::{SessionHandle, Update};
 
-use concord::tui::keybindings::external::Resolution;
+use concord_ui::keybindings::external::Resolution;
 
 use crate::keymap::{self, Keymap};
 use crate::theme::{self, Presence, active, layout, scaled, space, text};

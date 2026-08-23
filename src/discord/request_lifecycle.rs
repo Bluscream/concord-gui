@@ -63,7 +63,7 @@ pub(crate) struct GuildMemberSearchTarget {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GuildMemberSearchSurface {
+pub enum GuildMemberSearchSurface {
     Autocomplete,
     Popup,
 }
@@ -82,7 +82,7 @@ impl GuildMemberSearchSurface {
         }
     }
 
-    pub(crate) const fn result_limit(self) -> u16 {
+    pub const fn result_limit(self) -> u16 {
         match self {
             Self::Autocomplete => 10,
             Self::Popup => 100,
@@ -263,7 +263,7 @@ impl RequestLifecycle {
         self.newer_history.begin_request(channel_id, after, mode)
     }
 
-    pub(crate) fn next_forum_post_request(
+    pub fn next_forum_post_request(
         &mut self,
         target: Option<ForumPostRequestTarget>,
     ) -> Option<(
@@ -285,7 +285,7 @@ impl RequestLifecycle {
             .mark_failed(channel_id, archive_state, offset);
     }
 
-    pub(crate) fn next_pinned_message_request(
+    pub fn next_pinned_message_request(
         &mut self,
         channel_id: Option<Id<ChannelMarker>>,
     ) -> Option<Id<ChannelMarker>> {
@@ -296,7 +296,7 @@ impl RequestLifecycle {
         self.pinned_messages.mark_failed(channel_id);
     }
 
-    pub(crate) fn next_member_hydration_requests(
+    pub fn next_member_hydration_requests(
         &mut self,
         missing: Vec<(Id<GuildMarker>, Vec<Id<UserMarker>>)>,
         now: Instant,
@@ -304,7 +304,7 @@ impl RequestLifecycle {
         self.member_hydration.next(missing, now)
     }
 
-    pub(crate) fn set_guild_member_search_target(
+    pub fn set_guild_member_search_target(
         &mut self,
         surface: GuildMemberSearchSurface,
         target: Option<GuildMemberSearchTarget>,
@@ -313,14 +313,14 @@ impl RequestLifecycle {
         self.member_searches[surface.index()].set_target(target, surface.min_query_chars(), now);
     }
 
-    pub(crate) fn guild_member_search_deadline(
+    pub fn guild_member_search_deadline(
         &self,
         surface: GuildMemberSearchSurface,
     ) -> Option<Instant> {
         self.member_searches[surface.index()].pending_deadline()
     }
 
-    pub(crate) fn next_due_guild_member_search(
+    pub fn next_due_guild_member_search(
         &mut self,
         surface: GuildMemberSearchSurface,
         now: Instant,
@@ -328,7 +328,7 @@ impl RequestLifecycle {
         self.member_searches[surface.index()].next_due(now)
     }
 
-    pub(crate) fn set_member_list_subscription_target(
+    pub fn set_member_list_subscription_target(
         &mut self,
         target: Option<MemberListSubscriptionTarget>,
         now: Instant,
@@ -336,28 +336,25 @@ impl RequestLifecycle {
         self.member_list_subscriptions.set_target(target, now);
     }
 
-    pub(crate) fn member_list_subscription_deadline(&self) -> Option<Instant> {
+    pub fn member_list_subscription_deadline(&self) -> Option<Instant> {
         self.member_list_subscriptions.pending_deadline()
     }
 
-    pub(crate) fn next_due_member_list_subscription(
+    pub fn next_due_member_list_subscription(
         &mut self,
         now: Instant,
     ) -> Option<MemberListSubscriptionTarget> {
         self.member_list_subscriptions.next_due(now)
     }
 
-    pub(crate) fn next_thread_preview_requests(
+    pub fn next_thread_preview_requests(
         &mut self,
         missing: Vec<(Id<ChannelMarker>, Id<MessageMarker>)>,
     ) -> Vec<(Id<ChannelMarker>, Id<MessageMarker>)> {
         self.thread_previews.next(missing)
     }
 
-    pub(crate) fn remove_thread_preview_request(
-        &mut self,
-        key: (Id<ChannelMarker>, Id<MessageMarker>),
-    ) {
+    pub fn remove_thread_preview_request(&mut self, key: (Id<ChannelMarker>, Id<MessageMarker>)) {
         self.thread_previews.remove(key);
     }
 
@@ -399,7 +396,7 @@ impl RequestLifecycle {
         }
     }
 
-    pub(crate) fn next_read_ack_deadline(&self) -> Option<Instant> {
+    pub fn next_read_ack_deadline(&self) -> Option<Instant> {
         self.read_acks.next_deadline()
     }
 

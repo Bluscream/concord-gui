@@ -12,9 +12,12 @@ mod commands;
 mod display_name;
 mod emoji;
 mod events;
+pub mod extension;
 mod fingerprint;
-#[cfg(feature = "fixtures")]
 pub mod fixtures;
+#[cfg(any(test, feature = "fixtures"))]
+pub use events::test_builders;
+#[cfg(feature = "fixtures")]
 mod gateway;
 mod guild;
 pub mod ids;
@@ -53,6 +56,7 @@ pub use application_commands::{
     ApplicationCommandOptionInfo, application_command_content_is_complete,
     application_command_option_scope, parsed_application_command_option_names,
 };
+pub use extension::{ClientExtension, EventInjector};
 // Public so that out-of-crate front-ends can drive the login flows and pass
 // the resulting session to `app::Session::start`.
 pub use account_form::{AccountField, AccountForm, AccountFormProblem};
@@ -62,19 +66,21 @@ pub use builtin_commands::{
     BuiltinSlashCommandInfo, BuiltinSlashCommandParse, BuiltinSlashCommandSubmit,
     builtin_slash_commands, parse_builtin_slash_command,
 };
-pub(crate) use capabilities::MessageSendLimits;
+pub use capabilities::MessageSendLimits;
 pub use capabilities::{
     BASE_ATTACHMENT_LIMIT_BYTES, GuildBoostTier, PremiumTier, effective_attachment_limit_bytes,
 };
 #[cfg(test)]
 pub(crate) use capabilities::{BASE_MESSAGE_CHARACTER_LIMIT, NITRO_MESSAGE_CHARACTER_LIMIT};
-pub(crate) use channel::is_thread_kind;
 pub use channel::{
     ChannelInfo, ChannelRecipientInfo, ForumTagInfo, PermissionOverwriteInfo,
-    PermissionOverwriteKind, ThreadMetadataInfo,
+    PermissionOverwriteKind, ThreadMetadataInfo, is_thread_kind,
 };
 pub use client::DiscordClient;
-pub(crate) use client::validate_token_header;
+/// Public because a front end checks a pasted token before spending a request
+/// on it: the shape is knowable locally, and asking Discord to reject it is
+/// slower and noisier.
+pub use client::validate_token_header;
 pub use commands::next_message_nonce;
 pub use commands::{
     AppCommand, AttachmentDownloadId, DownloadAttachmentSource, ForumPostArchiveState,
@@ -88,8 +94,6 @@ pub use commands::{
     MessageAttachmentUpload, ReactionEmoji,
 };
 pub use emoji::custom_emoji_image_url;
-#[cfg(test)]
-pub(crate) use events::test_builders;
 pub use events::{
     AppEvent, GatewayDispatchInfo, GuildMemberListItem, GuildMemberListOperation,
     GuildMemberListUpdateInfo, GuildMembersChunkInfo, MessageHistoryLoadTarget,
@@ -97,7 +101,7 @@ pub use events::{
     SequencedAppEvent, ThreadListSyncInfo, ThreadMemberUpdateInfo, ThreadMembersUpdateInfo,
     UserGuildSettingsInfo,
 };
-pub(crate) use fingerprint::load_client_fingerprint_and_http;
+pub use fingerprint::load_client_fingerprint_and_http;
 pub use guild::{
     CustomEmojiInfo, GuildFolder, GuildOnboardingInfo, GuildOnboardingMode, GuildVerificationLevel,
 };
@@ -109,7 +113,7 @@ pub use message::{
     MessageInteractionInfo, MessageKind, MessageReferenceInfo, MessageSnapshotInfo, PollAnswerInfo,
     PollInfo, ReactionInfo, ReactionUserInfo, ReplyInfo, StickerFormat, StickerInfo,
 };
-pub(crate) use message_policy::{
+pub use message_policy::{
     validate_attachment_sizes, validate_message_content, validate_message_content_length,
     validate_message_payload,
 };
@@ -127,7 +131,7 @@ pub use profile::{
 };
 pub use read::ReadStateInfo;
 pub use remote_config::RemoteConfig;
-pub(crate) use request_lifecycle::GuildMemberSearchSurface;
+pub use request_lifecycle::GuildMemberSearchSurface;
 pub use rest::{
     AFK_TIMEOUTS, AccountEdit, AuditLogAction, AuditLogEntryInfo, AuthSession, AuthorisedApp,
     AutoModAction, AutoModRule, AutoModTrigger, BackupCode, ChannelEdit, Connection,
@@ -174,7 +178,7 @@ pub use voice::{
     StreamServerInfo, StreamUpdateInfo, VoiceConnectionStatus, VoiceScope, VoiceServerInfo,
     VoiceSoundKind, VoiceStateInfo,
 };
-pub(crate) use voice::{
+pub use voice::{
     VoiceAudioSourceOptions, VoiceAudioSources, list_stream_capture_targets,
     list_voice_audio_sources,
 };

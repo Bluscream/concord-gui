@@ -10,9 +10,9 @@
 //! action does to a `Workspace`.
 
 use concord::config;
-use concord::tui::keybindings::KeyBindings;
-use concord::tui::keybindings::external::UiAction;
-use concord::tui::keybindings::external::{Key, KeyPress, PendingSequence, Resolution};
+use concord_ui::keybindings::KeyBindings;
+use concord_ui::keybindings::external::UiAction;
+use concord_ui::keybindings::external::{Key, KeyPress, PendingSequence, Resolution};
 use gpui::{Context, KeyDownEvent};
 
 use crate::ui::messages::MessageAction;

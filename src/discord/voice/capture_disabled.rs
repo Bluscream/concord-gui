@@ -37,7 +37,7 @@ impl StreamCaptureHandle {
     }
 }
 
-pub(crate) fn list_stream_capture_targets() -> Result<Vec<StreamCaptureTarget>, String> {
+pub fn list_stream_capture_targets() -> Result<Vec<StreamCaptureTarget>, String> {
     Err(STREAM_BROADCAST_FEATURE_DISABLED.to_owned())
 }
 

@@ -37,8 +37,8 @@ mod state;
 mod stream;
 mod system_audio;
 
-pub(crate) use capture::list_stream_capture_targets;
-pub(crate) use devices::{VoiceAudioSourceOptions, VoiceAudioSources, list_voice_audio_sources};
+pub use capture::list_stream_capture_targets;
+pub use devices::{VoiceAudioSourceOptions, VoiceAudioSources, list_voice_audio_sources};
 #[cfg(all(feature = "voice-playback", not(test)))]
 use gateway::voice_speaking_payload;
 #[cfg(test)]

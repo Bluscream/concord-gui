@@ -3,7 +3,7 @@
 //! These run headlessly, so the whole core -> projection -> view-model path is
 //! verified in CI without a Discord account, a token, or a display.
 
-use concord::discord::fixtures::demo_state;
+use concord_fixtures::world::demo_state;
 
 use crate::model::message::project_messages;
 use crate::model::projection::{Navigation, Selection, project, typing_names};
@@ -529,7 +529,7 @@ fn emoji_ids_survive_parsing_for_cdn_lookup() {
 
 #[test]
 fn demo_history_paging_terminates() {
-    use concord::discord::fixtures;
+    use concord_fixtures::world as fixtures;
 
     let mut state = demo_state();
     let channel = concord::discord::Id::new(111);
@@ -550,7 +550,7 @@ fn demo_history_paging_terminates() {
 
 #[test]
 fn demo_history_prepends_older_messages_in_order() {
-    use concord::discord::fixtures;
+    use concord_fixtures::world as fixtures;
 
     let mut state = demo_state();
     let channel = concord::discord::Id::new(111);
@@ -568,7 +568,7 @@ fn demo_history_prepends_older_messages_in_order() {
 
 #[test]
 fn demo_attachments_land_on_the_sent_message() {
-    use concord::discord::fixtures;
+    use concord_fixtures::world as fixtures;
 
     let mut state = demo_state();
     let channel = concord::discord::Id::new(111);
@@ -593,7 +593,7 @@ fn demo_attachments_land_on_the_sent_message() {
 
 #[test]
 fn demo_send_updates_the_channel_last_message() {
-    use concord::discord::fixtures;
+    use concord_fixtures::world as fixtures;
 
     let mut state = demo_state();
     let channel = concord::discord::Id::new(111);
@@ -826,15 +826,15 @@ fn an_empty_poll_does_not_divide_by_zero() {
 
     let mut state = demo_state();
     let channel = concord::discord::Id::new(111);
-    let id = concord::discord::fixtures::append_message(
+    let id = concord_fixtures::world::append_message(
         &mut state,
         channel,
         Some(concord::discord::Id::new(10)),
-        concord::discord::fixtures::demo_user_id(),
+        concord_fixtures::world::demo_user_id(),
         "blu",
         "",
     );
-    concord::discord::fixtures::set_poll(&mut state, channel, id, poll);
+    concord_fixtures::world::set_poll(&mut state, channel, id, poll);
 
     let rows = project_messages(&state, channel, state.current_user_id());
     let projected = rows
@@ -848,7 +848,7 @@ fn an_empty_poll_does_not_divide_by_zero() {
 
 #[test]
 fn voting_updates_counts_and_withdraws_the_previous_choice() {
-    use concord::discord::fixtures;
+    use concord_fixtures::world as fixtures;
 
     let mut state = demo_state();
     let channel = concord::discord::Id::new(111);
@@ -939,7 +939,7 @@ fn application_commands_complete_with_a_trailing_space() {
 
 #[test]
 fn message_links_are_collected_from_the_rendered_body() {
-    use concord::discord::fixtures;
+    use concord_fixtures::world as fixtures;
 
     let mut state = demo_state();
     let channel = concord::discord::Id::new(111);
@@ -1000,8 +1000,8 @@ fn zoom_scales_type_and_clamps_at_both_ends() {
 
 #[test]
 fn demo_acking_a_channel_clears_its_unread_state() {
-    use concord::discord::fixtures;
     use concord::discord::{ChannelUnreadState, Id};
+    use concord_fixtures::world as fixtures;
 
     let mut state = demo_state();
     // 112 carries mentions in the fixture, the strongest unread state.
@@ -1026,7 +1026,7 @@ fn demo_acking_a_channel_clears_its_unread_state() {
 #[test]
 fn demo_thread_pinning_preserves_other_flags() {
     use concord::discord::Id;
-    use concord::discord::fixtures;
+    use concord_fixtures::world as fixtures;
 
     let mut state = demo_state();
     let thread = Id::new(130);
@@ -1050,7 +1050,7 @@ fn demo_thread_pinning_preserves_other_flags() {
 #[test]
 fn demo_forum_post_creates_a_thread_with_its_opening_message() {
     use concord::discord::Id;
-    use concord::discord::fixtures;
+    use concord_fixtures::world as fixtures;
 
     let mut state = demo_state();
     let forum = Id::new(114);
@@ -1132,7 +1132,7 @@ fn image_format_comes_from_the_extension_not_a_default() {
 
 #[test]
 fn the_demo_preview_encodes_to_a_real_png() {
-    use concord::discord::fixtures;
+    use concord_fixtures::world as fixtures;
 
     let bytes = fixtures::demo_preview_png(7);
     assert!(!bytes.is_empty(), "the encoder should produce output");
@@ -1146,8 +1146,8 @@ fn the_demo_preview_encodes_to_a_real_png() {
 #[test]
 fn the_gui_keymap_resolves_the_same_actions_the_tui_does() {
     use concord::config::KeymapOptions;
-    use concord::tui::keybindings::KeyBindings;
-    use concord::tui::keybindings::external::{Key, KeyPress, PendingSequence, Resolution};
+    use concord_ui::keybindings::KeyBindings;
+    use concord_ui::keybindings::external::{Key, KeyPress, PendingSequence, Resolution};
 
     let bindings = KeyBindings::from_options(&KeymapOptions::default());
     let press = |key, ctrl| KeyPress {
@@ -1174,14 +1174,14 @@ fn the_gui_keymap_resolves_the_same_actions_the_tui_does() {
     let mut pending = PendingSequence::default();
     assert_eq!(
         bindings.resolve(&mut pending, press(Key::Char('q'), false)),
-        Resolution::Action(concord::tui::keybindings::external::UiAction::Quit),
+        Resolution::Action(concord_ui::keybindings::external::UiAction::Quit),
         "the TUI default really does bind a bare letter"
     );
 }
 
 #[test]
 fn every_ui_action_is_handled_or_explicitly_declined() {
-    use concord::tui::keybindings::external::UiAction;
+    use concord_ui::keybindings::external::UiAction;
 
     // The dispatcher's match is exhaustive, so this cannot fail to compile
     // while an action is unhandled. What it checks is that the action list is
@@ -1213,14 +1213,14 @@ fn a_live_composer_never_loses_a_plain_character_to_the_keymap() {
     // character, or the first letter of "quick question" closes the client.
     assert_eq!(
         keymap.resolve(&event("q", Modifiers::none()), true),
-        concord::tui::keybindings::external::Resolution::Unbound
+        concord_ui::keybindings::external::Resolution::Unbound
     );
 
     // With focus elsewhere the same key is a binding again, which is what
     // makes the keymap worth honouring at all.
     assert!(matches!(
         keymap.resolve(&event("q", Modifiers::none()), false),
-        concord::tui::keybindings::external::Resolution::Action(_)
+        concord_ui::keybindings::external::Resolution::Action(_)
     ));
 }
 
@@ -1277,7 +1277,7 @@ fn demo_mode_answers_every_command_the_ui_can_send() {
     // who has not signed in. This asserts the diff stays closed:
     //
     //   comm -23 <(grep -rhoE "AppCommand::[A-Z][A-Za-z]+" crates/gui/src/ui/ | sort -u) \
-    //            <(grep -rhoE "AppCommand::[A-Z][A-Za-z]+" crates/gui/src/demo.rs | sort -u)
+    //            <(grep -rhoE "AppCommand::[A-Z][A-Za-z]+" crates/fixtures/src/backend.rs | sort -u)
     //
     // Kept as a source scan rather than a runtime check because the handler
     // is a match with a catch-all: an unhandled command is invisible at
@@ -1305,7 +1305,10 @@ fn demo_mode_answers_every_command_the_ui_can_send() {
         ]
         .concat(),
     );
-    let demo = extract(include_str!("../demo.rs"));
+    // The handler lives in `concord-fixtures` now, shared with the terminal
+    // client. Scanned by path rather than by importing it, for the reason
+    // above: an unhandled command is invisible at runtime by construction.
+    let demo = extract(include_str!("../../../fixtures/src/backend.rs"));
 
     let unanswered: Vec<_> = ui.difference(&demo).cloned().collect();
     assert!(
@@ -1356,7 +1359,7 @@ fn activities_reach_the_member_list_and_profile() {
     // Profiles are populated on demand, the same way the real client fetches
     // them, so the test asks for one first.
     let mut state = state;
-    concord::discord::fixtures::add_profile(&mut state, Id::new(1004), Some(Id::new(10)));
+    concord_fixtures::world::add_profile(&mut state, Id::new(1004), Some(Id::new(10)));
     let profile =
         crate::model::projection::project_profile(&state, Id::new(1004), Some(Id::new(10)))
             .expect("fixture defines a profile");

@@ -102,10 +102,10 @@ pub struct VoiceStateInfo {
     pub self_video: bool,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl VoiceStateInfo {
-    pub(crate) fn test(
+    pub fn test(
         guild_id: Id<GuildMarker>,
         channel_id: Option<Id<ChannelMarker>>,
         user_id: Id<UserMarker>,
@@ -168,10 +168,10 @@ impl VoiceServerInfo {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl VoiceServerInfo {
-    pub(crate) fn test(guild_id: Id<GuildMarker>) -> Self {
+    pub fn test(guild_id: Id<GuildMarker>) -> Self {
         Self {
             guild_id: Some(guild_id),
             channel_id: None,

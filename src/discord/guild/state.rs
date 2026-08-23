@@ -93,7 +93,7 @@ impl DiscordState {
     /// Limits for the current user posting in `channel_id`. Account benefits
     /// control message length and uploads. Guild benefits can further raise the
     /// per-file upload limit for messages sent in that guild.
-    pub(crate) fn message_send_limits(&self, channel_id: Id<ChannelMarker>) -> MessageSendLimits {
+    pub fn message_send_limits(&self, channel_id: Id<ChannelMarker>) -> MessageSendLimits {
         let user_tier = self.session.current_user_premium_tier.unwrap_or_default();
         let guild_attachment_limit = self
             .channel(channel_id)

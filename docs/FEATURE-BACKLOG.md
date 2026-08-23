@@ -251,7 +251,10 @@ Still to do, in order:
    sidebar: a channel list that is wrong looks like a bug, one that is absent
    looks like loading.
 
-   Messages are cached and still not replayed - the channel view fills from
+Cached messages are replayed when a channel opens, so a channel has content
+before the fetch lands. Messages that had attachments, embeds, stickers or a
+poll are skipped, since none of those are cached and a message drawn without
+its picture is wrong in the way that looks like a bug.
    the gateway. That is the next thing worth doing, and it needs a decision
    about what a cached message looks like next to a live one.
 4. **Deletion.** Tombstones are in the schema and nothing writes them.
@@ -274,3 +277,36 @@ only serves the clients in this repository is a core that has to be reopened
 later. `scripts/unreachable-commands.py` reports them under `core only` with the front
 end that would use each, so an entry that stops being true is a wrong sentence
 somebody can read rather than a silent exemption.
+
+### Storage, remaining
+
+5. ~~Eviction.~~ Done: `prune_messages` keeps the newest 200 per channel,
+   run once at startup. Users, guilds and channels are still unbounded, but
+   they are bounded in practice by how many exist.
+6. ~~Migrations.~~ Done: `schema_meta` records the version, older stores are
+   brought forward a step at a time, and a store written by a *newer* client is
+   refused rather than written to - a shared store may be in use by a client
+   this build knows nothing about. That one failure is logged visibly; every
+   other reason to go without a cache stays at debug.
+7. ~~Cache attachments.~~ Done: metadata, not bytes, so a replayed message has
+   its picture in the right place and the image itself loads from the CDN.
+   Embeds, stickers and polls are still uncached and still force a skip.
+11. ~~Evict rows of guilds that were left.~~ Done: `prune_orphans` drops
+    channels and members whose guild is tombstoned or absent, and
+    `prune_orphan_attachments` drops attachments whose message was evicted.
+    Both run at startup, after the message prune that creates the orphans.
+    Channels with no guild are left alone - a DM is one of those.
+8. ~~Cache channels.~~ Done: a cached guild draws its channel list, ordered by
+   the store so the cached sidebar and the live one agree. Only the columns a
+   sidebar entry needs are kept; overwrites, thread state and forum tags come
+   from the gateway.
+9. ~~Cache members.~~ Done, capped at 200 per guild. Keyed by guild and user
+   together, so the same account in two servers is two rows. Leaving is
+   tombstoned. The replayed member sets its `_present` flags to what the cache
+   actually holds, so a later partial update from the gateway patches it
+   rather than clearing it.
+10. ~~Tombstone writes for guilds and channels.~~ Done: leaving a guild or
+    losing a channel is remembered across restarts. `GuildUnavailable` caches
+    nothing, so an outage does not empty the sidebar. Rows Discord does not
+    stamp with a version use a wall-clock revision, so a rejoin outranks the
+    tombstone from when it was left.

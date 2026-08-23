@@ -240,7 +240,7 @@ impl DiscordState {
     /// an unread count, so the detail area is narrowed by comparing signatures
     /// around the write. Both the client's publisher and the test harness go
     /// through here so the two cannot drift apart.
-    pub(crate) fn apply_event_advancing(
+    pub fn apply_event_advancing(
         &mut self,
         event: &AppEvent,
         mut areas: SnapshotAreas,

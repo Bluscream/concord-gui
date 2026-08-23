@@ -101,10 +101,10 @@ impl GuildVerificationLevel {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl CustomEmojiInfo {
-    pub(crate) fn test(id: Id<EmojiMarker>, name: impl Into<String>) -> Self {
+    pub fn test(id: Id<EmojiMarker>, name: impl Into<String>) -> Self {
         Self {
             id,
             name: name.into(),

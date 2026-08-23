@@ -12,7 +12,7 @@ import subprocess
 import sys
 
 SOURCE = "src/discord/commands.rs"
-CLIENTS = {"tui": "src/tui", "gui": "crates/gui/src"}
+CLIENTS = {"tui": "crates/tui/src", "gui": "crates/gui/src"}
 
 # Commands the core builds on a client's behalf, so no client names the variant.
 #

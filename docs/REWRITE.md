@@ -11,7 +11,7 @@ The upstream crate is already layered for this. Measured, not assumed:
 | `src/discord/` | 85,277 | **0** references to `ratatui`/`crossterm` |
 | `src/app/` | 3,983 | **0** |
 | `src/config/`, `src/support/` | 3,040 | 0 |
-| `src/tui/` | 98,055 | the front-end being replaced |
+| `crates/tui/` | 98,055 | the front-end being replaced |
 
 `src/lib.rs` already exposes a library target (`App`, `DiscordClient`,
 `AppEvent`, `paths`, `token_store`, `config`). The interface between core and
@@ -38,7 +38,7 @@ concord-gui/
 └── crates/gui/         this rewrite
 ```
 
-Keeping `src/tui/` in-tree during the rewrite is deliberate: it is the
+Keeping `crates/tui/` in-tree during the rewrite is deliberate: it is the
 executable specification for what each of the 70 commands is supposed to do.
 
 ## Phases
@@ -115,7 +115,7 @@ Bridge over a channel, dispatching to entity updates on the foreground executor.
 
 ### Phase 3 (original note) — views
 
-`src/tui/ui/` (21,212 lines) and `src/tui/input/` (8,817) are the surfaces being
+`crates/tui/src/tui/ui/` (21,212 lines) and `crates/tui/src/tui/input/` (8,817) are the surfaces being
 replaced; `media/`, `keybindings/`, `message/` (~15k) are ported selectively.
 
 ### Phase 4 — media

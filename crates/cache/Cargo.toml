@@ -1,0 +1,26 @@
+[package]
+name = "concord-cache"
+version = "2.5.9"
+edition = "2024"
+rust-version = "1.90"
+description = "Offline cache for the concord Discord client"
+license = "GPL-3.0-only"
+publish = false
+
+[dependencies]
+# The core client. This crate sits between it and a front end: core keeps its
+# state in memory as it always did, and this one is what makes any of it
+# outlive the process.
+concord = { path = "../.." }
+chrono = { version = "0.4.44", default-features = false, features = ["clock"] }
+tokio = { version = "1", features = ["sync", "rt", "macros"] }
+# `any` is what makes the backend a runtime choice rather than a build-time
+# one, which is the whole point: a shared store is something someone points an
+# already-built client at.
+sqlx = { version = "0.8", default-features = false, features = [
+  "runtime-tokio-rustls",
+  "any",
+  "sqlite",
+  "mysql",
+  "macros",
+] }

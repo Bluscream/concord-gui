@@ -41,10 +41,10 @@ pub struct ChannelNotificationOverrideInfo {
     pub flags: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl ChannelNotificationOverrideInfo {
-    pub(crate) fn test(channel_id: Id<ChannelMarker>) -> Self {
+    pub fn test(channel_id: Id<ChannelMarker>) -> Self {
         Self {
             channel_id,
             message_notifications: None,
@@ -73,10 +73,10 @@ pub struct GuildNotificationSettingsInfo {
     pub channel_overrides: Vec<ChannelNotificationOverrideInfo>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl GuildNotificationSettingsInfo {
-    pub(crate) fn test(guild_id: Option<Id<GuildMarker>>) -> Self {
+    pub fn test(guild_id: Option<Id<GuildMarker>>) -> Self {
         Self {
             guild_id,
             message_notifications: None,

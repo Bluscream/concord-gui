@@ -4,7 +4,7 @@ use crate::{AppError, Result};
 /// Validate the stable parts of an outbound message before a transport builds
 /// its request. UI callers use this for immediate feedback and REST callers
 /// repeat it as a final safety boundary.
-pub(crate) fn validate_message_payload(
+pub fn validate_message_payload(
     content: &str,
     attachments: &[MessageAttachmentUpload],
     limits: MessageSendLimits,
@@ -23,17 +23,14 @@ pub(crate) fn validate_message_payload(
     )
 }
 
-pub(crate) fn validate_message_content(content: &str, max_content_chars: usize) -> Result<()> {
+pub fn validate_message_content(content: &str, max_content_chars: usize) -> Result<()> {
     if content.trim().is_empty() {
         return Err(AppError::EmptyMessageContent);
     }
     validate_message_content_length(content, max_content_chars)
 }
 
-pub(crate) fn validate_message_content_length(
-    content: &str,
-    max_content_chars: usize,
-) -> Result<()> {
+pub fn validate_message_content_length(content: &str, max_content_chars: usize) -> Result<()> {
     let len = content.chars().count();
     if len > max_content_chars {
         return Err(AppError::MessageTooLong {
@@ -47,7 +44,7 @@ pub(crate) fn validate_message_content_length(
 /// Discord applies its upload limit to each file rather than the sum. Accept
 /// metadata instead of upload objects so generated and re-statted files can be
 /// checked without cloning their bytes.
-pub(crate) fn validate_attachment_sizes<'a>(
+pub fn validate_attachment_sizes<'a>(
     attachment_count: usize,
     attachments: impl IntoIterator<Item = (&'a str, u64)>,
     upload_limit: u64,

@@ -23,10 +23,10 @@ pub struct ReadStateInfo {
     pub last_viewed: Option<u64>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl ReadStateInfo {
-    pub(crate) fn test(channel_id: Id<ChannelMarker>) -> Self {
+    pub fn test(channel_id: Id<ChannelMarker>) -> Self {
         Self {
             read_state_type: 0,
             channel_id,

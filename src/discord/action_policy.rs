@@ -141,20 +141,20 @@ impl fmt::Display for ActionBlockReason {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum ActionDecision {
+pub enum ActionDecision {
     Allowed,
     Blocked(ActionBlockReason),
 }
 
 impl ActionDecision {
-    pub(crate) const fn block_reason(self) -> Option<ActionBlockReason> {
+    pub const fn block_reason(self) -> Option<ActionBlockReason> {
         match self {
             Self::Allowed => None,
             Self::Blocked(reason) => Some(reason),
         }
     }
 
-    pub(crate) const fn optimistic_ui_block_reason(self) -> Option<ActionBlockReason> {
+    pub const fn optimistic_ui_block_reason(self) -> Option<ActionBlockReason> {
         match self {
             Self::Allowed | Self::Blocked(ActionBlockReason::PermissionDataUnavailable(_)) => None,
             Self::Blocked(reason) => Some(reason),
@@ -166,7 +166,7 @@ impl DiscordState {
     /// Full policy for a message submission. Reply and attachment permissions
     /// are conditional parts of the same user action, so both the composer and
     /// request boundary must evaluate them through this shared decision.
-    pub(crate) fn message_send_decision(
+    pub fn message_send_decision(
         &self,
         channel: &ChannelState,
         has_reply: bool,
@@ -180,7 +180,7 @@ impl DiscordState {
         )
     }
 
-    pub(crate) fn forum_post_decision(
+    pub fn forum_post_decision(
         &self,
         channel: &ChannelState,
         has_attachments: bool,
@@ -253,7 +253,7 @@ impl DiscordState {
             .map(|reason| reason.to_string())
     }
 
-    pub(crate) fn channel_action_decision(
+    pub fn channel_action_decision(
         &self,
         channel: &ChannelState,
         action: DiscordAction,

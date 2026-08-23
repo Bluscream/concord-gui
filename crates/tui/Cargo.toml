@@ -1,0 +1,91 @@
+[package]
+name = "concord-tui"
+version = "2.5.9"
+edition = "2024"
+rust-version = "1.90"
+description = "Terminal front-end for the concord Discord client core"
+license = "GPL-3.0-only"
+publish = false
+
+[[bin]]
+name = "concord"
+path = "src/main.rs"
+
+[dependencies]
+concord = { path = "../.." }
+# The offline cache. A front end rather than the core is what decides to keep
+# anything, which is why this is a dependency here and not there.
+concord-cache = { path = "../cache" }
+# The pieces shared with the GPUI front end.
+# The fake world, for running without an account.
+concord-fixtures = { path = "../fixtures", optional = true }
+concord-ui = { path = "../ui", features = ["terminal"] }
+anyhow = "1.0"
+emojis = "0.8.2"
+# Push-to-talk that works when the terminal is not focused. Optional and
+# per-platform, mirroring how the core gates the same set.
+global-hotkey = { version = "0.8.0", optional = true }
+arboard = { version = "3.6.1", features = ["wayland-data-control"] }
+notify-rust = "4"
+tempfile = "3"
+reqwest = { version = "0.12", default-features = false, features = [
+  "rustls-tls-webpki-roots-no-provider",
+  "json",
+] }
+rustls = { version = "0.23.39", default-features = false, features = [
+  "ring",
+  "std",
+] }
+chrono = { version = "0.4.44", default-features = false, features = ["clock"] }
+crossterm = { version = "0.29.0", features = ["event-stream", "osc52"] }
+futures = "0.3.32"
+ratatui = "0.30.0"
+tokio = { version = "1", features = ["full"] }
+unicode-width = "0.2.2"
+image = "0.25.10"
+unicode-segmentation = "1.12.0"
+syntect = { version = "5.3.0", default-features = false, features = [
+  "default-fancy",
+] }
+ratatui-image = { version = "11.0.5", default-features = false, features = [
+  "crossterm",
+  "image-defaults",
+] }
+
+[features]
+# Mirrored from the core so the `cfg`s in the moved terminal code still mean
+# something here. A feature that exists in the core and not in the front end
+# reads as a typo to the compiler rather than as a disabled feature.
+default = ["voice-playback", "stream-broadcast"]
+voice-playback = [
+  "concord/voice-playback",
+  "dep:global-hotkey",
+  "dep:ashpd",
+  "dep:x11rb",
+  "dep:xkeysym",
+]
+stream-broadcast = ["concord/stream-broadcast"]
+fixtures = [
+  "concord/fixtures",
+  "concord-ui/fixtures",
+  "dep:concord-fixtures",
+]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13.13", default-features = false, features = [
+  "tokio",
+  "global_shortcuts",
+], optional = true }
+x11rb = { version = "0.13.2", features = ["xinput"], optional = true }
+xkeysym = { version = "0.2.1", optional = true }
+
+[dev-dependencies]
+# Unconditional here, unlike the optional dependency above: the tests always
+# want the fake, while the shipped binary only carries it when asked.
+concord-fixtures = { path = "../fixtures" }
+# The input tests build gateway events with the core's own builders rather
+# than a second set that could drift from what the gateway actually sends.
+concord = { path = "../..", features = ["fixtures"] }
+concord-ui = { path = "../ui", features = ["fixtures", "terminal"] }
+serde_json = "1"
+tempfile = "3"

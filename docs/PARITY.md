@@ -10,13 +10,13 @@ the parts we do not want.
 Five checks, because each one missed gaps the next found:
 
 1. **Keybinding actions.** The TUI's 152 actions in
-   `src/tui/keybindings/actions.rs`. Too weak: it counts names, not behaviour.
+   `crates/ui/src/keybindings/actions.rs`. Too weak: it counts names, not behaviour.
 2. **Command coverage.** Which `AppCommand` variants each client sends,
    diffed:
 
    ```sh
    comm -23 \
-     <(grep -rhoE "AppCommand::[A-Z][A-Za-z]+" src/tui/ | sort -u) \
+     <(grep -rhoE "AppCommand::[A-Z][A-Za-z]+" crates/tui/src/tui/ | sort -u) \
      <(grep -rhoE "AppCommand::[A-Z][A-Za-z]+" crates/gui/src/ | sort -u)
    ```
 
@@ -212,7 +212,7 @@ sends one of the watched commands should go through them.
 ```bash
 # Every command that should be behind a warning, and where it is sent from.
 grep -rn "AcceptInvite\|LeaveGuild\|UpdateUserProfile\|AddFriend\|BlockUser\|RemoveRelationship\|SendFriendRequest" \
-  src/tui crates/gui/src --include=*.rs | grep -v test
+  crates/tui/src crates/gui/src --include=*.rs | grep -v test
 ```
 
 Each hit should be next to a `request_risky` in the TUI or a `friend_action` /
@@ -325,7 +325,7 @@ and pretending to fetch them would suggest they can change under us.
 
 ## Two clients on one store
 
-`src/storage/concurrent.rs` states the argument in full; the short version is
+`crates/cache/src/concurrent.rs` states the argument in full; the short version is
 that this is not the general distributed-write problem and should not be solved
 like one.
 
@@ -364,3 +364,81 @@ soundboard.
 Regenerate the catalogue when Discord adds permissions. Deprecated ones are
 struck through in the table and excluded, which is why the bits are not
 contiguous - 47 was Clyde.
+
+## Where the code lives
+
+Six crates. The core knows about one account, keeps its state in memory, and
+has no idea whether anything is drawing it or writing it down:
+
+| Crate | What it is |
+| --- | --- |
+| `concord` | The core. Gateway, REST, state. No renderer, no database. |
+| `concord-ui` | What both front ends share: key bindings, theme resolution, fuzzy matching, the vocabulary of panes and action menus. |
+| `concord-cache` | The offline store, attached to the core as a `ClientExtension`. |
+| `concord-merge` | One view across several signed-in accounts. Early. |
+| `concord-fixtures` | A fake Discord - a populated state, event builders, and a backend that answers commands - for running a front end with no account. |
+| `concord-tui` | The terminal client. |
+| `concord-gui` | The GPUI client. |
+
+The rule for `concord-ui` is a renderer, not the core: depending on `concord`
+is fine, since it sits below both front ends. Needing ratatui or GPUI is what
+makes a thing one front end's. One type failed that test and stayed behind -
+`LocalUploadPreviewView`, which borrows a ratatui image protocol.
+
+`concord-ui` owns its own vocabulary for the things a front end would
+otherwise have to borrow from a console library: `key::{KeyCode, KeyModifiers,
+KeyEvent}` and `style::{Color, Modifier, Style, BorderType}`. Crossterm and
+ratatui are optional, behind the `terminal` feature, and exist only to convert
+between those and their own. The terminal front end turns the feature on; the
+GPUI one does not, and neither library appears anywhere in its dependency
+tree - which is the point, and worth re-checking with:
+
+```
+cargo tree -p concord-gui -e normal -i crossterm
+```
+
+It should report no match. The accessors on `Theme` hand back whichever
+vocabulary the build is for, so the terminal front end is not converting at
+several hundred call sites and the GPUI one never sees a ratatui type.
+
+Extensions attach through `concord::discord::ClientExtension`: three methods,
+and an `EventInjector` for putting events back. That is the whole surface. The
+cache uses it to replay what it has; the merge crate will use it the same way.
+
+## Running against the fake
+
+`concord-fixtures` is a normal dependency of both front ends, gated by their
+own `fixtures` feature, not a dev-dependency. That is deliberate: it means the
+real binary can be run against a fake world, not only the test harness.
+
+Two pieces are re-exported from the core rather than living in that crate, and
+for the same reason both times - the core's own tests use them, and a crate
+cannot depend on something that depends on it:
+
+- `world`, the populated `DiscordState`. Building one from nothing means
+  reaching inside caches that are private on purpose, since state is otherwise
+  meant to change only by applying events.
+- `events`, the gateway event builders.
+
+A front end imports both from `concord_fixtures` and does not need to know
+which side of that line anything falls on.
+
+### Driving it
+
+`FakeBackend` takes an `AppCommand` and returns what happened. It holds no
+channels and knows about no front end, because the two wire it up differently:
+
+- The GPUI client forwards each emission into its `Update` stream.
+- The terminal client publishes the events through a real `DiscordClient` that
+  never opens a gateway, so the state store, snapshot revisions and effect
+  ordering all behave exactly as they do against Discord.
+
+Both are reached the same way:
+
+```
+CONCORD_TOKEN=demo cargo run
+```
+
+One wrinkle worth knowing if you write a test against it: `Ready` mutates state
+without being delivered as an effect, so a test that waits on the effect stream
+for it will hang rather than fail. Watch the snapshot channel instead.

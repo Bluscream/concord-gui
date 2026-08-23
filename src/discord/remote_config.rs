@@ -20,9 +20,6 @@ use serde::{Deserialize, Serialize};
 /// client that never reaches the network is not a degraded one.
 pub mod defaults {
     pub const GATEWAY_URL: &str = "wss://gateway.discord.gg";
-    /// The attachment limit for an account with no premium and a guild with no
-    /// boosts. Discord raises it per tier; this is the floor.
-    pub const ATTACHMENT_LIMIT_BYTES: u64 = 10 * 1024 * 1024;
 }
 
 /// How long a cached value is used before a refetch is attempted.
@@ -37,7 +34,6 @@ const CACHE_LIFETIME: Duration = Duration::from_secs(24 * 60 * 60);
 #[serde(default)]
 pub struct RemoteConfig {
     pub gateway_url: String,
-    pub attachment_limit_bytes: u64,
     /// When this was fetched, as Unix seconds. Zero means "compiled in" - a
     /// default has no fetch time, and treating it as fetched-at-the-epoch is
     /// what makes it always stale and therefore always retried.
@@ -48,7 +44,6 @@ impl Default for RemoteConfig {
     fn default() -> Self {
         Self {
             gateway_url: defaults::GATEWAY_URL.to_owned(),
-            attachment_limit_bytes: defaults::ATTACHMENT_LIMIT_BYTES,
             fetched_at: 0,
         }
     }
@@ -192,14 +187,14 @@ mod tests {
     #[test]
     fn a_partial_cache_keeps_the_defaults_for_what_is_missing() {
         // A cache written by an older build has fewer fields; the ones it does
-        // not mention must not become zero.
+        // not mention must not become zero. A zero `fetched_at` in particular
+        // reads as never fetched, which is the harmless direction - it costs
+        // one request rather than pinning the client to a stale value.
         let parsed: RemoteConfig =
             toml::from_str(r#"gateway_url = "wss://other.example""#).expect("should parse");
 
         assert_eq!(parsed.gateway_url, "wss://other.example");
-        assert_eq!(
-            parsed.attachment_limit_bytes,
-            defaults::ATTACHMENT_LIMIT_BYTES
-        );
+        assert_eq!(parsed.fetched_at, 0);
+        assert!(parsed.is_stale(SystemTime::now()));
     }
 }

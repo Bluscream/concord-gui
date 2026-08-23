@@ -1,0 +1,393 @@
+use std::collections::BTreeMap;
+
+use crate::tui::keybindings::KeyBindings;
+use concord::config::{
+    AppOptions, ComposerOptions, CredentialOptions, DisplayOptions, ImagePreviewQualityPreset,
+    KeymapOptions, NotificationOptions, PresenceOptions, UiStateOptions, VoiceOptions,
+    VoiceParticipantPlaybackOption,
+};
+use concord::discord::ids::{Id, marker::UserMarker};
+use concord::discord::{AppCommand, VoiceAudioSourceOptions, VoiceParticipantPlaybackSettings};
+
+use super::{DashboardState, FocusPane, FolderKey};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisplayOptionItem {
+    pub label: &'static str,
+    pub enabled: bool,
+    pub value: Option<String>,
+    pub gauge: Option<DisplayOptionGauge>,
+    pub effective: bool,
+    pub description: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DisplayOptionGauge {
+    value: u16,
+    maximum: u16,
+}
+
+impl DisplayOptionGauge {
+    pub(crate) const fn new(value: u16, maximum: u16) -> Self {
+        Self { value, maximum }
+    }
+
+    pub(crate) const fn value(self) -> u16 {
+        self.value
+    }
+
+    pub(crate) const fn maximum(self) -> u16 {
+        self.maximum
+    }
+}
+
+#[cfg(any(test, feature = "fixtures"))]
+#[allow(dead_code)]
+impl DisplayOptionItem {
+    pub fn test(label: &'static str) -> Self {
+        Self {
+            label,
+            enabled: false,
+            value: None,
+            gauge: None,
+            effective: false,
+            description: "",
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(super) struct SettingsState {
+    pub(super) display_options: DisplayOptions,
+    pub(super) composer_options: ComposerOptions,
+    pub(super) credential_options: CredentialOptions,
+    pub(super) notification_options: NotificationOptions,
+    pub(super) voice_options: VoiceOptions,
+    pub(super) voice_audio_source_options: VoiceAudioSourceOptions,
+    pub(super) voice_audio_sources_request_id: Option<u64>,
+    pub(super) next_voice_audio_sources_request_id: u64,
+    // Not editable in the TUI: kept only so saving unrelated options round-trips
+    // the user's Rich Presence choice instead of resetting it to the default.
+    pub(super) presence_options: PresenceOptions,
+    pub(super) storage_options: concord::config::StorageOptions,
+    pub(super) warning_options: concord::config::WarningOptions,
+    /// Tab state written by the GUI. Held so a TUI save does not discard it.
+    pub(super) ui_state_open_tabs:
+        Vec<concord::discord::Id<concord::discord::marker::ChannelMarker>>,
+    pub(super) ui_state_active_tab: usize,
+    pub(super) key_bindings: KeyBindings,
+    pub(super) voice_participant_playback:
+        BTreeMap<Id<UserMarker>, VoiceParticipantPlaybackSettings>,
+    pub(super) config_save_pending: bool,
+    pub(super) ui_state_save_pending: bool,
+}
+
+impl SettingsState {
+    pub(super) fn key_bindings(&self) -> &KeyBindings {
+        &self.key_bindings
+    }
+}
+
+impl DashboardState {
+    pub fn new_with_options(
+        display_options: DisplayOptions,
+        composer_options: ComposerOptions,
+        credential_options: CredentialOptions,
+        notification_options: NotificationOptions,
+        voice_options: VoiceOptions,
+        keymap_options: KeymapOptions,
+        ui_state_options: UiStateOptions,
+    ) -> Self {
+        let mut state = Self::new();
+        state.options.display_options = display_options;
+        state.options.composer_options = composer_options;
+        state.options.credential_options = credential_options;
+        state.options.notification_options = notification_options;
+        state.options.voice_options = voice_options;
+        state.options.key_bindings = KeyBindings::from_options(&keymap_options);
+        state.apply_ui_state_options(ui_state_options);
+        state
+    }
+
+    pub(in crate::tui) fn apply_presence_options(&mut self, presence_options: PresenceOptions) {
+        self.options.presence_options = presence_options;
+    }
+
+    #[cfg(test)]
+    pub fn display_options(&self) -> DisplayOptions {
+        self.options.display_options
+    }
+
+    #[cfg(test)]
+    pub fn composer_options(&self) -> ComposerOptions {
+        self.options.composer_options
+    }
+
+    #[cfg(test)]
+    pub fn new_with_display_options(display_options: DisplayOptions) -> Self {
+        Self::new_with_options(
+            display_options,
+            ComposerOptions::default(),
+            CredentialOptions::default(),
+            NotificationOptions::default(),
+            VoiceOptions::default(),
+            KeymapOptions::default(),
+            UiStateOptions::default(),
+        )
+    }
+
+    #[cfg(test)]
+    pub fn new_with_voice_options(voice_options: VoiceOptions) -> Self {
+        Self::new_with_options(
+            DisplayOptions::default(),
+            ComposerOptions::default(),
+            CredentialOptions::default(),
+            NotificationOptions::default(),
+            voice_options,
+            KeymapOptions::default(),
+            UiStateOptions::default(),
+        )
+    }
+
+    pub fn notification_options(&self) -> NotificationOptions {
+        self.options.notification_options.clone()
+    }
+
+    #[cfg(test)]
+    pub fn voice_options(&self) -> VoiceOptions {
+        self.options.voice_options.clone()
+    }
+
+    #[cfg(feature = "voice-playback")]
+    pub(in crate::tui) fn voice_options_ref(&self) -> &VoiceOptions {
+        &self.options.voice_options
+    }
+
+    pub fn key_bindings(&self) -> &crate::tui::keybindings::KeyBindings {
+        &self.options.key_bindings
+    }
+
+    fn apply_ui_state_options(&mut self, options: UiStateOptions) {
+        self.navigation.guilds.visible = options.guild_pane_visible;
+        self.navigation.channels.visible = options.channel_pane_visible;
+        self.navigation.members.visible = options.member_pane_visible;
+        self.navigation.guilds.width = options.server_width;
+        self.navigation.channels.width = options.channel_list_width;
+        self.navigation.members.width = options.member_list_width;
+        if !self.is_pane_visible(self.navigation.focus) {
+            self.navigation.focus = FocusPane::Messages;
+        }
+        // Held rather than used: the TUI has no tab strip yet, and dropping
+        // these on load would delete the GUI's tabs on the next save.
+        self.options.ui_state_open_tabs = options.open_tabs.clone();
+        self.options.ui_state_active_tab = options.active_tab;
+        self.navigation.channels.collapsed_channel_categories =
+            options.collapsed_channel_categories.into_iter().collect();
+        self.navigation.channels.established_dms = options.established_dms.into_iter().collect();
+        self.options.voice_participant_playback = options
+            .voice_participant_playback
+            .into_iter()
+            .map(|option| (option.user_id, option.settings))
+            .filter(|(_, settings)| *settings != VoiceParticipantPlaybackSettings::default())
+            .collect();
+        self.navigation.guilds.collapsed_folders = options
+            .collapsed_server_folder_ids
+            .into_iter()
+            .map(FolderKey::Id)
+            .chain(
+                options
+                    .collapsed_server_folder_guilds
+                    .into_iter()
+                    .map(FolderKey::Guilds),
+            )
+            .collect();
+    }
+
+    fn ui_state_options(&self) -> UiStateOptions {
+        let mut collapsed_channel_categories: Vec<_> = self
+            .navigation
+            .channels
+            .collapsed_channel_categories
+            .iter()
+            .copied()
+            .collect();
+        collapsed_channel_categories.sort_by_key(|id| id.get());
+
+        let mut established_dms: Vec<_> = self
+            .navigation
+            .channels
+            .established_dms
+            .iter()
+            .copied()
+            .collect();
+        established_dms.sort_by_key(|id| id.get());
+
+        let mut collapsed_server_folder_ids = Vec::new();
+        let mut collapsed_server_folder_guilds = Vec::new();
+        for folder in &self.navigation.guilds.collapsed_folders {
+            match folder {
+                FolderKey::Id(id) => collapsed_server_folder_ids.push(*id),
+                FolderKey::Guilds(guilds) => collapsed_server_folder_guilds.push(guilds.clone()),
+            }
+        }
+        collapsed_server_folder_ids.sort_unstable();
+        collapsed_server_folder_guilds.sort_by(|left, right| {
+            left.iter()
+                .map(|id| id.get())
+                .cmp(right.iter().map(|id| id.get()))
+        });
+
+        UiStateOptions {
+            guild_pane_visible: self.navigation.guilds.visible,
+            channel_pane_visible: self.navigation.channels.visible,
+            member_pane_visible: self.navigation.members.visible,
+            server_width: self.navigation.guilds.width,
+            channel_list_width: self.navigation.channels.width,
+            member_list_width: self.navigation.members.width,
+            // The TUI has no tab strip yet, so it preserves whatever the GUI
+            // wrote rather than clearing it on every save.
+            open_tabs: self.options.ui_state_open_tabs.clone(),
+            active_tab: self.options.ui_state_active_tab,
+            collapsed_channel_categories,
+            collapsed_server_folder_ids,
+            collapsed_server_folder_guilds,
+            established_dms,
+            voice_participant_playback: self.voice_participant_playback_options(),
+        }
+    }
+
+    pub(in crate::tui) fn voice_participant_playback_settings(
+        &self,
+        user_id: Id<UserMarker>,
+    ) -> VoiceParticipantPlaybackSettings {
+        self.options
+            .voice_participant_playback
+            .get(&user_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub(in crate::tui) fn voice_participant_playback_settings_snapshot(
+        &self,
+    ) -> Vec<(Id<UserMarker>, VoiceParticipantPlaybackSettings)> {
+        self.options
+            .voice_participant_playback
+            .iter()
+            .map(|(user_id, settings)| (*user_id, *settings))
+            .collect()
+    }
+
+    pub(in crate::tui) fn update_voice_participant_playback_settings(
+        &mut self,
+        user_id: Id<UserMarker>,
+        settings: VoiceParticipantPlaybackSettings,
+    ) -> AppCommand {
+        if settings == VoiceParticipantPlaybackSettings::default() {
+            self.options.voice_participant_playback.remove(&user_id);
+        } else {
+            self.options
+                .voice_participant_playback
+                .insert(user_id, settings);
+        }
+        self.options.ui_state_save_pending = true;
+        AppCommand::UpdateVoiceParticipantPlayback { user_id, settings }
+    }
+
+    fn voice_participant_playback_options(&self) -> Vec<VoiceParticipantPlaybackOption> {
+        self.options
+            .voice_participant_playback
+            .iter()
+            .map(|(user_id, settings)| VoiceParticipantPlaybackOption {
+                user_id: *user_id,
+                settings: *settings,
+            })
+            .collect()
+    }
+
+    pub fn show_avatars(&self) -> bool {
+        self.options.display_options.avatars_visible()
+    }
+
+    pub fn circular_avatars(&self) -> bool {
+        self.options.display_options.circular_avatars
+    }
+
+    pub fn hour_format_24(&self) -> bool {
+        self.options.display_options.hour_format_24
+    }
+
+    pub fn show_images(&self) -> bool {
+        self.options.display_options.images_visible()
+    }
+
+    pub fn media_playback_enabled(&self) -> bool {
+        self.options.display_options.media_playback_enabled()
+    }
+
+    pub fn image_preview_quality(&self) -> ImagePreviewQualityPreset {
+        self.options.display_options.image_preview_quality
+    }
+
+    pub fn attachment_viewer_quality(&self) -> ImagePreviewQualityPreset {
+        self.options.display_options.attachment_viewer_quality
+    }
+
+    pub fn show_custom_emoji(&self) -> bool {
+        self.options.display_options.custom_emoji_visible()
+    }
+
+    pub fn desktop_notifications_enabled(&self) -> bool {
+        self.options.notification_options.desktop_notifications
+    }
+
+    /// Sounds have their own switch, so the popup and the noise can be chosen
+    /// independently.
+    pub fn notification_sounds_enabled(&self) -> bool {
+        self.options.notification_options.notification_sounds
+    }
+
+    pub fn desktop_notification_icon(&self) -> Option<String> {
+        self.options.notification_options.notification_icon.clone()
+    }
+
+    pub(in crate::tui::state) fn queue_current_voice_state_update(&mut self) {
+        let Some(voice) = self.runtime.voice_connection else {
+            return;
+        };
+        let Some(channel_id) = voice.channel_id else {
+            return;
+        };
+
+        self.enqueue_pending_command(AppCommand::UpdateVoiceState {
+            scope: voice.scope,
+            channel_id,
+            self_mute: self.options.voice_options.self_mute,
+            self_deaf: self.options.voice_options.self_deaf,
+        });
+    }
+
+    pub(in crate::tui) fn take_options_save_request(&mut self) -> Option<AppOptions> {
+        if !self.options.config_save_pending {
+            return None;
+        }
+        self.options.config_save_pending = false;
+        Some(AppOptions {
+            display: self.options.display_options,
+            composer: self.options.composer_options,
+            credentials: self.options.credential_options,
+            notifications: self.options.notification_options.clone(),
+            voice: self.options.voice_options.clone(),
+            presence: self.options.presence_options,
+            storage: self.options.storage_options.clone(),
+            warnings: self.options.warning_options,
+        })
+    }
+
+    pub(in crate::tui) fn take_ui_state_save_request(&mut self) -> Option<UiStateOptions> {
+        if !self.options.ui_state_save_pending {
+            return None;
+        }
+        self.options.ui_state_save_pending = false;
+        Some(self.ui_state_options())
+    }
+}

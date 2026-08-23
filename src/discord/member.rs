@@ -93,27 +93,47 @@ pub struct MemberInfo {
     pub communication_disabled_until_present: bool,
 }
 
-#[cfg(test)]
-#[allow(dead_code)]
-impl MemberInfo {
-    pub(crate) fn test(user_id: Id<UserMarker>, display_name: impl Into<String>) -> Self {
+impl Default for MemberInfo {
+    /// A member with nothing filled in but an id.
+    ///
+    /// The `_present` flags default to false, which is the safe direction: a
+    /// partially built member says it knows nothing rather than claiming an
+    /// absent field is an explicit null, and merging treats it as a patch
+    /// instead of letting it clear what is already known.
+    fn default() -> Self {
         Self {
-            user_id,
-            display_name: display_name.into(),
+            user_id: Id::new(1),
+            display_name: String::new(),
             username: None,
             nickname: None,
             nickname_present: false,
             is_bot: false,
-            is_bot_present: true,
+            is_bot_present: false,
             avatar_url: None,
-            avatar_url_present: true,
+            avatar_url_present: false,
             role_ids: Vec::new(),
-            role_ids_present: true,
+            role_ids_present: false,
             joined_at: None,
-            flags: Some(0),
+            flags: None,
             pending: None,
             communication_disabled_until: None,
             communication_disabled_until_present: false,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "fixtures"))]
+#[allow(dead_code)]
+impl MemberInfo {
+    pub fn test(user_id: Id<UserMarker>, display_name: impl Into<String>) -> Self {
+        Self {
+            user_id,
+            display_name: display_name.into(),
+            is_bot_present: true,
+            avatar_url_present: true,
+            role_ids_present: true,
+            flags: Some(0),
+            ..Default::default()
         }
     }
 }
@@ -131,10 +151,10 @@ pub struct RoleInfo {
     pub permissions: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl RoleInfo {
-    pub(crate) fn test(id: Id<RoleMarker>, name: impl Into<String>) -> Self {
+    pub fn test(id: Id<RoleMarker>, name: impl Into<String>) -> Self {
         Self {
             id,
             name: name.into(),

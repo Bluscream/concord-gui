@@ -41,10 +41,10 @@ pub struct RelationshipUpdateInfo {
     pub username: Option<Option<String>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl RelationshipInfo {
-    pub(crate) fn test(user_id: Id<UserMarker>, status: FriendStatus) -> Self {
+    pub fn test(user_id: Id<UserMarker>, status: FriendStatus) -> Self {
         Self {
             user_id,
             status,
@@ -93,10 +93,10 @@ impl UserProfileInfo {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl UserProfileInfo {
-    pub(crate) fn test(user_id: Id<UserMarker>, username: impl Into<String>) -> Self {
+    pub fn test(user_id: Id<UserMarker>, username: impl Into<String>) -> Self {
         Self {
             user_id,
             username: username.into(),

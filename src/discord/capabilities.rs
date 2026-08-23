@@ -14,9 +14,9 @@ pub(crate) const NITRO_MESSAGE_CHARACTER_LIMIT: usize = 4_000;
 pub const BASE_ATTACHMENT_LIMIT_BYTES: u64 = 10 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct MessageSendLimits {
-    pub(crate) max_content_chars: usize,
-    pub(crate) max_attachment_bytes: u64,
+pub struct MessageSendLimits {
+    pub max_content_chars: usize,
+    pub max_attachment_bytes: u64,
 }
 
 impl Default for MessageSendLimits {

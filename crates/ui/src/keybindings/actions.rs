@@ -1,0 +1,554 @@
+use crate::key::{KeyCode, KeyModifiers};
+
+use crate::model::{FocusPane, MessageActionKind};
+use crate::text_input::TextEditAction;
+use concord::discord::password_auth::MfaMethod;
+
+use self::DefaultKeymapChord::{Char, Ctrl, Key, Leader, ModifiedKey};
+use super::KeyChord;
+
+/// Chord alphabet for default key bindings. `Leader` is a placeholder that
+/// resolves to the configured leader chord when the keymap is built.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DefaultKeymapChord {
+    Leader,
+    Char(char),
+    Ctrl(char),
+    Key(KeyCode),
+    ModifiedKey(KeyCode, KeyModifiers),
+}
+
+// Single source of truth for every UI action: its keymap name is the variant
+// identifier itself, and the default key sequences plus the dashboard mapping
+// live in the same row, so adding an action is a one-line change.
+macro_rules! define_ui_actions {
+    ($($variant:ident => ($label:literal, $sequences:expr, $dashboard:expr),)*) => {
+        #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+        pub enum UiAction {
+            $($variant,)*
+        }
+
+        impl UiAction {
+            pub const ALL: &'static [Self] = &[$(Self::$variant,)*];
+
+            pub fn from_name(name: &str) -> Option<Self> {
+                Self::ALL
+                    .iter()
+                    .copied()
+                    .find(|action| action.name() == name)
+            }
+
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => stringify!($variant),)*
+                }
+            }
+
+            pub fn label(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $label,)*
+                }
+            }
+
+            pub(super) fn default_sequences(self) -> &'static [&'static [DefaultKeymapChord]] {
+                match self {
+                    $(Self::$variant => $sequences,)*
+                }
+            }
+
+            pub(super) fn global_dashboard_action(self) -> Option<DashboardAction> {
+                match self {
+                    $(Self::$variant => $dashboard,)*
+                }
+            }
+        }
+    };
+}
+
+define_ui_actions! {
+    StartComposer => ("start composer", &[&[Char('i')]], Some(DashboardAction::StartComposer)),
+    OpenPaneFilter => ("filter/search pane", &[&[Char('/')]], Some(DashboardAction::OpenFocusedPaneFilter)),
+    ClosePopup => ("close popup", &[&[Char('q')]], None),
+    OpenDebugLog => ("open debug log", &[&[Char('`')]], None),
+    FocusGuildPane => ("focus Servers", &[&[Char('1')]], Some(DashboardAction::FocusPane(FocusPane::Guilds))),
+    FocusChannelPane => ("focus Channels", &[&[Char('2')]], Some(DashboardAction::FocusPane(FocusPane::Channels))),
+    FocusMessagePane => ("focus Messages", &[&[Char('3')]], Some(DashboardAction::FocusPane(FocusPane::Messages))),
+    FocusMemberPane => ("focus Members", &[&[Char('4')]], Some(DashboardAction::FocusPane(FocusPane::Members))),
+    SelectNext => ("select next", &[&[Char('j')]], Some(DashboardAction::Select(SelectionAction::Next))),
+    SelectPrevious => ("select previous", &[&[Char('k')]], Some(DashboardAction::Select(SelectionAction::Previous))),
+    CycleFocusNext => ("focus next", &[&[Char('l')], &[Key(KeyCode::Tab)], &[Key(KeyCode::Right)]], Some(DashboardAction::CycleFocusForward)),
+    CycleFocusPrevious => ("focus previous", &[&[Char('h')], &[ModifiedKey(KeyCode::Tab, KeyModifiers::SHIFT)], &[Key(KeyCode::Left)]], Some(DashboardAction::CycleFocusBackward)),
+    HalfPageDown => ("half page down", &[&[Ctrl('d')]], Some(DashboardAction::HalfPageDown)),
+    HalfPageUp => ("half page up", &[&[Ctrl('u')]], Some(DashboardAction::HalfPageUp)),
+    ScrollViewportDown => ("scroll viewport down", &[&[Char('J')]], Some(DashboardAction::ScrollViewportDown)),
+    ScrollViewportUp => ("scroll viewport up", &[&[Char('K')]], Some(DashboardAction::ScrollViewportUp)),
+    JumpTop => ("jump top", &[&[Char('g'), Char('g')]], Some(DashboardAction::JumpTop)),
+    JumpBottom => ("jump bottom", &[&[Char('G')]], Some(DashboardAction::JumpBottom)),
+    ScrollHorizontalLeft => ("scroll left", &[&[Char('H')]], Some(DashboardAction::ScrollHorizontalLeft)),
+    ScrollHorizontalRight => ("scroll right", &[&[Char('L')]], Some(DashboardAction::ScrollHorizontalRight)),
+    ResizePaneLeft => ("resize pane left", &[&[ModifiedKey(KeyCode::Char('h'), KeyModifiers::ALT)], &[ModifiedKey(KeyCode::Left, KeyModifiers::ALT)]], Some(DashboardAction::ResizePaneLeft)),
+    ResizePaneRight => ("resize pane right", &[&[ModifiedKey(KeyCode::Char('l'), KeyModifiers::ALT)], &[ModifiedKey(KeyCode::Right, KeyModifiers::ALT)]], Some(DashboardAction::ResizePaneRight)),
+    Quit => ("quit", &[&[Char('q')]], Some(DashboardAction::Quit)),
+    CopyMessage => ("copy message", &[&[Char('y')]], None),
+    ReactMessage => ("react", &[&[Char('r')]], None),
+    ReplyMessage => ("reply", &[&[Char('R')]], None),
+    DeleteMessage => ("delete message", &[&[Char('d')]], None),
+    EditMessage => ("edit message", &[&[Char('e')]], None),
+    OpenMessageUrl => ("open URL", &[&[Char('o')]], None),
+    RemoveMessageEmbeds => ("remove embeds", &[], None),
+    PlayMedia => ("play media", &[&[Char('x')]], None),
+    ViewMessageAttachment => ("view attachment", &[&[Char('v')]], None),
+    ShowMessageProfile => ("show message sender profile", &[], None),
+    PinMessage => ("pin message", &[], None),
+    OpenThread => ("open thread", &[], None),
+    ShowReactionUsers => ("show reacted users", &[], None),
+    OpenPollVotePicker => ("choose poll votes", &[], None),
+    GoToReferencedMessage => ("go to referenced message", &[], None),
+    ForwardMessage => ("forward message", &[], None),
+    OpenStickerPicker => ("Stickers", &[&[Leader, Char('s')]], None),
+    ToggleGuildPane => ("toggle Servers", &[&[Leader, Char('1')]], None),
+    ToggleChannelPane => ("toggle Channels", &[&[Leader, Char('2')]], None),
+    ToggleMemberPane => ("toggle Members", &[&[Leader, Char('4')]], None),
+    OpenFocusedPaneAction => ("Actions", &[&[Leader, Char('a')]], None),
+    OpenCurrentUserProfile => ("My profile", &[&[Leader, Char('p')]], None),
+    OpenOptions => ("Options", &[&[Leader, Char('o')]], None),
+    ChannelSwitcher => ("Switch channels", &[&[Leader, Leader]], None),
+    OpenNotificationInbox => ("Notification inbox", &[&[Leader, Char('n')]], None),
+    RefreshScreen => ("Refresh screen", &[&[Leader, Char('r')]], None),
+    OpenChannelInNewTab => ("Open in new tab", &[&[Leader, Char('t')]], Some(DashboardAction::OpenChannelTab)),
+    NextChannelTab => ("Next tab", &[&[Leader, Char(']')]], Some(DashboardAction::CycleChannelTab(true))),
+    PreviousChannelTab => ("Previous tab", &[&[Leader, Char('[')]], Some(DashboardAction::CycleChannelTab(false))),
+    CloseChannelTab => ("Close tab", &[&[Leader, Char('w')]], Some(DashboardAction::CloseChannelTab)),
+    OpenDisplayOptions => ("Display options", &[], None),
+    OpenComposerOptions => ("Composer options", &[], None),
+    OpenNotificationOptions => ("Notification options", &[], None),
+    OpenVoiceOptions => ("Voice options", &[], None),
+    VoiceDeafen => ("deafen voice", &[&[Leader, Char('v'), Char('d')]], None),
+    VoiceMute => ("mute voice", &[&[Leader, Char('v'), Char('m')]], None),
+    ToggleStream => ("Share screen", &[&[Leader, Char('v'), Char('s')]], None),
+    OpenSoundboard => ("Soundboard", &[&[Leader, Char('v'), Char('b')]], None),
+    OpenConnections => ("Linked accounts", &[&[Leader, Char('l')]], None),
+    OpenPrivacy => ("Privacy and safety", &[&[Leader, Char('y')]], None),
+    OpenAccess => ("Sessions and apps", &[&[Leader, Char('k')]], None),
+    OpenAccount => ("Account settings", &[&[Leader, Char('u')]], None),
+    // On the list rather than in the action menu: a reorder is a nudge you
+    // repeat, and reopening a menu between each one is the wrong shape.
+    MoveChannelUp => ("Move channel up", &[&[Leader, Char('m'), Char('k')]], None),
+    MoveChannelDown => ("Move channel down", &[&[Leader, Char('m'), Char('j')]], None),
+    VoiceLeave => ("leave voice", &[&[Leader, Char('v'), Char('l')]], None),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MessageActionBinding {
+    pub ui_action: UiAction,
+    pub message_action: MessageActionKind,
+    pub keymap_name: &'static str,
+}
+
+macro_rules! define_message_action_bindings {
+    ($($message_action:ident => ($ui_action:ident, $keymap_name:literal),)*) => {
+        const MESSAGE_ACTION_BINDINGS: &[MessageActionBinding] = &[
+            $(MessageActionBinding {
+                ui_action: UiAction::$ui_action,
+                message_action: MessageActionKind::$message_action,
+                keymap_name: $keymap_name,
+            },)*
+        ];
+
+        impl MessageActionKind {
+            #[cfg(test)]
+            pub const KEYMAP_BINDINGS: &'static [MessageActionBinding] =
+                MESSAGE_ACTION_BINDINGS;
+
+            pub fn from_keymap_name(name: &str) -> Option<Self> {
+                match name {
+                    $($keymap_name => Some(Self::$message_action),)*
+                    _ => None,
+                }
+            }
+
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(Self::$message_action => $keymap_name,)*
+                }
+            }
+        }
+    };
+}
+
+define_message_action_bindings! {
+    CopyContent => (CopyMessage, "CopyMessage"),
+    OpenReactionPicker => (ReactMessage, "ReactMessage"),
+    Reply => (ReplyMessage, "ReplyMessage"),
+    OpenDeleteConfirmation => (DeleteMessage, "DeleteMessage"),
+    Edit => (EditMessage, "EditMessage"),
+    OpenUrl => (OpenMessageUrl, "OpenMessageUrl"),
+    RemoveEmbeds => (RemoveMessageEmbeds, "RemoveMessageEmbeds"),
+    PlayMedia => (PlayMedia, "PlayMedia"),
+    ViewAttachment => (ViewMessageAttachment, "ViewMessageAttachment"),
+    ShowProfile => (ShowMessageProfile, "ShowMessageProfile"),
+    OpenPinConfirmation => (PinMessage, "PinMessage"),
+    OpenThread => (OpenThread, "OpenThread"),
+    ShowReactionUsers => (ShowReactionUsers, "ShowReactionUsers"),
+    OpenPollVotePicker => (OpenPollVotePicker, "OpenPollVotePicker"),
+    GoToReferencedMessage => (GoToReferencedMessage, "GoToReferencedMessage"),
+    Forward => (ForwardMessage, "ForwardMessage"),
+}
+
+impl UiAction {
+    pub fn message_action_kind(self) -> Option<MessageActionKind> {
+        MESSAGE_ACTION_BINDINGS
+            .iter()
+            .find(|binding| binding.ui_action == self)
+            .map(|binding| binding.message_action)
+    }
+}
+
+/// Configurable navigation actions that are valid while a popup owns input.
+///
+/// Popup closing is matched directly at the input boundary because it is a
+/// single-key command, not a navigable key sequence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PopupKeymapScope {
+    Selectable,
+    Scrollable,
+    Confirmation,
+}
+
+macro_rules! define_popup_actions {
+    ($($variant:ident => $ui_action:ident),+ $(,)?) => {
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub enum PopupAction {
+            $($variant),+
+        }
+
+        impl PopupAction {
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            pub const fn ui_action(self) -> UiAction {
+                match self {
+                    $(Self::$variant => UiAction::$ui_action),+
+                }
+            }
+        }
+    };
+}
+
+define_popup_actions! {
+    SelectNext => SelectNext,
+    SelectPrevious => SelectPrevious,
+    HalfPageDown => HalfPageDown,
+    HalfPageUp => HalfPageUp,
+    JumpTop => JumpTop,
+    JumpBottom => JumpBottom,
+}
+
+impl PopupAction {
+    pub const fn is_allowed_in(self, scope: PopupKeymapScope) -> bool {
+        match self {
+            Self::SelectNext | Self::SelectPrevious => true,
+            Self::HalfPageDown | Self::HalfPageUp => matches!(
+                scope,
+                PopupKeymapScope::Selectable | PopupKeymapScope::Scrollable
+            ),
+            Self::JumpTop | Self::JumpBottom => {
+                matches!(scope, PopupKeymapScope::Selectable)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SelectionAction {
+    Next,
+    Previous,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SelectionKeySet {
+    TextSafe,
+    Navigation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScrollAction {
+    Down,
+    Up,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DashboardAction {
+    Select(SelectionAction),
+    MessageShortcut(MessageActionKind),
+    Back,
+    Quit,
+    StartComposer,
+    FocusPane(FocusPane),
+    CycleFocusForward,
+    CycleFocusBackward,
+    OpenFocusedPaneFilter,
+    ResizePaneLeft,
+    ResizePaneRight,
+    HalfPageDown,
+    HalfPageUp,
+    JumpTop,
+    JumpBottom,
+    ScrollViewportDown,
+    ScrollViewportUp,
+    ScrollHorizontalLeft,
+    ScrollHorizontalRight,
+    ActivateFocused,
+    OpenChannelTab,
+    /// True steps right, false left.
+    CycleChannelTab(bool),
+    CloseChannelTab,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProfilePopupTabAction {
+    Global,
+    Guild,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChannelSwitcherAction {
+    Select(SelectionAction),
+    Close,
+    ActivateSelected,
+    MoveQueryCursorLeft,
+    MoveQueryCursorRight,
+    DeleteQueryChar,
+    InsertQueryChar(char),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NotificationInboxAction {
+    Select(SelectionAction),
+    SwitchTab(SelectionAction),
+    ActivateSelected,
+    MarkSelectedRead,
+    MarkAllRead,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NotificationInboxActionKind {
+    MarkRead,
+    MarkAllRead,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SearchPopupAction {
+    Select(SelectionAction),
+    Page(SelectionAction),
+    Close,
+    ActivateSelected,
+    NextField,
+    PreviousField,
+    MoveCursorLeft,
+    MoveCursorRight,
+    DeleteChar,
+    InsertChar(char),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PopupListAction {
+    Select(SelectionAction),
+    ActivateSelected,
+    ActivateShortcut(KeyChord),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AttachmentViewerAction {
+    Previous,
+    Next,
+    OpenSelected,
+    CopyUrl,
+    PlaySelected,
+    DownloadSelected,
+    ToggleZoom,
+    ZoomIn,
+    ZoomOut,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProfilePopupAction {
+    Close,
+    Scroll(ScrollAction),
+    NextField,
+    PreviousField,
+    SwitchTab(ProfilePopupTabAction),
+    StartOrCommitEdit,
+    PasteClipboard,
+    Save,
+    SignOut,
+    EditText(TextEditAction),
+    InsertChar(char),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PaneFilterAction {
+    Select(SelectionAction),
+    Close,
+    Confirm,
+    DeleteChar,
+    MoveCursorLeft,
+    MoveCursorRight,
+    Ignore,
+    InsertChar(char),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EmojiReactionPickerAction {
+    Select(SelectionAction),
+    StartFilter,
+    CommitFilter,
+    DeleteFilterChar,
+    InsertFilterChar(char),
+    ActivateSelected,
+    ActivateShortcut(char),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PollVotePickerAction {
+    Select(SelectionAction),
+    ToggleSelected,
+    Submit,
+    ToggleShortcut(char),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReactionUsersPopupAction {
+    Back,
+    Activate,
+    Navigate(SelectionAction),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OptionsCategoryShortcut {
+    Display,
+    Composer,
+    Notifications,
+    Voice,
+    Connections,
+    Privacy,
+    Access,
+    Account,
+}
+
+impl OptionsCategoryShortcut {
+    pub const ALL: [Self; 8] = [
+        Self::Display,
+        Self::Composer,
+        Self::Notifications,
+        Self::Voice,
+        Self::Connections,
+        Self::Privacy,
+        Self::Access,
+        Self::Account,
+    ];
+
+    pub const fn key(self) -> char {
+        match self {
+            Self::Display => 'd',
+            Self::Composer => 'c',
+            Self::Notifications => 'n',
+            Self::Voice => 'v',
+            // Not 'c', which composer already has.
+            Self::Connections => 'l',
+            // Not 'p', which is a leader prefix.
+            Self::Privacy => 'y',
+            Self::Access => 'k',
+            Self::Account => 'u',
+        }
+    }
+
+    pub fn from_key(value: char) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|category| value.eq_ignore_ascii_case(&category.key()))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OptionsPopupAction {
+    Close,
+    OpenCategory(OptionsCategoryShortcut),
+    Select(SelectionAction),
+    ToggleSelected,
+    AdjustSelected(i8),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VoiceParticipantAudioPopupAction {
+    Select(SelectionAction),
+    AdjustVolume(i8),
+    ToggleMuted,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComposerAction {
+    OpenInEditor,
+    PasteClipboard,
+    InsertNewline,
+    Submit,
+    Close,
+    ClearInput,
+    RemoveLastAttachment,
+    EditText(TextEditAction),
+    ToggleReplyPing,
+    InsertChar(char),
+    Ignore,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComposerCompletionAction {
+    Select(SelectionAction),
+    Confirm,
+    Cancel,
+    FallThrough,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LoginGlobalAction {
+    Cancel,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LoginModeSelectAction {
+    StartToken,
+    StartPassword,
+    StartQr,
+    Cancel,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LoginTextInputAction {
+    Submit,
+    Back,
+    DeletePreviousChar,
+    InsertChar(char),
+    Ignore,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LoginPasswordInputAction {
+    Submit,
+    SwitchField,
+    Back,
+    DeletePreviousChar,
+    InsertChar(char),
+    Ignore,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LoginMfaSelectAction {
+    Choose(MfaMethod),
+    Back,
+    Ignore,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LoginBusyAction {
+    Cancel,
+    Ignore,
+}

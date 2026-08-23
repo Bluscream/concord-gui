@@ -311,22 +311,19 @@ pub struct ThemeOptions {
 }
 
 impl ThemeOptions {
-    pub(crate) fn highlights(&self) -> &BTreeMap<HighlightGroup, HighlightDefinitionOptions> {
+    pub fn highlights(&self) -> &BTreeMap<HighlightGroup, HighlightDefinitionOptions> {
         &self.highlights
     }
 
-    pub(crate) const fn border_shapes(&self) -> &BorderShapeOptions {
+    pub const fn border_shapes(&self) -> &BorderShapeOptions {
         &self.border_shapes
     }
 
-    pub(crate) const fn border_shapes_mut(&mut self) -> &mut BorderShapeOptions {
+    pub const fn border_shapes_mut(&mut self) -> &mut BorderShapeOptions {
         &mut self.border_shapes
     }
 
-    pub(crate) fn highlight_mut(
-        &mut self,
-        group: HighlightGroup,
-    ) -> &mut HighlightDefinitionOptions {
+    pub fn highlight_mut(&mut self, group: HighlightGroup) -> &mut HighlightDefinitionOptions {
         self.highlights.entry(group).or_default()
     }
 }
@@ -335,7 +332,7 @@ macro_rules! define_border_surfaces {
     ($($variant:ident => $name:literal, rounded_by_default = $rounded:literal),+ $(,)?) => {
         #[derive(Clone, Copy, Debug, Eq, PartialEq)]
         #[repr(usize)]
-        pub(crate) enum BorderSurface {
+        pub enum BorderSurface {
             $($variant),+
         }
 
@@ -350,7 +347,7 @@ macro_rules! define_border_surfaces {
                 }
             }
 
-            pub(crate) const fn rounded_by_default(self) -> bool {
+            pub const fn rounded_by_default(self) -> bool {
                 match self {
                     $(Self::$variant => $rounded),+
                 }
@@ -370,23 +367,23 @@ define_border_surfaces! {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct BorderShapeOptions {
-    pub(crate) default: Option<BorderShape>,
+pub struct BorderShapeOptions {
+    pub default: Option<BorderShape>,
     surfaces: [Option<BorderShape>; BorderSurface::COUNT],
 }
 
 impl BorderShapeOptions {
-    pub(crate) const fn get(&self, surface: BorderSurface) -> Option<BorderShape> {
+    pub const fn get(&self, surface: BorderSurface) -> Option<BorderShape> {
         self.surfaces[surface as usize]
     }
 
-    pub(crate) fn set(&mut self, surface: BorderSurface, shape: BorderShape) {
+    pub fn set(&mut self, surface: BorderSurface, shape: BorderShape) {
         self.surfaces[surface as usize] = Some(shape);
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BorderShape {
+pub enum BorderShape {
     Plain,
     Rounded,
     Double,
@@ -422,19 +419,19 @@ impl BorderShape {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct HighlightDefinitionOptions {
-    pub(crate) link: Option<HighlightLinkOptions>,
-    pub(crate) foreground: Option<String>,
-    pub(crate) background: Option<String>,
-    pub(crate) bold: Option<bool>,
-    pub(crate) italic: Option<bool>,
-    pub(crate) dim: Option<bool>,
-    pub(crate) underline: Option<bool>,
-    pub(crate) strikethrough: Option<bool>,
+pub struct HighlightDefinitionOptions {
+    pub link: Option<HighlightLinkOptions>,
+    pub foreground: Option<String>,
+    pub background: Option<String>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub dim: Option<bool>,
+    pub underline: Option<bool>,
+    pub strikethrough: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum HighlightLinkOptions {
+pub enum HighlightLinkOptions {
     Inherit(HighlightGroup),
     Detached,
 }

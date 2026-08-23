@@ -49,7 +49,7 @@ pub(super) const DISCORD_REFERRER_CURRENT: &str = "";
 pub(super) const DISCORD_REFERRING_DOMAIN_CURRENT: &str = "";
 
 #[derive(Clone, Debug)]
-pub(crate) struct ClientFingerprint {
+pub struct ClientFingerprint {
     pub(super) os: &'static str,
     pub(super) os_version: String,
     pub(super) system_locale: String,
@@ -196,8 +196,7 @@ struct SessionIdentifierFetchFailure {
 /// Creates the login-session fingerprint after reading Discord's current web
 /// build. The returned HTTP client retains the cookies from that bootstrap
 /// request and is reused for authentication and REST.
-pub(crate) async fn load_client_fingerprint_and_http() -> (Arc<ClientFingerprint>, reqwest::Client)
-{
+pub async fn load_client_fingerprint_and_http() -> (Arc<ClientFingerprint>, reqwest::Client) {
     let bootstrap = Arc::new(ClientFingerprint::new(CLIENT_BUILD_NUMBER));
     let client = discord_http_client(&bootstrap);
     let client_build_number = match fetch_client_build_number(&client).await {

@@ -1,0 +1,15 @@
+[package]
+name = "concord-merge"
+version = "2.5.9"
+edition = "2024"
+rust-version = "1.90"
+description = "One view across several signed-in Discord accounts"
+license = "GPL-3.0-only"
+publish = false
+
+[dependencies]
+# The core client, one instance per signed-in account. This crate sits between
+# it and a front end, like concord-cache: the core knows about one account and
+# nothing about this.
+concord = { path = "../.." }
+tokio = { version = "1", features = ["sync", "rt", "macros"] }

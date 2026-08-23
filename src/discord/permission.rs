@@ -149,7 +149,7 @@ pub(crate) enum PermissionResolution {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PermissionDecision {
+pub enum PermissionDecision {
     Allowed,
     Denied(DiscordPermission),
     Unavailable(PermissionDataGap),
@@ -498,7 +498,7 @@ impl DiscordState {
             .is_allowed()
     }
 
-    pub(crate) fn channel_permission_decision(
+    pub fn channel_permission_decision(
         &self,
         channel: &ChannelState,
         permission: DiscordPermission,

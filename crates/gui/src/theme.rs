@@ -177,7 +177,7 @@ pub fn load_overrides() -> Vec<String> {
         return Vec::new();
     };
 
-    let resolved = concord::tui::theme::external::resolved_highlights(&options, &mut warnings);
+    let resolved = concord_ui::theme::external::resolved_highlights(&options, &mut warnings);
 
     let mut dark = DARK;
     let mut light = LIGHT;

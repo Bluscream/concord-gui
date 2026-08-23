@@ -32,7 +32,7 @@ impl PresenceStatus {
         }
     }
 
-    pub(crate) const fn user_selectable() -> [Self; 4] {
+    pub const fn user_selectable() -> [Self; 4] {
         [Self::Online, Self::Idle, Self::DoNotDisturb, Self::Offline]
     }
 }
@@ -209,10 +209,10 @@ impl ActivityInfo {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl ActivityInfo {
-    pub(crate) fn test(kind: ActivityKind, name: impl Into<String>) -> Self {
+    pub fn test(kind: ActivityKind, name: impl Into<String>) -> Self {
         Self {
             kind,
             name: name.into(),

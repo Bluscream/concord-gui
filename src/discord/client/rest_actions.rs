@@ -85,7 +85,7 @@ impl DiscordClient {
 
     /// Effective message and attachment limits for `channel_id`, resolved from
     /// account entitlements and guild capabilities in one state snapshot.
-    fn message_send_limits(&self, channel_id: Id<ChannelMarker>) -> MessageSendLimits {
+    pub fn message_send_limits(&self, channel_id: Id<ChannelMarker>) -> MessageSendLimits {
         self.read_state().message_send_limits(channel_id)
     }
 

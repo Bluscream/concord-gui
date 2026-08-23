@@ -685,7 +685,7 @@ impl StreamCaptureHandle {
     }
 }
 
-pub(crate) fn list_stream_capture_targets() -> Result<Vec<StreamCaptureTarget>, String> {
+pub fn list_stream_capture_targets() -> Result<Vec<StreamCaptureTarget>, String> {
     let mut targets = platform::list_targets()?;
 
     targets.sort_by(|left, right| {

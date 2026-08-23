@@ -37,10 +37,10 @@ impl ApplicationCommandInfo {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl ApplicationCommandInfo {
-    pub(crate) fn test(id: Id<ApplicationMarker>, name: impl Into<String>) -> Self {
+    pub fn test(id: Id<ApplicationMarker>, name: impl Into<String>) -> Self {
         let name = name.into();
         Self {
             id,
@@ -66,10 +66,10 @@ pub struct ApplicationCommandOptionInfo {
     pub options: Vec<ApplicationCommandOptionInfo>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl ApplicationCommandOptionInfo {
-    pub(crate) fn test(kind: u64, name: impl Into<String>) -> Self {
+    pub fn test(kind: u64, name: impl Into<String>) -> Self {
         Self {
             kind,
             name: name.into(),

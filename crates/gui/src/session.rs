@@ -191,7 +191,8 @@ pub fn spawn(token: String) -> Result<(mpsc::UnboundedReceiver<Update>, SessionH
             runtime.block_on(async move {
                 let auth = Session::new_auth_session().await;
 
-                let session = match Session::start(token, auth, Vec::new()).await {
+                let extension = concord_cache::open_from_config().await;
+                let session = match Session::start(token, auth, Vec::new(), extension).await {
                     Ok(session) => session,
                     Err(error) => {
                         let _ = updates_tx

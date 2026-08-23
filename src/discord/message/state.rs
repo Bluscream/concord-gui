@@ -711,14 +711,14 @@ impl DiscordState {
             .unwrap_or_default()
     }
 
-    pub(crate) fn channel_has_cached_messages(&self, channel_id: Id<ChannelMarker>) -> bool {
+    pub fn channel_has_cached_messages(&self, channel_id: Id<ChannelMarker>) -> bool {
         self.message_cache
             .timelines
             .get(&channel_id)
             .is_some_and(|timeline| !timeline.messages.is_empty())
     }
 
-    pub(crate) fn channel_cached_message_count_from(
+    pub fn channel_cached_message_count_from(
         &self,
         channel_id: Id<ChannelMarker>,
         author_id: Id<UserMarker>,

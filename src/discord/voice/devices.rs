@@ -23,7 +23,7 @@ pub(crate) type VoiceAudioSourceList = Vec<(String, String)>;
 /// `source_label` shows it as such, `adjust_source` cycles from that position,
 /// and `resolve_device` opens the default device.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct VoiceAudioSources {
+pub struct VoiceAudioSources {
     pub input: Option<String>,
     pub output: Option<String>,
 }
@@ -35,25 +35,25 @@ struct VoiceAudioSource {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct VoiceAudioSourceOptions {
+pub struct VoiceAudioSourceOptions {
     inputs: Vec<VoiceAudioSource>,
     outputs: Vec<VoiceAudioSource>,
 }
 
 impl VoiceAudioSourceOptions {
-    pub(crate) fn input_label(&self, selected: Option<&str>) -> String {
+    pub fn input_label(&self, selected: Option<&str>) -> String {
         source_label(selected, &self.inputs)
     }
 
-    pub(crate) fn output_label(&self, selected: Option<&str>) -> String {
+    pub fn output_label(&self, selected: Option<&str>) -> String {
         source_label(selected, &self.outputs)
     }
 
-    pub(crate) fn adjust_input(&self, selected: &mut Option<String>, delta: i8) -> bool {
+    pub fn adjust_input(&self, selected: &mut Option<String>, delta: i8) -> bool {
         adjust_source(selected, &self.inputs, delta)
     }
 
-    pub(crate) fn adjust_output(&self, selected: &mut Option<String>, delta: i8) -> bool {
+    pub fn adjust_output(&self, selected: &mut Option<String>, delta: i8) -> bool {
         adjust_source(selected, &self.outputs, delta)
     }
 
@@ -61,7 +61,7 @@ impl VoiceAudioSourceOptions {
         (source_parts(self.inputs), source_parts(self.outputs))
     }
 
-    pub(crate) fn from_parts(inputs: VoiceAudioSourceList, outputs: VoiceAudioSourceList) -> Self {
+    pub fn from_parts(inputs: VoiceAudioSourceList, outputs: VoiceAudioSourceList) -> Self {
         Self {
             inputs: sources_from_parts(inputs),
             outputs: sources_from_parts(outputs),
@@ -77,7 +77,7 @@ impl VoiceAudioSourceOptions {
     }
 }
 
-pub(crate) fn list_voice_audio_sources() -> Result<VoiceAudioSourceOptions, String> {
+pub fn list_voice_audio_sources() -> Result<VoiceAudioSourceOptions, String> {
     #[cfg(feature = "voice-playback")]
     {
         #[cfg(target_os = "linux")]

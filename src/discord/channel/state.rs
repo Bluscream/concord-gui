@@ -11,7 +11,7 @@ use crate::discord::state::DiscordState;
 
 const THREAD_NOTIFICATION_FLAGS_MASK: u64 = (1 << 1) | (1 << 2) | (1 << 3);
 
-pub(crate) fn is_thread_kind(kind: &str) -> bool {
+pub fn is_thread_kind(kind: &str) -> bool {
     matches!(
         kind,
         "thread"

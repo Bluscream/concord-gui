@@ -59,10 +59,10 @@ impl GuildMemberState {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl GuildMemberState {
-    pub(crate) fn test(user_id: Id<UserMarker>, display_name: impl Into<String>) -> Self {
+    pub fn test(user_id: Id<UserMarker>, display_name: impl Into<String>) -> Self {
         Self {
             user_id,
             display_name: display_name.into(),
@@ -305,7 +305,7 @@ impl DiscordState {
         selected_member_role_color(member, roles)
     }
 
-    pub(crate) fn role_color_for_ids(
+    pub fn role_color_for_ids(
         &self,
         guild_id: Id<GuildMarker>,
         role_ids: &[Id<RoleMarker>],
@@ -565,7 +565,7 @@ impl DiscordState {
         }
     }
 
-    pub(crate) fn current_user_role_ids_for_guild(
+    pub fn current_user_role_ids_for_guild(
         &self,
         guild_id: Id<GuildMarker>,
     ) -> Option<&[Id<RoleMarker>]> {

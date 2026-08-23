@@ -1,0 +1,38 @@
+[package]
+name = "concord-ui"
+version = "2.5.9"
+edition = "2024"
+rust-version = "1.90"
+description = "Front-end-agnostic pieces shared by the concord terminal and GPUI clients"
+license = "GPL-3.0-only"
+publish = false
+
+# The core is allowed: it sits below both front ends, as it does for the cache
+# and merge crates. A drawing library is not - needing one is what makes a
+# thing one front end's rather than shared, and holding those apart is the
+# whole reason this crate exists.
+[dependencies]
+concord = { path = "../.." }
+unicode-segmentation = "1.12.0"
+# Optional, and only for converting a terminal key event into the vocabulary
+# in `key.rs`. The GPUI front end builds this crate without it and so never
+# pulls a console library in order to ask what a key is bound to.
+crossterm = { version = "0.29.0", features = [
+  "event-stream",
+  "osc52",
+], optional = true }
+# Optional, and only to convert this crate's own colours, attributes and
+# border shapes into ratatui's. The GPUI front end builds without it, so it
+# never pulls a console library in to read a theme.
+ratatui = { version = "0.30.0", optional = true }
+
+[features]
+# The crossterm conversions. On for the terminal front end, off for the GPUI
+# one, which has its own event type and translates it into `key::KeyEvent`.
+terminal = ["dep:crossterm", "dep:ratatui"]
+fixtures = ["concord/fixtures"]
+
+[dev-dependencies]
+# The theme tests parse the same `theme.toml` shapes the core's tests do, and
+# reuse its parser rather than growing a second one that could disagree.
+concord = { path = "../..", features = ["fixtures"] }

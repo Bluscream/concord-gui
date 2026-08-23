@@ -1,6 +1,5 @@
 mod command_dispatch;
 mod command_loop;
-mod credentials;
 mod gateway_commands;
 mod history_commands;
 mod inbox_commands;
@@ -11,6 +10,7 @@ mod notification_commands;
 mod read_state_commands;
 mod session_commands;
 mod shutdown;
+
 mod user_commands;
 mod voice_commands;
 
@@ -23,12 +23,15 @@ use crate::{
         AppCommand, AppEvent, DiscordAuthSession, SequencedAppEvent, SnapshotRevision,
         load_client_fingerprint_and_http,
     },
-    logging, tui, version_check,
+    logging, version_check,
 };
 
-use self::{
-    command_loop::start_command_loop, credentials::resolve_token, shutdown::shutdown_gateway,
-};
+use self::command_loop::start_command_loop;
+
+/// Shutting a session down cleanly. Public because a front end owns the loop
+/// that decides when that is, and the sequence - stop the gateway, then the
+/// command loop - is a property of the session rather than of any one screen.
+pub use shutdown::shutdown_gateway;
 
 /// A live, front-end-agnostic Discord session.
 ///
@@ -50,8 +53,8 @@ pub struct Session {
     pub client: DiscordClient,
     /// Non-fatal warnings accumulated during startup, for the UI to surface.
     pub warnings: Vec<String>,
-    gateway_task: JoinHandle<()>,
-    command_task: JoinHandle<()>,
+    pub gateway_task: JoinHandle<()>,
+    pub command_task: JoinHandle<()>,
 }
 
 impl Session {
@@ -69,24 +72,24 @@ impl Session {
         token: String,
         auth_session: DiscordAuthSession,
         warnings: Vec<String>,
+        extension: Option<std::sync::Arc<dyn crate::discord::ClientExtension>>,
     ) -> Result<Self> {
-        let client = {
-            // Only the storage build mutates it, and a build without that
-            // feature would warn about a `mut` nothing uses.
-            #[cfg_attr(not(feature = "storage"), allow(unused_mut))]
-            let mut client = DiscordClient::new_with_auth_session(token, auth_session)?;
-            // Opened before the gateway, so the first events already have
-            // somewhere to go rather than being the ones that get dropped.
-            #[cfg(feature = "storage")]
-            if let Ok(options) = config::load_options() {
-                client.open_store(&options.storage).await;
-            }
-            client
-        };
-        // After the store opens and before the gateway task starts, so what
-        // was cached is on screen while READY is still in flight.
-        #[cfg(feature = "storage")]
-        client.hydrate_from_store().await;
+        let mut client = DiscordClient::new_with_auth_session(token, auth_session)?;
+        if let Some(extension) = extension {
+            // Attached before the gateway starts, so the first events already
+            // have somewhere to go rather than being the ones that get lost.
+            client.attach_extension(extension);
+        }
+        // Injected events are published like any other, so whatever an
+        // extension replays is drawn through the same path as live data.
+        if let Some(mut injected) = client.take_injected_events() {
+            let publisher = client.clone();
+            tokio::spawn(async move {
+                while let Some(event) = injected.recv().await {
+                    publisher.publish_event(event).await;
+                }
+            });
+        }
         let effects = client.take_effects();
         let snapshots = client.subscribe_snapshots();
         let (commands_tx, commands_rx) = mpsc::channel(64);
@@ -139,71 +142,5 @@ impl Session {
     pub async fn shutdown(self) {
         self.command_task.abort();
         shutdown_gateway(&self.client, self.gateway_task).await;
-    }
-}
-
-#[derive(Default)]
-pub struct App;
-
-impl App {
-    pub fn new() -> Self {
-        Self
-    }
-
-    pub async fn run(self) -> Result<()> {
-        let theme_warnings = match config::load_theme_options_with_warnings() {
-            Ok((theme_options, mut warnings)) => {
-                warnings.extend(tui::initialize_theme(&theme_options));
-                warnings
-            }
-            Err(error) => {
-                logging::error("config", format!("failed to load theme config: {error}"));
-                let mut warnings = vec![format!("theme.toml could not be loaded: {error}")];
-                warnings.extend(tui::initialize_theme(&config::ThemeOptions::default()));
-                warnings
-            }
-        };
-
-        loop {
-            let auth_session = Session::new_auth_session().await;
-            let resolved_token = resolve_token(auth_session.clone()).await?;
-
-            let session =
-                Session::start(resolved_token.token, auth_session, resolved_token.warnings).await?;
-
-            // `effects` is a non-Clone receiver, so the session is destructured
-            // by value here and the task handles are retained for teardown.
-            let Session {
-                effects,
-                snapshots,
-                commands,
-                client,
-                gateway_task,
-                command_task,
-                warnings: _,
-            } = session;
-
-            let result = tui::run(
-                effects,
-                snapshots,
-                commands,
-                client.clone(),
-                theme_warnings.clone(),
-            )
-            .await;
-
-            command_task.abort();
-            shutdown_gateway(&client, gateway_task).await;
-            match result? {
-                tui::DashboardExit::Quit => return Ok(()),
-                // Sign-out of an env-token session quits: re-resolving would
-                // read the same CONCORD_TOKEN and log straight back in.
-                tui::DashboardExit::SignOut => {
-                    if crate::token_store::env_token().is_some() {
-                        return Ok(());
-                    }
-                }
-            }
-        }
     }
 }

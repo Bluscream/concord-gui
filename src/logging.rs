@@ -47,6 +47,10 @@ impl ErrorLogEntry {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Level {
     Debug,
+    /// Written whether or not debug logging is on, and not collected as an
+    /// application error. For the handful of facts a log is useless without -
+    /// which account a run used, which backend it picked.
+    Info,
     Error,
 }
 
@@ -54,6 +58,7 @@ impl Level {
     fn label(self) -> &'static str {
         match self {
             Self::Debug => "DEBUG",
+            Self::Info => "INFO",
             Self::Error => "ERROR",
         }
     }
@@ -102,7 +107,7 @@ impl FileLogger {
     #[cfg_attr(test, allow(dead_code))]
     fn should_write(&self, level: Level) -> bool {
         match level {
-            Level::Error => true,
+            Level::Error | Level::Info => true,
             Level::Debug => self.debug_enabled,
         }
     }
@@ -114,6 +119,15 @@ pub fn debug_logging_enabled() -> bool {
 
 pub fn debug(target: &str, message: impl AsRef<str>) {
     logger().write(Level::Debug, target, message.as_ref());
+}
+
+/// A fact worth recording even when nobody asked for debug logging.
+///
+/// Not `debug`, because a log that omits which account a run used cannot
+/// answer the first question anybody asks of it. Not `error`, because it is
+/// not one and would show up in the error list in the UI.
+pub fn info(target: &str, message: impl AsRef<str>) {
+    logger().write(Level::Info, target, message.as_ref());
 }
 
 pub fn error(target: &str, message: impl AsRef<str>) {
@@ -379,6 +393,21 @@ fn format_log_timestamp(timestamp_millis: u128) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_info_line_is_written_even_when_debug_logging_is_off() {
+        // The rule this level exists for. A log that drops it whenever nobody
+        // asked for debug output cannot answer which account a run used, which
+        // is the first thing anybody wants from it afterwards.
+        let quiet = FileLogger {
+            path: None,
+            debug_enabled: false,
+        };
+
+        assert!(quiet.should_write(Level::Info));
+        assert!(quiet.should_write(Level::Error));
+        assert!(!quiet.should_write(Level::Debug));
+    }
+
     use std::sync::{Mutex, OnceLock};
 
     use super::{

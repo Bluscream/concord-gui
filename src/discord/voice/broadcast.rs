@@ -1109,7 +1109,7 @@ impl BroadcastRtpHistory {
         Ok(())
     }
 
-    fn get(&self, sequence: u16) -> Option<&[u8]> {
+    pub fn get(&self, sequence: u16) -> Option<&[u8]> {
         let (base_sequence, _) = self.packets.front()?;
         let offset = usize::from(sequence.wrapping_sub(*base_sequence));
         self.packets

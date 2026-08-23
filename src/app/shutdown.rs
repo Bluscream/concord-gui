@@ -2,7 +2,7 @@ use tokio::time::{Duration, sleep};
 
 use crate::{DiscordClient, logging};
 
-pub(super) async fn shutdown_gateway(
+pub async fn shutdown_gateway(
     client: &DiscordClient,
     mut gateway_task: tokio::task::JoinHandle<()>,
 ) {

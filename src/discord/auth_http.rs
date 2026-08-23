@@ -23,7 +23,7 @@ impl DiscordAuthSession {
         Self { fingerprint, http }
     }
 
-    pub(crate) fn with_http(fingerprint: Arc<ClientFingerprint>, http: reqwest::Client) -> Self {
+    pub fn with_http(fingerprint: Arc<ClientFingerprint>, http: reqwest::Client) -> Self {
         Self { fingerprint, http }
     }
 

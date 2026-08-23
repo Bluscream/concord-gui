@@ -16,6 +16,15 @@ publish = false
 # system media stack (pipewire/openh264/cpal). Voice and screenshare are
 # re-enabled via the `media` feature below once the shell is wired up.
 concord = { path = "../..", default-features = false }
+# The offline cache. Between the core and this front end rather than inside
+# the core: the core keeps its state in memory and knows nothing about
+# databases, and this is what makes any of it survive a restart.
+concord-cache = { path = "../cache" }
+# The pieces both front ends share. Reached directly rather than through the
+# terminal front end's module, which is what it used to be.
+# The fake world, for running without an account.
+concord-fixtures = { path = "../fixtures", optional = true }
+concord-ui = { path = "../ui" }
 
 gpui = "0.2.2"
 gpui_http_client = "0.2.2"
@@ -47,4 +56,4 @@ default = ["media"]
 # Treat both as stale until seen again on real hardware.
 media = ["concord/voice-playback", "concord/stream-broadcast"]
 # Offline demo state, selected at runtime with the token "test".
-fixtures = ["concord/fixtures"]
+fixtures = ["concord/fixtures", "dep:concord-fixtures"]

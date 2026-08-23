@@ -26,10 +26,10 @@ pub struct MentionInfo {
     pub display_name: String,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl MentionInfo {
-    pub(crate) fn test(user_id: Id<UserMarker>, display_name: impl Into<String>) -> Self {
+    pub fn test(user_id: Id<UserMarker>, display_name: impl Into<String>) -> Self {
         Self {
             user_id,
             guild_nick: None,
@@ -59,10 +59,10 @@ pub enum AttachmentMediaType {
     Audio,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl AttachmentInfo {
-    pub(crate) fn test(id: Id<AttachmentMarker>, filename: impl Into<String>) -> Self {
+    pub fn test(id: Id<AttachmentMarker>, filename: impl Into<String>) -> Self {
         Self {
             id,
             filename: filename.into(),
@@ -111,10 +111,10 @@ pub struct EmbedInfo {
     pub video_url: Option<String>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl EmbedInfo {
-    pub(crate) fn test() -> Self {
+    pub fn test() -> Self {
         Self {
             color: None,
             provider_name: None,
@@ -321,6 +321,20 @@ impl StickerFormat {
     }
 
     /// Whether this can be shown as an image at all.
+    /// The number Discord uses, so a stored format reads back as itself.
+    ///
+    /// The inverse of `from_wire` for every variant it can produce. An unknown
+    /// future value does not survive the round trip - it arrives as `Png` and
+    /// leaves as 1 - which is the same fallback `from_wire` already chose.
+    pub const fn to_wire(self) -> u64 {
+        match self {
+            Self::Png => 1,
+            Self::Apng => 2,
+            Self::Lottie => 3,
+            Self::Gif => 4,
+        }
+    }
+
     pub const fn is_image(self) -> bool {
         !matches!(self, Self::Lottie)
     }
@@ -376,10 +390,10 @@ pub struct MessageSnapshotInfo {
     pub timestamp: Option<String>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl MessageSnapshotInfo {
-    pub(crate) fn test() -> Self {
+    pub fn test() -> Self {
         Self {
             content: None,
             sticker_names: Vec::new(),
@@ -404,10 +418,10 @@ pub struct ReplyInfo {
     pub mentions: Vec<MentionInfo>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl ReplyInfo {
-    pub(crate) fn test(author: impl Into<String>) -> Self {
+    pub fn test(author: impl Into<String>) -> Self {
         Self {
             author_id: None,
             author: author.into(),
@@ -426,10 +440,10 @@ pub struct MessageInteractionInfo {
     pub command_name: Option<String>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl MessageInteractionInfo {
-    pub(crate) fn test(user: impl Into<String>) -> Self {
+    pub fn test(user: impl Into<String>) -> Self {
         Self {
             user_id: None,
             user: user.into(),
@@ -445,10 +459,10 @@ pub struct MessageReferenceInfo {
     pub message_id: Option<Id<MessageMarker>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl MessageReferenceInfo {
-    pub(crate) fn test(message_id: Id<MessageMarker>) -> Self {
+    pub fn test(message_id: Id<MessageMarker>) -> Self {
         Self {
             guild_id: None,
             channel_id: None,
@@ -466,10 +480,10 @@ pub struct PollInfo {
     pub total_votes: Option<u64>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl PollInfo {
-    pub(crate) fn test(question: impl Into<String>) -> Self {
+    pub fn test(question: impl Into<String>) -> Self {
         Self {
             question: question.into(),
             answers: Vec::new(),
@@ -488,10 +502,10 @@ pub struct PollAnswerInfo {
     pub me_voted: bool,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl PollAnswerInfo {
-    pub(crate) fn test(answer_id: u8, text: impl Into<String>) -> Self {
+    pub fn test(answer_id: u8, text: impl Into<String>) -> Self {
         Self {
             answer_id,
             text: text.into(),
@@ -508,10 +522,10 @@ pub struct ReactionInfo {
     pub me: bool,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl ReactionInfo {
-    pub(crate) fn test(emoji: ReactionEmoji) -> Self {
+    pub fn test(emoji: ReactionEmoji) -> Self {
         Self {
             emoji,
             count: 1,
@@ -526,10 +540,10 @@ pub struct ReactionUserInfo {
     pub display_name: String,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl ReactionUserInfo {
-    pub(crate) fn test(user_id: Id<UserMarker>, display_name: impl Into<String>) -> Self {
+    pub fn test(user_id: Id<UserMarker>, display_name: impl Into<String>) -> Self {
         Self {
             user_id,
             display_name: display_name.into(),
@@ -607,10 +621,10 @@ impl Default for MessageInfo {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl MessageInfo {
-    pub(crate) fn test(channel_id: Id<ChannelMarker>, message_id: Id<MessageMarker>) -> Self {
+    pub fn test(channel_id: Id<ChannelMarker>, message_id: Id<MessageMarker>) -> Self {
         Self {
             channel_id,
             message_id,

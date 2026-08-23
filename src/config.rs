@@ -29,8 +29,12 @@ pub fn load_theme_options_with_warnings() -> Result<(ThemeOptions, Vec<String>)>
     load_theme_options_from_path(&path)
 }
 
-#[cfg(test)]
-pub(crate) fn parse_theme_options_for_test(content: &str) -> Result<(ThemeOptions, Vec<String>)> {
+/// Parse a theme without touching the filesystem, for tests.
+///
+/// Behind `fixtures` rather than `cfg(test)` because theme resolution moved to
+/// `concord-ui`, and its tests need the same parser this crate's did.
+#[cfg(any(test, feature = "fixtures"))]
+pub fn parse_theme_options_for_test(content: &str) -> Result<(ThemeOptions, Vec<String>)> {
     parse_theme_options(content)
 }
 

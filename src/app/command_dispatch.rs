@@ -166,6 +166,12 @@ impl CommandDispatcher {
                 gateway_commands::set_selected_guild(self.client.clone(), guild_id).await;
             }
             AppCommand::SetSelectedMessageChannel { channel_id } => {
+                // Before the subscription, so anything an extension has
+                // cached is on screen while the gateway answers rather than
+                // after.
+                if let Some(channel_id) = channel_id {
+                    self.client.notify_channel_opened(channel_id);
+                }
                 gateway_commands::set_selected_message_channel(self.client.clone(), channel_id)
                     .await;
             }

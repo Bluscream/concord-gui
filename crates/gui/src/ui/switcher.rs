@@ -56,7 +56,7 @@ impl Switcher {
                     // Matched against "name context" so "gen rost" finds
                     // #general in RostFaden.
                     let haystack = format!("{} {}", candidate.name, candidate.context);
-                    concord::tui::fuzzy::fuzzy_text_score(&haystack, &query)
+                    concord_ui::fuzzy::fuzzy_text_score(&haystack, &query)
                         .map(|score| (score, candidate))
                 })
                 .collect();

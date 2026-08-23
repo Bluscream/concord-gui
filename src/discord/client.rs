@@ -85,8 +85,11 @@ pub struct DiscordClient {
     /// store could not be reached - the client worked without one before this
     /// existed, and refusing to start because a shared server is down would
     /// make the optional backend worse than no backend.
-    #[cfg(feature = "storage")]
-    store: Option<std::sync::Arc<crate::storage::Store>>,
+    /// Something outside this crate that watches events and may feed some
+    /// back. `None` in a build with no cache, which costs nothing.
+    extension: super::extension::AttachedExtension,
+    injected_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<AppEvent>>>>,
+    injected_tx: mpsc::UnboundedSender<AppEvent>,
     effects_rx: Arc<Mutex<Option<mpsc::Receiver<SequencedAppEvent>>>>,
     snapshots_tx: watch::Sender<SnapshotRevision>,
     state: Arc<RwLock<DiscordState>>,
@@ -111,6 +114,19 @@ pub struct DiscordClient {
 }
 
 impl DiscordClient {
+    /// Replace the state wholesale.
+    ///
+    /// Behind `fixtures`, and the only way in besides applying events. A fake
+    /// world is built by filling caches directly rather than by replaying a
+    /// history that never happened, so there is nothing to apply - it is the
+    /// starting point. Everything after this still arrives as events.
+    #[cfg(any(test, feature = "fixtures"))]
+    pub fn seed_state(&self, state: DiscordState) {
+        if let Ok(mut slot) = self.state.write() {
+            *slot = state;
+        }
+    }
+
     pub fn new(token: String) -> Result<Self> {
         Self::new_with_fingerprint(token, Arc::new(ClientFingerprint::new(CLIENT_BUILD_NUMBER)))
     }
@@ -123,10 +139,7 @@ impl DiscordClient {
         Self::new_with_fingerprint_and_http(token, fingerprint, http)
     }
 
-    pub(crate) fn new_with_auth_session(
-        token: String,
-        auth_session: DiscordAuthSession,
-    ) -> Result<Self> {
+    pub fn new_with_auth_session(token: String, auth_session: DiscordAuthSession) -> Result<Self> {
         Self::new_with_fingerprint_and_http(
             token,
             auth_session.fingerprint_arc(),
@@ -145,6 +158,7 @@ impl DiscordClient {
         let (effects_tx, effects_rx) = mpsc::channel(4096);
         let (snapshots_tx, _) = watch::channel(SnapshotRevision::default());
         let (gateway_commands_tx, gateway_commands_rx) = mpsc::unbounded_channel();
+        let (injected_tx, injected_rx) = mpsc::unbounded_channel();
         let (voice_events_tx, voice_events_rx) = mpsc::unbounded_channel();
         let state = Arc::new(RwLock::new(initial_state));
         let revision = Arc::new(RwLock::new(SnapshotRevision::default()));
@@ -168,8 +182,9 @@ impl DiscordClient {
             token,
             fingerprint,
             rest,
-            #[cfg(feature = "storage")]
-            store: None,
+            extension: super::extension::AttachedExtension::default(),
+            injected_rx: Arc::new(Mutex::new(Some(injected_rx))),
+            injected_tx,
             effects_rx: Arc::new(Mutex::new(Some(effects_rx))),
             snapshots_tx,
             state,
@@ -244,6 +259,37 @@ impl DiscordClient {
         Some((id.to_string(), username))
     }
 
+    /// Attach the thing that watches events and may feed some back.
+    ///
+    /// One rather than many: everything that has wanted this so far composes
+    /// better as one extension wrapping another than as a list the core has to
+    /// order, and a list would make the order a thing to get wrong.
+    pub fn attach_extension(&mut self, extension: std::sync::Arc<dyn super::ClientExtension>) {
+        extension.attach(super::EventInjector::new(self.injected_tx.clone()));
+        self.extension = super::extension::AttachedExtension(Some(extension));
+    }
+
+    /// Tell the extension a channel was opened, if there is one.
+    pub fn notify_channel_opened(
+        &self,
+        channel_id: crate::discord::ids::Id<crate::discord::ids::marker::ChannelMarker>,
+    ) {
+        if let Some(extension) = &self.extension.0 {
+            extension.channel_opened(channel_id);
+        }
+    }
+
+    /// Drain events an extension has injected, publishing each as its own.
+    ///
+    /// Taken once, like the other receivers here: a second caller would split
+    /// the stream and each would see half of it.
+    pub fn take_injected_events(&self) -> Option<mpsc::UnboundedReceiver<AppEvent>> {
+        self.injected_rx
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take())
+    }
+
     pub async fn publish_event(&self, event: AppEvent) {
         // Somebody else's soundboard sound arrives as an event saying what was
         // played, not as audio on the voice stream, so every client fetches and
@@ -256,139 +302,15 @@ impl DiscordClient {
         {
             self.spawn_soundboard_playback(*sound_id, *volume);
         }
-        // Cached here for the same reason: the one funnel every event passes
-        // through, so the two front ends cannot drift about what is on disk.
-        #[cfg(feature = "storage")]
-        self.cache_event(&event);
+        // Offered to the extension here for the same reason: the one funnel
+        // every event passes through, so nothing downstream can drift about
+        // what was seen.
+        if let Some(extension) = &self.extension.0 {
+            extension.observe(&event);
+        }
         self.event_publisher.publish(event).await;
     }
-
-    /// Open the offline cache, if one is configured.
-    ///
-    /// Separate from construction because it is async and may block on a
-    /// network round trip to a shared server. A store that will not open is
-    /// left as `None` rather than reported: the client worked without one
-    /// before this existed, and refusing to start because somebody's MariaDB
-    /// is down would make the optional backend worse than no backend.
-    #[cfg(feature = "storage")]
-    pub async fn open_store(&mut self, options: &crate::config::StorageOptions) {
-        if !options.enabled {
-            return;
-        }
-        let backend = if options.dsn.trim().is_empty() {
-            let Some(path) = crate::support::paths::state_dir().map(|dir| dir.join("cache.db"))
-            else {
-                return;
-            };
-            crate::storage::StorageBackend::Sqlite { path }
-        } else {
-            match crate::storage::StorageBackend::parse(&options.dsn) {
-                Ok(backend) => backend,
-                Err(problem) => {
-                    // Named rather than swallowed: a typo in a connection
-                    // string is a thing somebody can fix, unlike a store that
-                    // is simply unreachable.
-                    crate::logging::error(
-                        "storage",
-                        format!("could not read the storage setting: {problem}"),
-                    );
-                    return;
-                }
-            }
-        };
-
-        match crate::storage::Store::open(&backend).await {
-            Ok(store) => {
-                crate::logging::debug("storage", format!("caching to {backend}"));
-                self.store = Some(std::sync::Arc::new(store));
-            }
-            Err(error) => crate::logging::debug(
-                "storage",
-                format!("no cache this run, {backend} could not be opened: {error}"),
-            ),
-        }
-    }
-
-    /// Fill state from the cache, before the gateway has answered.
-    ///
-    /// Replayed as ordinary events rather than written into state directly, so
-    /// the front ends draw cached data through the same path as live data and
-    /// there is no second rendering path to keep in step.
-    ///
-    /// The guilds arrive with no channels, members or roles: those are not
-    /// cached yet, and inventing empty ones would be worse than an empty
-    /// sidebar - a channel list that is wrong looks like a bug, one that is
-    /// absent looks like loading. The gateway replaces all of it within
-    /// seconds.
-    ///
-    /// Re-caching what was just read is harmless: the revision is unchanged,
-    /// so each write is the same row it came from.
-    #[cfg(feature = "storage")]
-    pub async fn hydrate_from_store(&self) {
-        let Some(store) = self.store.clone() else {
-            return;
-        };
-        let Ok(guilds) = store.guilds().await else {
-            return;
-        };
-
-        for guild in guilds {
-            let Ok(guild_id) = guild.id.parse::<u64>() else {
-                continue;
-            };
-            self.publish_event(AppEvent::GuildCreate {
-                guild_id: crate::discord::ids::Id::new(guild_id),
-                name: guild.name.unwrap_or_default(),
-                member_count: None,
-                owner_id: guild
-                    .owner_id
-                    .and_then(|id| id.parse::<u64>().ok())
-                    .map(crate::discord::ids::Id::new),
-                boost_tier: crate::discord::GuildBoostTier::default(),
-                boost_count: 0,
-                verification_level: None,
-                mfa_level: None,
-                features: None,
-                onboarding: None,
-                channels: Vec::new(),
-                members: Vec::new(),
-                presences: Vec::new(),
-                roles: None,
-                emojis: Vec::new(),
-                stickers: Vec::new(),
-            })
-            .await;
-        }
-    }
-
     /// Write what an event says to the offline cache.
-    ///
-    /// Spawned rather than awaited: a slow or unreachable store must not hold
-    /// up the event, which the in-memory state has already taken. A cache is
-    /// an optimisation, and one that blocked the client would be worse than
-    /// none.
-    #[cfg(feature = "storage")]
-    fn cache_event(&self, event: &AppEvent) {
-        let Some(store) = self.store.clone() else {
-            return;
-        };
-        let writes = crate::storage::persist::writes_for(event);
-        if writes.is_empty() {
-            return;
-        }
-        tokio::spawn(async move {
-            for write in writes {
-                if let Err(error) = store.apply(&write).await {
-                    // Logged once and dropped. Retrying would need a queue,
-                    // and the next event carrying the same entity rewrites it
-                    // anyway - the cache is allowed to be behind.
-                    crate::logging::debug("storage", format!("could not cache an event: {error}"));
-                    break;
-                }
-            }
-        });
-    }
-
     fn spawn_soundboard_playback(&self, sound_id: u64, volume: f64) {
         let rest = self.rest.clone();
         tokio::spawn(async move {
@@ -829,7 +751,7 @@ impl DiscordClient {
     }
 
     #[cfg(feature = "voice-playback")]
-    pub(crate) fn set_push_to_talk_enabled(&self, enabled: bool) {
+    pub fn set_push_to_talk_enabled(&self, enabled: bool) {
         let mut current = self
             .push_to_talk
             .write()
@@ -844,7 +766,7 @@ impl DiscordClient {
     }
 
     #[cfg(feature = "voice-playback")]
-    pub(crate) fn set_push_to_talk_pressed(&self, pressed: bool) {
+    pub fn set_push_to_talk_pressed(&self, pressed: bool) {
         let _ = self
             .voice_events_tx
             .send(VoiceRuntimeEvent::PushToTalkPressed(pressed));
@@ -1287,7 +1209,7 @@ async fn publish_app_event(
     }
 }
 
-pub(crate) fn validate_token_header(token: &str) -> Result<()> {
+pub fn validate_token_header(token: &str) -> Result<()> {
     HeaderValue::from_str(token)
         .map_err(|source| AppError::InvalidDiscordTokenHeader { source })?;
     Ok(())

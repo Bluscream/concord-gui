@@ -30,10 +30,10 @@ pub struct VoiceParticipantState {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct StreamParticipantList {
-    pub(crate) paused: bool,
-    pub(crate) broadcaster: String,
-    pub(crate) viewers: Vec<String>,
+pub struct StreamParticipantList {
+    pub paused: bool,
+    pub broadcaster: String,
+    pub viewers: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -85,10 +85,10 @@ impl CurrentVoiceConnectionState {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl CurrentVoiceConnectionState {
-    pub(crate) fn test(guild_id: Id<GuildMarker>, channel_id: Id<ChannelMarker>) -> Self {
+    pub fn test(guild_id: Id<GuildMarker>, channel_id: Id<ChannelMarker>) -> Self {
         Self {
             scope: VoiceScope::Guild(guild_id),
             channel_id,
@@ -122,7 +122,7 @@ pub(in crate::discord) struct StreamState {
     pub(in crate::discord) channel_id: Id<ChannelMarker>,
     pub(in crate::discord) owner_id: Id<UserMarker>,
     pub(in crate::discord) viewer_ids: BTreeSet<Id<UserMarker>>,
-    paused: bool,
+    pub paused: bool,
 }
 
 impl DiscordState {
@@ -279,7 +279,7 @@ impl DiscordState {
         sounds
     }
 
-    pub(crate) fn stream_participants(
+    pub fn stream_participants(
         &self,
         scope: VoiceScope,
         channel_id: Id<ChannelMarker>,

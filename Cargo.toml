@@ -1,5 +1,12 @@
 [workspace]
-members = ["crates/gui"]
+members = [
+  "crates/cache",
+  "crates/fixtures",
+  "crates/gui",
+  "crates/merge",
+  "crates/tui",
+  "crates/ui",
+]
 
 [package]
 name = "concord"
@@ -17,11 +24,9 @@ exclude = ["docs/", ".github/", "dist-workspace.toml"]
 
 [dependencies]
 aes-gcm = "0.10.3"
-arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 base64 = "0.22"
 chacha20poly1305 = "0.10.1"
 chrono = { version = "0.4.44", default-features = false, features = ["clock"] }
-crossterm = { version = "0.29.0", features = ["event-stream", "osc52"] }
 cookie_store = "0.22.1"
 cpal = { version = "0.18.1", optional = true, features = ["pulseaudio"] }
 davey = "0.1.4"
@@ -38,7 +43,6 @@ keyring = { version = "3.6.3", default-features = false, features = [
   "windows-native",
 ] }
 mime_guess = "2.0"
-notify-rust = "4"
 opus = { version = "1.6.1", package = "opusic-c" }
 # Soundboard sounds are MP3 or OGG, per Discord's own CDN reference, so the
 # WAV reader the notification sounds use cannot play them.
@@ -49,11 +53,6 @@ symphonia = { version = "0.5", optional = true, default-features = false, featur
 ] }
 qrcode = { version = "0.14", default-features = false }
 rand = "0.8"
-ratatui = "0.30.0"
-ratatui-image = { version = "11.0.5", default-features = false, features = [
-  "crossterm",
-  "image-defaults",
-] }
 reqwest = { version = "0.12", default-features = false, features = [
   "rustls-tls-webpki-roots-no-provider",
   "json",
@@ -94,31 +93,14 @@ tokio-tungstenite = { version = "0.27", default-features = false, features = [
 ] }
 tempfile = "3"
 toml = "1.1.2"
-unicode-segmentation = "1.12.0"
 unicode-width = "0.2.2"
 uuid = { version = "1.23.1", features = ["v4"] }
-syntect = { version = "5.3.0", default-features = false, features = [
-  "default-fancy",
-] }
 interprocess = { version = "2.4.2", features = ["tokio"] }
 sys-locale = "0.3.2"
 iana-time-zone = "0.1.65"
 nnnoiseless = { version = "0.5.2", default-features = false, optional = true }
 global-hotkey = { version = "0.8.0", optional = true }
 openh264 = { version = "0.9.7", optional = true }
-# Offline cache. `sqlite` and `mysql` together because the two backends are a
-# runtime choice, not a build-time one - a shared store is something someone
-# points an already-built client at.
-sqlx = { version = "0.8", optional = true, default-features = false, features = [
-  "runtime-tokio-rustls",
-  # `any` is what makes the backend a runtime choice rather than a build-time
-  # one, which is the whole point: a shared store is something someone points
-  # an already-built client at.
-  "any",
-  "sqlite",
-  "mysql",
-  "macros",
-] }
 fast_image_resize = { version = "6.1.0", features = [
   "only_u8x4",
 ], optional = true }
@@ -127,10 +109,7 @@ fluent-bundle = "0.16.0"
 unic-langid = "0.9.6"
 
 [features]
-default = ["voice-playback", "stream-broadcast", "storage"]
-# Offline cache. Behind a feature because it pulls a database driver, and a
-# build that never caches should not pay for one.
-storage = ["dep:sqlx"]
+default = ["voice-playback", "stream-broadcast"]
 # Synthetic state for offline UI development. Never enabled in release builds.
 fixtures = []
 voice-playback = [

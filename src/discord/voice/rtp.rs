@@ -52,7 +52,7 @@ pub(super) struct VoiceOutboundRtpState {
     pub(super) ssrc: u32,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl VoiceOutboundRtpState {
     pub(super) fn test() -> Self {

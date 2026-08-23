@@ -1373,7 +1373,6 @@ version = "2.5.9"
 dependencies = [
  "aes-gcm",
  "alsa",
- "arboard",
  "ashpd 0.13.13",
  "base64",
  "block2",
@@ -1382,7 +1381,6 @@ dependencies = [
  "cookie_store",
  "cpal",
  "cros-codecs-extended",
- "crossterm",
  "davey",
  "dirs 6.0.0",
  "dispatch2",
@@ -1401,7 +1399,6 @@ dependencies = [
  "libc",
  "mime_guess",
  "nnnoiseless",
- "notify-rust",
  "objc2",
  "objc2-core-audio-types",
  "objc2-core-foundation",
@@ -1415,8 +1412,6 @@ dependencies = [
  "pipewire",
  "qrcode",
  "rand 0.8.6",
- "ratatui",
- "ratatui-image",
  "reqwest",
  "reqwest_cookie_store",
  "rsa",
@@ -1425,9 +1420,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "socket2",
- "sqlx",
  "symphonia",
- "syntect",
  "sys-locale",
  "tempfile",
  "thiserror 2.0.18",
@@ -1435,7 +1428,6 @@ dependencies = [
  "tokio-tungstenite",
  "toml 1.1.2+spec-1.1.0",
  "unic-langid",
- "unicode-segmentation",
  "unicode-width",
  "uuid",
  "v4l",
@@ -1448,12 +1440,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "concord-cache"
+version = "2.5.9"
+dependencies = [
+ "chrono",
+ "concord",
+ "sqlx",
+ "tokio",
+]
+
+[[package]]
+name = "concord-fixtures"
+version = "2.5.9"
+dependencies = [
+ "chrono",
+ "concord",
+ "image",
+]
+
+[[package]]
 name = "concord-gui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
  "concord",
+ "concord-cache",
+ "concord-fixtures",
+ "concord-ui",
  "futures",
  "gpui",
  "gpui_http_client",
@@ -1462,6 +1476,56 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "concord-merge"
+version = "2.5.9"
+dependencies = [
+ "concord",
+ "tokio",
+]
+
+[[package]]
+name = "concord-tui"
+version = "2.5.9"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "ashpd 0.13.13",
+ "chrono",
+ "concord",
+ "concord-cache",
+ "concord-fixtures",
+ "concord-ui",
+ "crossterm",
+ "emojis",
+ "futures",
+ "global-hotkey",
+ "image",
+ "notify-rust",
+ "ratatui",
+ "ratatui-image",
+ "reqwest",
+ "rustls",
+ "serde_json",
+ "syntect",
+ "tempfile",
+ "tokio",
+ "unicode-segmentation",
+ "unicode-width",
+ "x11rb",
+ "xkeysym",
+]
+
+[[package]]
+name = "concord-ui"
+version = "2.5.9"
+dependencies = [
+ "concord",
+ "crossterm",
+ "ratatui",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -9199,6 +9263,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
+ "parking_lot 0.12.5",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",

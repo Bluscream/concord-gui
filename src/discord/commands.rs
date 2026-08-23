@@ -448,7 +448,7 @@ impl MessageHistoryAfterMode {
         matches!(self, Self::GapFill)
     }
 
-    pub(crate) fn is_catch_up(self) -> bool {
+    pub fn is_catch_up(self) -> bool {
         matches!(self, Self::CatchUp)
     }
 }

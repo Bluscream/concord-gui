@@ -1,8 +1,7 @@
 mod state;
 
-pub(crate) use state::is_thread_kind;
 pub(in crate::discord) use state::refresh_private_channel_name_from_recipients;
-pub use state::{ChannelRecipientState, ChannelState, ChannelVisibilityStats};
+pub use state::{ChannelRecipientState, ChannelState, ChannelVisibilityStats, is_thread_kind};
 
 use crate::discord::ids::{
     Id,
@@ -128,18 +127,22 @@ impl ChannelInfo {
     }
 }
 
-#[cfg(test)]
-impl ChannelInfo {
-    pub(crate) fn test(channel_id: Id<ChannelMarker>, kind: impl Into<String>) -> Self {
+impl Default for ChannelInfo {
+    /// A channel with nothing filled in but its id.
+    ///
+    /// Exists so a partial channel - one rebuilt from the cache, where only
+    /// some columns are stored - is written as the fields it does have rather
+    /// than as thirty lines of `None` that hide which ones those are.
+    fn default() -> Self {
         Self {
             guild_id: None,
-            channel_id,
+            channel_id: Id::new(1),
             parent_id: None,
             owner_id: None,
             position: None,
             last_message_id: None,
             name: String::new(),
-            kind: kind.into(),
+            kind: String::new(),
             message_count: None,
             member_count: None,
             total_message_sent: None,
@@ -163,9 +166,20 @@ impl ChannelInfo {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
+impl ChannelInfo {
+    pub fn test(channel_id: Id<ChannelMarker>, kind: impl Into<String>) -> Self {
+        Self {
+            channel_id,
+            kind: kind.into(),
+            ..Default::default()
+        }
+    }
+}
+
+#[cfg(any(test, feature = "fixtures"))]
 impl ThreadMetadataInfo {
-    pub(crate) fn test(archived: bool, locked: bool) -> Self {
+    pub fn test(archived: bool, locked: bool) -> Self {
         Self {
             archived,
             auto_archive_duration: None,
@@ -195,10 +209,10 @@ pub struct PermissionOverwriteInfo {
     pub deny: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl PermissionOverwriteInfo {
-    pub(crate) fn test(id: u64, kind: PermissionOverwriteKind) -> Self {
+    pub fn test(id: u64, kind: PermissionOverwriteKind) -> Self {
         Self {
             id,
             kind,
@@ -221,10 +235,10 @@ pub struct ChannelRecipientInfo {
     pub status: Option<PresenceStatus>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl ChannelRecipientInfo {
-    pub(crate) fn test(user_id: Id<UserMarker>, display_name: impl Into<String>) -> Self {
+    pub fn test(user_id: Id<UserMarker>, display_name: impl Into<String>) -> Self {
         Self {
             user_id,
             display_name: display_name.into(),
