@@ -137,8 +137,8 @@ fn main() {
                 )
                 .expect("failed to open window");
 
-            // Start the core only when a credential already exists.
-            if let Some(token) = existing_token() {
+            let initial_token = std::env::args().nth(1).or_else(existing_token);
+            if let Some(token) = initial_token {
                 match session::spawn(token) {
                     Ok((updates, handle)) => {
                         window

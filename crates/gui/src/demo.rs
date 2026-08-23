@@ -17,7 +17,8 @@ use crate::session::{SessionHandle, Update};
 
 /// Whether this token asks for the fake rather than a real account.
 pub fn is_demo_token(token: &str) -> bool {
-    token.trim().eq_ignore_ascii_case("demo")
+    let t = token.trim();
+    t.eq_ignore_ascii_case("demo") || t.eq_ignore_ascii_case("test")
 }
 
 #[cfg(feature = "fixtures")]

@@ -327,13 +327,13 @@ Every icon needs a tooltip, and every tooltip goes through the catalogue. Use
   `--no-test` builds without. That default must flip before the first real
   release; a shipped build should not carry synthetic state or accept the
   literal `test` token.
+- **Graphical Testing via Linux GUI MCP**:
+  - Always check if an existing `concord-gui` window/process exists (`find_window` or `list_windows`) before launching a new instance, and kill lingering processes to prevent duplicate windows.
+  - Launch using `run_app` with `executable: "distrobox"`, `args: ["enter", "arch", "--", "/path/to/concord-gui"]`, and explicit Wayland/KDE environment variables (`DISPLAY=:0`, `WAYLAND_DISPLAY=wayland-0`, `XDG_RUNTIME_DIR=/run/user/1000`, `RUST_LOG=debug`). Do not pass an auto-connect token argument if testing the login picker screen.
 - **Verify in release too.** A dead-code warning that only the release profile
   reports has already caught a feature whose button was never actually added.
   `cargo build --release` before claiming a UI change landed.
-- **Demo mode**: `--token test` loads an offline fixture — guilds, channels,
-  DMs, messages, voice — so the UI can be exercised without an account. New
-  commands should be answered in `crates/gui/src/demo.rs`, or the feature
-  silently does nothing there.
+- **Demo mode**: `--token test` or `--token demo` (or selecting Demo Mode on the login screen) loads offline fixture data — guilds, channels, DMs, messages, voice — so the UI can be exercised without an account. New commands should be answered in `crates/gui/src/demo.rs`, or the feature silently does nothing there.
 - **References**: `.references/` holds 114 surveyed third-party clients. Read
   them before guessing at a request shape. Moderation endpoints came from
   Abaddon; the sticker payload was confirmed against two independent

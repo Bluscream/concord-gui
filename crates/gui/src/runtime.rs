@@ -52,7 +52,10 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    shared().map(|runtime| runtime.spawn(future))
+    shared().map(|runtime| {
+        let _guard = runtime.handle().enter();
+        runtime.spawn(future)
+    })
 }
 
 /// Run a future to completion on the shared runtime.
