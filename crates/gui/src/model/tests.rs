@@ -1300,7 +1300,7 @@ fn demo_mode_answers_every_command_the_ui_can_send() {
 
     let ui = extract(
         &[
-            include_str!("../ui/workspace.rs"),
+            include_str!("../ui/workspace/mod.rs"),
             include_str!("../ui/messages.rs"),
         ]
         .concat(),
@@ -1388,7 +1388,7 @@ fn no_icon_glyph_needs_a_font_we_do_not_ship() {
     // Checked over source rather than at runtime: a glyph that fails to render
     // looks like a layout quirk, not an error, so nothing would ever raise it.
     const SOURCES: [(&str, &str); 3] = [
-        ("workspace.rs", include_str!("../ui/workspace.rs")),
+        ("workspace/mod.rs", include_str!("../ui/workspace/mod.rs")),
         ("messages.rs", include_str!("../ui/messages.rs")),
         ("chrome.rs", include_str!("../ui/chrome.rs")),
     ];
