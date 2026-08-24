@@ -5,15 +5,44 @@ use crate::ui::chrome::{avatar_with_url, column};
 use crate::ui::composer::Composer;
 use crate::ui::workspace::{ContextSubject, Prompt, Workspace};
 
+/// Height of one entry in the rail, including the gap under it.
+const RAIL_ENTRY: f32 = 44. + space::SM;
+
+/// Height of a folder's label, including its padding.
+const RAIL_FOLDER: f32 = 18. + space::SM;
+
 impl Workspace {
+    /// How tall the rail's contents want to be.
+    ///
+    /// Counted rather than measured: GPUI reports a laid-out size only after
+    /// the frame it was laid out in, which is a frame too late to decide
+    /// what the row below it should look like.
+    pub(super) fn rail_content_height(&self) -> f32 {
+        let mut folders = std::collections::HashSet::new();
+        for guild in &self.model.guilds {
+            if let Some(folder) = &guild.folder {
+                folders.insert(folder.id);
+            }
+        }
+
+        // Every server, plus the add button under them.
+        let entries = self.model.guilds.len() + 1;
+        space::MD + entries as f32 * RAIL_ENTRY + folders.len() as f32 * RAIL_FOLDER
+    }
+
     pub(super) fn guild_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut rail = column()
+            .id("guild-rail")
             .w(px(layout::GUILD_RAIL))
             .h_full()
+            .flex_shrink_0()
             .bg(rgb(active().bg))
             .items_center()
             .pt(px(space::MD))
-            .gap(px(space::SM));
+            .gap(px(space::SM))
+            // Enough servers and the list runs past the bottom of the window,
+            // where the ones at the end were simply unreachable.
+            .overflow_y_scroll();
 
         let mut open_folder: Option<u64> = None;
 
@@ -144,5 +173,38 @@ impl Workspace {
                     cx.notify();
                 })),
         )
+    }
+}
+
+#[cfg(test)]
+mod rail_height_tests {
+    use super::{RAIL_ENTRY, RAIL_FOLDER};
+    use crate::theme::space;
+
+    /// The same sum `rail_content_height` does, without needing a Workspace.
+    fn height(guilds: usize, folders: usize) -> f32 {
+        space::MD + (guilds + 1) as f32 * RAIL_ENTRY + folders as f32 * RAIL_FOLDER
+    }
+
+    #[test]
+    fn the_rail_grows_with_what_is_in_it() {
+        // The add button counts: it is the entry that pushes a rail which
+        // exactly fits its servers into needing a scroll, and forgetting it
+        // would let the island cover it.
+        assert!(height(0, 0) > 0.);
+        assert!(height(3, 0) > height(2, 0));
+        assert!(height(3, 1) > height(3, 0));
+    }
+
+    #[test]
+    fn a_short_rail_leaves_the_corner_and_a_long_one_does_not() {
+        // The decision the island makes, at a window height of 828 - the
+        // size the client opens at.
+        let available = 828. - 24. - 52.;
+        assert!(
+            height(2, 0) <= available,
+            "two servers should leave the corner free"
+        );
+        assert!(height(40, 0) > available, "forty should not");
     }
 }

@@ -1731,3 +1731,61 @@ fn the_voice_tick_moves_the_speaker_on() {
         "the speaker never changed across four ticks: {speakers:?}"
     );
 }
+
+#[test]
+fn the_kitchen_sink_message_is_one_that_could_be_sent() {
+    // It exists to be a fair test of the renderer, and a message longer than
+    // the limit is not one anybody could post - so it would be testing a case
+    // that cannot happen. Easy to break by adding one more example to it.
+    let state = concord::discord::fixtures::demo_state();
+    let sink = state
+        .messages_for_channel(concord::discord::Id::new(111))
+        .into_iter()
+        .find(|message| {
+            message
+                .content
+                .as_deref()
+                .is_some_and(|body| body.contains("||spoiler||"))
+        })
+        .expect("the kitchen-sink message is in #general");
+
+    let body = sink.content.as_deref().unwrap_or_default();
+    let used = body.chars().count();
+    assert!(
+        used <= 2_000,
+        "the kitchen-sink message is {used} characters, over the 2000 limit"
+    );
+
+    // And it has to keep containing one of everything, or it quietly decays
+    // into an ordinary message that proves nothing.
+    for part in [
+        "**bold**",
+        "*italic*",
+        "__underline__",
+        "~~strike~~",
+        "`inline code`",
+        "||spoiler||",
+        "> a blockquote",
+        "```",
+        "<@1002>",
+        "<@&2>",
+        "<#112>",
+        "@everyone",
+        "@here",
+        "<:ferris:4001>",
+        "<a:crab_party:4002>",
+        "<t:1756000000:f>",
+        "https://github.com/bluscream/concord",
+    ] {
+        assert!(
+            body.contains(part),
+            "the kitchen-sink message lost {part:?}"
+        );
+    }
+
+    assert!(
+        sink.attachments.len() >= 4,
+        "it should carry an image, a video, a text file and an archive"
+    );
+    assert!(!sink.embeds.is_empty(), "it should carry an embed");
+}

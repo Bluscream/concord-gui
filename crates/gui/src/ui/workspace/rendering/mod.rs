@@ -851,7 +851,7 @@ impl Render for Workspace {
                             d.child(self.guild_rail(cx))
                         })
                         .when(self.ui_state.channel_pane_visible, |d| {
-                            d.child(self.channel_sidebar(cx))
+                            d.child(self.channel_sidebar(window, cx))
                         })
                         .child(self.content(window, cx))
                         .when(self.profile.is_some(), |d| d.child(self.profile_pane(cx)))

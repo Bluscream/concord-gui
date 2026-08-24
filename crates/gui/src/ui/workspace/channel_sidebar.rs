@@ -1,4 +1,4 @@
-use gpui::{Context, IntoElement, prelude::*, px, rgb};
+use gpui::{Context, IntoElement, Window, prelude::*, px, rgb};
 
 use concord::discord::Id;
 use concord::discord::marker;
@@ -12,8 +12,18 @@ use crate::ui::chrome::{
 use crate::ui::stream::share_button;
 use crate::ui::workspace::{ChannelKind, ContextSubject, Pane, Presence, Selection, Workspace};
 
+/// Height of the user island at the foot of the sidebar.
+const ISLAND_HEIGHT: f32 = 52.;
+
+/// Height of the status bar under everything.
+const STATUS_BAR: f32 = 24.;
+
 impl Workspace {
-    pub(super) fn channel_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn channel_sidebar(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let guild_name = self
             .model
             .guilds
@@ -344,7 +354,7 @@ impl Workspace {
             sidebar = sidebar.child(self.voice_connected_card(name, cx));
         }
 
-        sidebar = sidebar.child(self.user_profile_bar(cx));
+        sidebar = sidebar.child(self.user_profile_bar(window, cx));
 
         sidebar
     }
@@ -512,7 +522,22 @@ impl Workspace {
             )
     }
 
-    pub(super) fn user_profile_bar(&self, cx: &mut Context<Self>) -> gpui::Div {
+    /// Whether the rail's servers reach as far down as the user island.
+    ///
+    /// When they do not, the island has the corner to itself and spreads into
+    /// it. When they do, it gets out of their way - a server the island sat
+    /// on top of would be unclickable, which is worse than a cramped island.
+    fn island_has_the_corner(&self, window: &Window) -> bool {
+        if !self.ui_state.guild_pane_visible {
+            return true;
+        }
+        // The rail stops above the status bar, and the island is the bottom
+        // of the sidebar beside it.
+        let available = f32::from(window.viewport_size().height) - STATUS_BAR - ISLAND_HEIGHT;
+        self.rail_content_height() <= available
+    }
+
+    pub(super) fn user_profile_bar(&self, window: &Window, cx: &mut Context<Self>) -> gpui::Div {
         let user_name = self
             .last_state
             .as_ref()
@@ -523,14 +548,25 @@ impl Workspace {
         let mute = self.self_mute;
         let deaf = self.self_deaf;
 
+        let spread = self.island_has_the_corner(window);
+
         row()
             .w_full()
-            .h(px(52.))
+            .h(px(ISLAND_HEIGHT))
             .px(px(space::SM))
             .items_center()
             .bg(rgb(active().surface))
             .border_t_1()
             .border_color(rgb(active().border))
+            // Pulled left over the rail's column when nothing is down there
+            // to cover. A negative margin rather than a repositioned element:
+            // the sidebar is painted after the rail, so it already sits on
+            // top, and this keeps the island a child of the thing it belongs
+            // to instead of floating over both.
+            .when(spread, |bar| {
+                bar.ml(px(-layout::GUILD_RAIL))
+                    .w(px(layout::SIDEBAR + layout::GUILD_RAIL))
+            })
             .child(
                 row()
                     .id("user-bar-profile")

@@ -249,6 +249,39 @@ fn attachment(
     }
 }
 
+/// One message containing every part the renderer can draw.
+///
+/// Every markdown style, all three kinds of mention, `@everyone` and `@here`,
+/// unicode and custom emoji, a timestamp, a link that unfurls and one that
+/// does not. Attachments and an embed are added alongside it.
+///
+/// Here as a constant so its length can be asserted: it has to stay under the
+/// limit, or it is not a message anyone could send and stops being a fair
+/// test of the thing it is testing.
+const KITCHEN_SINK: &str = "**bold** *italic* _also italic_ __underline__ ~~strike~~ `inline code` ||spoiler||\n> a blockquote, which wraps onto a second line when the pane is narrow enough to make it\n```\na fenced block\n  keeping its indentation\n```\nMentions: <@1002> a person, <@&2> a role, <#112> a channel, @everyone and @here.\nEmoji: unicode \u{2764} and custom <:ferris:4001> and animated <a:crab_party:4002>.\nA timestamp: <t:1756000000:f>. A bare link that unfurls: https://github.com/bluscream/concord\nAnd one that does not: https://example.invalid/nothing-here";
+
+/// Servers that exist only to make the rail longer than the window.
+///
+/// Named rather than numbered: a rail reading "Server 7, Server 8" tells you
+/// nothing about whether the names are being drawn correctly, and one of
+/// these is deliberately long enough to test that they are truncated.
+const FILLER_GUILDS: [&str; 14] = [
+    "Compiler Explorer",
+    "Embedded Rust",
+    "Game Dev",
+    "GPUI Builders",
+    "Home Lab",
+    "Linux Gaming",
+    "Mechanical Keyboards",
+    "Nix Users",
+    "Open Source Fridays",
+    "Rust Gamedev Working Group With A Very Long Name",
+    "Self Hosted",
+    "Type Theory",
+    "Wayland",
+    "Zig Learners",
+];
+
 /// A fully-populated state for offline UI work.
 pub fn demo_state() -> DiscordState {
     let mut state = DiscordState::default();
@@ -262,6 +295,18 @@ pub fn demo_state() -> DiscordState {
     navigation
         .guilds
         .insert(guild_id(20), guild(20, "Rust Community", 4210, 812));
+
+    // Enough servers that the rail runs past the bottom of the window and
+    // has to scroll. Two named servers exercised the list; they never
+    // exercised what happens when it does not fit, which is where the last
+    // few become unreachable.
+    for (offset, name) in FILLER_GUILDS.iter().enumerate() {
+        let id = 40 + offset as u64;
+        navigation.guilds.insert(
+            guild_id(id),
+            guild(id, name, 120 + offset as u64 * 37, 4 + offset as u32),
+        );
+    }
 
     // ---- guild 10 channels -------------------------------------------------
     let channels = [
@@ -745,6 +790,52 @@ pub fn demo_state() -> DiscordState {
         ..Default::default()
     });
     general.push(gifv);
+
+    // A message with one of everything, so a change to the renderer can be
+    // checked against every case at once rather than by hunting for an
+    // example of each. Kept under the 2000-character limit on purpose: it has
+    // to be a message that could actually be sent.
+    let mut kitchen_sink = message(70, 111, Some(10), 1003, "turing", KITCHEN_SINK, 300);
+    kitchen_sink.mention_everyone = true;
+    kitchen_sink.attachments.push(attachment(
+        9200,
+        "screenshot.png",
+        "image/png",
+        184_320,
+        Some((320, 180)),
+    ));
+    kitchen_sink.attachments.push(attachment(
+        9201,
+        "recording.mp4",
+        "video/mp4",
+        4_194_304,
+        None,
+    ));
+    kitchen_sink
+        .attachments
+        .push(attachment(9202, "notes.txt", "text/plain", 2_048, None));
+    kitchen_sink.attachments.push(attachment(
+        9203,
+        "archive.zip",
+        "application/zip",
+        10_485_760,
+        None,
+    ));
+    kitchen_sink.embeds.push(crate::discord::EmbedInfo {
+        color: Some(0x24_29_2F),
+        provider_name: Some("GitHub".to_string()),
+        author_name: Some("bluscream".to_string()),
+        title: Some("bluscream/concord".to_string()),
+        description: Some("A Discord client in Rust.".to_string()),
+        url: Some("https://github.com/bluscream/concord".to_string()),
+        fields: vec![crate::discord::EmbedFieldInfo {
+            name: "Language".to_string(),
+            value: "Rust".to_string(),
+        }],
+        footer_text: Some("github.com".to_string()),
+        ..Default::default()
+    });
+    general.push(kitchen_sink);
 
     message_cache.set_fixture_messages(channel_id(111), general);
 
