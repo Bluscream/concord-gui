@@ -385,20 +385,7 @@ fn handle_command(
         AppCommand::LoadGuildEmojis { guild_id } => {
             publish_event!(AppEvent::GuildEmojisLoaded {
                 guild_id,
-                emojis: vec![
-                    concord::discord::GuildEmojiInfo {
-                        id: concord::discord::Id::new(8001),
-                        name: "ferris".to_string(),
-                        animated: false,
-                        role_restricted: false,
-                    },
-                    concord::discord::GuildEmojiInfo {
-                        id: concord::discord::Id::new(8002),
-                        name: "party_parrot".to_string(),
-                        animated: true,
-                        role_restricted: true,
-                    },
-                ],
+                emojis: admin.emojis.clone(),
             });
         }
         AppCommand::LoadGuildAuditLog { guild_id } => {
@@ -457,22 +444,6 @@ fn handle_command(
                 rules: admin.automod.clone(),
             });
         }
-        AppCommand::ModifyGuild { .. }
-        | AppCommand::SetGuildIcon { .. }
-        | AppCommand::CreateRole { .. }
-        | AppCommand::ModifyRole { .. }
-        | AppCommand::DeleteRole { .. }
-        | AppCommand::ReorderRoles { .. }
-        | AppCommand::CreateGuildChannel { .. }
-        | AppCommand::ModifyChannel { .. }
-        | AppCommand::DeleteChannel { .. }
-        | AppCommand::ReorderChannels { .. }
-        | AppCommand::SetChannelOverwrite { .. }
-        | AppCommand::DeleteChannelOverwrite { .. }
-        | AppCommand::SetVoiceChannelStatus { .. } => {}
-        AppCommand::CreateEmoji { .. }
-        | AppCommand::RenameEmoji { .. }
-        | AppCommand::DeleteEmoji { .. } => {}
 
         AppCommand::LoadGuildBans { guild_id } => {
             // A short list so the panel and the unban path can be exercised
@@ -1013,6 +984,146 @@ fn handle_command(
                 &format!("ran /{} - nothing to do offline", invocation.command_name),
             );
             publish_state!();
+        }
+
+        AppCommand::SetChannelOverwrite {
+            channel_id,
+            target,
+            allow,
+            deny,
+            ..
+        } => {
+            fixtures::guild::set_overwrite(state, channel_id, target, allow, deny);
+            publish_state!();
+        }
+
+        AppCommand::DeleteChannelOverwrite {
+            channel_id, target, ..
+        } => {
+            fixtures::guild::delete_overwrite(state, channel_id, target);
+            publish_state!();
+        }
+
+        // ---- server structure ----------------------------------------------
+        //
+        // These live in the state, so they are written straight into it and
+        // the next projection shows them. The backend used to refuse the lot
+        // on the grounds that a reproject would undo them, which was not so:
+        // the fake holds one state and hands out clones, exactly as thread
+        // deletion has always relied on.
+        AppCommand::CreateGuildChannel {
+            guild_id,
+            name,
+            kind,
+            parent_id,
+        } => {
+            let id = admin.fresh_id();
+            fixtures::guild::create_channel(state, guild_id, &name, kind, parent_id, id);
+            publish_state!();
+        }
+
+        AppCommand::ModifyChannel {
+            channel_id, edit, ..
+        } => {
+            fixtures::guild::modify_channel(state, channel_id, &edit);
+            publish_state!();
+        }
+
+        AppCommand::DeleteChannel { channel_id, .. } => {
+            fixtures::guild::delete_channel(state, channel_id);
+            publish_state!();
+        }
+
+        AppCommand::ReorderChannels { positions, .. } => {
+            fixtures::guild::reorder_channels(state, &positions);
+            publish_state!();
+        }
+
+        AppCommand::SetVoiceChannelStatus { channel_id, status } => {
+            fixtures::guild::set_voice_status(state, channel_id, status);
+            publish_state!();
+        }
+
+        AppCommand::CreateRole { guild_id, name } => {
+            let id = admin.fresh_id();
+            fixtures::guild::create_role(state, guild_id, &name, id);
+            publish_state!();
+        }
+
+        AppCommand::ModifyRole {
+            guild_id,
+            role_id,
+            edit,
+            ..
+        } => {
+            fixtures::guild::modify_role(state, guild_id, role_id, &edit);
+            publish_state!();
+        }
+
+        AppCommand::DeleteRole {
+            guild_id, role_id, ..
+        } => {
+            fixtures::guild::delete_role(state, guild_id, role_id);
+            publish_state!();
+        }
+
+        AppCommand::ReorderRoles {
+            guild_id,
+            positions,
+            ..
+        } => {
+            fixtures::guild::reorder_roles(state, guild_id, &positions);
+            publish_state!();
+        }
+
+        AppCommand::ModifyGuild { guild_id, edit, .. } => {
+            fixtures::guild::modify_guild(state, guild_id, &edit);
+            publish_state!();
+        }
+
+        AppCommand::SetGuildIcon { guild_id, .. } => {
+            // No upload offline, but the icon can still change: a generated
+            // one shows the rail redrawing, which is the visible half.
+            fixtures::guild::cycle_guild_icon(state, guild_id);
+            publish_state!();
+        }
+
+        AppCommand::CreateEmoji { guild_id, name, .. } => {
+            let id = admin.fresh_id();
+            admin.emojis.push(concord::discord::GuildEmojiInfo {
+                id: concord::discord::Id::new(id),
+                name,
+                animated: false,
+                role_restricted: false,
+            });
+            publish_event!(AppEvent::GuildEmojisLoaded {
+                guild_id,
+                emojis: admin.emojis.clone(),
+            });
+        }
+
+        AppCommand::RenameEmoji {
+            guild_id,
+            emoji_id,
+            name,
+        } => {
+            if let Some(emoji) = admin.emojis.iter_mut().find(|e| e.id == emoji_id) {
+                emoji.name = name;
+            }
+            publish_event!(AppEvent::GuildEmojisLoaded {
+                guild_id,
+                emojis: admin.emojis.clone(),
+            });
+        }
+
+        AppCommand::DeleteEmoji {
+            guild_id, emoji_id, ..
+        } => {
+            admin.emojis.retain(|e| e.id != emoji_id);
+            publish_event!(AppEvent::GuildEmojisLoaded {
+                guild_id,
+                emojis: admin.emojis.clone(),
+            });
         }
 
         // ---- server administration: edits ----------------------------------
