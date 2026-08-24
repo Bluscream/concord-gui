@@ -49,26 +49,29 @@ where
 
     if let Some(close_fn) = on_close {
         header_col = header_col.child(
-            row()
-                .w_full()
-                .justify_end()
-                .child(
-                    gpui::div()
-                        .id("profile-close-btn")
-                        .w(px(24.))
-                        .h(px(24.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(layout::RADIUS))
-                        .cursor_pointer()
-                        .text_size(px(14.))
-                        .text_color(rgb(active().text_muted))
-                        .hover(|s| s.bg(rgb(active().surface_hover)).text_color(rgb(active().text)))
-                        .on_click(close_fn)
-                        .child("✕")
-                        .tooltip(|_window, cx| cx.new(|_| crate::ui::chrome::Tooltip::new("Close profile")).into())
-                )
+            row().w_full().justify_end().child(
+                gpui::div()
+                    .id("profile-close-btn")
+                    .w(px(24.))
+                    .h(px(24.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(layout::RADIUS))
+                    .cursor_pointer()
+                    .text_size(px(14.))
+                    .text_color(rgb(active().text_muted))
+                    .hover(|s| {
+                        s.bg(rgb(active().surface_hover))
+                            .text_color(rgb(active().text))
+                    })
+                    .on_click(close_fn)
+                    .child("✕")
+                    .tooltip(|_window, cx| {
+                        cx.new(|_| crate::ui::chrome::Tooltip::new("Close profile"))
+                            .into()
+                    }),
+            ),
         );
     }
 

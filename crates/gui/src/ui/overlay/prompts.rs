@@ -1,6 +1,6 @@
 //! Prompt and dialog overlay views.
 
-use gpui::{prelude::*, px, rgb, Div};
+use gpui::{Div, prelude::*, px, rgb};
 
 use concord::t;
 
@@ -469,23 +469,21 @@ pub fn ban_list_view(
         );
     }
 
-    panel(&t!("label-bans"), 460.)
-        .child(list)
-        .child(
-            row()
-                .w_full()
-                .px(px(space::LG))
-                .py(px(space::MD))
-                .gap(px(space::SM))
-                .justify_end()
-                .child(button(
-                    "bulk-ban",
-                    &t!("action-bulk-ban"),
-                    true,
-                    on_bulk_ban,
-                ))
-                .child(button("bans-close", &t!("action-close"), false, on_close)),
-        )
+    panel(&t!("label-bans"), 460.).child(list).child(
+        row()
+            .w_full()
+            .px(px(space::LG))
+            .py(px(space::MD))
+            .gap(px(space::SM))
+            .justify_end()
+            .child(button(
+                "bulk-ban",
+                &t!("action-bulk-ban"),
+                true,
+                on_bulk_ban,
+            ))
+            .child(button("bans-close", &t!("action-close"), false, on_close)),
+    )
 }
 
 pub struct ContextItem {

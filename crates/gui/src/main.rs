@@ -28,49 +28,7 @@ use gpui::{App, Application, Bounds, WindowBounds, WindowOptions, prelude::*, px
 use crate::ui::workspace::{Screen, Workspace, WorkspaceModel};
 
 use concord::config::CredentialStoreMode;
-use concord::{paths, token_store};
-
-/// What the shell knows about the core before a session is established.
-///
-/// Deliberately minimal: this is the seam probe. It reads only what the core
-/// exposes publicly, which is how we verify the GUI can be built against the
-/// library without touching `src/`.
-struct CoreStatus {
-    config_path: String,
-    state_path: String,
-    /// Whether a credential is already present. The token itself is never read
-    /// into the GUI - only its presence is reported.
-    has_token: bool,
-    core_version: &'static str,
-}
-
-impl CoreStatus {
-    fn probe() -> Self {
-        let config_path = paths::config_file()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "<unavailable>".into());
-
-        let state_path = paths::state_dir()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "<unavailable>".into());
-
-        // Presence check only. A failure to reach the credential store is
-        // reported as "absent" rather than surfaced as an error - the login
-        // flow is responsible for that path.
-        let has_token = token_store::env_token().is_some()
-            || matches!(
-                token_store::load_token(CredentialStoreMode::default()),
-                Ok(Some(_))
-            );
-
-        Self {
-            config_path,
-            state_path,
-            has_token,
-            core_version: env!("CARGO_PKG_VERSION"),
-        }
-    }
-}
+use concord::token_store;
 
 /// Resolve a token without any interactive flow.
 ///
@@ -103,7 +61,9 @@ fn main() {
 
         if socket_path.exists() {
             if std::os::unix::net::UnixStream::connect(&socket_path).is_ok() {
-                eprintln!("concord-gui is already running at {socket_path:?}. Exiting second instance.");
+                eprintln!(
+                    "concord-gui is already running at {socket_path:?}. Exiting second instance."
+                );
                 std::process::exit(0);
             }
             let _ = std::fs::remove_file(&socket_path);
@@ -112,12 +72,10 @@ fn main() {
             Ok(listener) => {
                 eprintln!("Bound single-instance socket at {socket_path:?}");
                 std::thread::spawn(move || {
-                    for stream in listener.incoming() {
-                        if let Ok(mut stream) = stream {
-                            use std::io::Read;
-                            let mut buf = [0u8; 16];
-                            let _ = stream.read(&mut buf);
-                        }
+                    for mut stream in listener.incoming().flatten() {
+                        use std::io::Read;
+                        let mut buf = [0u8; 16];
+                        let _ = stream.read(&mut buf);
                     }
                 });
             }

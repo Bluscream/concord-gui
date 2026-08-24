@@ -1505,3 +1505,114 @@ fn a_stage_is_joined_like_a_voice_channel() {
     assert!(!ChannelKind::Text.joins_voice());
     assert!(!ChannelKind::Category.joins_voice());
 }
+
+#[test]
+fn no_key_binding_is_shadowed_by_an_unguarded_one_above_it() {
+    // The GUI dispatches keys through one long `else if` chain, so an arm
+    // whose condition names only the key claims that key outright: every
+    // later arm holding the same key behind a state guard is dead code.
+    //
+    // Two of these had already happened. A bare `key == "escape"` sat above
+    // the arms closing the profile pane, the search panel and an in-progress
+    // reply, so escape only ever dismissed modals. A bare `key == "tab"`
+    // sat above the slash picker's completion, so tab cycled panes while a
+    // command was half-typed.
+    //
+    // Clippy catches neither: `ifs_same_cond` compares conditions for
+    // equality, and `this.slash.is_some() && matches!(key, "tab")` is not
+    // equal to `key == "tab"`. Only the first pair, which happened to be
+    // textually identical, was flagged.
+    //
+    // Checked over source because the chain lives inside a GPUI closure that
+    // needs a window to run, so there is nothing to press keys against here.
+    const SOURCE: &str = include_str!("../ui/workspace/mod.rs");
+
+    /// Keys a condition tests for, and whether it tests for anything else.
+    fn keys_of(condition: &str) -> (Vec<String>, bool) {
+        let mut keys = Vec::new();
+        for (index, _) in condition.match_indices("key ==") {
+            let rest = &condition[index..];
+            if let Some(open) = rest.find('"')
+                && let Some(close) = rest[open + 1..].find('"')
+            {
+                keys.push(rest[open + 1..open + 1 + close].to_string());
+            }
+        }
+        if let Some(index) = condition.find("matches!(key,") {
+            let rest = &condition[index..];
+            let end = rest.find(')').unwrap_or(rest.len());
+            for part in rest[..end].split('|').skip(1) {
+                if let Some(open) = part.find('"')
+                    && let Some(close) = part[open + 1..].find('"')
+                {
+                    keys.push(part[open + 1..open + 1 + close].to_string());
+                }
+            }
+            // The first alternative sits after the comma, not after a pipe.
+            if let Some(open) = rest[..end]
+                .find(',')
+                .map(|c| rest[c..].find('"').map(|q| c + q))
+                && let Some(open) = open
+                && let Some(close) = rest[open + 1..end.max(open + 1)].find('"')
+            {
+                keys.push(rest[open + 1..open + 1 + close].to_string());
+            }
+        }
+        // Anything beyond the key itself - a modifier, a piece of state -
+        // means the arm does not claim the key for every situation.
+        let guarded = condition.contains("modifiers")
+            || condition.contains("this.")
+            || condition.contains("event.keystroke.key");
+        (keys, guarded)
+    }
+
+    // The chain is the run of `} else if` arms at one indentation level.
+    let mut claimed: Vec<(String, usize)> = Vec::new();
+    let mut problems = Vec::new();
+    let lines: Vec<&str> = SOURCE.lines().collect();
+    for (number, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let Some(head) = trimmed.strip_prefix("} else if ") else {
+            continue;
+        };
+        // A condition may run over several lines, and the rest of it is
+        // usually where the modifiers are - so reading only the first line
+        // reports `key == "q"` as claiming q outright when the very next
+        // line narrows it to ctrl+shift.
+        let mut condition = head.to_string();
+        let mut cursor = number;
+        while !condition.trim_end().ends_with('{') && cursor + 1 < lines.len() {
+            cursor += 1;
+            condition.push(' ');
+            condition.push_str(lines[cursor].trim());
+        }
+        let condition = condition.trim_end_matches('{').trim().to_string();
+        let condition = condition.as_str();
+        let (keys, guarded) = keys_of(condition);
+        if keys.is_empty() {
+            continue;
+        }
+        for key in &keys {
+            if let Some((_, claimed_at)) = claimed.iter().find(|(held, _)| held == key) {
+                problems.push(format!(
+                    "line {}: `{}` is unreachable for {key:?} - line {} already claims \
+                     that key unconditionally",
+                    number + 1,
+                    condition,
+                    claimed_at + 1,
+                ));
+            }
+        }
+        if !guarded {
+            for key in keys {
+                claimed.push((key, number));
+            }
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "shadowed key bindings:\n{}",
+        problems.join("\n")
+    );
+}

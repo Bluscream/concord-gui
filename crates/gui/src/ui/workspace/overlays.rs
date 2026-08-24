@@ -1,4 +1,4 @@
-use gpui::{prelude::*, px, rgb, Context};
+use gpui::{Context, prelude::*, px, rgb};
 
 use concord::discord::PresenceStatus;
 use concord::t;
@@ -11,7 +11,8 @@ use crate::ui::overlay;
 use crate::ui::stream;
 use crate::ui::switcher;
 use crate::ui::workspace::{
-    activity_kind_label, audit_line, emoji_summary, invite_summary, ActivityDraft, AttachmentViewerZoom, Prompt, ServerTab, Workspace,
+    ActivityDraft, AttachmentViewerZoom, Prompt, ServerTab, Workspace, activity_kind_label,
+    audit_line, emoji_summary, invite_summary,
 };
 
 impl Workspace {
@@ -59,6 +60,27 @@ impl Workspace {
                 }
             };
 
+            let edit_activity_fn = {
+                let entity = entity.clone();
+                move |cx: &mut gpui::App| {
+                    entity.update(cx, |workspace, cx| {
+                        workspace.self_profile_popout = false;
+                        workspace.open_activity_editor();
+                        cx.notify();
+                    });
+                }
+            };
+
+            let change_avatar_fn = {
+                let entity = entity.clone();
+                move |cx: &mut gpui::App| {
+                    entity.update(cx, |workspace, cx| {
+                        workspace.self_profile_popout = false;
+                        workspace.change_avatar(cx);
+                    });
+                }
+            };
+
             let open_settings_fn = {
                 let entity = entity.clone();
                 move |cx: &mut gpui::App| {
@@ -85,12 +107,7 @@ impl Workspace {
                 .child(
                     column()
                         .w_full()
-                        .child(
-                            gpui::div()
-                                .w_full()
-                                .h(px(60.))
-                                .bg(rgb(active().accent)),
-                        )
+                        .child(gpui::div().w_full().h(px(60.)).bg(rgb(active().accent)))
                         .child(
                             column()
                                 .p(px(space::MD))
@@ -117,38 +134,48 @@ impl Workspace {
                                                 ),
                                         ),
                                 )
-                                .child(
-                                    gpui::div()
-                                        .w_full()
-                                        .h(px(1.))
-                                        .bg(rgb(active().border)),
-                                )
+                                .child(gpui::div().w_full().h(px(1.)).bg(rgb(active().border)))
                                 .child(
                                     column()
                                         .gap(px(2.))
-                                        .child(Self::self_status_item("Online", PresenceStatus::Online, current_status, {
-                                            let sp = set_presence.clone();
-                                            move |cx| sp(PresenceStatus::Online, cx)
-                                        }))
-                                        .child(Self::self_status_item("Idle", PresenceStatus::Idle, current_status, {
-                                            let sp = set_presence.clone();
-                                            move |cx| sp(PresenceStatus::Idle, cx)
-                                        }))
-                                        .child(Self::self_status_item("Do Not Disturb", PresenceStatus::DoNotDisturb, current_status, {
-                                            let sp = set_presence.clone();
-                                            move |cx| sp(PresenceStatus::DoNotDisturb, cx)
-                                        }))
-                                        .child(Self::self_status_item("Offline", PresenceStatus::Offline, current_status, {
-                                            let sp = set_presence.clone();
-                                            move |cx| sp(PresenceStatus::Offline, cx)
-                                        })),
+                                        .child(Self::self_status_item(
+                                            "Online",
+                                            PresenceStatus::Online,
+                                            current_status,
+                                            {
+                                                let sp = set_presence.clone();
+                                                move |cx| sp(PresenceStatus::Online, cx)
+                                            },
+                                        ))
+                                        .child(Self::self_status_item(
+                                            "Idle",
+                                            PresenceStatus::Idle,
+                                            current_status,
+                                            {
+                                                let sp = set_presence.clone();
+                                                move |cx| sp(PresenceStatus::Idle, cx)
+                                            },
+                                        ))
+                                        .child(Self::self_status_item(
+                                            "Do Not Disturb",
+                                            PresenceStatus::DoNotDisturb,
+                                            current_status,
+                                            {
+                                                let sp = set_presence.clone();
+                                                move |cx| sp(PresenceStatus::DoNotDisturb, cx)
+                                            },
+                                        ))
+                                        .child(Self::self_status_item(
+                                            "Offline",
+                                            PresenceStatus::Offline,
+                                            current_status,
+                                            {
+                                                let sp = set_presence.clone();
+                                                move |cx| sp(PresenceStatus::Offline, cx)
+                                            },
+                                        )),
                                 )
-                                .child(
-                                    gpui::div()
-                                        .w_full()
-                                        .h(px(1.))
-                                        .bg(rgb(active().border)),
-                                )
+                                .child(gpui::div().w_full().h(px(1.)).bg(rgb(active().border)))
                                 .child(
                                     row()
                                         .id("popout-edit-status")
@@ -164,6 +191,40 @@ impl Workspace {
                                                 .text_size(px(scaled(text::SM)))
                                                 .text_color(rgb(active().text))
                                                 .child("Set Custom Status"),
+                                        ),
+                                )
+                                .child(
+                                    row()
+                                        .id("popout-edit-activity")
+                                        .w_full()
+                                        .px(px(space::SM))
+                                        .py(px(space::XS))
+                                        .rounded(px(layout::RADIUS))
+                                        .cursor_pointer()
+                                        .hover(|s| s.bg(rgb(active().surface_hover)))
+                                        .on_click(move |_, _, cx| edit_activity_fn(cx))
+                                        .child(
+                                            gpui::div()
+                                                .text_size(px(scaled(text::SM)))
+                                                .text_color(rgb(active().text))
+                                                .child(t!("action-set-activity")),
+                                        ),
+                                )
+                                .child(
+                                    row()
+                                        .id("popout-change-avatar")
+                                        .w_full()
+                                        .px(px(space::SM))
+                                        .py(px(space::XS))
+                                        .rounded(px(layout::RADIUS))
+                                        .cursor_pointer()
+                                        .hover(|s| s.bg(rgb(active().surface_hover)))
+                                        .on_click(move |_, _, cx| change_avatar_fn(cx))
+                                        .child(
+                                            gpui::div()
+                                                .text_size(px(scaled(text::SM)))
+                                                .text_color(rgb(active().text))
+                                                .child(t!("action-change-avatar")),
                                         ),
                                 )
                                 .child(

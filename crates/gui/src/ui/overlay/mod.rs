@@ -205,14 +205,21 @@ pub fn inbox_view(
         );
     }
 
-    panel(&concord::t!("label-mentions"), 460.).child(list).child(
-        crate::ui::chrome::row()
-            .w_full()
-            .px(px(space::LG))
-            .py(px(space::MD))
-            .justify_end()
-            .child(button("inbox-close", &concord::t!("action-close"), false, on_close)),
-    )
+    panel(&concord::t!("label-mentions"), 460.)
+        .child(list)
+        .child(
+            crate::ui::chrome::row()
+                .w_full()
+                .px(px(space::LG))
+                .py(px(space::MD))
+                .justify_end()
+                .child(button(
+                    "inbox-close",
+                    &concord::t!("action-close"),
+                    false,
+                    on_close,
+                )),
+        )
 }
 
 /// Audio input and output device selection.
@@ -283,19 +290,21 @@ pub fn audio_devices_view(
         }
     }
 
-    panel(&concord::t!("label-audio-devices"), 400.).child(body).child(
-        crate::ui::chrome::row()
-            .w_full()
-            .px(px(space::LG))
-            .py(px(space::MD))
-            .justify_end()
-            .child(button(
-                "devices-close",
-                &concord::t!("action-close"),
-                false,
-                on_close,
-            )),
-    )
+    panel(&concord::t!("label-audio-devices"), 400.)
+        .child(body)
+        .child(
+            crate::ui::chrome::row()
+                .w_full()
+                .px(px(space::LG))
+                .py(px(space::MD))
+                .justify_end()
+                .child(button(
+                    "devices-close",
+                    &concord::t!("action-close"),
+                    false,
+                    on_close,
+                )),
+        )
 }
 
 #[cfg(test)]
@@ -317,19 +326,34 @@ mod connection_row_tests {
     #[test]
     fn each_button_says_what_clicking_it_would_do() {
         let hidden = ConnectionRow::new(&connection(ConnectionVisibility::Hidden, false));
-        assert_eq!(hidden.visibility_action, concord::t!("action-connection-show"));
-        assert_eq!(hidden.activity_action, concord::t!("action-connection-activity-on"));
+        assert_eq!(
+            hidden.visibility_action,
+            concord::t!("action-connection-show")
+        );
+        assert_eq!(
+            hidden.activity_action,
+            concord::t!("action-connection-activity-on")
+        );
 
         let shown = ConnectionRow::new(&connection(ConnectionVisibility::Everyone, true));
-        assert_eq!(shown.visibility_action, concord::t!("action-connection-hide"));
-        assert_eq!(shown.activity_action, concord::t!("action-connection-activity-off"));
+        assert_eq!(
+            shown.visibility_action,
+            concord::t!("action-connection-hide")
+        );
+        assert_eq!(
+            shown.activity_action,
+            concord::t!("action-connection-activity-off")
+        );
     }
 
     #[test]
     fn the_two_controls_are_independent() {
         let row = ConnectionRow::new(&connection(ConnectionVisibility::Everyone, false));
         assert_eq!(row.visibility_action, concord::t!("action-connection-hide"));
-        assert_eq!(row.activity_action, concord::t!("action-connection-activity-on"));
+        assert_eq!(
+            row.activity_action,
+            concord::t!("action-connection-activity-on")
+        );
     }
 }
 

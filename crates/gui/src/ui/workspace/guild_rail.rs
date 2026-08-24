@@ -1,6 +1,6 @@
-use gpui::{prelude::*, px, rgb, Context, IntoElement};
+use gpui::{Context, IntoElement, prelude::*, px, rgb};
 
-use crate::theme::{active, scaled, space, text, layout};
+use crate::theme::{active, layout, scaled, space, text};
 use crate::ui::chrome::{avatar_with_url, column};
 use crate::ui::composer::Composer;
 use crate::ui::workspace::{ContextSubject, Prompt, Workspace};
@@ -70,7 +70,12 @@ impl Workspace {
                         )
                     })
                     .relative()
-                    .child(avatar_with_url(44., &guild.name, guild.icon.as_deref(), true))
+                    .child(avatar_with_url(
+                        44.,
+                        &guild.name,
+                        guild.icon.as_deref(),
+                        true,
+                    ))
                     .when(selected, |d| {
                         d.border_2()
                             .border_color(rgb(active().accent))

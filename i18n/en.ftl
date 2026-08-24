@@ -11,6 +11,10 @@ presence-idle = Idle
 presence-dnd = Do not disturb
 presence-invisible = Invisible
 presence-offline = Offline
+action-change-avatar = Change avatar
+action-notify-all = Notify: all messages
+action-notify-mentions = Notify: mentions only
+action-notify-none = Notify: nothing
 action-set-status = Set status
 action-mute = Mute
 action-unmute = Unmute
@@ -189,7 +193,7 @@ activity-competing = Competing in
 activity-streaming = Streaming
 activity-custom = Custom
 
-action-set-activity = set activity
+action-set-activity = Set Activity
 
 warning-friend-action = Adding, removing and blocking people is one of the things Discord's anti-spam checks watch for on third-party clients. Doing a lot of it at once is what gets accounts flagged; doing it occasionally is normally fine.
 

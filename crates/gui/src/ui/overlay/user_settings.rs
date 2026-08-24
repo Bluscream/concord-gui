@@ -1,6 +1,6 @@
 //! User settings and profile overlays.
 
-use gpui::{prelude::*, px, rgb, Div};
+use gpui::{Div, prelude::*, px, rgb};
 
 use concord::t;
 

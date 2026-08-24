@@ -40,21 +40,18 @@ use concord_ui::keybindings::external::Resolution;
 
 use crate::keymap::{self, Keymap};
 use crate::theme::{self, Presence, active, layout, scaled, space, text};
-use crate::ui::chrome::{
-    VoiceRow, avatar, avatar_with_url, column, header, icon_button, panel_sunken, presence_dot,
-    presence_swatch, row, section_label, sidebar_row, voice_participant_row,
-};
+use crate::ui::chrome::{column, header, icon_button, presence_dot, row, section_label};
 use crate::ui::composer::{ClipboardIntent, Composer, composer_view};
 use crate::ui::emoji::{self, EmojiPicker};
 use crate::ui::forum::{self, ForumPost, ForumView};
 use crate::ui::login::{Login, LoginEvent, LoginHandle, LoginScreen, PasswordField, login_view};
 use crate::ui::messages::{MessageAction, RenderOptions, message_list};
 use crate::ui::overlay;
-use crate::ui::profile::{ProfileView, profile_view};
+use crate::ui::profile::ProfileView;
 use crate::ui::settings::{OnChange, SettingsWindow};
 use crate::ui::slash::{SlashPicker, slash_view};
-use crate::ui::stream::{self, StreamPicker, share_button};
-use crate::ui::switcher::{self, Switcher};
+use crate::ui::stream::StreamPicker;
+use crate::ui::switcher::Switcher;
 
 mod channel_sidebar;
 mod guild_rail;
@@ -2328,7 +2325,13 @@ impl Workspace {
     ///
     /// Ordered so one press closes one thing: escape with several panels open
     /// should peel them back, not clear the screen.
-    pub fn close_popup(&mut self) {
+    /// Dismiss the topmost modal, reporting whether there was one.
+    ///
+    /// The answer matters because escape has more to do than this: with
+    /// nothing modal open it belongs to the reply being composed, or to the
+    /// channel being marked read. Returning `false` is what lets the key
+    /// carry on to those.
+    pub fn close_popup(&mut self) -> bool {
         if self.risk.take().is_some()
             || self.bans.take().is_some()
             || self.editing_roles.take().is_some()
@@ -2350,11 +2353,14 @@ impl Workspace {
             || self.inbox.take().is_some()
             || self.pane_filter.take().is_some()
         {
-            return;
+            return true;
         }
 
-        // Nothing modal is open, so the selection is what escape clears.
+        // Nothing modal is open, so the selection is what escape clears -
+        // and only if there is one, otherwise the key is still unspent.
+        let had_selection = self.selected_message.is_some();
         self.clear_message_selection();
+        had_selection
     }
 
     /// Open the action list for whichever pane has focus.
@@ -2953,7 +2959,12 @@ impl Workspace {
         }
 
         self.nav.channel = Some(channel_id);
-        if let Some(pos) = self.model.channels.iter().position(|c| c.id == Some(channel_id)) {
+        if let Some(pos) = self
+            .model
+            .channels
+            .iter()
+            .position(|c| c.id == Some(channel_id))
+        {
             self.model.selected_channel = pos;
         }
         self.messages.clear();
@@ -6680,8 +6691,6 @@ impl Workspace {
         self.channel_sidebar_impl(cx)
     }
 
-
-
     /// Open a forum channel, which lists posts rather than messages.
     fn open_forum(&mut self, channel_id: Id<marker::ChannelMarker>, name: String) {
         self.forum = Some(ForumView::loading(channel_id, name));
@@ -6821,10 +6830,10 @@ impl Workspace {
         let Some(channel_id) = self.nav.channel else {
             return false;
         };
-        if let Some(state) = &self.last_state {
-            if let Some(c) = state.channel(channel_id) {
-                return c.is_thread();
-            }
+        if let Some(state) = &self.last_state
+            && let Some(c) = state.channel(channel_id)
+        {
+            return c.is_thread();
         }
         self.model
             .channels
@@ -7986,8 +7995,6 @@ impl Workspace {
                 self.model.status_line = format!("Preview failed: {message}");
             }
 
-
-
             AppEvent::UserProfileLoadFailed { message, .. } => {
                 // The panel is closed rather than left on a spinner that will
                 // never resolve.
@@ -8219,11 +8226,6 @@ impl Workspace {
         self.guild_rail_impl(cx)
     }
 
-
-
-
-
-
     fn self_status_item(
         label: &'static str,
         target_status: PresenceStatus,
@@ -8412,8 +8414,22 @@ impl Workspace {
             .unwrap_or_default();
 
         let channel_glyph = selected_channel_opt
-            .map(|c| if c.is_thread() { ChannelKind::Thread.glyph() } else { ChannelKind::Text.glyph() })
-            .or_else(|| model_channel.map(|c| if c.kind == ChannelKind::Thread { ChannelKind::Thread.glyph() } else { c.kind.glyph() }))
+            .map(|c| {
+                if c.is_thread() {
+                    ChannelKind::Thread.glyph()
+                } else {
+                    ChannelKind::Text.glyph()
+                }
+            })
+            .or_else(|| {
+                model_channel.map(|c| {
+                    if c.kind == ChannelKind::Thread {
+                        ChannelKind::Thread.glyph()
+                    } else {
+                        c.kind.glyph()
+                    }
+                })
+            })
             .unwrap_or_else(|| ChannelKind::Text.glyph());
 
         column()
@@ -8449,11 +8465,66 @@ impl Workspace {
                                     })),
                             )
                             .child(
-                                icon_button("thread-mute", "\u{2573}", "Mute thread notifications", false)
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                icon_button(
+                                    "thread-mute",
+                                    "\u{2573}",
+                                    "Mute thread notifications",
+                                    false,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
                                         this.set_thread_muted(true);
                                         cx.notify();
-                                    })),
+                                    },
+                                )),
+                            )
+                            // Notification level, which is finer than the
+                            // mute beside it: muting silences a thread, these
+                            // choose what it is allowed to notify about. Three
+                            // buttons rather than one that cycles, because a
+                            // cycling control does not say what it is now
+                            // without being clicked.
+                            .child(
+                                icon_button(
+                                    "thread-notify-all",
+                                    "\u{25C9}",
+                                    t!("action-notify-all"),
+                                    false,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
+                                        this.set_thread_notification_level(2);
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                            .child(
+                                icon_button(
+                                    "thread-notify-mentions",
+                                    "@",
+                                    t!("action-notify-mentions"),
+                                    false,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
+                                        this.set_thread_notification_level(4);
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                            .child(
+                                icon_button(
+                                    "thread-notify-none",
+                                    "\u{25CB}",
+                                    t!("action-notify-none"),
+                                    false,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _event, _window, cx| {
+                                        this.set_thread_notification_level(8);
+                                        cx.notify();
+                                    },
+                                )),
                             )
                             .child(
                                 icon_button("thread-pin", "\u{25B2}", "Pin thread", false)
@@ -8665,13 +8736,14 @@ impl Workspace {
                         let call_channel = self.nav.channel;
                         let call_name = channel_name.clone();
                         header.child(
-                            icon_button("dm-call", "\u{260E}", "Start voice call", false)
-                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                            icon_button("dm-call", "\u{260E}", "Start voice call", false).on_click(
+                                cx.listener(move |this, _event, _window, cx| {
                                     if let Some(channel_id) = call_channel {
                                         this.join_voice(channel_id, call_name.clone());
                                     }
                                     cx.notify();
-                                })),
+                                }),
+                            ),
                         )
                     }),
             )
@@ -8898,7 +8970,7 @@ impl Workspace {
         self.command_choices.clear();
     }
 
-    fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn status_bar(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         row()
             .w_full()
             .h(px(24.))
@@ -9428,10 +9500,30 @@ impl Render for Workspace {
                             this.toggle_tts();
                         } else if key == "slash" && event.keystroke.modifiers.control {
                             this.toggle_pane_filter();
-                        } else if key == "tab" {
+                        } else if key == "tab" && this.slash.is_none() {
+                            // Guarded, because the slash picker below claims
+                            // tab to complete a command: unguarded this arm
+                            // reaches it first and cycles panes instead.
                             this.cycle_focus(!event.keystroke.modifiers.shift);
                         } else if key == "escape" {
-                            this.close_popup();
+                            // One branch for the whole key: escape belongs to
+                            // the topmost thing on screen, so it has to be
+                            // decided in overlay order rather than split into
+                            // arms that a bare `key == "escape"` above them
+                            // would shadow.
+                            if !this.close_popup() {
+                                if this.slash.is_some() {
+                                    this.slash = None;
+                                } else if this.profile.is_some() {
+                                    this.profile = None;
+                                } else if this.search.is_some() {
+                                    this.search = None;
+                                } else if this.replying_to.is_some() || this.editing.is_some() {
+                                    this.cancel_compose_context();
+                                } else {
+                                    this.mark_read();
+                                }
+                            }
                         } else if key == "q"
                             && event.keystroke.modifiers.control
                             && !event.keystroke.modifiers.shift
@@ -9446,10 +9538,6 @@ impl Render for Workspace {
                             this.open_inbox();
                         } else if key == "f" && event.keystroke.modifiers.control {
                             this.toggle_search();
-                        } else if this.profile.is_some() && key == "escape" {
-                            this.profile = None;
-                        } else if this.search.is_some() && key == "escape" {
-                            this.search = None;
                         } else if let Some(search) = &mut this.search {
                             // While the search panel is open it owns the
                             // keyboard, so typing does not leak into the
@@ -9457,20 +9545,8 @@ impl Render for Workspace {
                             if search.input.handle_key(event) {
                                 this.run_search();
                             }
-                        } else if key == "escape" {
-                            // Escape dismisses an active reply or edit first;
-                            // only once nothing is open does it mark the
-                            // channel read, matching the TUI's ordering.
-                            if this.replying_to.is_some() || this.editing.is_some() {
-                                this.cancel_compose_context();
-                            } else {
-                                this.mark_read();
-                            }
-                        } else if this.slash.is_some()
-                            && matches!(key, "up" | "down" | "tab" | "escape")
-                        {
+                        } else if this.slash.is_some() && matches!(key, "up" | "down" | "tab") {
                             match key {
-                                "escape" => this.slash = None,
                                 "up" => {
                                     if let Some(picker) = &mut this.slash {
                                         picker.move_selection(-1);

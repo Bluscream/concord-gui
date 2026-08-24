@@ -125,17 +125,15 @@ pub fn avatar(size: f32, seed: &str) -> Div {
         .justify_center()
         .text_size(px(size * 0.4))
         .text_color(rgb(0xffffff))
-        .child(
-            if seed == "Direct Messages" {
-                "DM".to_string()
-            } else {
-                seed.chars()
-                    .next()
-                    .unwrap_or('?')
-                    .to_uppercase()
-                    .to_string()
-            },
-        )
+        .child(if seed == "Direct Messages" {
+            "DM".to_string()
+        } else {
+            seed.chars()
+                .next()
+                .unwrap_or('?')
+                .to_uppercase()
+                .to_string()
+        })
 }
 
 /// Top bar for the main content area.
@@ -318,40 +316,5 @@ pub fn icon_button(
         }))
         .hover(|style| style.bg(rgb(active().surface_hover)))
         .child(glyph)
-        .tooltip(move |_window, cx| cx.new(|_| Tooltip::new(tooltip.clone())).into())
-}
-
-/// A presence swatch with a tooltip, for picking a status.
-///
-/// Drawn rather than lettered: a filled circle always renders, where the
-/// obvious emoji for it does not.
-pub fn presence_swatch(
-    id: &'static str,
-    presence: Presence,
-    tooltip: impl Into<gpui::SharedString>,
-    selected: bool,
-) -> gpui::Stateful<Div> {
-    let tooltip = tooltip.into();
-    gpui::div()
-        .id(id)
-        .w(px(20.))
-        .h(px(20.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(layout::RADIUS))
-        .cursor_pointer()
-        .when(selected, |swatch| swatch.bg(rgb(active().surface_active)))
-        .hover(|style| style.bg(rgb(active().surface_hover)))
-        .child(
-            gpui::div()
-                .w(px(10.))
-                .h(px(10.))
-                .rounded_full()
-                .bg(rgb(presence.color(active())))
-                // An unselected status is dimmed rather than hidden, so the
-                // row reads as a set of choices with one of them current.
-                .when(!selected, |dot| dot.opacity(0.55)),
-        )
         .tooltip(move |_window, cx| cx.new(|_| Tooltip::new(tooltip.clone())).into())
 }

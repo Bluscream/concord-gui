@@ -180,7 +180,9 @@ pub fn apply(workspace: &mut Workspace, action: UiAction, cx: &mut Context<Works
         UiAction::OpenStickerPicker => workspace.open_sticker_picker(),
         UiAction::OpenCurrentUserProfile => workspace.open_own_profile(),
         UiAction::OpenDebugLog => workspace.toggle_debug_log(),
-        UiAction::ClosePopup => workspace.close_popup(),
+        UiAction::ClosePopup => {
+            workspace.close_popup();
+        }
         // The GUI has one settings window rather than the TUI's four separate
         // options popups. Every one of these opens it, which is closer to the
         // intent than leaving three of the four bindings dead.

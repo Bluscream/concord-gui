@@ -1,7 +1,7 @@
-use gpui::{prelude::*, px, rgb, Context, IntoElement};
+use gpui::{Context, IntoElement, prelude::*, px, rgb};
 
 use crate::theme::{active, layout, scaled, space, text};
-use crate::ui::chrome::{avatar, avatar_with_url, column, presence_dot, row, section_label, sidebar_row};
+use crate::ui::chrome::{avatar_with_url, column, presence_dot, section_label, sidebar_row};
 use crate::ui::workspace::{ContextSubject, Pane, Workspace};
 
 impl Workspace {

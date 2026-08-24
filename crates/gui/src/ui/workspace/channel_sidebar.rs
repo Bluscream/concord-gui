@@ -1,13 +1,13 @@
-use gpui::{prelude::*, px, rgb, Context, IntoElement};
+use gpui::{Context, IntoElement, prelude::*, px, rgb};
 
-use concord::discord::marker;
 use concord::discord::Id;
+use concord::discord::marker;
 use concord::t;
 
 use crate::theme::{active, layout, scaled, space, text};
 use crate::ui::chrome::{
-    avatar, avatar_with_url, column, icon_button, panel_sunken, presence_dot, row, section_label, sidebar_row,
-    voice_participant_row, VoiceRow,
+    VoiceRow, avatar, column, icon_button, panel_sunken, presence_dot, row, section_label,
+    sidebar_row, voice_participant_row,
 };
 use crate::ui::stream::share_button;
 use crate::ui::workspace::{ChannelKind, ContextSubject, Pane, Presence, Selection, Workspace};
@@ -47,10 +47,12 @@ impl Workspace {
                                 },
                                 muted,
                             )
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.toggle_guild_muted();
-                                cx.notify();
-                            })),
+                            .on_click(cx.listener(
+                                |this, _event, _window, cx| {
+                                    this.toggle_guild_muted();
+                                    cx.notify();
+                                },
+                            )),
                         )
                         .when(
                             self.last_state.as_ref().is_some_and(|state| {
@@ -59,11 +61,18 @@ impl Workspace {
                             }),
                             |header| {
                                 header.child(
-                                    icon_button("guild-bans", "\u{2717}", t!("action-view-bans"), false)
-                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                    icon_button(
+                                        "guild-bans",
+                                        "\u{2717}",
+                                        t!("action-view-bans"),
+                                        false,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _event, _window, cx| {
                                             this.open_ban_list();
                                             cx.notify();
-                                        })),
+                                        },
+                                    )),
                                 )
                             },
                         )
@@ -76,11 +85,18 @@ impl Workspace {
                             }),
                             |header| {
                                 header.child(
-                                    icon_button("guild-manage", "\u{2699}", t!("label-server-management"), false)
-                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                    icon_button(
+                                        "guild-manage",
+                                        "\u{2699}",
+                                        t!("label-server-management"),
+                                        false,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _event, _window, cx| {
                                             this.open_server_management(this.first_server_tab());
                                             cx.notify();
-                                        })),
+                                        },
+                                    )),
                                 )
                             },
                         )
@@ -91,20 +107,34 @@ impl Workspace {
                             }),
                             |header| {
                                 header.child(
-                                    icon_button("guild-forget", "\u{2716}", t!("action-forget-guild"), false)
-                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                    icon_button(
+                                        "guild-forget",
+                                        "\u{2716}",
+                                        t!("action-forget-guild"),
+                                        false,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _event, _window, cx| {
                                             this.forget_guild();
                                             cx.notify();
-                                        })),
+                                        },
+                                    )),
                                 )
                             },
                         )
                         .child(
-                            icon_button("guild-leave", "\u{2192}", t!("action-leave-server"), false)
-                                .on_click(cx.listener(|this, _event, _window, cx| {
+                            icon_button(
+                                "guild-leave",
+                                "\u{2192}",
+                                t!("action-leave-server"),
+                                false,
+                            )
+                            .on_click(cx.listener(
+                                |this, _event, _window, cx| {
                                     this.leave_guild();
                                     cx.notify();
-                                })),
+                                },
+                            )),
                         )
                 },
             );
@@ -318,7 +348,11 @@ impl Workspace {
         sidebar
     }
 
-    pub(super) fn voice_connected_card_impl(&self, name: &str, cx: &mut Context<Self>) -> gpui::Div {
+    pub(super) fn voice_connected_card_impl(
+        &self,
+        name: &str,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let mute = self.self_mute;
         let deaf = self.self_deaf;
 

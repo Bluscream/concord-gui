@@ -1,10 +1,10 @@
-use gpui::{prelude::*, px, rgb, Context, IntoElement};
+use gpui::{Context, IntoElement, prelude::*, px, rgb};
 
 use concord::t;
 
 use crate::theme::{active, layout, scaled, space, text};
 use crate::ui::chrome::{column, row};
-use crate::ui::profile::{profile_view, ProfileView};
+use crate::ui::profile::{ProfileView, profile_view};
 use crate::ui::workspace::Workspace;
 
 impl Workspace {
@@ -21,9 +21,7 @@ impl Workspace {
             cx.notify();
         });
 
-        let container = gpui::div()
-            .w(px(layout::MEMBERS))
-            .h_full();
+        let container = gpui::div().w(px(layout::MEMBERS)).h_full();
 
         match view {
             Some(view) => container
