@@ -199,6 +199,7 @@ impl MessageKind {
             10 => Some("Guild boost tier 2"),
             11 => Some("Guild boost tier 3"),
             12 => Some("Channel follow add"),
+            13 => Some("Guild stream"),
             14 => Some("Guild discovery disqualified"),
             15 => Some("Guild discovery requalified"),
             16 => Some("Guild discovery initial warning"),
@@ -215,14 +216,45 @@ impl MessageKind {
             27 => Some("Stage start"),
             28 => Some("Stage end"),
             29 => Some("Stage speaker"),
+            30 => Some("Stage raise hand"),
             31 => Some("Stage topic"),
             32 => Some("Application premium subscription"),
+            33 => Some("Integration added"),
+            34 => Some("Integration removed"),
+            35 => Some("Premium referral"),
             36 => Some("Incident alert mode enabled"),
             37 => Some("Incident alert mode disabled"),
             38 => Some("Incident raid report"),
             39 => Some("Incident false alarm report"),
+            40 => Some("Revive prompt"),
+            41 => Some("Gift"),
+            42 => Some("Gaming stats prompt"),
+            // 43 is absent from Discord's own table.
             44 => Some("Purchase notification"),
+            45 => Some("Voice hangout invite"),
             46 => Some("Poll result"),
+            47 => Some("Changelog"),
+            48 => Some("Nitro notification"),
+            49 => Some("Channel linked to lobby"),
+            50 => Some("Gifting prompt"),
+            51 => Some("In-game message intro"),
+            52 => Some("Join request accepted"),
+            53 => Some("Join request rejected"),
+            54 => Some("Join request withdrawn"),
+            55 => Some("HD streaming upgraded"),
+            56 => Some("Chat wallpaper set"),
+            57 => Some("Chat wallpaper removed"),
+            58 => Some("Moderator deleted a message"),
+            59 => Some("Moderator timed a member out"),
+            60 => Some("Moderator kicked a member"),
+            61 => Some("Moderator banned a member"),
+            62 => Some("Moderator closed a report"),
+            63 => Some("Emoji added"),
+            64 => Some("Premium group invite"),
+            65 => Some("Voice session"),
+            66 => Some("Guild boost upsell"),
+            67 => Some("Friend request accepted"),
+            68 => Some("Media mention"),
             _ => None,
         }
     }
@@ -830,5 +862,40 @@ mod sticker_tests {
         assert_eq!(preview.height, Some(160));
         assert_eq!(preview.url, sticker.url);
         assert!(!preview.animated);
+    }
+}
+
+#[cfg(test)]
+mod message_kind_tests {
+    use super::MessageKind;
+
+    /// Every message type the live client knows about must have a label.
+    ///
+    /// The codes were read off a running stable client in August 2026 - the
+    /// whole table, not the ones that happened to come up. Anything without a
+    /// label renders as "Unknown message type" in the log, which is a blank
+    /// stare at a message Discord itself explains.
+    ///
+    /// 43 is genuinely absent from Discord's own table and is excluded here
+    /// rather than left as a hole somebody would try to fill.
+    #[test]
+    fn every_message_type_the_client_knows_has_a_label() {
+        let missing: Vec<u8> = (0..=68u8)
+            .filter(|code| *code != 43)
+            .filter(|code| MessageKind::new(*code).known_label().is_none())
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "these message types would render as \"Unknown message type\": {missing:?}"
+        );
+    }
+
+    /// A label past the end must still be absent, or the test above passes by
+    /// labelling everything and proves nothing.
+    #[test]
+    fn a_type_discord_does_not_have_is_still_unknown() {
+        assert_eq!(MessageKind::new(200).known_label(), None);
+        assert_eq!(MessageKind::new(200).label(), "Unknown message type");
+        assert_eq!(MessageKind::new(43).known_label(), None);
     }
 }

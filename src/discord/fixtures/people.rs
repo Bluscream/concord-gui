@@ -154,7 +154,7 @@ pub fn autocomplete_choices(
     const CANDIDATES: [&str; 5] = [
         "general",
         "gui-rewrite",
-        "ci-logs",
+        "ci_logs",
         "announcements",
         "rules",
     ];

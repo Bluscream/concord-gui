@@ -54,8 +54,13 @@ pub(crate) fn parse_channel_info(
         Some(11) => "GuildPublicThread".to_owned(),
         Some(12) => "GuildPrivateThread".to_owned(),
         Some(13) => "stage".to_owned(),
+        Some(14) => "directory".to_owned(),
         Some(15) => "forum".to_owned(),
         Some(16) => "media".to_owned(),
+        Some(17) => "lobby".to_owned(),
+        Some(19) => "GuildMediaThread".to_owned(),
+        Some(20) => "space".to_owned(),
+        Some(21) => "app".to_owned(),
         Some(other) => format!("type-{other}"),
         None => "channel".to_owned(),
     };

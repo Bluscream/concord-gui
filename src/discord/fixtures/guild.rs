@@ -236,12 +236,33 @@ pub fn emojis() -> Vec<GuildEmojiInfo> {
             animated: false,
             role_restricted: false,
         },
-        // Animated and restricted, so both flags have somewhere to show.
+        // Animated, which about one in five real custom emoji is.
         GuildEmojiInfo {
             id: emoji_id(4002),
             name: "crab_party".to_string(),
             animated: true,
+            role_restricted: false,
+        },
+        // Role-restricted, which almost none are - 0.4% across 4775 real
+        // emoji. Kept because the flag needs somewhere to show, but it is one
+        // of several rather than half the set.
+        GuildEmojiInfo {
+            id: emoji_id(4003),
+            name: "shipit".to_string(),
+            animated: false,
             role_restricted: true,
+        },
+        GuildEmojiInfo {
+            id: emoji_id(4004),
+            name: "rustaceanthink".to_string(),
+            animated: false,
+            role_restricted: false,
+        },
+        GuildEmojiInfo {
+            id: emoji_id(4005),
+            name: "blobwave".to_string(),
+            animated: true,
+            role_restricted: false,
         },
     ]
 }

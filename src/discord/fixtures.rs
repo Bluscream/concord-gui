@@ -324,6 +324,28 @@ fn kitchen_sink() -> String {
 /// Named rather than numbered: a rail reading "Server 7, Server 8" tells you
 /// nothing about whether the names are being drawn correctly, and one of
 /// these is deliberately long enough to test that they are truncated.
+/// Member and online counts for [`FILLER_GUILDS`], in the same order.
+///
+/// Drawn to match the shape a real account shows: a long tail of small
+/// servers, a couple in the tens of thousands, one very large. Online counts
+/// run a few percent of members, which is what an idle server looks like.
+const FILLER_MEMBERS: [(u64, u32); 14] = [
+    (312, 24),
+    (1_204, 88),
+    (86, 9),
+    (447, 31),
+    (2_918, 173),
+    (58_402, 3_104),
+    (742, 51),
+    (139, 12),
+    (5_610, 288),
+    (61, 4),
+    (18_337, 951),
+    (203, 17),
+    (414_308, 22_770),
+    (1_066, 74),
+];
+
 const FILLER_GUILDS: [&str; 14] = [
     "Compiler Explorer",
     "Embedded Rust",
@@ -348,7 +370,7 @@ pub fn demo_state() -> DiscordState {
     let navigation = Arc::make_mut(&mut state.navigation);
 
     // ---- guilds ------------------------------------------------------------
-    let mut rostfaden = guild(10, "RostFaden", 128, 34);
+    let mut rostfaden = guild(10, "RostFaden", 953, 61);
     rostfaden.icon = Some("https://cdn.discordapp.com/icons/747967102895390741/4ed9b9516ae3bb878c8e15f4ca089141.webp?size=1024".to_string());
     navigation.guilds.insert(guild_id(10), rostfaden);
     navigation
@@ -363,28 +385,58 @@ pub fn demo_state() -> DiscordState {
         let id = 40 + offset as u64;
         navigation.guilds.insert(
             guild_id(id),
-            guild(id, name, 120 + offset as u64 * 37, 4 + offset as u32),
+            // Sizes spread the way real ones do rather than climbing evenly:
+            // a surveyed account's guilds ran median 953, p90 55k, max 414k,
+            // so most are small, a few are enormous, and none of them sit on
+            // a neat arithmetic progression.
+            guild(id, name, FILLER_MEMBERS[offset].0, FILLER_MEMBERS[offset].1),
         );
     }
 
     // ---- guild 10 channels -------------------------------------------------
+    //
+    // The names deliberately do not all follow one convention. A survey of a
+    // real account's 7020 channels put pure lowercase-kebab at 29% - the
+    // fixture used to be at 100%, which is the sort of tidiness no actual
+    // server has and the first thing that makes a demo look staged.
+    //
+    // The mix here follows the survey: underscores are commoner than hyphens
+    // (44% against 32%), about one in seven carries an emoji, a few use
+    // separators, and categories are a different convention again - 59% have
+    // an uppercase letter and 44% a space, while barely 2% are kebab.
     let channels = [
-        channel(100, Some(10), None, "information", "category", 0),
+        channel(100, Some(10), None, "Information", "category", 0),
         channel(101, Some(10), Some(100), "announcements", "text", 1),
         channel(102, Some(10), Some(100), "rules", "text", 2),
-        channel(110, Some(10), None, "development", "category", 3),
+        channel(110, Some(10), None, "\u{1f4bb} DEVELOPMENT", "category", 3),
         channel(111, Some(10), Some(110), "general", "text", 4),
         channel(112, Some(10), Some(110), "gui-rewrite", "text", 5),
-        channel(113, Some(10), Some(110), "ci-logs", "text", 6),
+        channel(113, Some(10), Some(110), "ci_logs", "text", 6),
+        channel(
+            115,
+            Some(10),
+            Some(110),
+            "\u{1f41b}\u{fe0f}bug-reports",
+            "text",
+            7,
+        ),
         // A forum, so the post-list view has something to render offline.
-        channel(114, Some(10), Some(110), "help-forum", "forum", 7),
-        channel(120, Some(10), None, "voice", "category", 7),
-        channel(121, Some(10), Some(120), "Standup", "voice", 8),
-        channel(122, Some(10), Some(120), "Pairing", "voice", 9),
+        channel(114, Some(10), Some(110), "help-forum", "forum", 8),
+        channel(
+            120,
+            Some(10),
+            None,
+            "Voice \u{2502} Hangouts",
+            "category",
+            9,
+        ),
+        channel(121, Some(10), Some(120), "Standup", "voice", 10),
+        channel(122, Some(10), Some(120), "Pairing", "voice", 11),
         // guild 20
-        channel(200, Some(20), None, "community", "category", 0),
+        channel(200, Some(20), None, "COMMUNITY", "category", 0),
         channel(201, Some(20), Some(200), "help", "text", 1),
         channel(202, Some(20), Some(200), "showcase", "text", 2),
+        channel(203, Some(20), Some(200), "off_topic", "text", 3),
     ];
     for channel in channels {
         navigation.channels.insert(channel.id, channel);
@@ -429,27 +481,43 @@ pub fn demo_state() -> DiscordState {
     // ---- roles and members -------------------------------------------------
     let guild_details = Arc::make_mut(&mut state.guild_details);
 
+    // Colours are Discord's own default role palette, in the order a survey
+    // of 4290 real roles found them used: #3498db first, then #f1c40f,
+    // #e74c3c, #9b59b6, #2ecc71. Server owners overwhelmingly pick from the
+    // swatches Discord offers rather than typing a hex code, so a fixture
+    // using its own tasteful blues is a tell.
+    //
+    // The uncoloured role is deliberate too: 41% of real roles have no colour
+    // at all, and a list where every entry is tinted does not look like one.
     let roles = [
         RoleState {
             id: role_id(1),
             name: "Maintainer".into(),
-            color: Some(0x5b8def),
-            position: 3,
+            color: Some(0x3498db),
+            position: 4,
             hoist: true,
             permissions: 0,
         },
         RoleState {
             id: role_id(2),
             name: "Contributor".into(),
-            color: Some(0x3fb950),
-            position: 2,
+            color: Some(0x2ecc71),
+            position: 3,
             hoist: true,
             permissions: 0,
         },
         RoleState {
             id: role_id(3),
             name: "Bot".into(),
-            color: Some(0xd29922),
+            color: Some(0xf1c40f),
+            position: 2,
+            hoist: false,
+            permissions: 0,
+        },
+        RoleState {
+            id: role_id(4),
+            name: "Member".into(),
+            color: None,
             position: 1,
             hoist: false,
             permissions: 0,
@@ -2188,7 +2256,7 @@ pub fn leave_guild(state: &mut DiscordState, guild_id: Id<marker::GuildMarker>) 
 /// Listed rather than derived, so adding an emoji to the fixture without
 /// adding it here shows up as a blank gap rather than as a picture that
 /// silently comes from somewhere else.
-const FIXTURE_EMOJI: [u64; 3] = [4001, 4002, 9001];
+const FIXTURE_EMOJI: [u64; 6] = [4001, 4002, 4003, 4004, 4005, 9001];
 
 /// Whether an emoji CDN address names an emoji this fixture made up.
 ///

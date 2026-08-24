@@ -88,8 +88,8 @@ fn unread_and_mentions_reach_the_view_model() {
     let noisy = model
         .channels
         .iter()
-        .find(|c| c.name == "ci-logs")
-        .expect("fixture defines #ci-logs");
+        .find(|c| c.name == "ci_logs")
+        .expect("fixture defines #ci_logs");
     assert!(noisy.unread);
     assert_eq!(noisy.mentions, 0, "unread without mentions shows no number");
 }
