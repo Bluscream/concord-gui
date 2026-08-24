@@ -94,6 +94,8 @@ action-remove-embeds = Remove embeds
 action-jump-to-replied = Jump to the replied message
 
 # Settings
+settings-appearance-theme = Appearance & Theme
+settings-dark-mode = Dark Mode
 settings-language-follow-system = Follow system
 
 # Overlays
@@ -110,6 +112,13 @@ label-search = Search
 label-reacted-with = Reacted with { $emoji }
 
 # Settings panel
+settings-light-mode = Light Mode
+settings-nav-appearance = Appearance
+settings-nav-display = Display & UI
+settings-nav-endpoint = Server Endpoint
+settings-nav-notifications = Notifications
+settings-nav-presence = Presence
+settings-nav-voice = Voice & Audio
 settings-title = Client Settings
 settings-app-settings = APP SETTINGS
 settings-appearance = Appearance
@@ -349,3 +358,8 @@ label-about = Description
 status-not-listed = none - the server is not listed
 state-none = none
 action-add-sticker = Add a sticker
+voice-camera-on = Camera on
+voice-deafened = Deafened
+voice-local-volume = Volume for me
+voice-muted = Muted
+voice-watch-stream = Watch stream

@@ -45,6 +45,22 @@ fn existing_token() -> Option<String> {
         .flatten()
 }
 
+/// Whether this run was asked to open against the fake Discord.
+///
+/// Its own flag rather than relying on the token argument happening to be the
+/// word "demo": that worked, but only by accident, and it read like passing a
+/// credential. `--demo` says what it does, and the environment variable is
+/// there for launchers and desktop files that cannot easily pass arguments.
+fn demo_requested() -> bool {
+    std::env::args().any(|arg| arg == "--demo")
+        || std::env::var("CONCORD_DEMO").is_ok_and(|value| {
+            let value = value.trim();
+            !value.is_empty()
+                && !value.eq_ignore_ascii_case("0")
+                && !value.eq_ignore_ascii_case("false")
+        })
+}
+
 fn main() {
     // Held for the life of the process: GPUI's main thread needs an ambient
     // tokio context because several dependencies spawn onto one from here.
@@ -103,7 +119,7 @@ fn main() {
                         model.status_line = "connecting…".to_string();
                         // With a stored credential the workspace opens directly;
                         // otherwise the login screen is the entry point.
-                        let screen = if existing_token().is_some() {
+                        let screen = if demo_requested() || existing_token().is_some() {
                             Screen::Ready
                         } else {
                             Screen::Login(Box::default())
@@ -113,7 +129,14 @@ fn main() {
                 )
                 .expect("failed to open window");
 
-            let initial_token = std::env::args().nth(1).or_else(existing_token);
+            let initial_token = if demo_requested() {
+                Some("demo".to_string())
+            } else {
+                std::env::args()
+                    .nth(1)
+                    .filter(|arg| !arg.starts_with("--"))
+                    .or_else(existing_token)
+            };
             if let Some(token) = initial_token {
                 match session::spawn(token) {
                     Ok((updates, handle)) => {

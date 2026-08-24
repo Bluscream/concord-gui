@@ -474,6 +474,13 @@ impl Workspace {
                             url.clone(),
                             std::sync::Arc::new(gpui::Image::from_bytes(format, bytes.clone())),
                         );
+                        // A picture that has just decoded makes the log
+                        // taller than it was when it was last scrolled, so
+                        // the newest message slides back out of view unless
+                        // the follow is re-applied here.
+                        if self.follow_bottom {
+                            self.message_scroll.scroll_to_bottom();
+                        }
                     }
                     // An extension GPUI cannot decode. Dropped rather than
                     // guessed at, since handing it the wrong format renders
@@ -558,6 +565,7 @@ impl Workspace {
                 self.refresh_history();
                 self.hydrate_missing_members();
                 self.restore_tabs();
+                self.land_somewhere();
             }
             _ => {}
         }

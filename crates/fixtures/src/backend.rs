@@ -587,7 +587,13 @@ fn handle_command(
             // Seeded from the URL so each attachment gets a distinguishable
             // image rather than every preview looking identical.
             let seed = url.bytes().map(u64::from).sum::<u64>();
-            let bytes = fixtures::demo_preview_png(seed);
+            // Matched to the extension: the front end picks its decoder from
+            // the URL, so handing PNG bytes to a .gif renders nothing at all.
+            let bytes = if url.to_ascii_lowercase().ends_with(".gif") {
+                fixtures::demo_preview_gif(seed)
+            } else {
+                fixtures::demo_preview_png(seed)
+            };
             if bytes.is_empty() {
                 publish_event!(AppEvent::AttachmentPreviewLoadFailed {
                     url,

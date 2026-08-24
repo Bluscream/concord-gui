@@ -209,6 +209,11 @@ impl Workspace {
 
         column()
             .flex_1()
+            // A flex item will not shrink below its content unless told it
+            // may, so one long unbroken URL in a message was widening this
+            // column and squeezing the member list beside it.
+            .min_w(px(0.))
+            .overflow_hidden()
             .h_full()
             .bg(rgb(active().surface))
             .children(self.tab_strip(cx))

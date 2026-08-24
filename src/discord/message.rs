@@ -84,7 +84,7 @@ pub struct EmbedFieldInfo {
     pub value: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct EmbedInfo {
     pub color: Option<u32>,
     pub provider_name: Option<String>,

@@ -462,12 +462,16 @@ impl Workspace {
 
     /// Jump to the oldest loaded message.
     pub fn scroll_to_top(&mut self) {
+        // Any deliberate move backwards ends the follow, or the next picture
+        // to finish loading would snap the reader to the bottom again.
+        self.follow_bottom = false;
         self.message_scroll
             .set_offset(gpui::point(gpui::px(0.), gpui::px(0.)));
     }
 
     /// Jump to the newest message.
     pub fn scroll_to_bottom(&mut self) {
+        self.follow_bottom = true;
         self.message_scroll.scroll_to_bottom();
     }
 

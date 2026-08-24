@@ -1,13 +1,22 @@
 use gpui::{Context, IntoElement, prelude::*, px, rgb};
 
 use crate::theme::{active, layout, scaled, space, text};
-use crate::ui::chrome::{avatar_with_url, column, presence_dot, section_label, sidebar_row};
+use crate::ui::chrome::{
+    avatar_with_url, column, one_line, presence_dot, section_label, sidebar_row,
+};
 use crate::ui::workspace::{ContextSubject, Pane, Workspace};
+
+/// Width the name and status lines have to work with.
+///
+/// The pane minus the avatar, presence dot, gaps and padding around them.
+/// Fixed rather than measured because the row is a fixed width itself.
+const NAME_WIDTH: f32 = layout::MEMBERS - 70.;
 
 impl Workspace {
     pub(super) fn member_pane(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut pane = column()
             .w(px(layout::MEMBERS))
+            .flex_shrink_0()
             .h_full()
             .bg(rgb(active().surface_sunken))
             .border_l_1()
@@ -50,13 +59,28 @@ impl Workspace {
                         .child(
                             gpui::div()
                                 .text_color(rgb(member.color.unwrap_or(active().text_muted)))
-                                .child(member.name.clone()),
+                                // Names never scroll, only truncate: a moving
+                                // name is hard to read at a glance, and this
+                                // list is scanned rather than read.
+                                .child(one_line(
+                                    ("member-name", pane_index),
+                                    member.name.clone(),
+                                    NAME_WIDTH,
+                                    scaled(text::SM),
+                                    false,
+                                )),
                         )
                         .children(member.activity.clone().map(|activity| {
                             gpui::div()
                                 .text_size(px(scaled(text::XS)))
                                 .text_color(rgb(active().text_subtle))
-                                .child(activity)
+                                .child(one_line(
+                                    ("member-activity", pane_index),
+                                    activity,
+                                    NAME_WIDTH,
+                                    scaled(text::XS),
+                                    self.options.display.animate_images,
+                                ))
                         })),
                 );
 

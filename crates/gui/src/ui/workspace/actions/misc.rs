@@ -498,6 +498,60 @@ impl Workspace {
     }
 
     /// Switch the open guild, clearing the channel selection.
+    /// Open something readable on first connect.
+    ///
+    /// Without this the client comes up on the direct-message list with no
+    /// conversation chosen, so the first thing anyone sees is an empty pane
+    /// reading "No messages loaded" - including in demo mode, where there is
+    /// a whole populated server one click away.
+    ///
+    /// Only ever runs when nothing was restored and nothing is selected, so
+    /// it cannot override where a returning session left off.
+    pub fn land_somewhere(&mut self) {
+        if self.nav.channel.is_some() || !self.tabs.is_empty() {
+            return;
+        }
+        let Some(state) = &self.last_state else {
+            return;
+        };
+
+        // The first guild in the rail, then its first channel that actually
+        // holds messages - a category or a voice room would leave the pane
+        // as empty as doing nothing.
+        let Some(guild_id) = state.guilds().first().map(|guild| guild.id) else {
+            return;
+        };
+        let readable: Vec<_> = state
+            .channels_for_guild(Some(guild_id))
+            .into_iter()
+            .filter(|channel| {
+                !channel.is_category()
+                    && !channel.is_thread()
+                    && !channel.is_voice()
+                    && !channel.is_stage()
+                    && !channel.is_forum()
+            })
+            .map(|channel| channel.id)
+            .collect();
+
+        // One that already has messages, so the first thing on screen is a
+        // conversation. Falls back to the first readable channel, because an
+        // account whose cache is cold still has to land somewhere.
+        let channel = readable
+            .iter()
+            .copied()
+            .find(|id| !state.messages_for_channel(*id).is_empty())
+            .or_else(|| readable.first().copied());
+
+        if let Some(channel_id) = channel {
+            self.open_guild(Some(guild_id));
+            self.open_channel(channel_id);
+            // At the newest message, which is where a chat client is expected
+            // to open - the top of the backlog is the least useful end of it.
+            self.scroll_to_bottom();
+        }
+    }
+
     pub fn open_guild(&mut self, guild_id: Option<Id<marker::GuildMarker>>) {
         self.nav.selection = match guild_id {
             Some(id) => Selection::Guild(id),

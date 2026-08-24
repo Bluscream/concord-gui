@@ -92,6 +92,8 @@ action-remove-embeds = Einbettungen entfernen
 action-jump-to-replied = Zur beantworteten Nachricht springen
 
 # Einstellungen
+settings-appearance-theme = Erscheinungsbild & Design
+settings-dark-mode = Dunkler Modus
 settings-language-follow-system = System folgen
 
 # Overlagerungen
@@ -108,6 +110,13 @@ label-search = Suche
 label-reacted-with = Reagiert mit { $emoji }
 
 # Einstellungsfenster
+settings-light-mode = Heller Modus
+settings-nav-appearance = Erscheinungsbild
+settings-nav-display = Anzeige & Oberfläche
+settings-nav-endpoint = Server-Endpunkt
+settings-nav-notifications = Benachrichtigungen
+settings-nav-presence = Status
+settings-nav-voice = Sprache & Audio
 settings-title = Client-Einstellungen
 settings-app-settings = APP-EINSTELLUNGEN
 settings-appearance = Erscheinungsbild
@@ -347,3 +356,8 @@ label-about = Beschreibung
 status-not-listed = keine - der Server wird nicht gelistet
 state-none = keine
 action-add-sticker = Sticker hinzufügen
+voice-camera-on = Kamera an
+voice-deafened = Ton aus
+voice-local-volume = Lautstärke für mich
+voice-muted = Stummgeschaltet
+voice-watch-stream = Stream ansehen

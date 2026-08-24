@@ -16,12 +16,15 @@ impl Workspace {
         let moderation = self.moderation_controls(user_id, cx);
         let friendship = self.friend_controls(user_id, cx);
 
+        // Clears the pane itself rather than calling close_popup, which walks
+        // the modal fields and never touches `profile` - so the button did
+        // nothing at all.
         let close_listener = cx.listener(|this, _, _, cx| {
-            this.close_popup();
+            this.profile = None;
             cx.notify();
         });
 
-        let container = gpui::div().w(px(layout::MEMBERS)).h_full();
+        let container = gpui::div().w(px(layout::MEMBERS)).flex_shrink_0().h_full();
 
         match view {
             Some(view) => container
@@ -57,6 +60,7 @@ impl Workspace {
 
         let mut pane = column()
             .w(px(layout::MEMBERS + 80.))
+            .flex_shrink_0()
             .h_full()
             .bg(rgb(active().surface_sunken))
             .border_l_1()

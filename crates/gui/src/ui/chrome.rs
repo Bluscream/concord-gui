@@ -4,7 +4,8 @@
 //! selected") rather than repeating colour and spacing literals. Consistency
 //! here is what keeps the interface coherent as surfaces are added.
 
-use gpui::{Div, prelude::*, px, rgb};
+use concord::t;
+use gpui::{AnimationExt, Div, prelude::*, px, rgb};
 
 use crate::theme::{Presence, active, layout, scaled, space, text};
 
@@ -199,52 +200,81 @@ pub fn voice_participant_row(
                 }))
                 .child(name.to_string()),
         )
+        // Status and controls are icons with tooltips rather than the words
+        // "cam", "live", "mute" and "vol": at this size the labels were wider
+        // than the name they sat beside, and four of them crowded the row.
         .when(on_camera, |d| {
-            // A word rather than a camera glyph: the obvious one is outside
-            // the Basic Multilingual Plane and draws as an empty box in the
-            // font this ships, which a test here checks for.
-            d.child(
-                gpui::div()
-                    .px(px(space::XS))
-                    .text_color(rgb(active().text_muted))
-                    .child("cam"),
-            )
+            d.child(voice_glyph(
+                ("voice-camera", id_seed),
+                "\u{25A3}",
+                t!("voice-camera-on"),
+                active().text_muted,
+            ))
         })
         .when(streaming, |d| {
-            // "live" is the label; the click target is the whole badge, since
-            // watching is the only thing a viewer wants from a live marker.
             d.child(
-                gpui::div()
-                    .id(("watch-stream", id_seed))
-                    .px(px(space::XS))
-                    .rounded(px(layout::RADIUS))
-                    .cursor_pointer()
-                    .text_color(rgb(active().accent))
-                    .hover(|style| style.bg(rgb(active().surface_hover)))
-                    .child("live")
-                    .on_click(move |_event, _window, cx| on_watch(cx)),
+                voice_glyph(
+                    ("watch-stream", id_seed),
+                    "\u{25B8}",
+                    t!("voice-watch-stream"),
+                    active().accent,
+                )
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(active().surface_hover)))
+                .on_click(move |_event, _window, cx| on_watch(cx)),
             )
         })
         .when(muted || deafened, |d| {
-            d.child(
-                gpui::div()
-                    .text_color(rgb(active().danger))
-                    .child(if deafened { "deaf" } else { "mute" }),
-            )
+            let (glyph, label) = if deafened {
+                ("\u{2298}", t!("voice-deafened"))
+            } else {
+                ("\u{2297}", t!("voice-muted"))
+            };
+            d.child(voice_glyph(
+                ("voice-state", id_seed),
+                glyph,
+                label,
+                active().danger,
+            ))
         })
         // Local mute, offered on every participant: it is about what this
         // client plays, so it applies whether or not they muted themselves.
         .child(
-            gpui::div()
-                .id(("local-mute", id_seed))
-                .px(px(space::XS))
-                .rounded(px(layout::RADIUS))
-                .cursor_pointer()
-                .text_color(rgb(active().text_subtle))
-                .hover(|style| style.text_color(rgb(active().text)))
-                .child("vol")
-                .on_click(move |_event, _window, cx| on_toggle_mute(cx)),
+            voice_glyph(
+                ("local-mute", id_seed),
+                "\u{25C9}",
+                t!("voice-local-volume"),
+                active().text_subtle,
+            )
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(active().surface_hover)))
+            .on_click(move |_event, _window, cx| on_toggle_mute(cx)),
         )
+}
+
+/// One icon in a voice row, with the tooltip that says what it is.
+///
+/// Separate from `icon_button` because that takes a `&'static str` id, and
+/// these need one per participant or GPUI treats every row's button as the
+/// same element.
+fn voice_glyph(
+    id: (&'static str, u64),
+    glyph: &'static str,
+    tooltip: impl Into<gpui::SharedString>,
+    color: u32,
+) -> gpui::Stateful<Div> {
+    let tooltip = tooltip.into();
+    gpui::div()
+        .id(id)
+        .w(px(16.))
+        .h(px(16.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(layout::RADIUS))
+        .text_color(rgb(color))
+        .child(glyph)
+        .tooltip(move |_window, cx| cx.new(|_| Tooltip::new(tooltip.clone())).into())
 }
 
 /// A hover tooltip.
@@ -317,4 +347,73 @@ pub fn icon_button(
         .hover(|style| style.bg(rgb(active().surface_hover)))
         .child(glyph)
         .tooltip(move |_window, cx| cx.new(|_| Tooltip::new(tooltip.clone())).into())
+}
+
+/// Roughly how wide a character is, as a fraction of the font size.
+///
+/// The interface font is proportional, so this is an average rather than a
+/// measurement. It only decides whether a line is long enough to be worth
+/// scrolling, and both ways of being wrong are cheap: a still line that could
+/// have moved, or a scroll with almost nowhere to go.
+const CHAR_WIDTH_RATIO: f32 = 0.52;
+
+/// A marquee that pauses at each end rather than turning on the spot.
+///
+/// Out and back rather than wrapping around, because a wrap needs a second
+/// copy of the text trailing the first to avoid a visible jump, and at this
+/// size the whole string is readable in one pass anyway.
+fn marquee_easing(t: f32) -> f32 {
+    const DWELL: f32 = 0.18;
+    let travel = 0.5 - DWELL;
+    if t < DWELL {
+        0.
+    } else if t < 0.5 {
+        (t - DWELL) / travel
+    } else if t < 0.5 + DWELL {
+        1.
+    } else {
+        1. - (t - 0.5 - DWELL) / travel
+    }
+}
+
+/// One line of text, truncated - or scrolled, when it does not fit and
+/// animation is on.
+///
+/// Never wraps to a second line: these sit in fixed-height rows, so a wrap
+/// pushes the row's other line out of view rather than revealing anything.
+///
+/// Whether to scroll is decided from a character estimate, because the real
+/// width is not known until layout and asking for it would mean laying the
+/// row out twice for a decision this small.
+pub fn one_line(
+    id: impl Into<gpui::ElementId>,
+    text: String,
+    width: f32,
+    font_size: f32,
+    animate: bool,
+) -> gpui::AnyElement {
+    let estimated = text.chars().count() as f32 * font_size * CHAR_WIDTH_RATIO;
+    let overflow = estimated - width;
+
+    if !animate || overflow <= 1. {
+        return gpui::div().truncate().child(text).into_any_element();
+    }
+
+    // Paced by distance rather than a fixed duration, so a long name does not
+    // race past while a short one crawls.
+    let seconds = (overflow / 28.).clamp(2.5, 12.);
+
+    gpui::div()
+        .w(px(width))
+        .overflow_hidden()
+        .child(
+            gpui::div().whitespace_nowrap().child(text).with_animation(
+                id,
+                gpui::Animation::new(std::time::Duration::from_secs_f32(seconds))
+                    .repeat()
+                    .with_easing(marquee_easing),
+                move |line, delta| line.ml(px(-overflow * delta)),
+            ),
+        )
+        .into_any_element()
 }

@@ -14,7 +14,7 @@ use gpui::{
 use crate::model::markdown::{self, Kind};
 use concord::discord::custom_emoji_image_url;
 
-use crate::model::message::{MessageRow, format_bytes};
+use crate::model::message::{EmbedRow, MessageRow, format_bytes};
 use concord::t;
 
 use crate::theme::{active, layout, scaled, space, text};
@@ -689,17 +689,8 @@ fn message_body(
         body = body.child(links);
     }
 
-    if message.embed_count > 0 {
-        body = body.child(
-            gpui::div()
-                .text_size(px(scaled(text::XS)))
-                .text_color(rgb(active().text_subtle))
-                .child(format!(
-                    "{} embed{}",
-                    message.embed_count,
-                    if message.embed_count == 1 { "" } else { "s" }
-                )),
-        );
+    for (position, embed) in message.embeds.iter().enumerate() {
+        body = body.child(embed_card(index * 8 + position, embed, options));
     }
 
     if !message.reactions.is_empty() {
@@ -1100,4 +1091,116 @@ fn reaction_bar(
     }
 
     bar
+}
+
+/// One embed, drawn as Discord draws it: an accent bar down the left, then
+/// author, title, description, fields, picture and footer, in that order.
+///
+/// Only the parts that are present appear - most embeds carry a handful of
+/// these, and a link preview often has just a title and a description.
+fn embed_card(id: usize, embed: &EmbedRow, options: RenderOptions) -> impl IntoElement {
+    let mut card = column()
+        .gap(px(space::XS))
+        .my(px(space::XS))
+        .pl(px(space::SM))
+        .py(px(space::XS))
+        .pr(px(space::MD))
+        .max_w(px(440.))
+        .rounded(px(layout::RADIUS))
+        .bg(rgb(active().surface_sunken))
+        .border_l_2()
+        // Falls back to the theme accent so the bar is never invisible
+        // against the card behind it.
+        .border_color(rgb(embed.color.unwrap_or(active().accent)));
+
+    if let Some(provider) = &embed.provider {
+        card = card.child(
+            gpui::div()
+                .text_size(px(scaled(text::XS)))
+                .text_color(rgb(active().text_subtle))
+                .child(provider.clone()),
+        );
+    }
+
+    if let Some(author) = &embed.author {
+        card = card.child(
+            gpui::div()
+                .text_size(px(scaled(text::XS)))
+                .text_color(rgb(active().text))
+                .child(author.clone()),
+        );
+    }
+
+    if let Some(title) = &embed.title {
+        card = card.child(
+            gpui::div()
+                .text_size(px(scaled(text::SM)))
+                .text_color(rgb(active().accent))
+                .child(title.clone()),
+        );
+    }
+
+    if let Some(description) = &embed.description {
+        card = card.child(
+            gpui::div()
+                .text_size(px(scaled(text::SM)))
+                .text_color(rgb(active().text_muted))
+                .child(description.clone()),
+        );
+    }
+
+    for (name, value) in &embed.fields {
+        card = card.child(
+            column()
+                .gap(px(1.))
+                .child(
+                    gpui::div()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().text))
+                        .child(name.clone()),
+                )
+                .child(
+                    gpui::div()
+                        .text_size(px(scaled(text::XS)))
+                        .text_color(rgb(active().text_muted))
+                        .child(value.clone()),
+                ),
+        );
+    }
+
+    // Pictures come from the same preview cache as attachments, so a demo
+    // run and a real session take the same path and neither reaches for the
+    // network from here.
+    if options.show_images {
+        if let Some(url) = &embed.image_url
+            && let Some(image) = options.previews.get(url.as_str())
+        {
+            card = card.child(
+                gpui::img(image.clone())
+                    .max_w(px(400.))
+                    .max_h(px(300.))
+                    .rounded(px(layout::RADIUS)),
+            );
+        } else if let Some(url) = &embed.thumbnail_url
+            && let Some(image) = options.previews.get(url.as_str())
+        {
+            card = card.child(
+                gpui::img(image.clone())
+                    .max_w(px(80.))
+                    .max_h(px(80.))
+                    .rounded(px(layout::RADIUS)),
+            );
+        }
+    }
+
+    if let Some(footer) = &embed.footer {
+        card = card.child(
+            gpui::div()
+                .text_size(px(scaled(text::XS)))
+                .text_color(rgb(active().text_subtle))
+                .child(footer.clone()),
+        );
+    }
+
+    card.id(("embed", id))
 }

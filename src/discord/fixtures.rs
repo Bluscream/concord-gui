@@ -214,6 +214,30 @@ fn message(
     }
 }
 
+/// One attachment, with the fields the message list actually reads.
+fn attachment(
+    id: u64,
+    filename: &str,
+    content_type: &str,
+    size: u64,
+    dimensions: Option<(u64, u64)>,
+) -> crate::discord::AttachmentInfo {
+    crate::discord::AttachmentInfo {
+        id: Id::new(id),
+        filename: filename.to_string(),
+        // Images are previewed by URL, and an empty one is skipped; the
+        // scheme is ours because nothing here is really hosted anywhere.
+        url: format!("concord-demo://attachment/{filename}"),
+        proxy_url: String::new(),
+        content_type: Some(content_type.to_string()),
+        size,
+        width: dimensions.map(|(w, _)| w),
+        height: dimensions.map(|(_, h)| h),
+        description: None,
+        flags: 0,
+    }
+}
+
 /// A fully-populated state for offline UI work.
 pub fn demo_state() -> DiscordState {
     let mut state = DiscordState::default();
@@ -607,6 +631,101 @@ pub fn demo_state() -> DiscordState {
     );
     edited.edited_timestamp = Some("2026-08-14T12:00:00Z".into());
     general.push(edited);
+
+    // ---- media -------------------------------------------------------------
+    //
+    // A picture, something animated, a video and a link preview, so the demo
+    // covers every shape the message list can draw rather than only text.
+    // The URLs use a scheme of our own: nothing is on a CDN, and demo mode
+    // answers the preview request for them itself.
+    let mut shot = message(
+        60,
+        111,
+        Some(10),
+        1001,
+        "blu",
+        "here is the new member list",
+        520,
+    );
+    shot.attachments.push(attachment(
+        9100,
+        "member-list.png",
+        "image/png",
+        184_320,
+        Some((320, 180)),
+    ));
+    general.push(shot);
+
+    let mut moving = message(61, 111, Some(10), 1002, "ferris", "it scrolls now", 480);
+    moving.attachments.push(attachment(
+        9101,
+        "marquee.gif",
+        "image/gif",
+        61_440,
+        Some((160, 120)),
+    ));
+    general.push(moving);
+
+    let mut clip = message(
+        62,
+        111,
+        Some(10),
+        1003,
+        "turing",
+        "screen recording of the voice panel",
+        440,
+    );
+    clip.attachments.push(attachment(
+        9102,
+        "voice-panel.mp4",
+        "video/mp4",
+        2_355_200,
+        None,
+    ));
+    general.push(clip);
+
+    let mut linked = message(
+        63,
+        111,
+        Some(10),
+        1005,
+        "ci-bot",
+        "build finished: https://example.invalid/builds/482",
+        400,
+    );
+    linked.embeds.push(crate::discord::EmbedInfo {
+        color: Some(0x57_9F_6E),
+        provider_name: Some("RostFaden CI".to_string()),
+        author_name: Some("pipeline #482".to_string()),
+        title: Some("Build passed on gui".to_string()),
+        description: Some("2329 tests, no warnings. Artefacts kept for seven days.".to_string()),
+        fields: vec![
+            crate::discord::EmbedFieldInfo {
+                name: "Duration".to_string(),
+                value: "3m 12s".to_string(),
+            },
+            crate::discord::EmbedFieldInfo {
+                name: "Commit".to_string(),
+                value: "48c857c5".to_string(),
+            },
+        ],
+        footer_text: Some("finished a moment ago".to_string()),
+        url: Some("https://example.invalid/builds/482".to_string()),
+        image_url: Some("concord-demo://attachment/build-graph.png".to_string()),
+        ..Default::default()
+    });
+    general.push(linked);
+
+    let mut gifv = message(64, 111, Some(10), 1002, "ferris", "mood", 360);
+    gifv.embeds.push(crate::discord::EmbedInfo {
+        provider_name: Some("Tenor".to_string()),
+        title: Some("shipping it".to_string()),
+        // A gifv embed carries the animation separately, because Discord
+        // reports only a video URL for this kind.
+        gifv_image_url: Some("concord-demo://attachment/mood.gif".to_string()),
+        ..Default::default()
+    });
+    general.push(gifv);
 
     message_cache.set_fixture_messages(channel_id(111), general);
 
@@ -1436,6 +1555,59 @@ pub fn demo_preview_png(seed: u64) -> Vec<u8> {
     // An encoder failure would mean a bug here, not bad input; an empty
     // result is preferable to a panic in a demo path.
     if encoded.is_err() { Vec::new() } else { out }
+}
+
+/// A short animated GIF, so the demo has something that actually moves.
+///
+/// A still image would exercise the same code path as a PNG and prove
+/// nothing about the animated one - which is the path that decides whether
+/// the "animate images" setting does anything.
+pub fn demo_preview_gif(seed: u64) -> Vec<u8> {
+    use image::{Delay, Frame, RgbaImage, codecs::gif::GifEncoder};
+    use std::time::Duration;
+
+    const W: u32 = 160;
+    const H: u32 = 120;
+    const FRAMES: u32 = 12;
+
+    let mut out = Vec::new();
+    {
+        let mut encoder = GifEncoder::new(&mut out);
+        if encoder
+            .set_repeat(image::codecs::gif::Repeat::Infinite)
+            .is_err()
+        {
+            return Vec::new();
+        }
+
+        for index in 0..FRAMES {
+            let mut frame = RgbaImage::new(W, H);
+            // A band sweeping across, which reads as motion at any size.
+            let sweep = index * W / FRAMES;
+            for (x, y, pixel) in frame.enumerate_pixels_mut() {
+                let near = x.abs_diff(sweep).min(W - x.abs_diff(sweep));
+                let glow = 255u32.saturating_sub(near * 6) as u8;
+                *pixel = image::Rgba([
+                    glow,
+                    (y * 255 / H) as u8,
+                    ((seed as u32 + index * 20) % 256) as u8,
+                    255,
+                ]);
+            }
+            if encoder
+                .encode_frame(Frame::from_parts(
+                    frame,
+                    0,
+                    0,
+                    Delay::from_saturating_duration(Duration::from_millis(80)),
+                ))
+                .is_err()
+            {
+                return Vec::new();
+            }
+        }
+    }
+    out
 }
 
 /// Mute or unmute a guild.

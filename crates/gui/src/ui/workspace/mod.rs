@@ -93,6 +93,13 @@ pub struct Workspace {
     pub pane_filter: Option<Composer>,
     /// Scroll position of the message list, so navigation can move it.
     pub message_scroll: gpui::ScrollHandle,
+    /// Whether the log should keep itself pinned to the newest message.
+    ///
+    /// Set when a channel opens and cleared as soon as the reader scrolls
+    /// back, so arriving pictures - which change the list's height after it
+    /// has been laid out - do not leave the view stranded mid-backlog, and
+    /// do not yank someone away from what they were reading either.
+    pub follow_bottom: bool,
     /// Pane visibility and widths, shared with the TUI through ui_state.toml.
     pub ui_state: UiStateOptions,
     /// Slash commands published by bots in the open guild.
@@ -309,6 +316,7 @@ impl Workspace {
             pane_filter: None,
             debug_log: None,
             message_scroll: gpui::ScrollHandle::new(),
+            follow_bottom: true,
             ui_state,
             app_commands: Vec::new(),
             current_user: None,

@@ -293,6 +293,12 @@ impl Workspace {
     /// A fraction rather than a fixed pixel count, so half-page means the same
     /// thing on a tall window as on a short one.
     pub fn scroll_by_pages(&mut self, pages: f32) {
+        // Scrolling backwards ends the follow; scrolling forwards does not
+        // resume it, because reaching the end by hand is not the same as
+        // asking to be kept there.
+        if pages < 0. {
+            self.follow_bottom = false;
+        }
         let offset = self.message_scroll.offset();
         let height = self.message_scroll.bounds().size.height;
         self.message_scroll

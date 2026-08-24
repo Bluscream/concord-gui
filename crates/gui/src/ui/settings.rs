@@ -7,6 +7,8 @@
 
 use gpui::{Context, Div, FocusHandle, KeyDownEvent, Render, Window, prelude::*, px, rgb};
 
+use concord::t;
+
 use crate::theme::{DARK, LIGHT, Palette, layout, scaled, space, text};
 use crate::ui::chrome::{column, row};
 
@@ -163,12 +165,36 @@ impl Render for SettingsWindow {
                             .text_color(rgb(theme.text_subtle))
                             .child(concord::t!("settings-app-settings")),
                     )
-                    .child(sidebar_nav_item("⚙ Appearance", true, theme))
-                    .child(sidebar_nav_item("🌐 Server Endpoint", false, theme))
-                    .child(sidebar_nav_item("📺 Display & UI", false, theme))
-                    .child(sidebar_nav_item("🔔 Notifications", false, theme))
-                    .child(sidebar_nav_item("🎤 Voice & Audio", false, theme))
-                    .child(sidebar_nav_item("🟢 Presence", false, theme))
+                    .child(sidebar_nav_item(
+                        format!("\u{25D0} {}", t!("settings-nav-appearance")),
+                        true,
+                        theme,
+                    ))
+                    .child(sidebar_nav_item(
+                        format!("\u{25C8} {}", t!("settings-nav-endpoint")),
+                        false,
+                        theme,
+                    ))
+                    .child(sidebar_nav_item(
+                        format!("\u{25A3} {}", t!("settings-nav-display")),
+                        false,
+                        theme,
+                    ))
+                    .child(sidebar_nav_item(
+                        format!("\u{2606} {}", t!("settings-nav-notifications")),
+                        false,
+                        theme,
+                    ))
+                    .child(sidebar_nav_item(
+                        format!("\u{266A} {}", t!("settings-nav-voice")),
+                        false,
+                        theme,
+                    ))
+                    .child(sidebar_nav_item(
+                        format!("\u{25CF} {}", t!("settings-nav-presence")),
+                        false,
+                        theme,
+                    ))
                     .child(
                         column()
                             .flex_1()
@@ -181,7 +207,7 @@ impl Render for SettingsWindow {
                                 gpui::div()
                                     .text_size(px(scaled(text::XS)))
                                     .text_color(rgb(theme.text_subtle))
-                                    .child("concord v0.1.0"),
+                                    .child(format!("concord v{}", env!("CARGO_PKG_VERSION"))),
                             ),
                     ),
             )
@@ -220,7 +246,7 @@ impl Render for SettingsWindow {
                             .gap(px(space::XL))
                             .overflow_y_scroll()
                             // --- Section 1: Appearance & Theme ---
-                            .child(section_title("Appearance & Theme", theme))
+                            .child(section_title(t!("settings-appearance-theme"), theme))
                             .child(
                                 row()
                                     .w_full()
@@ -254,7 +280,10 @@ impl Render for SettingsWindow {
                                                 gpui::div()
                                                     .text_size(px(scaled(text::BASE)))
                                                     .text_color(rgb(theme.text))
-                                                    .child("🌙 Dark Mode"),
+                                                    .child(format!(
+                                                        "\u{25D1} {}",
+                                                        t!("settings-dark-mode")
+                                                    )),
                                             )
                                             .child(
                                                 gpui::div()
@@ -292,7 +321,10 @@ impl Render for SettingsWindow {
                                                 gpui::div()
                                                     .text_size(px(scaled(text::BASE)))
                                                     .text_color(rgb(theme.text))
-                                                    .child("☀️ Light Mode"),
+                                                    .child(format!(
+                                                        "\u{25CB} {}",
+                                                        t!("settings-light-mode")
+                                                    )),
                                             )
                                             .child(
                                                 gpui::div()
@@ -450,7 +482,7 @@ impl Render for SettingsWindow {
     }
 }
 
-fn sidebar_nav_item(label: &'static str, active: bool, theme: &Palette) -> Div {
+fn sidebar_nav_item(label: impl Into<gpui::SharedString>, active: bool, theme: &Palette) -> Div {
     gpui::div()
         .w_full()
         .px(px(space::MD))
@@ -465,7 +497,7 @@ fn sidebar_nav_item(label: &'static str, active: bool, theme: &Palette) -> Div {
         .text_color(rgb(if active { theme.text } else { theme.text_muted }))
         .cursor_pointer()
         .hover(|s| s.bg(rgb(theme.surface_hover)).text_color(rgb(theme.text)))
-        .child(label)
+        .child(label.into())
 }
 
 fn section_title(title: impl Into<gpui::SharedString>, theme: &Palette) -> Div {

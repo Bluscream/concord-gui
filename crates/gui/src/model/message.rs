@@ -98,6 +98,49 @@ pub struct AttachmentRow {
     pub is_playable: bool,
 }
 
+/// One embed, flattened into what the renderer draws.
+///
+/// Discord's embed carries proxy URLs, flags and dimensions that only matter
+/// to a client fetching from its CDN; this keeps what is drawn.
+pub struct EmbedRow {
+    /// Accent colour for the bar down the left edge.
+    pub color: Option<u32>,
+    pub author: Option<String>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    /// `(name, value)`. The core does not carry Discord's `inline`
+    /// flag, so these stack rather than sitting side by side.
+    pub fields: Vec<(String, String)>,
+    pub footer: Option<String>,
+    pub image_url: Option<String>,
+    pub thumbnail_url: Option<String>,
+    pub provider: Option<String>,
+}
+
+fn project_embed(embed: &concord::discord::EmbedInfo) -> EmbedRow {
+    EmbedRow {
+        color: embed.color,
+        author: embed.author_name.clone(),
+        title: embed.title.clone(),
+        description: embed.description.clone(),
+        fields: embed
+            .fields
+            .iter()
+            .map(|field| (field.name.clone(), field.value.clone()))
+            .collect(),
+        footer: embed.footer_text.clone(),
+        // A gifv embed puts the animation in its own field, because Discord
+        // reports only a video URL for those - preferred here so the picture
+        // moves rather than showing a still frame.
+        image_url: embed
+            .gifv_image_url
+            .clone()
+            .or_else(|| embed.image_url.clone()),
+        thumbnail_url: embed.thumbnail_url.clone(),
+        provider: embed.provider_name.clone(),
+    }
+}
+
 /// A single rendered message row.
 pub struct MessageRow {
     pub id: Id<marker::MessageMarker>,
@@ -128,6 +171,12 @@ pub struct MessageRow {
     /// `(emoji, count, me_reacted)`.
     pub reactions: Vec<(String, u64, bool)>,
     pub embed_count: usize,
+    /// Embeds, projected for rendering rather than counted.
+    ///
+    /// A count was all this carried before, so a link preview or a bot's
+    /// answer - which is often the whole content of the message - drew as the
+    /// words "1 embed".
+    pub embeds: Vec<EmbedRow>,
     /// Poll attached to this message, if any.
     pub poll: Option<PollRow>,
     /// Set once the user clicks a hidden spoiler in this message.
@@ -242,6 +291,7 @@ pub fn project_messages(
                 .map(|reaction| (reaction_glyph(&reaction.emoji), reaction.count, reaction.me))
                 .collect(),
             embed_count: message.embeds.len(),
+            embeds: message.embeds.iter().map(project_embed).collect(),
             poll: message.poll.as_ref().map(project_poll),
             spoiler_revealed: false,
             links: Vec::new(),

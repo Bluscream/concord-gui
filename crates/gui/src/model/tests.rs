@@ -1420,6 +1420,39 @@ fn activities_reach_the_member_list_and_profile() {
     );
 }
 
+/// Whether a codepoint will fail to draw with the fonts this client ships.
+///
+/// Two ways to fail: outside the Basic Multilingual Plane, or one of the BMP
+/// codepoints Unicode gives `Emoji_Presentation=Yes`, which a font draws in
+/// colour or not at all. Not a blanket range - most of Dingbats and
+/// Miscellaneous Symbols are ordinary text glyphs and render fine.
+fn is_unrenderable(code: u32) -> bool {
+    const EMOJI_PRESENTATION: [std::ops::RangeInclusive<u32>; 20] = [
+        0x231A..=0x231B,
+        0x23E9..=0x23EC,
+        0x23F0..=0x23F0,
+        0x23F3..=0x23F3,
+        0x25FD..=0x25FE,
+        0x2614..=0x2615,
+        0x2648..=0x2653,
+        0x267F..=0x267F,
+        0x2693..=0x2693,
+        0x26A1..=0x26A1,
+        0x26AA..=0x26AB,
+        0x26BD..=0x26BE,
+        0x26C4..=0x26C5,
+        0x26D4..=0x26D4,
+        0x2705..=0x2705,
+        0x270A..=0x270B,
+        0x2728..=0x2728,
+        0x274C..=0x274C,
+        0x2B1B..=0x2B1C,
+        0x2B50..=0x2B55,
+    ];
+
+    code > 0xFFFF || EMOJI_PRESENTATION.iter().any(|range| range.contains(&code))
+}
+
 #[test]
 fn no_icon_glyph_needs_a_font_we_do_not_ship() {
     // Astral-plane emoji draw as empty boxes with the shipped fonts, which is
@@ -1433,6 +1466,30 @@ fn no_icon_glyph_needs_a_font_we_do_not_ship() {
     // rendering/mod.rs were scanned by nothing at all.
     let sources = ui_sources();
 
+    // Literal characters as well as `\u{...}` escapes. The settings window
+    // had a sidebar of astral-plane emoji written directly into the source -
+    // six empty boxes on screen - and this test read straight past them,
+    // because it only ever looked at the escaped form.
+    for (name, source) in &sources {
+        // The emoji picker is a list of emoji; they are its content, not
+        // icons chosen for it. Whether they draw depends on an emoji font
+        // being installed, which is a packaging question rather than one
+        // this test can answer.
+        if name == "emoji.rs" {
+            continue;
+        }
+        for character in source.chars() {
+            let code = character as u32;
+            if code <= 0x7F || !is_unrenderable(code) {
+                continue;
+            }
+            panic!(
+                "{name} uses U+{code:04X} ({character}) literally, which this \
+                 client has no font for and will draw as an empty box"
+            );
+        }
+    }
+
     for (name, source) in &sources {
         let (name, source) = (name.as_str(), source.as_str());
         for (index, _) in source.match_indices("\\u{") {
@@ -1443,41 +1500,9 @@ fn no_icon_glyph_needs_a_font_we_do_not_ship() {
             };
 
             assert!(
-                code <= 0xFFFF,
-                "{name} uses U+{code:04X}, which is outside the Basic \
-                 Multilingual Plane and will draw as an empty box"
-            );
-            // Not a blanket range: most of Dingbats and Miscellaneous
-            // Symbols are ordinary text glyphs. These are the BMP codepoints
-            // Unicode gives Emoji_Presentation=Yes, which are the ones a font
-            // will draw in colour - or not at all.
-            const EMOJI_PRESENTATION: [std::ops::RangeInclusive<u32>; 20] = [
-                0x231A..=0x231B,
-                0x23E9..=0x23EC,
-                0x23F0..=0x23F0,
-                0x23F3..=0x23F3,
-                0x25FD..=0x25FE,
-                0x2614..=0x2615,
-                0x2648..=0x2653,
-                0x267F..=0x267F,
-                0x2693..=0x2693,
-                0x26A1..=0x26A1,
-                0x26AA..=0x26AB,
-                0x26BD..=0x26BE,
-                0x26C4..=0x26C5,
-                0x26D4..=0x26D4,
-                0x2705..=0x2705,
-                0x270A..=0x270B,
-                0x2728..=0x2728,
-                0x274C..=0x274C,
-                0x2B1B..=0x2B1C,
-                0x2B50..=0x2B55,
-            ];
-
-            assert!(
-                !EMOJI_PRESENTATION.iter().any(|range| range.contains(&code)),
-                "{name} uses U+{code:04X}, which Unicode marks as \
-                 emoji-presentation and a font will draw in colour or not at all"
+                !is_unrenderable(code),
+                "{name} uses U+{code:04X}, which this client has no font for \
+                 and will draw as an empty box"
             );
         }
     }

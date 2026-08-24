@@ -299,6 +299,8 @@ impl Workspace {
             self.profile = Some((user_id, view));
         }
 
+        let was_empty = self.messages.is_empty();
+
         (self.messages, self.typing) = match self.nav.channel {
             Some(channel_id) => (
                 message::project_messages(state, channel_id, state.current_user_id()),
@@ -306,6 +308,17 @@ impl Workspace {
             ),
             None => (Vec::new(), Vec::new()),
         };
+
+        // A channel's first page arrives after it is opened, so asking to
+        // scroll at open time scrolls an empty list and lands at the top of
+        // the backlog once the messages appear. Done here instead, the moment
+        // there is something to scroll.
+        if was_empty && !self.messages.is_empty() {
+            self.follow_bottom = true;
+        }
+        if self.follow_bottom && !self.messages.is_empty() {
+            self.message_scroll.scroll_to_bottom();
+        }
 
         // Previews for threads visible in the log. Requested once each: the
         // reprojection runs on every snapshot, and re-asking each time would
@@ -323,12 +336,30 @@ impl Workspace {
         // Image attachments in view. Gated on the display options, so turning
         // previews off stops the fetch rather than only hiding the result.
         if self.options.display.show_images && !self.options.display.disable_image_preview {
-            let urls: Vec<_> = self
+            let attachments = self
                 .messages
                 .iter()
                 .flat_map(|row| row.attachments.iter())
                 .filter(|attachment| attachment.is_image && !attachment.url.is_empty())
-                .map(|attachment| attachment.url.clone())
+                .map(|attachment| attachment.url.clone());
+
+            // Embed pictures go through the same cache. Left out before, so
+            // an embed that was mostly its image drew as an empty card.
+            let embedded = self
+                .messages
+                .iter()
+                .flat_map(|row| row.embeds.iter())
+                .flat_map(|embed| {
+                    embed
+                        .image_url
+                        .iter()
+                        .chain(embed.thumbnail_url.iter())
+                        .cloned()
+                })
+                .filter(|url| !url.is_empty());
+
+            let urls: Vec<_> = attachments
+                .chain(embedded)
                 .filter(|url| self.requested_previews.insert(url.clone()))
                 .collect();
 
