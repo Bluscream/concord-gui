@@ -822,3 +822,101 @@ fn parse_keymap_options(toml: &str) -> KeymapOptions {
         .expect("keymap config should parse")
         .keymap
 }
+
+/// Every manifest in the workspace, as (path, text).
+///
+/// Read from disk rather than listed, so a new crate is covered the day it is
+/// added instead of the day somebody remembers to add it here.
+fn workspace_manifests() -> Vec<(String, String)> {
+    fn walk(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            if path.is_dir() {
+                // `target` holds vendored manifests for every dependency, and
+                // their features are not ours to have an opinion about.
+                if name != "target" && name != ".git" {
+                    walk(&path, out);
+                }
+            } else if name == "Cargo.toml" {
+                out.push((
+                    path.display().to_string(),
+                    std::fs::read_to_string(&path).expect("read manifest"),
+                ));
+            }
+        }
+    }
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut out = Vec::new();
+    walk(root, &mut out);
+    out.sort();
+    out
+}
+
+/// D-Bus crates must not ask for zbus's tokio backing.
+///
+/// Cargo unifies features per crate version, so one `zbus/tokio` anywhere in
+/// the workspace is `zbus/tokio` in the copy GPUI reaches through its own
+/// ashpd and oo7. GPUI drives those from dispatcher threads that have no
+/// Tokio runtime, so zbus panics with "there is no reactor running" and the
+/// XDG settings portal is lost - quietly, on a worker thread, with the app
+/// still running.
+///
+/// This failed once and cost a session to find, and nothing about adding
+/// `features = ["tokio"]` to a new D-Bus dependency looks wrong.
+#[test]
+fn dbus_dependencies_do_not_pull_in_zbus_tokio() {
+    let manifests = workspace_manifests();
+    assert!(
+        manifests.len() >= 5,
+        "only {} manifests found - the walk is not finding them",
+        manifests.len()
+    );
+
+    let mut examined = 0;
+    let mut offenders = Vec::new();
+    for (path, text) in &manifests {
+        for line in text.lines() {
+            let line = line.trim();
+            // Only the dependency lines themselves; the prose explaining why
+            // names both features and must not trip this.
+            let Some(rest) = ["ashpd", "keyring", "oo7", "zbus", "secret-service"]
+                .iter()
+                .find_map(|name| line.strip_prefix(name))
+            else {
+                continue;
+            };
+            if !rest.trim_start().starts_with('=') {
+                continue;
+            }
+            examined += 1;
+        }
+        if text.contains("\"tokio\",") || text.contains("features = [\"tokio\"]") {
+            // Narrow to the D-Bus block: a plain tokio dependency is fine.
+            for block in text
+                .split("ashpd")
+                .skip(1)
+                .chain(text.split("keyring").skip(1))
+            {
+                let head = &block[..block.len().min(400)];
+                if head.contains("\"tokio\"") {
+                    offenders.push(path.clone());
+                }
+            }
+        }
+    }
+
+    assert!(
+        examined >= 3,
+        "only {examined} D-Bus dependency lines found - has the manifest moved?"
+    );
+    assert!(
+        offenders.is_empty(),
+        "these manifests ask for zbus's tokio backing, which breaks GPUI's \
+         portal: {offenders:?} - use \"async-io\" instead"
+    );
+}

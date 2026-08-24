@@ -35,11 +35,22 @@ emojis = "0.8.2"
 flate2 = "1.1.5"
 futures = "0.3.32"
 image = "0.25.10"
+# QUIRK: `async-io` rather than `tokio`, and it has to stay that way.
+#
+# Cargo unifies features per crate version, so a `zbus/tokio` asked for here
+# is `zbus/tokio` everywhere - including the copy GPUI reaches through its own
+# ashpd and oo7. GPUI drives those from its own dispatcher threads, which have
+# no Tokio runtime, so zbus panicked with "there is no reactor running" and
+# GPUI silently lost the XDG settings portal.
+#
+# `async-io` gives zbus its own reactor, which works from any thread. Our own
+# calls still run inside the shared Tokio runtime: awaiting an async-io-backed
+# future from a Tokio task is fine, it is only the reverse that is not.
 keyring = { version = "3.6.3", default-features = false, features = [
   "apple-native",
+  "async-io",
   "async-secret-service",
   "crypto-rust",
-  "tokio",
   "windows-native",
 ] }
 mime_guess = "2.0"
@@ -156,8 +167,9 @@ alsa = { version = "0.11", optional = true }
 v4l = { version = "0.14.0", optional = true, default-features = false, features = [
   "v4l2",
 ] }
+# `async-io` for the same reason as `keyring` above - see the note there.
 ashpd = { version = "0.13.13", default-features = false, features = [
-  "tokio",
+  "async-io",
   "global_shortcuts",
   "screencast",
 ], optional = true }

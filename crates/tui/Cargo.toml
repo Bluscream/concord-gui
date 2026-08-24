@@ -72,8 +72,11 @@ fixtures = [
 ]
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# `async-io`, not `tokio` - see the note on `keyring` in the root manifest.
+# Cargo unifies zbus's features across the whole graph, so asking for
+# `zbus/tokio` here would break GPUI's portal in the other front end.
 ashpd = { version = "0.13.13", default-features = false, features = [
-  "tokio",
+  "async-io",
   "global_shortcuts",
 ], optional = true }
 x11rb = { version = "0.13.2", features = ["xinput"], optional = true }

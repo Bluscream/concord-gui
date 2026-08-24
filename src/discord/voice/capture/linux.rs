@@ -293,10 +293,15 @@ async fn open_portal(stop: &AtomicBool) -> Result<PortalCapture, String> {
     let cancellation = wait_for_capture_cancellation(stop);
     tokio::pin!(cancellation);
     logging::debug("stream", "connecting to screen cast portal");
-    // The default ashpd proxy caches its D-Bus connection process-wide. Our
-    // capture runtime is per session, so that cached connection stops being
-    // driven after the first runtime is dropped. Bind a fresh connection to
-    // each capture runtime so later broadcasts can open another portal.
+    // The default ashpd proxy caches its D-Bus connection process-wide, and a
+    // cached connection outlives the capture that opened it. A fresh one per
+    // capture keeps each broadcast's portal session independent, so tearing
+    // one down cannot take the next one's connection with it.
+    //
+    // This used to be load-bearing for a second reason - zbus was backed by
+    // tokio, so the cached connection stopped being driven once the capture's
+    // runtime was dropped. zbus is on async-io now and drives itself, so that
+    // reason is gone; the first one still stands.
     let connection = tokio::select! {
         _ = &mut cancellation => return Err("screen cast portal selection was cancelled".to_owned()),
         result = ashpd::zbus::Connection::session() => result
