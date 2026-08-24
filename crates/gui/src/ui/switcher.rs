@@ -148,6 +148,7 @@ pub fn switcher_view(switcher: &Switcher) -> Div {
                 .child(
                     gpui::div()
                         .flex_1()
+                        .min_w(px(0.))
                         .text_size(px(scaled(text::SM)))
                         .text_color(rgb(if candidate.unread || selected {
                             active().text

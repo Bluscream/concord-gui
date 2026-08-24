@@ -217,6 +217,7 @@ impl Workspace {
                 .child(
                     gpui::div()
                         .flex_1()
+                        .min_w(px(0.))
                         .when(channel.unread && !selected, |d| {
                             d.text_color(rgb(active().text))
                         })
@@ -373,6 +374,7 @@ impl Workspace {
                     .child(
                         column()
                             .flex_1()
+                            .min_w(px(0.))
                             .child(
                                 gpui::div()
                                     .text_size(px(scaled(text::XS)))
@@ -420,6 +422,7 @@ impl Workspace {
                             mute,
                         )
                         .flex_1()
+                        .min_w(px(0.))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.toggle_voice_flag(false);
                             cx.notify();
@@ -437,6 +440,7 @@ impl Workspace {
                             deaf,
                         )
                         .flex_1()
+                        .min_w(px(0.))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.toggle_voice_flag(true);
                             cx.notify();
@@ -446,6 +450,7 @@ impl Workspace {
                         gpui::div()
                             .id("card-screen")
                             .flex_1()
+                            .min_w(px(0.))
                             .h(px(28.))
                             .items_center()
                             .justify_center()
@@ -469,6 +474,7 @@ impl Workspace {
                             self.soundboard.is_some(),
                         )
                         .flex_1()
+                        .min_w(px(0.))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.open_soundboard();
                             cx.notify();
@@ -482,6 +488,7 @@ impl Workspace {
                             false,
                         )
                         .flex_1()
+                        .min_w(px(0.))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.open_audio_devices();
                             cx.notify();
@@ -495,6 +502,7 @@ impl Workspace {
                             !self.allow_microphone_transmit,
                         )
                         .flex_1()
+                        .min_w(px(0.))
                         .on_click(cx.listener(|this, _, _, cx| {
                             let allowed = !this.allow_microphone_transmit;
                             this.set_microphone_allowed(allowed);
@@ -527,6 +535,7 @@ impl Workspace {
                 row()
                     .id("user-bar-profile")
                     .flex_1()
+                    .min_w(px(0.))
                     .items_center()
                     .gap(px(space::SM))
                     .px(px(4.))

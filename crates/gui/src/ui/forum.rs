@@ -80,6 +80,7 @@ pub fn forum_view(
             .child(
                 gpui::div()
                     .flex_1()
+                    .min_w(px(0.))
                     .text_size(px(scaled(text::BASE)))
                     .text_color(rgb(active().text))
                     .child(view.name.clone()),
@@ -172,6 +173,7 @@ pub fn forum_view(
                         .child(
                             gpui::div()
                                 .flex_1()
+                                .min_w(px(0.))
                                 .text_size(px(scaled(text::BASE)))
                                 .text_color(rgb(active().text))
                                 .child(post.title.clone()),

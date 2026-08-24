@@ -152,6 +152,7 @@ pub fn slash_view(picker: &SlashPicker) -> Div {
                 .child(
                     gpui::div()
                         .flex_1()
+                        .min_w(px(0.))
                         .text_size(px(scaled(text::XS)))
                         .text_color(rgb(active().text_subtle))
                         .child(command.description().to_string()),

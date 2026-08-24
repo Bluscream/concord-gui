@@ -523,7 +523,7 @@ fn message_body(
     options: RenderOptions<'_>,
     on_action: impl Fn(usize, MessageAction, &mut gpui::App) + Clone + 'static,
 ) -> Div {
-    let mut body = column().flex_1().gap(px(space::XS));
+    let mut body = column().flex_1().min_w(px(0.)).gap(px(space::XS));
 
     if !message.body.text.is_empty() {
         let has_spoiler = message.body.runs.iter().any(|(_, style)| style.spoiler);
@@ -532,6 +532,8 @@ fn message_body(
         body = body.child(
             gpui::div()
                 .id(("body", index))
+                .w_full()
+                .min_w(px(0.))
                 .when(has_spoiler && !message.spoiler_revealed, |d| {
                     d.cursor_pointer().on_click(move |_event, _window, cx| {
                         handler(index, MessageAction::RevealSpoiler, cx)
@@ -757,10 +759,18 @@ fn rich_body(
 
     // Fast path: no custom emoji, so no need to wrap in a row.
     if !show_emoji || parts.len() == 1 {
-        return gpui::div().child(rich_text(parsed, reveal_spoilers));
+        return gpui::div()
+            .w_full()
+            .min_w(px(0.))
+            .child(rich_text(parsed, reveal_spoilers));
     }
 
-    let mut wrapper = row().flex_wrap().items_center().gap(px(2.));
+    let mut wrapper = row()
+        .flex_wrap()
+        .w_full()
+        .min_w(px(0.))
+        .items_center()
+        .gap(px(2.));
 
     for part in parts {
         match part {
@@ -939,6 +949,7 @@ fn poll_view(
                         .child(
                             gpui::div()
                                 .flex_1()
+                                .min_w(px(0.))
                                 .text_size(px(scaled(text::SM)))
                                 .text_color(rgb(active().text))
                                 .child(answer.text.clone()),

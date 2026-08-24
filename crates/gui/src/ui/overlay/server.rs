@@ -121,6 +121,7 @@ pub fn server_management_view(
                 .child(
                     column()
                         .flex_1()
+                        .min_w(px(0.))
                         .child(
                             gpui::div()
                                 .text_size(px(scaled(text::SM)))
@@ -240,6 +241,7 @@ pub fn discovery_results(
                 .child(
                     column()
                         .flex_1()
+                        .min_w(px(0.))
                         .child(
                             gpui::div()
                                 .text_size(px(scaled(text::SM)))

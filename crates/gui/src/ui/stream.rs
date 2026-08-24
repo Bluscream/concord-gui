@@ -126,6 +126,7 @@ pub fn picker_view(
                 .child(
                     gpui::div()
                         .flex_1()
+                        .min_w(px(0.))
                         .text_size(px(scaled(text::SM)))
                         .text_color(rgb(active().text))
                         .child(target.title.clone()),
