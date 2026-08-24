@@ -1610,6 +1610,11 @@ pub fn demo_preview_gif(seed: u64) -> Vec<u8> {
     out
 }
 
+/// The bot in the fixture, which answers slash commands.
+pub fn demo_bot_id() -> Id<marker::UserMarker> {
+    user_id(1005)
+}
+
 /// Linked accounts, for the connections panel.
 pub fn demo_connections() -> Vec<crate::discord::Connection> {
     use crate::discord::{Connection, ConnectionVisibility};

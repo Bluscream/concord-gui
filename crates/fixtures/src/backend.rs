@@ -465,9 +465,22 @@ fn handle_command(
                 ],
             });
         }
-        AppCommand::PlaySoundboardSound { .. }
-        | AppCommand::RenameSoundboardSound { .. }
-        | AppCommand::DeleteSoundboardSound { .. } => {}
+        AppCommand::PlaySoundboardSound {
+            channel_id,
+            sound_id,
+            ..
+        } => {
+            // Nothing to hear offline, but this is the event that tells the
+            // channel a sound was played, which is the visible half of it.
+            publish_event!(AppEvent::SoundboardSoundPlayed {
+                channel_id,
+                user_id: crate::world::demo_user_id(),
+                sound_id,
+                volume: 1.0,
+            });
+        }
+
+        AppCommand::RenameSoundboardSound { .. } | AppCommand::DeleteSoundboardSound { .. } => {}
 
         // The fixture's channel tree is canned, so a create or delete would be
         // undone by the next reproject and read as the action having failed.
@@ -604,10 +617,26 @@ fn handle_command(
             }
         }
 
-        AppCommand::LoadProfileAvatarPreview { .. }
-        | AppCommand::RequestApplicationCommandAutocomplete { .. } => {
-            // Both need a real upload or a real bot; there is nothing
-            // meaningful the fixture can answer with.
+        AppCommand::LoadProfileAvatarPreview { key, .. } => {
+            // Keyed by the caller's key, which is how it identifies which
+            // preview a reply belongs to, and lands in the same cache the
+            // rest of the client reads pictures from.
+            let url = key;
+            let seed = url.bytes().map(u64::from).sum::<u64>();
+            let bytes = fixtures::demo_preview_png(seed);
+            if bytes.is_empty() {
+                publish_event!(AppEvent::AttachmentPreviewLoadFailed {
+                    url,
+                    message: "could not encode the demo image".to_string(),
+                });
+            } else {
+                publish_event!(AppEvent::AttachmentPreviewLoaded { url, bytes });
+            }
+        }
+
+        AppCommand::RequestApplicationCommandAutocomplete { .. } => {
+            // Autocomplete is answered by the bot that owns the command, and
+            // the fixture has no bot listening.
         }
 
         AppCommand::LoadGuildMembersByIds { .. } => {
@@ -1006,8 +1035,20 @@ fn handle_command(
             // a mutable self-profile, which it does not.
         }
 
-        AppCommand::RunApplicationCommand { .. } => {
-            // No bots in the fixture, so nothing would answer.
+        AppCommand::RunApplicationCommand { invocation } => {
+            // ci-bot is in the fixture, so it can answer rather than the
+            // command vanishing with no sign it was run.
+            let channel_id = invocation.channel_id;
+            let guild = guild_of(state, channel_id);
+            fixtures::append_message(
+                state,
+                channel_id,
+                guild,
+                crate::world::demo_bot_id(),
+                "ci-bot",
+                &format!("ran /{} - nothing to do offline", invocation.command_name),
+            );
+            publish_state!();
         }
 
         // ---- deliberately inert ----------------------------------------------
