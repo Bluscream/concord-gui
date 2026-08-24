@@ -143,9 +143,14 @@ pub fn image_viewer_view(
         .items_center()
         .gap(px(space::SM))
         .child(
+            // A size rather than a maximum. GPUI defaults to `Contain`, so
+            // the picture keeps its aspect ratio inside this box - and a
+            // small one scales up to fill it, instead of opening at exactly
+            // the size it already was in the message, which made clicking it
+            // look like it had done nothing.
             gpui::img(image)
-                .max_w(px(max_width))
-                .max_h(px(max_height))
+                .w(px(max_width))
+                .h(px(max_height))
                 .rounded(px(layout::RADIUS)),
         )
         .child(

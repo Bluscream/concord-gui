@@ -867,7 +867,7 @@ pub fn demo_state() -> DiscordState {
         "screenshot.png",
         "image/png",
         184_320,
-        Some((320, 180)),
+        Some((640, 400)),
     ));
     kitchen_sink.attachments.push(attachment(
         9201,
@@ -1710,16 +1710,56 @@ pub fn search_members(
 pub fn demo_preview_png(seed: u64) -> Vec<u8> {
     use image::{ImageEncoder, codecs::png::PngEncoder};
 
-    const W: u32 = 320;
-    const H: u32 = 180;
+    const W: u32 = 640;
+    const H: u32 = 400;
 
+    // Drawn as a rough screenshot rather than a gradient. A gradient is a
+    // fair test of the layout and a poor test of everything else: you cannot
+    // tell a correctly-scaled gradient from a stretched one, or a cropped one
+    // from a whole one, which is exactly what an image viewer has to get
+    // right. Straight edges and a repeating pattern make all three obvious.
+    let hue = (seed % 6) as u8;
     let mut pixels = Vec::with_capacity((W * H * 3) as usize);
+
     for y in 0..H {
         for x in 0..W {
-            // The seed shifts the hue so two attachments are distinguishable.
-            pixels.push((x * 255 / W) as u8);
-            pixels.push((y * 255 / H) as u8);
-            pixels.push((seed % 256) as u8);
+            // A title bar, a sidebar, and rows of "text" in the body.
+            let title_bar = y < 28;
+            let sidebar = x < 140 && !title_bar;
+            let gutter = (140..160).contains(&x);
+            let text_row = !title_bar && !sidebar && !gutter && (y % 24) < 10 && x < W - 40;
+
+            let (r, g, b) = if title_bar {
+                (46, 48, 54)
+            } else if sidebar {
+                // Rows in the sidebar, so a vertical crop is visible too.
+                if (y % 20) < 12 && x > 12 && x < 128 {
+                    (70, 74, 84)
+                } else {
+                    (34, 36, 42)
+                }
+            } else if text_row {
+                let shade = 90 + ((x / 7 + y / 24) % 3) as u8 * 30;
+                match hue {
+                    0 => (shade, 120, 200),
+                    1 => (120, shade, 150),
+                    2 => (200, 140, shade),
+                    3 => (shade, 190, 190),
+                    4 => (190, shade, 120),
+                    _ => (150, 150, shade),
+                }
+            } else {
+                (24, 25, 30)
+            };
+
+            // A one-pixel border, so an edge that has been cropped away is
+            // immediately visible rather than merely suspected.
+            let edge = x == 0 || y == 0 || x == W - 1 || y == H - 1;
+            if edge {
+                pixels.extend_from_slice(&[220, 220, 220]);
+            } else {
+                pixels.extend_from_slice(&[r, g, b]);
+            }
         }
     }
 
