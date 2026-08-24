@@ -288,6 +288,11 @@ pub struct ServerAdmin {
     pub sounds: Vec<crate::discord::SoundboardSound>,
     pub emojis: Vec<crate::discord::GuildEmojiInfo>,
     pub bans: Vec<crate::discord::GuildBanInfo>,
+    pub connections: Vec<crate::discord::Connection>,
+    pub sessions: Vec<crate::discord::AuthSession>,
+    pub apps: Vec<crate::discord::AuthorisedApp>,
+    pub backup_codes: Vec<crate::discord::BackupCode>,
+    pub totp_enabled: bool,
     /// Where the next generated id comes from.
     ///
     /// A counter rather than a hash of the name: two stickers may share a
@@ -315,6 +320,11 @@ impl ServerAdmin {
             sounds: sounds(),
             emojis: super::guild::emojis(),
             bans: super::people::bans(),
+            connections: super::demo_connections(),
+            sessions: super::demo_auth_sessions(),
+            apps: super::demo_authorised_apps(),
+            backup_codes: super::demo_backup_codes(),
+            totp_enabled: false,
             next_id: 50_000,
         }
     }

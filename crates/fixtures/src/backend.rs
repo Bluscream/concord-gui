@@ -756,6 +756,97 @@ fn handle_command(
             publish_event!(AppEvent::StreamBroadcastEnded { scope, channel_id });
         }
 
+        // ---- the account ---------------------------------------------------
+        //
+        // Nothing here reaches a real account, and the parts that would need
+        // a password or an SMS say so plainly rather than reporting a success
+        // that did not happen.
+        AppCommand::ModifyConnection {
+            kind,
+            id,
+            visibility,
+            show_activity,
+            ..
+        } => {
+            fixtures::account::modify_connection(
+                &mut admin.connections,
+                &kind,
+                &id,
+                visibility,
+                show_activity,
+            );
+            publish_event!(AppEvent::ConnectionsLoaded {
+                connections: admin.connections.clone(),
+            });
+        }
+
+        AppCommand::DeleteConnection { kind, id, .. } => {
+            admin
+                .connections
+                .retain(|entry| !(entry.kind == kind && entry.id == id));
+            publish_event!(AppEvent::ConnectionsLoaded {
+                connections: admin.connections.clone(),
+            });
+        }
+
+        AppCommand::ModifyPrivacySettings { edit } => {
+            fixtures::account::apply_privacy(state, &edit);
+            publish_state!();
+        }
+
+        AppCommand::RevokeAuthSessions { id_hashes, .. } => {
+            // The current session is never revoked, which is what Discord
+            // does: signing yourself out from here is a different button.
+            admin
+                .sessions
+                .retain(|session| session.current || !id_hashes.contains(&session.id_hash));
+            publish_event!(AppEvent::AuthSessionsLoaded {
+                sessions: admin.sessions.clone(),
+            });
+        }
+
+        AppCommand::RevokeAuthorisedApp { id, .. } => {
+            admin.apps.retain(|app| app.id != id);
+            publish_event!(AppEvent::AuthorisedAppsLoaded {
+                apps: admin.apps.clone(),
+            });
+        }
+
+        AppCommand::ModifyAccount { .. } => {
+            // Accepted without checking the password: there is no account
+            // behind it to check against, and refusing every attempt would
+            // make the form untestable.
+            publish_event!(AppEvent::AccountModified);
+        }
+
+        AppCommand::EnableTotp { .. } => {
+            admin.totp_enabled = true;
+            let codes = fixtures::account::fresh_backup_codes(admin.fresh_id());
+            admin.backup_codes = codes.clone();
+            publish_event!(AppEvent::TotpEnabled {
+                backup_codes: codes,
+            });
+        }
+
+        AppCommand::DisableTotp { .. } => {
+            admin.totp_enabled = false;
+            publish_event!(AppEvent::TotpDisabled);
+        }
+
+        // A phone number needs an SMS to arrive, and nothing offline can send
+        // one. Said out loud rather than accepted silently, so the form does
+        // not sit waiting for a code that will never come.
+        AppCommand::SendPhoneCode { .. }
+        | AppCommand::SendPhoneCodeAgain { .. }
+        | AppCommand::AttachPhone { .. }
+        | AppCommand::ReverifyPhone { .. }
+        | AppCommand::RemovePhone { .. }
+        | AppCommand::SetSmsMfa { .. } => {
+            publish_event!(AppEvent::GatewayError {
+                message: "Demo mode cannot send or receive an SMS".to_string(),
+            });
+        }
+
         // ---- moderation ---------------------------------------------------
         //
         // Kicking and banning both remove the member locally, which is what
@@ -1621,47 +1712,32 @@ fn handle_command(
         // "loading" forever, which reads as broken rather than as offline.
         AppCommand::LoadConnections => {
             publish_event!(AppEvent::ConnectionsLoaded {
-                connections: fixtures::demo_connections(),
+                connections: admin.connections.clone(),
             });
         }
 
         AppCommand::LoadAuthSessions => {
             publish_event!(AppEvent::AuthSessionsLoaded {
-                sessions: fixtures::demo_auth_sessions(),
+                sessions: admin.sessions.clone(),
             });
         }
 
         AppCommand::LoadAuthorisedApps => {
             publish_event!(AppEvent::AuthorisedAppsLoaded {
-                apps: fixtures::demo_authorised_apps(),
+                apps: admin.apps.clone(),
             });
         }
 
         AppCommand::LoadBackupCodes { .. } => {
             publish_event!(AppEvent::BackupCodesLoaded {
-                codes: fixtures::demo_backup_codes(),
+                codes: admin.backup_codes.clone(),
             });
         }
-
-        AppCommand::ModifyConnection { .. }
-        | AppCommand::DeleteConnection { .. }
-        | AppCommand::ModifyPrivacySettings { .. }
-        | AppCommand::RevokeAuthSessions { .. }
-        | AppCommand::RevokeAuthorisedApp { .. }
-        | AppCommand::ModifyAccount { .. }
-        | AppCommand::EnableTotp { .. }
-        | AppCommand::DisableTotp { .. } => {}
 
         // Server administration a fixture cannot answer honestly either: each
         // reports what Discord holds, and a demo number would be a guess
         // presented as a fact - a prune count most of all.
-        AppCommand::SendPhoneCode { .. }
-        | AppCommand::SendPhoneCodeAgain { .. }
-        | AppCommand::AttachPhone { .. }
-        | AppCommand::ReverifyPhone { .. }
-        | AppCommand::RemovePhone { .. }
-        | AppCommand::SetSmsMfa { .. }
-        | AppCommand::StartStageInstance { .. }
+        AppCommand::StartStageInstance { .. }
         | AppCommand::ModifyStageTopic { .. }
         | AppCommand::EndStageInstance { .. }
         | AppCommand::RequestToSpeak { .. }
