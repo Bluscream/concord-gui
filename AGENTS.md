@@ -395,6 +395,12 @@ When designing new features, models, or data flows in `concord-gui` or `concord`
    - **Account-Aware Context**: Any action that modifies state (sending messages, reacting, joining voice, changing status, server moderation) must be explicitly scoped to a target `AccountContext` / `UserMarker`.
    - **Deduplicated & Merged Projections**: When multiple accounts share access to the same resources (such as mutual guilds or DMs), state projections must fold multiple `DiscordState` instances into a unified view, attributing individual actions to the active account while avoiding redundant UI rows or duplicated notifications.
 
+### 16. Source File Modularity & Line Count Limits (<1,000 Lines)
+
+- **Maximum File Size Limit**: All Rust source files (`.rs`) across all workspace crates must remain **under 1,000 lines of code**.
+- **Decomposition Strategy**: When a module approaches or exceeds 1,000 lines, split it into a module directory (`mod_name/mod.rs`) or separate domain submodules (e.g. `events.rs`, `rendering.rs`, `actions.rs`, `tests.rs`).
+- **Commits**: Perform clean, atomic commits frequently whenever a module extraction or major sub-feature decomposition passes test verification.
+
 ## A caution
 
 Nothing in this fork has been verified against a real Discord account. Every
