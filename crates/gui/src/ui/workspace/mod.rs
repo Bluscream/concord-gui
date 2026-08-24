@@ -36,13 +36,15 @@ use crate::model::projection::{self, Navigation, Selection};
 use crate::notify;
 use crate::session::{SessionHandle, Update};
 
+use concord_ui::keybindings::external::Resolution;
+
 use crate::keymap::{self, Keymap};
 use crate::theme::{self, Presence, active, layout, scaled, space, text};
 use crate::ui::chrome::{
     VoiceRow, avatar, avatar_with_url, column, header, icon_button, panel_sunken, presence_dot,
     presence_swatch, row, section_label, sidebar_row, voice_participant_row,
 };
-use crate::ui::composer::{Composer, composer_view};
+use crate::ui::composer::{ClipboardIntent, Composer, composer_view};
 use crate::ui::emoji::{self, EmojiPicker};
 use crate::ui::forum::{self, ForumPost, ForumView};
 use crate::ui::login::{Login, LoginEvent, LoginHandle, LoginScreen, PasswordField, login_view};
