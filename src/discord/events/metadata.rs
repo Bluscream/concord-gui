@@ -93,6 +93,9 @@ impl AppEventKind {
         | AppEventKind::MessagePinnedUpdate
         | AppEventKind::CurrentUserPollVoteUpdate
         | AppEventKind::MessageDelete
+        // A resolved embed is attached to the message it describes, so the
+        // message cache changes and the log has to be reprojected.
+        | AppEventKind::EmbedResolved
         | AppEventKind::MessageDeleteBulk => {
             AppEventMetadata::mutating(SnapshotAreas::message())
         }
@@ -245,6 +248,7 @@ impl AppEventKind {
         | AppEventKind::ReactionUsersLoadFailed
         | AppEventKind::AttachmentPreviewLoaded
         | AppEventKind::AttachmentPreviewLoadFailed
+        | AppEventKind::EmbedResolveFailed
         | AppEventKind::ThreadPreviewLoadFailed
         | AppEventKind::ForumPostsLoadFailed
         | AppEventKind::MessageSearchLoadFailed

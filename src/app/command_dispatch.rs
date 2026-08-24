@@ -345,6 +345,22 @@ impl CommandDispatcher {
                 voice_commands::leave_channel(self.client.clone(), scope, self_mute, self_deaf)
                     .await;
             }
+            AppCommand::ResolveEmbed {
+                channel_id,
+                message_id,
+                url,
+                proxy,
+            } => {
+                // Detached: a proxy that is slow, or wrong, must not hold up
+                // the commands queued behind it.
+                tokio::spawn(super::embed_proxy::resolve(
+                    self.client.clone(),
+                    proxy,
+                    channel_id,
+                    message_id,
+                    url,
+                ));
+            }
             AppCommand::LoadAttachmentPreview { url } => {
                 media_commands::load_attachment_preview(
                     self.client.clone(),

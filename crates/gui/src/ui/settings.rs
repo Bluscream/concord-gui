@@ -9,6 +9,8 @@ use gpui::{Context, Div, FocusHandle, KeyDownEvent, Render, Window, prelude::*, 
 
 use concord::t;
 
+use crate::ui::composer::Composer;
+
 use crate::theme::{DARK, LIGHT, Palette, layout, scaled, space, text};
 use crate::ui::chrome::{column, row};
 
@@ -101,6 +103,9 @@ pub struct SettingsWindow {
     body_scroll: gpui::ScrollHandle,
     /// Which category the sidebar shows as current.
     section: usize,
+    /// The embed-proxy field, and whether it currently has the keyboard.
+    proxy: Composer,
+    proxy_focused: bool,
     /// A category the sidebar asked to jump to, applied on the next render.
     ///
     /// Deferred because the anchor positions are only known while the body
@@ -110,12 +115,19 @@ pub struct SettingsWindow {
 
 impl SettingsWindow {
     pub fn new(options: concord::config::AppOptions, cx: &mut Context<Self>) -> Self {
+        let options_for_proxy = options.embeds.proxy.clone();
         Self {
             options,
             settings_note: None,
             on_change: None,
             focus: cx.focus_handle(),
             section: 0,
+            proxy: {
+                let mut field = Composer::default();
+                field.set_text(&options_for_proxy);
+                field
+            },
+            proxy_focused: false,
             body_scroll: gpui::ScrollHandle::new(),
             pending_jump: None,
         }
@@ -170,6 +182,20 @@ impl Render for SettingsWindow {
             .id("settings-window-view")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+                // The field takes the keyboard while it has focus, or typing
+                // an address would be read as shortcuts by the window behind
+                // it. Escape gives the keyboard back rather than closing, so
+                // there is a way out that is not "close the window".
+                if this.proxy_focused {
+                    if event.keystroke.key == "escape" {
+                        this.proxy_focused = false;
+                    } else if this.proxy.handle_key(event) {
+                        this.options.embeds.proxy = this.proxy.text().to_owned();
+                        this.save_options(cx);
+                    }
+                    cx.notify();
+                    return;
+                }
                 if event.keystroke.key == "escape" {
                     this.save_options(cx);
                     cx.notify();
@@ -373,6 +399,58 @@ impl Render for SettingsWindow {
                                         concord::t!("settings-interface-display"),
                                         theme,
                                     ))
+                                    .child(
+                                        column()
+                                            .w_full()
+                                            .gap(px(space::XS))
+                                            .child(
+                                                gpui::div()
+                                                    .text_size(px(scaled(text::SM)))
+                                                    .text_color(rgb(theme.text))
+                                                    .child(t!("settings-embed-proxy")),
+                                            )
+                                            .child(
+                                                gpui::div()
+                                                    .text_size(px(scaled(text::XS)))
+                                                    .text_color(rgb(theme.text_subtle))
+                                                    .child(t!("settings-embed-proxy-help")),
+                                            )
+                                            .child(
+                                                gpui::div()
+                                                    .id("embed-proxy-field")
+                                                    .w_full()
+                                                    .min_w(px(0.))
+                                                    .overflow_hidden()
+                                                    .px(px(space::SM))
+                                                    .py(px(space::XS))
+                                                    .rounded(px(layout::RADIUS))
+                                                    .bg(rgb(theme.surface_sunken))
+                                                    .border_1()
+                                                    .border_color(rgb(if self.proxy_focused {
+                                                        theme.accent
+                                                    } else {
+                                                        theme.border
+                                                    }))
+                                                    .cursor_pointer()
+                                                    .text_size(px(scaled(text::SM)))
+                                                    .text_color(rgb(
+                                                        if options.embeds.proxy.is_empty() {
+                                                            theme.text_subtle
+                                                        } else {
+                                                            theme.text
+                                                        },
+                                                    ))
+                                                    .child(if options.embeds.proxy.is_empty() {
+                                                        t!("settings-embed-proxy-off").to_string()
+                                                    } else {
+                                                        options.embeds.proxy.clone()
+                                                    })
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.proxy_focused = !this.proxy_focused;
+                                                        cx.notify();
+                                                    })),
+                                            ),
+                                    )
                                     // Language, first in this section because it
                                     // changes every other label under it.
                                     .child(language_row(options.display.language, theme, cx))

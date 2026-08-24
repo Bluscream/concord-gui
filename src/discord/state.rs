@@ -811,6 +811,14 @@ impl DiscordState {
                     profile.note = note.clone();
                 }
             }
+            AppEvent::EmbedResolved {
+                channel_id,
+                message_id,
+                embed,
+            } => {
+                let cache = Arc::make_mut(&mut self.message_cache);
+                cache.attach_resolved_embed(*channel_id, *message_id, (**embed).clone());
+            }
             AppEvent::RelationshipsLoaded { relationships } => {
                 self.apply_relationships_loaded(relationships);
             }
@@ -1087,6 +1095,7 @@ impl DiscordState {
             | AppEvent::ReactionUsersLoadFailed { .. }
             | AppEvent::AttachmentPreviewLoaded { .. }
             | AppEvent::AttachmentPreviewLoadFailed { .. }
+            | AppEvent::EmbedResolveFailed { .. }
             | AppEvent::ThreadPreviewLoadFailed { .. }
             | AppEvent::ForumPostsLoadFailed { .. }
             | AppEvent::UserProfileLoadFailed { .. }

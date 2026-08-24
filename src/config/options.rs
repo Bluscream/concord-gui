@@ -246,7 +246,41 @@ pub struct AppOptions {
     pub presence: PresenceOptions,
     pub warnings: WarningOptions,
     pub storage: StorageOptions,
+    pub embeds: EmbedOptions,
 }
+
+/// How link previews are obtained for links Discord did not preview itself.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
+pub struct EmbedOptions {
+    /// A service that reads a page and reports its title, description and
+    /// image, used for links Discord did not unfurl.
+    ///
+    /// Discord only unfurls what its own crawler reached: a private site, a
+    /// page behind Cloudflare, a link posted while its server was down. Those
+    /// arrive with no embed at all, and the client has no way to make one
+    /// because reading the page itself means fetching an arbitrary URL.
+    ///
+    /// The address has the target appended to it, percent-encoded. Empty
+    /// disables the whole thing, which is the setting for anyone who would
+    /// rather not tell a third party which links they are reading - that is
+    /// the cost of this feature and it should be a choice.
+    pub proxy: String,
+}
+
+impl Default for EmbedOptions {
+    fn default() -> Self {
+        Self {
+            proxy: DEFAULT_EMBED_PROXY.to_string(),
+        }
+    }
+}
+
+/// The service the embed proxy is pre-filled with.
+///
+/// Microlink answers the shape this client wants without a key or a sign-up,
+/// which is what makes it a reasonable default rather than a recommendation.
+pub const DEFAULT_EMBED_PROXY: &str = "https://api.microlink.io/?url=";
 
 /// Where cached Discord data is kept between runs.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

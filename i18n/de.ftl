@@ -96,6 +96,9 @@ action-jump-to-replied = Zur beantworteten Nachricht springen
 # Einstellungen
 settings-appearance-theme = Erscheinungsbild & Design
 settings-dark-mode = Dunkler Modus
+settings-embed-proxy = Embed-Proxy
+settings-embed-proxy-help = Wird für Links verwendet, die Discord nicht selbst als Vorschau anzeigt. Leeren zum Abschalten - ein Proxy erfährt, welche Links du liest.
+settings-embed-proxy-off = Aus - Links ohne Discord-Vorschau bleiben schlicht
 settings-language-follow-system = System folgen
 
 # Overlagerungen

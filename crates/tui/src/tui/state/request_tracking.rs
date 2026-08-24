@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use concord::discord::AppCommand;
 use concord::discord::ids::{
@@ -27,6 +27,11 @@ pub(super) struct RequestTrackingState {
     pub(super) forum_post_lists: HashMap<Id<ChannelMarker>, ForumPostListState>,
     latest_message_history: HashMap<Id<ChannelMarker>, LatestMessageHistoryState>,
     pub(super) pending_commands: VecDeque<AppCommand>,
+    /// Addresses already sent to the embed proxy this session.
+    ///
+    /// A page that has no preview will not grow one while the client is open,
+    /// so asking twice is a request nobody reads.
+    requested_embeds: HashSet<String>,
 }
 
 impl DashboardState {
@@ -36,6 +41,46 @@ impl DashboardState {
 
     pub(in crate::tui) fn enqueue_pending_command(&mut self, command: AppCommand) {
         self.requests.pending_commands.push_back(command);
+    }
+
+    /// Ask the embed proxy about links in messages Discord did not preview.
+    ///
+    /// Only messages that came back with no embed at all: Discord's own
+    /// unfurl is authoritative, and a second opinion beside the real one
+    /// would have nothing to tell them apart.
+    pub(super) fn queue_missing_embed_resolves(
+        &mut self,
+        channel_id: Id<ChannelMarker>,
+        messages: &[concord::discord::MessageInfo],
+    ) {
+        let proxy = self.options.embed_options.proxy.trim().to_owned();
+        if proxy.is_empty() {
+            return;
+        }
+
+        let mut wanted = Vec::new();
+        for message in messages {
+            if !message.embeds.is_empty() {
+                continue;
+            }
+            let Some(content) = message.content.as_deref() else {
+                continue;
+            };
+            for url in concord::app::links_in(content) {
+                if self.requests.requested_embeds.insert(url.clone()) {
+                    wanted.push((message.message_id, url));
+                }
+            }
+        }
+
+        for (message_id, url) in wanted {
+            self.enqueue_pending_command(AppCommand::ResolveEmbed {
+                channel_id,
+                message_id,
+                url,
+                proxy: proxy.clone(),
+            });
+        }
     }
 
     pub(super) fn queue_application_command_load(&mut self, guild_id: Option<Id<GuildMarker>>) {

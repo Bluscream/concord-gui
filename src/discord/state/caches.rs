@@ -61,6 +61,32 @@ pub(in crate::discord) struct MessageCache {
 }
 
 impl MessageCache {
+    /// Attach an embed the client resolved itself.
+    ///
+    /// Only when the message has none. Discord's own unfurl is authoritative,
+    /// and a proxy's guess sitting beside it would be a second opinion the
+    /// reader has no way to tell apart from the real one.
+    pub(crate) fn attach_resolved_embed(
+        &mut self,
+        channel_id: Id<ChannelMarker>,
+        message_id: Id<MessageMarker>,
+        embed: crate::discord::EmbedInfo,
+    ) {
+        let Some(timeline) = self.timelines.get_mut(&channel_id) else {
+            return;
+        };
+        let Some(message) = timeline
+            .messages
+            .iter_mut()
+            .find(|message| message.id == message_id)
+        else {
+            return;
+        };
+        if message.embeds.is_empty() {
+            message.embeds.push(embed);
+        }
+    }
+
     pub(super) fn new(max_messages_per_channel: usize) -> Self {
         Self {
             timelines: BTreeMap::new(),

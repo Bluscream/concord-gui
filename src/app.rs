@@ -1,5 +1,6 @@
 mod command_dispatch;
 mod command_loop;
+mod embed_proxy;
 mod gateway_commands;
 mod history_commands;
 mod inbox_commands;
@@ -25,6 +26,8 @@ use crate::{
     },
     logging, version_check,
 };
+
+pub use self::embed_proxy::links_in;
 
 use self::command_loop::start_command_loop;
 

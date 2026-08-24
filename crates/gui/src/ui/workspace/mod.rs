@@ -160,6 +160,8 @@ pub struct Workspace {
     /// URLs already requested, so a reprojection does not re-ask on every
     /// snapshot revision.
     requested_previews: std::collections::HashSet<String>,
+    /// Links already sent to the embed proxy, so one is asked about once.
+    requested_embeds: std::collections::HashSet<String>,
     /// What the open switcher will do with its selection.
     switcher_purpose: SwitcherPurpose,
     /// Index of the active tab within `tabs`.
@@ -346,6 +348,7 @@ impl Workspace {
             inbox_history_request: 0,
             attachment_previews: std::collections::HashMap::new(),
             requested_previews: std::collections::HashSet::new(),
+            requested_embeds: std::collections::HashSet::new(),
             switcher_purpose: SwitcherPurpose::Navigate,
             tabs: Vec::new(),
             active_tab: 0,

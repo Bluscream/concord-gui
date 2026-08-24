@@ -739,6 +739,9 @@ fn options_save_and_load_round_trip() {
             dsn: "mariadb://192.168.2.10:3333/discord".to_owned(),
             enabled: true,
         },
+        embeds: super::EmbedOptions {
+            proxy: "https://proxy.test/?url=".to_owned(),
+        },
     };
 
     save_options_to_path(&path, &options).expect("config should save");

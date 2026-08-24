@@ -71,6 +71,9 @@ pub(super) struct SettingsState {
     pub(super) presence_options: PresenceOptions,
     pub(super) storage_options: concord::config::StorageOptions,
     pub(super) warning_options: concord::config::WarningOptions,
+    /// Kept only so a save from here does not wipe it. The terminal client
+    /// has no setting for it yet; the GPUI one does.
+    pub(super) embed_options: concord::config::EmbedOptions,
     /// Tab state written by the GUI. Held so a TUI save does not discard it.
     pub(super) ui_state_open_tabs:
         Vec<concord::discord::Id<concord::discord::marker::ChannelMarker>>,
@@ -380,6 +383,10 @@ impl DashboardState {
             presence: self.options.presence_options,
             storage: self.options.storage_options.clone(),
             warnings: self.options.warning_options,
+            // The terminal client has no embed proxy setting of its own yet,
+            // so it writes back what it read rather than clearing it - a save
+            // from here must not wipe a setting made in the other client.
+            embeds: self.options.embed_options.clone(),
         })
     }
 

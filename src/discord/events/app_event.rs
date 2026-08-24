@@ -733,6 +733,19 @@ pub enum AppEvent {
         url: String,
         bytes: Vec<u8>,
     },
+    /// An embed proxy answered, and the link turned out to be describable.
+    EmbedResolved {
+        channel_id: Id<ChannelMarker>,
+        message_id: Id<MessageMarker>,
+        embed: Box<crate::discord::EmbedInfo>,
+    },
+    /// The proxy could not say what the link is. Reported rather than
+    /// swallowed: a preview that never appears is indistinguishable from one
+    /// still loading, and a misconfigured proxy would look like a slow one.
+    EmbedResolveFailed {
+        url: String,
+        message: String,
+    },
     AttachmentPreviewLoadFailed {
         url: String,
         message: String,
@@ -998,6 +1011,8 @@ define_app_event_kinds! {
     AttachmentDownloadFailed: AppEvent::AttachmentDownloadFailed { .. },
     UpdateAvailable: AppEvent::UpdateAvailable { .. },
     AttachmentPreviewLoaded: AppEvent::AttachmentPreviewLoaded { .. },
+    EmbedResolved: AppEvent::EmbedResolved { .. },
+    EmbedResolveFailed: AppEvent::EmbedResolveFailed { .. },
     AttachmentPreviewLoadFailed: AppEvent::AttachmentPreviewLoadFailed { .. },
     UserProfileLoaded: AppEvent::UserProfileLoaded { .. },
     UserProfileLoadFailed: AppEvent::UserProfileLoadFailed { .. },

@@ -335,6 +335,8 @@ impl Workspace {
 
         // Image attachments in view. Gated on the display options, so turning
         // previews off stops the fetch rather than only hiding the result.
+        self.resolve_missing_embeds();
+
         if self.options.display.show_images && !self.options.display.disable_image_preview {
             let attachments = self
                 .messages
@@ -612,5 +614,46 @@ impl Workspace {
         self.ui_state.open_tabs = self.tabs.iter().map(|tab| tab.channel_id).collect();
         self.ui_state.active_tab = self.active_tab;
         let _ = config::save_ui_state_options(&self.ui_state);
+    }
+}
+
+impl Workspace {
+    /// Ask the embed proxy about links Discord did not preview.
+    ///
+    /// Only links in messages that came back with no embed at all: Discord's
+    /// own unfurl is authoritative, and asking about a link it already
+    /// described would put a second opinion beside the real one with nothing
+    /// to tell them apart.
+    ///
+    /// Each address is asked about once per session. A page that has no
+    /// preview will not grow one while the client is open, and asking again
+    /// on every reprojection would be a request per link per keystroke.
+    fn resolve_missing_embeds(&mut self) {
+        let proxy = self.options.embeds.proxy.trim().to_owned();
+        if proxy.is_empty() {
+            return;
+        }
+        let Some(channel_id) = self.nav.channel else {
+            return;
+        };
+
+        let pending: Vec<_> = self
+            .messages
+            .iter()
+            .filter(|row| row.embeds.is_empty())
+            .flat_map(|row| row.links.iter().map(move |url| (row.id, url.clone())))
+            .filter(|(_, url)| self.requested_embeds.insert(url.clone()))
+            .collect();
+
+        for (message_id, url) in pending {
+            if let Some(handle) = &self.handle {
+                handle.send(AppCommand::ResolveEmbed {
+                    channel_id,
+                    message_id,
+                    url,
+                    proxy: proxy.clone(),
+                });
+            }
+        }
     }
 }

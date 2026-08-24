@@ -467,6 +467,7 @@ impl DashboardState {
             } => {
                 self.record_latest_message_history_loaded(*channel_id);
                 self.record_dm_established_from_messages(*channel_id, messages);
+                self.queue_missing_embed_resolves(*channel_id, messages);
             }
             AppEvent::MessageHistoryLoaded { .. } | AppEvent::MessageHistoryAfterLoaded { .. } => {}
             AppEvent::InboxMentionsLoaded {
@@ -551,6 +552,10 @@ impl DashboardState {
                     self.remove_pending_message(message.channel_id, nonce);
                 }
                 self.record_dm_established_from_messages(
+                    message.channel_id,
+                    std::slice::from_ref(message),
+                );
+                self.queue_missing_embed_resolves(
                     message.channel_id,
                     std::slice::from_ref(message),
                 );

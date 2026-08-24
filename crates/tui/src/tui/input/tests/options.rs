@@ -48,6 +48,7 @@ fn options_popup_toggles_and_cycles_display_settings() {
         assert_eq!(
             state.take_options_save_request(),
             Some(AppOptions {
+                embeds: Default::default(),
                 display: state.display_options(),
                 composer: state.composer_options(),
                 credentials: Default::default(),
@@ -112,6 +113,7 @@ fn options_popup_h_l_adjust_microphone_sensitivity_by_one_or_ten_db() {
     assert_eq!(
         state.take_options_save_request(),
         Some(AppOptions {
+            embeds: Default::default(),
             display: state.display_options(),
             composer: state.composer_options(),
             credentials: Default::default(),
@@ -285,6 +287,7 @@ fn options_popup_sequences_own_continuations_then_restore_fixed_shortcuts() {
     assert_eq!(
         state.take_options_save_request(),
         Some(AppOptions {
+            embeds: Default::default(),
             display: state.display_options(),
             composer: state.composer_options(),
             credentials: Default::default(),

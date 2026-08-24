@@ -98,6 +98,9 @@ action-jump-to-replied = Jump to the replied message
 # Settings
 settings-appearance-theme = Appearance & Theme
 settings-dark-mode = Dark Mode
+settings-embed-proxy = Embed Proxy
+settings-embed-proxy-help = Used for links Discord did not preview itself. Clear it to turn this off - a proxy is told which links you are reading.
+settings-embed-proxy-off = Off - links Discord did not preview stay bare
 settings-language-follow-system = Follow system
 
 # Overlays

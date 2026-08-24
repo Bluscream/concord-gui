@@ -784,6 +784,26 @@ fn handle_command(
             publish_event!(AppEvent::StreamBroadcastEnded { scope, channel_id });
         }
 
+        AppCommand::ResolveEmbed {
+            channel_id,
+            message_id,
+            url,
+            ..
+        } => {
+            // The fixture unfurls the shapes it recognises rather than
+            // reaching a proxy, so the path from "a link with no embed" to
+            // "an embed under the message" can be walked offline. Links it
+            // does not recognise stay bare, which is also what a real proxy
+            // does with most of them.
+            if let Some(embed) = fixtures::unfurl(&url) {
+                publish_event!(AppEvent::EmbedResolved {
+                    channel_id,
+                    message_id,
+                    embed: Box::new(embed),
+                });
+            }
+        }
+
         // ---- the stage -----------------------------------------------------
         //
         // A stage is a voice room with one rule over it: speakers are unmuted

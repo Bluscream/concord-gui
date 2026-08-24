@@ -1055,6 +1055,20 @@ pub enum AppCommand {
     LoadAttachmentPreview {
         url: String,
     },
+    /// Ask an embed proxy what a link is, for a link Discord did not unfurl.
+    ///
+    /// Carries the message it belongs to so the answer can be attached to the
+    /// right one: several messages can quote the same address, and a preview
+    /// that arrived without saying which would land on all of them.
+    ResolveEmbed {
+        channel_id: Id<ChannelMarker>,
+        message_id: Id<MessageMarker>,
+        url: String,
+        /// The service to ask, carried here rather than read from config by
+        /// the core: which proxy to use is a front-end setting, and the core
+        /// has no business knowing the shape of one.
+        proxy: String,
+    },
     LoadProfileAvatarPreview {
         key: String,
         upload: ProfileAvatarUpload,
