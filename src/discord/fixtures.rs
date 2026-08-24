@@ -1723,6 +1723,11 @@ pub fn unfurl_last_message(state: &mut DiscordState, channel_id: Id<marker::Chan
     }
 }
 
+/// The server the fixture's administration panels belong to.
+pub fn demo_guild_id() -> Id<marker::GuildMarker> {
+    guild_id(10)
+}
+
 /// The bot in the fixture, which answers slash commands.
 pub fn demo_bot_id() -> Id<marker::UserMarker> {
     user_id(1005)

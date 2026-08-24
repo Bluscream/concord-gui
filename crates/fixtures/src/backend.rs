@@ -32,6 +32,8 @@ pub enum Emission {
 /// A fake Discord, holding its own world.
 pub struct FakeBackend {
     state: DiscordState,
+    /// Lists a server administrator edits, which do not live in the state.
+    admin: concord::discord::fixtures::server::ServerAdmin,
     history_pages: HashMap<concord::discord::Id<concord::discord::marker::ChannelMarker>, usize>,
     pending: Vec<Scheduled>,
 }
@@ -47,6 +49,7 @@ impl FakeBackend {
     pub fn new() -> Self {
         Self {
             state: crate::world::demo_state(),
+            admin: concord::discord::fixtures::server::ServerAdmin::new(),
             history_pages: HashMap::new(),
             pending: Vec::new(),
         }
@@ -78,6 +81,7 @@ impl FakeBackend {
             &mut out,
             &mut self.history_pages,
             &mut self.pending,
+            &mut self.admin,
         );
         if concord::logging::trace_enabled() {
             concord::logging::trace("fake", format!("answered with {} emission(s)", out.len()));
@@ -171,6 +175,7 @@ fn handle_command(
         usize,
     >,
     pending: &mut Vec<Scheduled>,
+    admin: &mut concord::discord::fixtures::server::ServerAdmin,
 ) {
     use concord::discord::{AppEvent, ReactionEmoji, fixtures};
 
@@ -368,28 +373,7 @@ fn handle_command(
         AppCommand::LoadGuildInvites { guild_id } => {
             publish_event!(AppEvent::GuildInvitesLoaded {
                 guild_id,
-                invites: vec![
-                    concord::discord::GuildInviteInfo {
-                        code: "aBc-123".to_string(),
-                        channel_id: Some(concord::discord::Id::new(111)),
-                        channel_name: Some("general".to_string()),
-                        inviter: Some("ferris".to_string()),
-                        uses: 3,
-                        max_uses: None,
-                        max_age_seconds: None,
-                        temporary: false,
-                    },
-                    concord::discord::GuildInviteInfo {
-                        code: "xYz-789".to_string(),
-                        channel_id: Some(concord::discord::Id::new(112)),
-                        channel_name: Some("welcome".to_string()),
-                        inviter: Some("turing".to_string()),
-                        uses: 9,
-                        max_uses: Some(10),
-                        max_age_seconds: Some(3600),
-                        temporary: true,
-                    },
-                ],
+                invites: admin.invites.clone(),
             });
         }
         AppCommand::CreateChannelInvite { channel_id, .. } => {
@@ -447,27 +431,7 @@ fn handle_command(
         AppCommand::LoadSoundboardSounds { guild_id } => {
             publish_event!(AppEvent::SoundboardSoundsLoaded {
                 guild_id,
-                sounds: vec![
-                    concord::discord::SoundboardSound {
-                        sound_id: 1,
-                        name: "airhorn".to_string(),
-                        volume: 1.0,
-                        emoji_id: None,
-                        emoji_name: Some("\u{1F4E3}".to_string()),
-                        guild_id,
-                        available: true,
-                    },
-                    concord::discord::SoundboardSound {
-                        sound_id: 2,
-                        name: "quack".to_string(),
-                        volume: 0.5,
-                        emoji_id: None,
-                        emoji_name: None,
-                        guild_id,
-                        // Shown and refused, so the reason is visible.
-                        available: false,
-                    },
-                ],
+                sounds: admin.sounds.clone(),
             });
         }
         AppCommand::PlaySoundboardSound {
@@ -485,25 +449,15 @@ fn handle_command(
             });
         }
 
-        AppCommand::RenameSoundboardSound { .. } | AppCommand::DeleteSoundboardSound { .. } => {}
-
         // The fixture's channel tree is canned, so a create or delete would be
         // undone by the next reproject and read as the action having failed.
         AppCommand::LoadAutoModRules { guild_id } => {
             publish_event!(AppEvent::AutoModRulesLoaded {
                 guild_id,
-                rules: vec![concord::discord::AutoModRule {
-                    id: 1,
-                    name: "No invite links".to_string(),
-                    enabled: true,
-                    trigger: concord::discord::AutoModTrigger::Keyword,
-                    actions: vec![concord::discord::AutoModAction::BlockMessage],
-                }],
+                rules: admin.automod.clone(),
             });
         }
-        AppCommand::SetAutoModRuleEnabled { .. }
-        | AppCommand::DeleteAutoModRule { .. }
-        | AppCommand::ModifyGuild { .. }
+        AppCommand::ModifyGuild { .. }
         | AppCommand::SetGuildIcon { .. }
         | AppCommand::CreateRole { .. }
         | AppCommand::ModifyRole { .. }
@@ -516,9 +470,7 @@ fn handle_command(
         | AppCommand::SetChannelOverwrite { .. }
         | AppCommand::DeleteChannelOverwrite { .. }
         | AppCommand::SetVoiceChannelStatus { .. } => {}
-
-        AppCommand::RevokeInvite { .. }
-        | AppCommand::CreateEmoji { .. }
+        AppCommand::CreateEmoji { .. }
         | AppCommand::RenameEmoji { .. }
         | AppCommand::DeleteEmoji { .. } => {}
 
@@ -1063,6 +1015,267 @@ fn handle_command(
             publish_state!();
         }
 
+        // ---- server administration: edits ----------------------------------
+        //
+        // Written into the session's own copy of each list, so a rename or a
+        // delete sticks until restart. Every one of these used to be dropped,
+        // and the panel then redrew from the canned list as though the edit
+        // had silently failed.
+        AppCommand::CreateSticker {
+            guild_id,
+            name,
+            tags,
+            ..
+        } => {
+            let id = admin.fresh_id();
+            admin.stickers.push(concord::discord::GuildSticker {
+                id,
+                name,
+                description: None,
+                tags,
+                format: concord::discord::StickerFormat::Png,
+                available: true,
+            });
+            publish_event!(AppEvent::GuildStickersLoaded {
+                guild_id,
+                stickers: admin.stickers.clone(),
+            });
+        }
+
+        AppCommand::RenameSticker {
+            guild_id,
+            sticker_id,
+            name,
+        } => {
+            if let Some(sticker) = admin.stickers.iter_mut().find(|s| s.id == sticker_id) {
+                sticker.name = name;
+            }
+            publish_event!(AppEvent::GuildStickersLoaded {
+                guild_id,
+                stickers: admin.stickers.clone(),
+            });
+        }
+
+        AppCommand::DeleteSticker {
+            guild_id,
+            sticker_id,
+            ..
+        } => {
+            admin.stickers.retain(|s| s.id != sticker_id);
+            publish_event!(AppEvent::GuildStickersLoaded {
+                guild_id,
+                stickers: admin.stickers.clone(),
+            });
+        }
+
+        AppCommand::SetAutoModRuleEnabled {
+            guild_id,
+            rule_id,
+            enabled,
+            ..
+        } => {
+            if let Some(rule) = admin.automod.iter_mut().find(|r| r.id == rule_id) {
+                rule.enabled = enabled;
+            }
+            publish_event!(AppEvent::AutoModRulesLoaded {
+                guild_id,
+                rules: admin.automod.clone(),
+            });
+        }
+
+        AppCommand::DeleteAutoModRule {
+            guild_id, rule_id, ..
+        } => {
+            admin.automod.retain(|r| r.id != rule_id);
+            publish_event!(AppEvent::AutoModRulesLoaded {
+                guild_id,
+                rules: admin.automod.clone(),
+            });
+        }
+
+        AppCommand::RevokeInvite { code } => {
+            admin.invites.retain(|invite| invite.code != code);
+            publish_event!(AppEvent::GuildInvitesLoaded {
+                guild_id: fixtures::demo_guild_id(),
+                invites: admin.invites.clone(),
+            });
+        }
+
+        AppCommand::RenameSoundboardSound {
+            guild_id,
+            sound_id,
+            name,
+        } => {
+            if let Some(sound) = admin.sounds.iter_mut().find(|s| s.sound_id == sound_id) {
+                sound.name = name;
+            }
+            publish_event!(AppEvent::SoundboardSoundsLoaded {
+                guild_id: Some(guild_id),
+                sounds: admin.sounds.clone(),
+            });
+        }
+
+        AppCommand::DeleteSoundboardSound {
+            guild_id, sound_id, ..
+        } => {
+            admin.sounds.retain(|s| s.sound_id != sound_id);
+            publish_event!(AppEvent::SoundboardSoundsLoaded {
+                guild_id: Some(guild_id),
+                sounds: admin.sounds.clone(),
+            });
+        }
+
+        AppCommand::CreateScheduledEvent { guild_id, event } => {
+            let id = admin.fresh_id();
+            admin
+                .events
+                .push(fixtures::server::event_from_new(id, &event));
+            publish_event!(AppEvent::ScheduledEventsLoaded {
+                guild_id,
+                events: admin.events.clone(),
+            });
+        }
+
+        AppCommand::ModifyScheduledEvent {
+            guild_id,
+            event_id,
+            event,
+        } => {
+            if let Some(existing) = admin.events.iter_mut().find(|e| e.id == event_id) {
+                // Interest survives an edit: it belongs to the people who
+                // clicked it, not to the description.
+                let interested = existing.interested;
+                *existing = fixtures::server::event_from_new(event_id, &event);
+                existing.interested = interested;
+            }
+            publish_event!(AppEvent::ScheduledEventsLoaded {
+                guild_id,
+                events: admin.events.clone(),
+            });
+        }
+
+        AppCommand::CancelScheduledEvent {
+            guild_id, event_id, ..
+        } => {
+            // A status change rather than a removal: Discord keeps a
+            // cancelled event on the list.
+            if let Some(event) = admin.events.iter_mut().find(|e| e.id == event_id) {
+                event.status = concord::discord::EventStatus::Cancelled;
+            }
+            publish_event!(AppEvent::ScheduledEventsLoaded {
+                guild_id,
+                events: admin.events.clone(),
+            });
+        }
+
+        AppCommand::DeleteScheduledEvent {
+            guild_id, event_id, ..
+        } => {
+            admin.events.retain(|e| e.id != event_id);
+            publish_event!(AppEvent::ScheduledEventsLoaded {
+                guild_id,
+                events: admin.events.clone(),
+            });
+        }
+
+        AppCommand::SetEventInterest {
+            guild_id,
+            event_id,
+            interested,
+        } => {
+            if let Some(event) = admin.events.iter_mut().find(|e| e.id == event_id) {
+                let count = event.interested.unwrap_or(0);
+                event.interested = Some(if interested {
+                    count.saturating_add(1)
+                } else {
+                    count.saturating_sub(1)
+                });
+            }
+            publish_event!(AppEvent::ScheduledEventsLoaded {
+                guild_id,
+                events: admin.events.clone(),
+            });
+        }
+
+        AppCommand::CreateGuildTemplate { guild_id, name } => {
+            admin.templates.push(concord::discord::GuildTemplate {
+                code: name.to_lowercase().replace(' ', "-"),
+                name,
+                description: None,
+                usage_count: 0,
+                is_dirty: false,
+            });
+            publish_event!(AppEvent::GuildTemplatesLoaded {
+                guild_id,
+                templates: admin.templates.clone(),
+            });
+        }
+
+        AppCommand::SyncGuildTemplate { guild_id, code, .. } => {
+            // Syncing is what clears the dirty flag, which is the whole
+            // visible effect of the action.
+            if let Some(template) = admin.templates.iter_mut().find(|t| t.code == code) {
+                template.is_dirty = false;
+            }
+            publish_event!(AppEvent::GuildTemplatesLoaded {
+                guild_id,
+                templates: admin.templates.clone(),
+            });
+        }
+
+        AppCommand::DeleteGuildTemplate { guild_id, code, .. } => {
+            admin.templates.retain(|t| t.code != code);
+            publish_event!(AppEvent::GuildTemplatesLoaded {
+                guild_id,
+                templates: admin.templates.clone(),
+            });
+        }
+
+        AppCommand::ModifyWelcomeScreen { guild_id, edit } => {
+            if let Some(enabled) = edit.enabled {
+                admin.welcome.enabled = enabled;
+            }
+            if let Some(description) = edit.description {
+                admin.welcome.description = description;
+            }
+            if let Some(channels) = edit.channels {
+                admin.welcome.channels = channels;
+            }
+            publish_event!(AppEvent::WelcomeScreenLoaded {
+                guild_id,
+                screen: admin.welcome.clone(),
+            });
+        }
+
+        AppCommand::ModifyGuildWidget { guild_id, widget } => {
+            admin.widget = widget;
+            publish_event!(AppEvent::GuildWidgetLoaded {
+                guild_id,
+                widget: admin.widget.clone(),
+            });
+        }
+
+        AppCommand::ModifyDiscoveryMetadata { guild_id, metadata } => {
+            admin.discovery = *metadata;
+            publish_event!(AppEvent::DiscoveryMetadataLoaded {
+                guild_id,
+                metadata: Box::new(admin.discovery.clone()),
+                categories: fixtures::server::discovery_categories(),
+            });
+        }
+
+        AppCommand::SubmitOnboarding {
+            guild_id, picked, ..
+        } => {
+            // The roles the answers grant are applied, which is the point of
+            // onboarding and the only part of it with a visible result.
+            let roles = fixtures::server::roles_for_onboarding(&picked);
+            if !roles.is_empty() {
+                fixtures::set_member_roles(state, guild_id, fixtures::demo_user_id(), &roles);
+            }
+            publish_state!();
+        }
+
         // ---- server administration -----------------------------------------
         //
         // Each of these backs a panel that shows a spinner until an answer
@@ -1071,14 +1284,14 @@ fn handle_command(
         AppCommand::LoadGuildStickers { guild_id } => {
             publish_event!(AppEvent::GuildStickersLoaded {
                 guild_id,
-                stickers: fixtures::server::stickers(),
+                stickers: admin.stickers.clone(),
             });
         }
 
         AppCommand::LoadDiscoveryMetadata { guild_id } => {
             publish_event!(AppEvent::DiscoveryMetadataLoaded {
                 guild_id,
-                metadata: Box::new(fixtures::server::discovery_metadata()),
+                metadata: Box::new(admin.discovery.clone()),
                 categories: fixtures::server::discovery_categories(),
             });
         }
@@ -1113,28 +1326,28 @@ fn handle_command(
         AppCommand::LoadWelcomeScreen { guild_id } => {
             publish_event!(AppEvent::WelcomeScreenLoaded {
                 guild_id,
-                screen: fixtures::server::welcome_screen(),
+                screen: admin.welcome.clone(),
             });
         }
 
         AppCommand::LoadGuildWidget { guild_id } => {
             publish_event!(AppEvent::GuildWidgetLoaded {
                 guild_id,
-                widget: fixtures::server::widget(),
+                widget: admin.widget.clone(),
             });
         }
 
         AppCommand::LoadScheduledEvents { guild_id } => {
             publish_event!(AppEvent::ScheduledEventsLoaded {
                 guild_id,
-                events: fixtures::server::scheduled_events(),
+                events: admin.events.clone(),
             });
         }
 
         AppCommand::LoadGuildTemplates { guild_id } => {
             publish_event!(AppEvent::GuildTemplatesLoaded {
                 guild_id,
-                templates: fixtures::server::templates(),
+                templates: admin.templates.clone(),
             });
         }
 
@@ -1228,23 +1441,8 @@ fn handle_command(
         | AppCommand::ReverifyPhone { .. }
         | AppCommand::RemovePhone { .. }
         | AppCommand::SetSmsMfa { .. }
-        | AppCommand::CreateSticker { .. }
-        | AppCommand::RenameSticker { .. }
-        | AppCommand::DeleteSticker { .. }
-        | AppCommand::ModifyDiscoveryMetadata { .. }
-        | AppCommand::SubmitOnboarding { .. }
         | AppCommand::BulkBanMembers { .. }
         | AppCommand::PruneGuild { .. }
-        | AppCommand::ModifyWelcomeScreen { .. }
-        | AppCommand::ModifyGuildWidget { .. }
-        | AppCommand::CreateScheduledEvent { .. }
-        | AppCommand::ModifyScheduledEvent { .. }
-        | AppCommand::CancelScheduledEvent { .. }
-        | AppCommand::DeleteScheduledEvent { .. }
-        | AppCommand::SetEventInterest { .. }
-        | AppCommand::CreateGuildTemplate { .. }
-        | AppCommand::SyncGuildTemplate { .. }
-        | AppCommand::DeleteGuildTemplate { .. }
         | AppCommand::StartStageInstance { .. }
         | AppCommand::ModifyStageTopic { .. }
         | AppCommand::EndStageInstance { .. }

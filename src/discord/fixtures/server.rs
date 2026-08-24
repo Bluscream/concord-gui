@@ -262,3 +262,176 @@ pub fn stage_instance(
 pub fn prune_count(days: u16) -> u64 {
     u64::from(days).saturating_mul(3) / 2
 }
+
+// ---------------------------------------------------------------------------
+// mutable state
+
+/// The lists a server administrator edits, as this fake session holds them.
+///
+/// Separate from [`crate::discord::DiscordState`] because none of it lives
+/// there: stickers, events, templates and the rest come back from REST calls
+/// and are held by whichever panel asked. Without somewhere to keep them, a
+/// rename or a delete had nowhere to be written and the panel redrew from the
+/// canned list as though nothing had happened.
+///
+/// Held for the life of the session, so an edit sticks until the client is
+/// restarted - which is what a real server would do.
+pub struct ServerAdmin {
+    pub stickers: Vec<GuildSticker>,
+    pub events: Vec<ScheduledEvent>,
+    pub templates: Vec<GuildTemplate>,
+    pub welcome: WelcomeScreen,
+    pub widget: GuildWidget,
+    pub discovery: DiscoveryMetadata,
+    pub automod: Vec<crate::discord::AutoModRule>,
+    pub invites: Vec<crate::discord::GuildInviteInfo>,
+    pub sounds: Vec<crate::discord::SoundboardSound>,
+    /// Where the next generated id comes from.
+    ///
+    /// A counter rather than a hash of the name: two stickers may share a
+    /// name, and an id collision would make the second edit act on the first.
+    next_id: u64,
+}
+
+impl Default for ServerAdmin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ServerAdmin {
+    pub fn new() -> Self {
+        Self {
+            stickers: stickers(),
+            events: scheduled_events(),
+            templates: templates(),
+            welcome: welcome_screen(),
+            widget: widget(),
+            discovery: discovery_metadata(),
+            automod: automod_rules(),
+            invites: invites(),
+            sounds: sounds(),
+            next_id: 50_000,
+        }
+    }
+
+    /// An id nothing else is using.
+    pub fn fresh_id(&mut self) -> u64 {
+        self.next_id += 1;
+        self.next_id
+    }
+}
+
+/// Automod rules, one of each shape the list renders.
+pub fn automod_rules() -> Vec<crate::discord::AutoModRule> {
+    use crate::discord::{AutoModAction, AutoModRule, AutoModTrigger};
+    vec![
+        AutoModRule {
+            id: 1,
+            name: "No invite links".to_string(),
+            enabled: true,
+            trigger: AutoModTrigger::Keyword,
+            actions: vec![AutoModAction::BlockMessage],
+        },
+        // Disabled, so the enable/disable toggle has both states to show.
+        AutoModRule {
+            id: 2,
+            name: "Mention spam".to_string(),
+            enabled: false,
+            trigger: AutoModTrigger::MentionSpam,
+            actions: vec![AutoModAction::BlockMessage],
+        },
+    ]
+}
+
+/// Invites, covering unlimited, limited and temporary.
+pub fn invites() -> Vec<crate::discord::GuildInviteInfo> {
+    use crate::discord::GuildInviteInfo;
+    vec![
+        GuildInviteInfo {
+            code: "aBc-123".to_string(),
+            channel_id: Some(channel_id(111)),
+            channel_name: Some("general".to_string()),
+            inviter: Some("ferris".to_string()),
+            uses: 3,
+            max_uses: None,
+            max_age_seconds: None,
+            temporary: false,
+        },
+        GuildInviteInfo {
+            code: "xyz-789".to_string(),
+            channel_id: Some(channel_id(112)),
+            channel_name: Some("gui-rewrite".to_string()),
+            inviter: Some("blu".to_string()),
+            uses: 9,
+            max_uses: Some(10),
+            max_age_seconds: Some(86_400),
+            temporary: true,
+        },
+    ]
+}
+
+/// Soundboard sounds, including one the server may not play.
+pub fn sounds() -> Vec<crate::discord::SoundboardSound> {
+    use crate::discord::SoundboardSound;
+    vec![
+        SoundboardSound {
+            sound_id: 1,
+            name: "airhorn".to_string(),
+            volume: 1.0,
+            emoji_id: None,
+            emoji_name: Some("\u{266A}".to_string()),
+            guild_id: Some(guild_id(10)),
+            available: true,
+        },
+        SoundboardSound {
+            sound_id: 2,
+            name: "quack".to_string(),
+            volume: 0.5,
+            emoji_id: None,
+            emoji_name: None,
+            guild_id: Some(guild_id(10)),
+            // Shown and refused, so the reason is visible.
+            available: false,
+        },
+    ]
+}
+
+/// Turn a compose-form event into the shape the list holds.
+///
+/// The two differ because one describes what to create and the other what
+/// exists: the created event has an id, a status and an interest count that
+/// the form has no opinion about.
+pub fn event_from_new(id: u64, new: &crate::discord::NewEvent) -> ScheduledEvent {
+    use crate::discord::NewEventLocation;
+    ScheduledEvent {
+        id,
+        name: new.name.clone(),
+        description: (!new.description.is_empty()).then(|| new.description.clone()),
+        starts_at: (!new.starts_at.is_empty()).then(|| new.starts_at.clone()),
+        ends_at: (!new.ends_at.is_empty()).then(|| new.ends_at.clone()),
+        status: EventStatus::Scheduled,
+        location: match &new.location {
+            NewEventLocation::Channel(id) => EventLocation::Channel(*id),
+            NewEventLocation::External(place) => EventLocation::External(place.clone()),
+        },
+        interested: Some(0),
+    }
+}
+
+/// The roles the picked onboarding answers grant.
+///
+/// Onboarding is the one place a client hands out roles on your behalf, so
+/// the fixture applies them rather than accepting the answers and doing
+/// nothing - which would leave the whole flow with no visible result.
+pub fn roles_for_onboarding(
+    picked: &[u64],
+) -> Vec<crate::discord::Id<crate::discord::marker::RoleMarker>> {
+    onboarding()
+        .questions
+        .iter()
+        .flat_map(|question| question.options.iter())
+        .filter(|option| picked.contains(&option.id))
+        .flat_map(|option| option.role_ids.iter().copied())
+        .collect()
+}
