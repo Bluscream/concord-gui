@@ -125,18 +125,18 @@ fn message_create_parser_keeps_forwarded_snapshot_fields() {
     assert_eq!(message.forwarded_snapshots[1].content.as_deref(), Some(""));
 }
 
-fn mention_info(user_id: u64, display_name: &str) -> MentionInfo {
+pub(super) fn mention_info(user_id: u64, display_name: &str) -> MentionInfo {
     MentionInfo::test(Id::new(user_id), display_name.to_owned())
 }
 
-fn mention_info_with_nick(user_id: u64, nick: &str) -> MentionInfo {
+pub(super) fn mention_info_with_nick(user_id: u64, nick: &str) -> MentionInfo {
     MentionInfo {
         guild_nick: Some(nick.to_owned()),
         ..MentionInfo::test(Id::new(user_id), nick.to_owned())
     }
 }
 
-fn thread_payload(id: u64, name: &str) -> serde_json::Value {
+pub(super) fn thread_payload(id: u64, name: &str) -> serde_json::Value {
     json!({
         "id": id.to_string(),
         "guild_id": "1",

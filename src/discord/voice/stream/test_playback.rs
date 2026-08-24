@@ -29,6 +29,8 @@ use std::time::{Instant, Duration};
 
 #[cfg(test)]
 mod test_playback {
+    use super::*;
+    use super::super::*;
     use serde_json::json;
 
     #[test]

@@ -29,6 +29,8 @@ use std::time::{Instant, Duration};
 
 #[cfg(test)]
 mod test_recovery {
+    use super::*;
+    use super::super::*;
     use tokio::time::timeout;
 
     #[test]
