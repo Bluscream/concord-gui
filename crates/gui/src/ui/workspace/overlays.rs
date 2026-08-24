@@ -16,7 +16,7 @@ use crate::ui::workspace::{
 };
 
 impl Workspace {
-    pub(super) fn overlays_impl(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+    pub(super) fn overlays(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
         let entity = cx.entity();
 
         if self.self_profile_popout {

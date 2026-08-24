@@ -6,7 +6,7 @@ use crate::ui::composer::Composer;
 use crate::ui::workspace::{ContextSubject, Prompt, Workspace};
 
 impl Workspace {
-    pub(super) fn guild_rail_impl(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn guild_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut rail = column()
             .w(px(layout::GUILD_RAIL))
             .h_full()

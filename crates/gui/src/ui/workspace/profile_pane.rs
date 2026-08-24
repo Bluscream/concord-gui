@@ -8,7 +8,7 @@ use crate::ui::profile::{ProfileView, profile_view};
 use crate::ui::workspace::Workspace;
 
 impl Workspace {
-    pub(super) fn profile_pane_impl(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn profile_pane(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let Some((user_id, view)) = &self.profile else {
             return gpui::div();
         };
@@ -50,7 +50,7 @@ impl Workspace {
         }
     }
 
-    pub(super) fn search_pane_impl(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn search_pane(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(search) = &self.search else {
             return gpui::div();
         };

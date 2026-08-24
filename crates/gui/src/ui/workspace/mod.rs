@@ -5779,21 +5779,9 @@ impl Workspace {
         });
     }
 
-    fn profile_pane(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        self.profile_pane_impl(cx)
-    }
 
-    fn search_pane(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        self.search_pane_impl(cx)
-    }
 
-    fn member_pane(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        self.member_pane_impl(cx)
-    }
 
-    fn channel_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        self.channel_sidebar_impl(cx)
-    }
 
     /// Open a forum channel, which lists posts rather than messages.
     fn open_forum(&mut self, channel_id: Id<marker::ChannelMarker>, name: String) {
@@ -7326,9 +7314,6 @@ impl Workspace {
         }
     }
 
-    fn guild_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        self.guild_rail_impl(cx)
-    }
 
     fn self_status_item(
         label: &'static str,
@@ -7369,14 +7354,6 @@ impl Workspace {
             )
     }
 
-    /// The single open modal, if any.
-    ///
-    /// Ordered by urgency: a confirmation blocks whatever opened it, so it
-    /// wins over everything else. Only one is returned, because a second modal
-    /// drawn over the first would leave the one underneath clickable.
-    fn overlays(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
-        self.overlays_impl(cx)
-    }
 
     fn content(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         if let Some(view) = &self.forum {

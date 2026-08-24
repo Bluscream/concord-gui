@@ -5,7 +5,7 @@ use crate::ui::chrome::{avatar_with_url, column, presence_dot, section_label, si
 use crate::ui::workspace::{ContextSubject, Pane, Workspace};
 
 impl Workspace {
-    pub(super) fn member_pane_impl(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn member_pane(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut pane = column()
             .w(px(layout::MEMBERS))
             .h_full()

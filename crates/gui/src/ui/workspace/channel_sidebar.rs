@@ -13,7 +13,7 @@ use crate::ui::stream::share_button;
 use crate::ui::workspace::{ChannelKind, ContextSubject, Pane, Presence, Selection, Workspace};
 
 impl Workspace {
-    pub(super) fn channel_sidebar_impl(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn channel_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let guild_name = self
             .model
             .guilds
@@ -340,15 +340,15 @@ impl Workspace {
         let mut sidebar = panel_sunken(layout::SIDEBAR).child(header_row).child(list);
 
         if let Some((_, name)) = &self.voice_channel {
-            sidebar = sidebar.child(self.voice_connected_card_impl(name, cx));
+            sidebar = sidebar.child(self.voice_connected_card(name, cx));
         }
 
-        sidebar = sidebar.child(self.user_profile_bar_impl(cx));
+        sidebar = sidebar.child(self.user_profile_bar(cx));
 
         sidebar
     }
 
-    pub(super) fn voice_connected_card_impl(
+    pub(super) fn voice_connected_card(
         &self,
         name: &str,
         cx: &mut Context<Self>,
@@ -508,7 +508,7 @@ impl Workspace {
             )
     }
 
-    pub(super) fn user_profile_bar_impl(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(super) fn user_profile_bar(&self, cx: &mut Context<Self>) -> gpui::Div {
         let user_name = self
             .last_state
             .as_ref()
