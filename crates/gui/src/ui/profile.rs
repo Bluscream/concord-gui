@@ -33,7 +33,11 @@ where
 {
     let mut panel = column()
         .w_full()
-        .h_full()
+        // Takes the space left over rather than all of it: the friend and
+        // moderation controls sit below this in the same column, and h_full
+        // would leave them nothing.
+        .flex_1()
+        .min_h(px(0.))
         .bg(rgb(active().surface_sunken))
         .border_l_1()
         .border_color(rgb(active().border))

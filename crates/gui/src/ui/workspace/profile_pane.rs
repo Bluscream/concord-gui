@@ -24,7 +24,14 @@ impl Workspace {
             cx.notify();
         });
 
-        let container = gpui::div().w(px(layout::MEMBERS)).flex_shrink_0().h_full();
+        // A column: `gpui::div()` is a flex row, which laid the profile, the
+        // friend controls and the moderation controls out side by side and
+        // squeezed the profile into a third of the pane.
+        let container = column()
+            .w(px(layout::MEMBERS))
+            .flex_shrink_0()
+            .h_full()
+            .overflow_hidden();
 
         match view {
             Some(view) => container

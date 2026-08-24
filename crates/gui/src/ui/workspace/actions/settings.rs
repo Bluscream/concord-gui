@@ -19,7 +19,11 @@ use crate::ui::workspace::RiskAction;
 impl Workspace {
     pub fn open_settings_window(&mut self, cx: &mut Context<Self>) {
         let options = self.options.clone();
-        let bounds = gpui::Bounds::centered(None, gpui::size(px(600.), px(650.)), cx);
+        // Wide enough for the two theme cards to sit side by side, which is
+        // what the section is: at 600 the second one was cut off by the right
+        // edge, so half the choice was off screen until the window was
+        // dragged wider.
+        let bounds = gpui::Bounds::centered(None, gpui::size(px(900.), px(820.)), cx);
 
         // The window edits its own copy, so it needs a way back: without this
         // the live client keeps stale settings until restart, and a later
