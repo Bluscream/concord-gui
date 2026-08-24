@@ -1063,6 +1063,88 @@ fn handle_command(
             publish_state!();
         }
 
+        // ---- server administration -----------------------------------------
+        //
+        // Each of these backs a panel that shows a spinner until an answer
+        // arrives, so leaving them unanswered made the whole of server
+        // administration look broken rather than offline.
+        AppCommand::LoadGuildStickers { guild_id } => {
+            publish_event!(AppEvent::GuildStickersLoaded {
+                guild_id,
+                stickers: fixtures::server::stickers(),
+            });
+        }
+
+        AppCommand::LoadDiscoveryMetadata { guild_id } => {
+            publish_event!(AppEvent::DiscoveryMetadataLoaded {
+                guild_id,
+                metadata: Box::new(fixtures::server::discovery_metadata()),
+                categories: fixtures::server::discovery_categories(),
+            });
+        }
+
+        AppCommand::LoadDiscoverableGuilds { query } => {
+            // Filtered by the query, so typing in the box visibly does
+            // something rather than returning the same two rows every time.
+            let needle = query.trim().to_ascii_lowercase();
+            let guilds = fixtures::server::discoverable_guilds()
+                .into_iter()
+                .filter(|guild| {
+                    needle.is_empty() || guild.name.to_ascii_lowercase().contains(&needle)
+                })
+                .collect();
+            publish_event!(AppEvent::DiscoverableGuildsLoaded { guilds });
+        }
+
+        AppCommand::LoadOnboarding { guild_id } => {
+            publish_event!(AppEvent::OnboardingLoaded {
+                guild_id,
+                onboarding: Box::new(fixtures::server::onboarding()),
+            });
+        }
+
+        AppCommand::LoadPruneCount { guild_id, days, .. } => {
+            publish_event!(AppEvent::PruneCountLoaded {
+                guild_id,
+                count: fixtures::server::prune_count(days),
+            });
+        }
+
+        AppCommand::LoadWelcomeScreen { guild_id } => {
+            publish_event!(AppEvent::WelcomeScreenLoaded {
+                guild_id,
+                screen: fixtures::server::welcome_screen(),
+            });
+        }
+
+        AppCommand::LoadGuildWidget { guild_id } => {
+            publish_event!(AppEvent::GuildWidgetLoaded {
+                guild_id,
+                widget: fixtures::server::widget(),
+            });
+        }
+
+        AppCommand::LoadScheduledEvents { guild_id } => {
+            publish_event!(AppEvent::ScheduledEventsLoaded {
+                guild_id,
+                events: fixtures::server::scheduled_events(),
+            });
+        }
+
+        AppCommand::LoadGuildTemplates { guild_id } => {
+            publish_event!(AppEvent::GuildTemplatesLoaded {
+                guild_id,
+                templates: fixtures::server::templates(),
+            });
+        }
+
+        AppCommand::LoadStageInstance { channel_id } => {
+            publish_event!(AppEvent::StageInstanceLoaded {
+                channel_id,
+                instance: fixtures::server::stage_instance(channel_id),
+            });
+        }
+
         // ---- deliberately inert ----------------------------------------------
         //
         // Navigation, subscriptions and typing need no reply: the fixture is
@@ -1146,33 +1228,23 @@ fn handle_command(
         | AppCommand::ReverifyPhone { .. }
         | AppCommand::RemovePhone { .. }
         | AppCommand::SetSmsMfa { .. }
-        | AppCommand::LoadGuildStickers { .. }
         | AppCommand::CreateSticker { .. }
         | AppCommand::RenameSticker { .. }
         | AppCommand::DeleteSticker { .. }
-        | AppCommand::LoadDiscoveryMetadata { .. }
         | AppCommand::ModifyDiscoveryMetadata { .. }
-        | AppCommand::LoadDiscoverableGuilds { .. }
-        | AppCommand::LoadOnboarding { .. }
         | AppCommand::SubmitOnboarding { .. }
         | AppCommand::BulkBanMembers { .. }
-        | AppCommand::LoadPruneCount { .. }
         | AppCommand::PruneGuild { .. }
-        | AppCommand::LoadWelcomeScreen { .. }
         | AppCommand::ModifyWelcomeScreen { .. }
-        | AppCommand::LoadGuildWidget { .. }
         | AppCommand::ModifyGuildWidget { .. }
-        | AppCommand::LoadScheduledEvents { .. }
         | AppCommand::CreateScheduledEvent { .. }
         | AppCommand::ModifyScheduledEvent { .. }
         | AppCommand::CancelScheduledEvent { .. }
         | AppCommand::DeleteScheduledEvent { .. }
         | AppCommand::SetEventInterest { .. }
-        | AppCommand::LoadGuildTemplates { .. }
         | AppCommand::CreateGuildTemplate { .. }
         | AppCommand::SyncGuildTemplate { .. }
         | AppCommand::DeleteGuildTemplate { .. }
-        | AppCommand::LoadStageInstance { .. }
         | AppCommand::StartStageInstance { .. }
         | AppCommand::ModifyStageTopic { .. }
         | AppCommand::EndStageInstance { .. }

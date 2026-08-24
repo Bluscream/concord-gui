@@ -56,6 +56,8 @@ fn snowflake_at(seconds_ago: u64) -> u64 {
     (target.saturating_sub(DISCORD_EPOCH_MS)) << 22
 }
 
+pub mod server;
+
 fn guild_id(raw: u64) -> Id<marker::GuildMarker> {
     Id::new(raw)
 }
