@@ -57,7 +57,13 @@ fn snowflake_at(seconds_ago: u64) -> u64 {
 }
 
 pub mod guild;
+pub mod people;
 pub mod server;
+
+pub use people::{
+    autocomplete_choices, member_name, relationship, set_member_timeout,
+    set_thread_notification_level, update_self_profile, user_by_name,
+};
 
 fn guild_id(raw: u64) -> Id<marker::GuildMarker> {
     Id::new(raw)

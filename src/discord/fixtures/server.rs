@@ -287,6 +287,7 @@ pub struct ServerAdmin {
     pub invites: Vec<crate::discord::GuildInviteInfo>,
     pub sounds: Vec<crate::discord::SoundboardSound>,
     pub emojis: Vec<crate::discord::GuildEmojiInfo>,
+    pub bans: Vec<crate::discord::GuildBanInfo>,
     /// Where the next generated id comes from.
     ///
     /// A counter rather than a hash of the name: two stickers may share a
@@ -313,6 +314,7 @@ impl ServerAdmin {
             invites: invites(),
             sounds: sounds(),
             emojis: super::guild::emojis(),
+            bans: super::people::bans(),
             next_id: 50_000,
         }
     }

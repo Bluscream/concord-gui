@@ -446,22 +446,11 @@ fn handle_command(
         }
 
         AppCommand::LoadGuildBans { guild_id } => {
-            // A short list so the panel and the unban path can be exercised
-            // offline; the fixture has no real bans.
+            // From the session's own list, so an unban or a bulk ban is
+            // still there the next time the panel is opened.
             publish_event!(AppEvent::GuildBansLoaded {
                 guild_id,
-                bans: vec![
-                    concord::discord::GuildBanInfo {
-                        user_id: concord::discord::Id::new(9001),
-                        username: "spammer".to_string(),
-                        reason: Some("posting invite links".to_string()),
-                    },
-                    concord::discord::GuildBanInfo {
-                        user_id: concord::discord::Id::new(9002),
-                        username: "raider".to_string(),
-                        reason: None,
-                    },
-                ],
+                bans: admin.bans.clone(),
             });
         }
 
@@ -567,15 +556,6 @@ fn handle_command(
             } else {
                 publish_event!(AppEvent::AttachmentPreviewLoaded { url, bytes });
             }
-        }
-
-        AppCommand::RequestApplicationCommandAutocomplete { .. } => {
-            // Autocomplete is answered by the bot that owns the command, and
-            // the fixture has no bot listening.
-        }
-
-        AppCommand::LoadGuildMembersByIds { .. } => {
-            // Every fixture member is already fully hydrated.
         }
 
         AppCommand::EditMessage {
@@ -800,18 +780,6 @@ fn handle_command(
             publish_state!();
         }
 
-        // Nothing offline can show a timeout or an unban: the fixture has no
-        // timeout state, and the ban list it answers with is canned.
-        AppCommand::TimeoutMember { .. } | AppCommand::UnbanMember { .. } => {}
-
-        // Friendship is between two accounts, and the fixture only has one.
-        // Pretending a request was accepted would show a friend who is not
-        // there and cannot be removed.
-        AppCommand::SendFriendRequest { .. }
-        | AppCommand::AddFriend { .. }
-        | AppCommand::BlockUser { .. }
-        | AppCommand::RemoveRelationship { .. } => {}
-
         // ---- mutes and threads ---------------------------------------------
         AppCommand::SetGuildMuted {
             guild_id, muted, ..
@@ -955,19 +923,9 @@ fn handle_command(
             publish_state!();
         }
 
-        AppCommand::SetThreadNotificationLevel { .. } => {
-            // The fixture carries no per-thread notification level, so there
-            // is nothing to show a change against.
-        }
-
         AppCommand::UpdateCurrentUserActivity { status, .. } => {
             fixtures::set_current_presence(state, status);
             publish_state!();
-        }
-
-        AppCommand::UpdateUserProfile { .. } => {
-            // Editing your own profile offline would need the fixture to model
-            // a mutable self-profile, which it does not.
         }
 
         AppCommand::RunApplicationCommand { invocation } => {
@@ -1002,6 +960,162 @@ fn handle_command(
         } => {
             fixtures::guild::delete_overwrite(state, channel_id, target);
             publish_state!();
+        }
+
+        // ---- moderation ----------------------------------------------------
+        AppCommand::TimeoutMember {
+            guild_id,
+            user_id,
+            minutes,
+            ..
+        } => {
+            fixtures::set_member_timeout(state, guild_id, user_id, minutes);
+            publish_state!();
+        }
+
+        AppCommand::UnbanMember {
+            guild_id, user_id, ..
+        } => {
+            admin.bans.retain(|ban| ban.user_id != user_id);
+            publish_event!(AppEvent::GuildBansLoaded {
+                guild_id,
+                bans: admin.bans.clone(),
+            });
+        }
+
+        AppCommand::BulkBanMembers {
+            guild_id, user_ids, ..
+        } => {
+            for user_id in user_ids {
+                // Banned people leave the member list as well as joining the
+                // ban list; only doing one of the two leaves them in both
+                // places at once.
+                let name = fixtures::member_name(state, guild_id, user_id);
+                fixtures::remove_member(state, guild_id, user_id);
+                admin.bans.push(concord::discord::GuildBanInfo {
+                    user_id,
+                    username: name,
+                    reason: Some("Bulk ban from the member list".to_string()),
+                });
+            }
+            publish_state!();
+            publish_event!(AppEvent::GuildBansLoaded {
+                guild_id,
+                bans: admin.bans.clone(),
+            });
+        }
+
+        AppCommand::PruneGuild { guild_id, days, .. } => {
+            publish_event!(AppEvent::GuildPruned {
+                guild_id,
+                count: fixtures::server::prune_count(days),
+            });
+        }
+
+        // ---- relationships -------------------------------------------------
+        //
+        // The fixture has one account, so a request cannot be accepted by
+        // anybody - but the outgoing state is real, and it is what the profile
+        // pane and the friends list read.
+        AppCommand::SendFriendRequest { target } => {
+            if let Some(user_id) = fixtures::user_by_name(state, &target) {
+                publish_event!(AppEvent::RelationshipUpsert {
+                    relationship: fixtures::relationship(
+                        state,
+                        user_id,
+                        concord::discord::FriendStatus::OutgoingRequest,
+                    ),
+                });
+            }
+        }
+
+        AppCommand::AddFriend { user_id, .. } => {
+            publish_event!(AppEvent::RelationshipUpsert {
+                relationship: fixtures::relationship(
+                    state,
+                    user_id,
+                    concord::discord::FriendStatus::Friend,
+                ),
+            });
+        }
+
+        AppCommand::BlockUser { user_id, .. } => {
+            publish_event!(AppEvent::RelationshipUpsert {
+                relationship: fixtures::relationship(
+                    state,
+                    user_id,
+                    concord::discord::FriendStatus::Blocked,
+                ),
+            });
+        }
+
+        AppCommand::RemoveRelationship { user_id, .. } => {
+            publish_event!(AppEvent::RelationshipRemove { user_id });
+        }
+
+        // ---- odds and ends -------------------------------------------------
+        AppCommand::TriggerTyping { channel_id } => {
+            // Discord shows your own typing to everyone else, not to you, so
+            // there is nothing to draw here - but the fixture records it, and
+            // that is what the reply timer keys off.
+            fixtures::set_typing(state, channel_id, fixtures::demo_user_id());
+            publish_state!();
+        }
+
+        AppCommand::SetThreadNotificationLevel {
+            channel_id, flags, ..
+        } => {
+            fixtures::set_thread_notification_level(state, channel_id, flags);
+            publish_state!();
+        }
+
+        AppCommand::UpdateUserProfile { update } => {
+            fixtures::update_self_profile(state, &update);
+            publish_state!();
+        }
+
+        AppCommand::LoadGuildMembersByIds { .. } => {
+            // Every fixture member is already fully hydrated, so this is
+            // complete the moment it arrives; republished so a caller waiting
+            // on a state change is not left waiting.
+            publish_state!();
+        }
+
+        AppCommand::RequestApplicationCommandAutocomplete { invocation } => {
+            publish_event!(AppEvent::ApplicationCommandAutocompleteResponse {
+                nonce: None,
+                choices: fixtures::autocomplete_choices(&invocation),
+            });
+        }
+
+        AppCommand::OpenUrl { url } => {
+            // Not opened: a demo should not be able to launch a browser at an
+            // address that arrived in a message. Reported instead, so the
+            // click is visibly acknowledged.
+            publish_event!(AppEvent::GatewayError {
+                message: format!("Demo mode does not open links: {url}"),
+            });
+        }
+
+        AppCommand::PlayMedia { .. } => {
+            publish_event!(AppEvent::GatewayError {
+                message: "Demo mode has no external player".to_string(),
+            });
+        }
+
+        AppCommand::DownloadAttachment {
+            id,
+            filename,
+            source,
+            ..
+        } => {
+            // Reported as completed rather than started and abandoned: a
+            // download that never finishes leaves a row spinning for ever.
+            publish_event!(AppEvent::AttachmentDownloadCompleted {
+                id,
+                path: format!("/tmp/{filename}"),
+                source,
+            });
         }
 
         // ---- server structure ----------------------------------------------
@@ -1477,8 +1591,7 @@ fn handle_command(
         | AppCommand::SetSelectedMessageChannel { .. }
         | AppCommand::SubscribeGuildChannel { .. }
         | AppCommand::SubscribeDirectMessage { .. }
-        | AppCommand::UpdateMemberListSubscription { .. }
-        | AppCommand::TriggerTyping { .. } => {}
+        | AppCommand::UpdateMemberListSubscription { .. } => {}
 
         // These reach outside the process - a browser, a media player, the
         // file system, an audio device - so offline they would either do the
@@ -1499,10 +1612,6 @@ fn handle_command(
         | AppCommand::UpdateVoiceParticipantPlayback { .. } => {
             publish_state!();
         }
-
-        AppCommand::OpenUrl { .. }
-        | AppCommand::PlayMedia { .. }
-        | AppCommand::DownloadAttachment { .. } => {}
 
         // Account-wide things a fixture has no answer for: they describe a
         // real Discord account, and inventing one would put made-up sessions,
@@ -1552,8 +1661,6 @@ fn handle_command(
         | AppCommand::ReverifyPhone { .. }
         | AppCommand::RemovePhone { .. }
         | AppCommand::SetSmsMfa { .. }
-        | AppCommand::BulkBanMembers { .. }
-        | AppCommand::PruneGuild { .. }
         | AppCommand::StartStageInstance { .. }
         | AppCommand::ModifyStageTopic { .. }
         | AppCommand::EndStageInstance { .. }
