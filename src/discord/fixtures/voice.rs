@@ -80,6 +80,20 @@ pub fn participants(state: &DiscordState, scope: VoiceScope) -> Vec<Id<marker::U
     state.voice.fixture_participants(scope)
 }
 
+/// Every voice room that already has somebody in it.
+///
+/// The fixture seats people in a room before anybody joins it, so without
+/// this the room only starts moving once the person watching joins one -
+/// which is the one moment they are not looking at it from the outside.
+pub fn occupied_scopes(state: &DiscordState) -> Vec<VoiceScope> {
+    state.voice.fixture_occupied_scopes()
+}
+
+/// Who is currently speaking in a room.
+pub fn speaking(state: &DiscordState, scope: VoiceScope) -> Vec<Id<marker::UserMarker>> {
+    state.voice.fixture_speaking(scope)
+}
+
 /// How often the fake moves a voice room on.
 ///
 /// Slow enough to read - a room where everyone flickers is noise, not a

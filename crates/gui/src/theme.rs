@@ -279,3 +279,33 @@ impl Presence {
         }
     }
 }
+
+/// The font the whole application inherits, with an emoji fallback.
+///
+/// GPUI picks a UI font on its own and it is a good pick, but the fallback
+/// chain it builds from that has no emoji font in it. Anything outside the
+/// text font's own coverage - which is most of them; U+2764 HEAVY BLACK HEART
+/// is in a text font, U+1F980 CRAB is not - draws as nothing at all.
+///
+/// Several families are named because which one is installed varies. The
+/// first one that exists wins, and naming one that does not is harmless.
+///
+/// QUIRK: this has no effect on Linux, and the missing glyphs there are not
+/// ours to fix. GPUI's Linux text system ignores `FontFallbacks` entirely and
+/// leaves fallback to cosmic-text, which picks "Noto Color Emoji" - and the
+/// current Noto Color Emoji is COLRv1, a format swash cannot rasterise, so it
+/// returns an empty image and the glyph is a blank gap. A CBDT emoji font
+/// such as Twemoji renders correctly, but nothing here can steer cosmic-text
+/// towards it. Kept regardless: macOS and Windows do read this, and it is a
+/// real fix there.
+pub fn ui_font() -> gpui::Font {
+    let mut font = gpui::font(".SystemUIFont");
+    font.fallbacks = Some(gpui::FontFallbacks::from_fonts(vec![
+        "Noto Color Emoji".to_owned(),
+        "Apple Color Emoji".to_owned(),
+        "Segoe UI Emoji".to_owned(),
+        "Twemoji".to_owned(),
+        "Noto Emoji".to_owned(),
+    ]));
+    font
+}

@@ -180,6 +180,9 @@ impl Render for SettingsWindow {
 
         row()
             .id("settings-window-view")
+            // Its own window, so it inherits nothing from the workspace root
+            // - including the emoji fallback.
+            .font(crate::theme::ui_font())
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
                 // The field takes the keyboard while it has focus, or typing

@@ -473,6 +473,13 @@ pub fn composer_view(
     let content: Div = if !enabled || composer.text().is_empty() {
         gpui::div()
             .text_color(rgb(active().text_subtle))
+            // One line, cut short if it does not fit. A refusal can be a
+            // whole sentence, and left to wrap it turned the composer into a
+            // six-line block that pushed the conversation off screen - in a
+            // narrow window, which is exactly where the room is tightest.
+            .w_full()
+            .min_w(px(0.))
+            .truncate()
             .child(placeholder.to_string())
     } else {
         // A selection is drawn as a tinted middle span; without a visible

@@ -834,6 +834,11 @@ impl Render for Workspace {
             .on_key_down(cx.listener(Self::on_key))
             .size_full()
             .bg(rgb(active().bg))
+            // Set on the root so every view inherits it: the emoji fallback
+            // has to be in the chain wherever text is drawn, and a per-view
+            // font would leave whichever view nobody remembered drawing
+            // empty boxes.
+            .font(crate::theme::ui_font())
             .text_size(px(scaled(text::BASE)))
             .when(matches!(self.screen, Screen::Login(_)), |d| {
                 let Screen::Login(login) = &self.screen else {

@@ -47,11 +47,25 @@ impl Default for FakeBackend {
 impl FakeBackend {
     /// A populated world, ready to be driven.
     pub fn new() -> Self {
+        let state = crate::world::demo_state();
+
+        // The rooms the fixture seated people in start moving straight away.
+        // Armed here rather than on the first join, because a room nobody has
+        // joined is exactly the one being looked at from the channel list,
+        // and a frozen one there reads as a client that is not running.
+        let pending = concord::discord::fixtures::voice::occupied_scopes(&state)
+            .into_iter()
+            .map(|scope| Scheduled {
+                at: std::time::Instant::now() + concord::discord::fixtures::voice::TICK,
+                action: Action::VoiceTick { scope },
+            })
+            .collect();
+
         Self {
-            state: crate::world::demo_state(),
+            state,
             admin: concord::discord::fixtures::server::ServerAdmin::new(),
             history_pages: HashMap::new(),
-            pending: Vec::new(),
+            pending,
         }
     }
 
@@ -1944,6 +1958,53 @@ mod voice_tick_tests {
         assert!(
             seen.iter().any(|now| now != &seen[0]),
             "the room published updates but nobody's microphone ever moved: {seen:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod voice_start_tests {
+    use super::FakeBackend;
+
+    /// A demo whose voice room only starts moving once you join it is frozen
+    /// at exactly the moment somebody is looking at it from the outside.
+    #[test]
+    fn a_room_with_people_in_it_is_already_ticking() {
+        let backend = FakeBackend::new();
+        assert!(
+            backend.next_deadline().is_some(),
+            "nothing is scheduled, so the seated voice room will never move"
+        );
+    }
+
+    /// The tick has to actually change something, or arming it proves nothing.
+    #[test]
+    fn ticking_moves_who_is_speaking() {
+        use concord::discord::fixtures::voice;
+
+        let mut backend = FakeBackend::new();
+        let scopes = voice::occupied_scopes(backend.state());
+        assert!(!scopes.is_empty(), "the fixture seats nobody in voice");
+        let scope = scopes[0];
+
+        let speaking = |backend: &FakeBackend| voice::speaking(backend.state(), scope);
+
+        // Two ticks, not one. Who talks is a rotating index over the room
+        // derived from the clock, and the baseline it counts from is set by
+        // the first tick - so that one lands on index zero and may well pick
+        // whoever the fixture already had talking. The rotation is what is
+        // being checked, and one step is not a rotation.
+        let mut seen = Vec::new();
+        for _ in 0..2 {
+            std::thread::sleep(voice::TICK + std::time::Duration::from_millis(120));
+            backend.fire_due();
+            seen.push(speaking(&backend));
+        }
+
+        assert_ne!(
+            seen[0], seen[1],
+            "the room looks the same from one tick to the next, so it is \
+             frozen on screen"
         );
     }
 }

@@ -674,6 +674,30 @@ impl crate::discord::state::caches::VoiceStateCache {
             .collect()
     }
 
+    /// Who a fake has speaking in a scope, so a test can watch it change.
+    pub(in crate::discord) fn fixture_speaking(&self, scope: VoiceScope) -> Vec<Id<UserMarker>> {
+        let mut who: Vec<_> = self
+            .states
+            .iter()
+            .filter(|((held, _), state)| *held == scope && state.speaking)
+            .map(|((_, user), _)| *user)
+            .collect();
+        who.sort_by_key(|user| user.get());
+        who
+    }
+
+    /// Every scope that has somebody in it.
+    ///
+    /// So a fake can start its rooms moving at launch rather than waiting for
+    /// somebody to join one: a demo whose voice panel is frozen until you
+    /// click into it does not show the thing the panel is for.
+    pub(in crate::discord) fn fixture_occupied_scopes(&self) -> Vec<VoiceScope> {
+        let mut scopes: Vec<_> = self.states.keys().map(|(scope, _)| *scope).collect();
+        scopes.sort_by_key(|scope| format!("{scope:?}"));
+        scopes.dedup();
+        scopes
+    }
+
     /// Remove one participant from a scope.
     pub(in crate::discord) fn remove_fixture_participant(
         &mut self,
