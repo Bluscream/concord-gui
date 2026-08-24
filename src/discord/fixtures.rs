@@ -67,19 +67,56 @@ pub use people::{
     set_thread_notification_level, update_self_profile, user_by_name,
 };
 
+/// Turn a small fixture number into an id that looks like Discord issued it.
+///
+/// The fixture is written in terms of readable numbers - guild 10, user 1001 -
+/// because a file full of nineteen-digit snowflakes is unreadable. This is the
+/// one place they become real ids, so every cross-reference in the fixture
+/// keeps pointing at the same thing.
+///
+/// A number like 1001 is not a snowflake: decoded, it claims to have been
+/// created in the first millisecond of Discord's existence, in the same
+/// millisecond as every other small number. Anything reading a creation date
+/// out of an id - account age, "created on", sorting by id - was getting that
+/// answer for the whole fixture, and getting it silently.
+///
+/// `kind` separates the spaces, so a guild and a user built from the same
+/// number are still different ids, as they would be on Discord.
+fn fixture_snowflake(kind: u64, raw: u64) -> u64 {
+    // Spread across the year before the fixture's "now", so ids sort into a
+    // sensible creation order and none of them is in the future.
+    let year_ms = 365 * 24 * 60 * 60 * 1000_u64;
+    let created = fixture_now_ms()
+        .saturating_sub(year_ms)
+        .saturating_add(raw.wrapping_mul(97) % year_ms);
+
+    // Worker and process from the kind, increment from the number: two ids
+    // built in the same millisecond still differ, which is what stops the
+    // fixture handing out the same id twice by accident.
+    Id::<()>::from_parts(created, kind, kind >> 5, raw).get()
+}
+
 fn guild_id(raw: u64) -> Id<marker::GuildMarker> {
-    Id::new(raw)
+    Id::new(fixture_snowflake(1, raw))
 }
 fn channel_id(raw: u64) -> Id<marker::ChannelMarker> {
-    Id::new(raw)
+    Id::new(fixture_snowflake(2, raw))
 }
 fn user_id(raw: u64) -> Id<marker::UserMarker> {
-    Id::new(raw)
+    Id::new(fixture_snowflake(3, raw))
 }
 fn role_id(raw: u64) -> Id<marker::RoleMarker> {
-    Id::new(raw)
+    Id::new(fixture_snowflake(4, raw))
+}
+fn emoji_id(raw: u64) -> Id<marker::EmojiMarker> {
+    Id::new(fixture_snowflake(5, raw))
+}
+fn attachment_id(raw: u64) -> Id<marker::AttachmentMarker> {
+    Id::new(fixture_snowflake(6, raw))
 }
 fn message_id(raw: u64) -> Id<marker::MessageMarker> {
+    // Already a snowflake: the caller derives it from the message's age, so
+    // the timeline sorts by id the way Discord's does.
     Id::new(raw)
 }
 
@@ -102,6 +139,12 @@ fn guild(id: u64, name: &str, members: u64, online: u32) -> GuildState {
 
 /// Base channel. Written out in full rather than via `Default`, because `Id`
 /// has no `Default` by design - a zero snowflake is not a valid id.
+fn blank_channel_with_id(id: Id<marker::ChannelMarker>, kind: &str, name: &str) -> ChannelState {
+    let mut channel = blank_channel(1, kind, name);
+    channel.id = id;
+    channel
+}
+
 fn blank_channel(id: u64, kind: &str, name: &str) -> ChannelState {
     ChannelState {
         id: channel_id(id),
@@ -234,7 +277,7 @@ fn attachment(
     dimensions: Option<(u64, u64)>,
 ) -> crate::discord::AttachmentInfo {
     crate::discord::AttachmentInfo {
-        id: Id::new(id),
+        id: attachment_id(id),
         filename: filename.to_string(),
         // Images are previewed by URL, and an empty one is skipped; the
         // scheme is ours because nothing here is really hosted anywhere.
@@ -260,7 +303,21 @@ fn attachment(
 /// Here as a constant so its length can be asserted: it has to stay under the
 /// limit, or it is not a message anyone could send and stops being a fair
 /// test of the thing it is testing.
-const KITCHEN_SINK: &str = "# Heading 1\n## Heading 2\n### Heading 3\n-# Subtext under a heading\n**bold** *italic* _italic_ __underline__ ~~strike~~ ***bold italic*** __**underline bold**__ __*underline italic*__\n`inline code`, ||a spoiler||, and \\*escaped\\* \\_markers\\_\n> a single-line quote\n> a second quote line\n- bullet one\n- bullet two\n  - nested bullet\n    - twice nested\n1. ordered one\n2. ordered two\n   1. nested ordered\n```rust\nfn main() {\n    println!(\"fenced, with a language\");\n}\n```\n```\nfenced, no language\n```\n[masked link](https://github.com/bluscream/concord), bare https://github.com/bluscream/concord, and suppressed <https://example.invalid/no-embed>\nMentions: <@1002> a user, <@&2> a role, <#112> a channel, </settings:1> a command, @everyone, @here\nEmoji: ❤ 🦀 <:ferris:4001> <a:crab_party:4002>\nTimes: <t:1756000000:t> <t:1756000000:T> <t:1756000000:d> <t:1756000000:D> <t:1756000000:f> <t:1756000000:F> <t:1756000000:R>\nA long unbroken token to test wrapping: https://example.invalid/a/very/long/path/that/keeps/going/and/going/until/it/has/to/wrap/somewhere\n-# and a closing subtext line\n>>> a block quote that swallows\neverything after it on its own lines";
+fn kitchen_sink() -> String {
+    // Built rather than written out: mentions carry their ids in the text, so
+    // hard-coded ones stopped resolving the moment the fixture started
+    // issuing real snowflakes - and a mention that resolves to nobody renders
+    // as a raw `<@1001>`, which is the exact thing this message exists to
+    // check. The braces the message itself contains are doubled for `format!`.
+    format!(
+        "# Heading 1\n## Heading 2\n### Heading 3\n-# Subtext under a heading\n**bold** *italic* _italic_ __underline__ ~~strike~~ ***bold italic*** __**underline bold**__ __*underline italic*__\n`inline code`, ||a spoiler||, and \\*escaped\\* \\_markers\\_\n> a single-line quote\n> a second quote line\n- bullet one\n- bullet two\n  - nested bullet\n    - twice nested\n1. ordered one\n2. ordered two\n   1. nested ordered\n```rust\nfn main() {{\n    println!(\"fenced, with a language\");\n}}\n```\n```\nfenced, no language\n```\n[masked link](https://github.com/bluscream/concord), bare https://github.com/bluscream/concord, and suppressed <https://example.invalid/no-embed>\nMentions: <@{user}> a user, <@&{role}> a role, <#{channel}> a channel, </settings:1> a command, @everyone, @here\nEmoji: ❤ 🦀 <:ferris:{emoji}> <a:crab_party:{animated}>\nTimes: <t:1756000000:t> <t:1756000000:T> <t:1756000000:d> <t:1756000000:D> <t:1756000000:f> <t:1756000000:F> <t:1756000000:R>\nA long unbroken token to test wrapping: https://example.invalid/a/very/long/path/that/keeps/going/and/going/until/it/has/to/wrap/somewhere\n-# and a closing subtext line\n>>> a block quote that swallows\neverything after it on its own lines",
+        user = user_id(1002),
+        role = role_id(2),
+        channel = channel_id(112),
+        emoji = emoji_id(4001),
+        animated = emoji_id(4002),
+    )
+}
 
 /// Servers that exist only to make the rail longer than the window.
 ///
@@ -626,7 +683,7 @@ pub fn demo_state() -> DiscordState {
         },
         ReactionInfo {
             emoji: ReactionEmoji::Custom {
-                id: Id::new(9001),
+                id: emoji_id(9001),
                 name: Some("ferris".into()),
                 animated: false,
             },
@@ -674,7 +731,13 @@ pub fn demo_state() -> DiscordState {
         Some(10),
         1003,
         "turing",
-        "ping <@1002> about <#111> when you get a chance",
+        // Built for the same reason as the kitchen-sink message: a mention
+        // carries its id in the text, and a hard-coded one resolves to nobody.
+        &format!(
+            "ping <@{}> about <#{}> when you get a chance",
+            user_id(1002),
+            channel_id(111)
+        ),
         1200,
     ));
 
@@ -797,7 +860,7 @@ pub fn demo_state() -> DiscordState {
     // checked against every case at once rather than by hunting for an
     // example of each. Kept under the 2000-character limit on purpose: it has
     // to be a message that could actually be sent.
-    let mut kitchen_sink = message(70, 111, Some(10), 1003, "turing", KITCHEN_SINK, 300);
+    let mut kitchen_sink = message(70, 111, Some(10), 1003, "turing", &kitchen_sink(), 300);
     kitchen_sink.mention_everyone = true;
     kitchen_sink.attachments.push(attachment(
         9200,
@@ -860,7 +923,7 @@ pub fn demo_state() -> DiscordState {
                 Some(10),
                 1003,
                 "turing",
-                "<@1001> can you take a look at this one?",
+                &format!("<@{}> can you take a look at this one?", user_id(1001)),
                 450,
             ),
             message(
@@ -1304,7 +1367,7 @@ pub fn attach_to_last_message(
         };
 
         message.attachments.push(crate::discord::AttachmentInfo {
-            id: Id::new(9_000 + index as u64 + 1),
+            id: attachment_id(9_000 + index as u64 + 1),
             filename: filename.clone(),
             url,
             proxy_url: String::new(),
@@ -1572,20 +1635,20 @@ pub fn create_forum_post(
             .and_then(|channel| channel.guild_id)
     };
 
-    // The post's channel id is a fresh snowflake so it cannot collide with a
-    // fixture channel and inherit its timeline.
-    let id = channel_id(snowflake_at(0));
+    // A fresh snowflake, so it cannot collide with a fixture channel and
+    // inherit its timeline.
+    let id = Id::new(snowflake_at(0));
 
     let navigation = Arc::make_mut(&mut state.navigation);
-    // The kind is the core's own string name, not a numeric wire value.
-    let mut post = channel(
-        id.get(),
-        guild_id.map(|guild| guild.get()),
-        Some(parent.get()),
-        title,
-        "thread",
-        0,
-    );
+    // Built directly rather than through `channel`, which takes the small
+    // seeds the fixture is written in and runs them through the snowflake
+    // encoder. These ids are already real, and passing them in would encode
+    // them a second time - which is how the post ended up parented to a
+    // channel that does not exist.
+    let mut post = blank_channel_with_id(id, "thread", title);
+    post.guild_id = guild_id;
+    post.parent_id = Some(parent);
+    post.position = Some(0);
     post.thread_metadata = Some(crate::discord::ThreadMetadataInfo {
         archived: false,
         auto_archive_duration: Some(1440),
@@ -1823,6 +1886,30 @@ pub fn unfurl_last_message(state: &mut DiscordState, channel_id: Id<marker::Chan
             return;
         }
     }
+}
+
+/// The id the fixture gave one of its channels.
+///
+/// Public because a test cannot write `Id::new(111)` any more: the fixture
+/// issues real snowflakes, so the only way to name a channel from outside is
+/// to ask for it by the same small number the fixture used.
+pub fn demo_channel_id(seed: u64) -> Id<marker::ChannelMarker> {
+    channel_id(seed)
+}
+
+/// The id the fixture gave one of its users.
+pub fn demo_user(seed: u64) -> Id<marker::UserMarker> {
+    user_id(seed)
+}
+
+/// The id the fixture gave one of its servers.
+pub fn demo_guild(seed: u64) -> Id<marker::GuildMarker> {
+    guild_id(seed)
+}
+
+/// The id the fixture gave one of its roles.
+pub fn demo_role_id(seed: u64) -> Id<marker::RoleMarker> {
+    role_id(seed)
 }
 
 /// The server the fixture's administration panels belong to.

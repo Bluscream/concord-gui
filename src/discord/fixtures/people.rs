@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use super::{demo_guild_id, guild_id};
+use super::{demo_guild_id, guild_id, user_id};
 use crate::discord::{
     ApplicationCommandAutocompleteInvocation, ApplicationCommandChoiceInfo, DiscordState,
     FriendStatus, GuildBanInfo, Id, RelationshipInfo, UserProfileUpdate, marker,
@@ -102,13 +102,13 @@ pub fn relationship(
 pub fn bans() -> Vec<GuildBanInfo> {
     vec![
         GuildBanInfo {
-            user_id: Id::new(2001),
+            user_id: user_id(2001),
             username: "spammer".to_string(),
             reason: Some("Advertising".to_string()),
         },
         // No reason, which Discord allows and the row has to cope with.
         GuildBanInfo {
-            user_id: Id::new(2002),
+            user_id: user_id(2002),
             username: "throwaway".to_string(),
             reason: None,
         },

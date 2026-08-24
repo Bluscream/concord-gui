@@ -37,6 +37,50 @@ impl<T> Id<T> {
         }
     }
 
+    /// The first millisecond Discord will issue an id for.
+    ///
+    /// Snowflakes count from here rather than from the Unix epoch, so the
+    /// timestamp has to be shifted before it means anything.
+    pub const DISCORD_EPOCH_MS: u64 = 1_420_070_400_000;
+
+    /// Build a snowflake for a moment in time.
+    ///
+    /// Discord's layout: 42 bits of milliseconds since its own epoch, then a
+    /// worker, a process and an increment. The lower bits carry no meaning to
+    /// a client, but they are not always zero on a real id, and an id that is
+    /// suspiciously round is the sort of thing that only shows up as a bug
+    /// once something starts sorting by it.
+    pub const fn from_parts(created_ms: u64, worker: u64, process: u64, increment: u64) -> Self {
+        let elapsed = created_ms.saturating_sub(Self::DISCORD_EPOCH_MS);
+        let value = (elapsed << 22)
+            | ((worker & 0b1_1111) << 17)
+            | ((process & 0b1_1111) << 12)
+            | (increment & 0xFFF);
+        Self::new(value)
+    }
+
+    /// When Discord would have issued this id, in milliseconds.
+    pub const fn created_at_ms(self) -> u64 {
+        (self.value.get() >> 22) + Self::DISCORD_EPOCH_MS
+    }
+
+    /// Whether this could be an id Discord actually issued.
+    ///
+    /// Checks the only part of a snowflake that carries meaning: the
+    /// timestamp. It has to be after Discord existed and not in the future.
+    ///
+    /// The point is to catch a number that was never a snowflake - a test
+    /// fixture's `1001`, an array index that leaked into an id, a truncated
+    /// parse - rather than to authenticate anything. A small number decodes
+    /// to a timestamp at or near Discord's epoch, which is how they are
+    /// caught: id 1001 claims to have been created in January 2015, in the
+    /// same millisecond as every other small number.
+    pub fn is_plausible(self, now_ms: u64) -> bool {
+        let created = self.created_at_ms();
+        // A day of slack, for a clock that is behind the server's.
+        created > Self::DISCORD_EPOCH_MS && created <= now_ms.saturating_add(86_400_000)
+    }
+
     pub const fn get(self) -> u64 {
         self.value.get()
     }

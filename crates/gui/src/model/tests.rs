@@ -10,10 +10,15 @@ use crate::model::projection::{Navigation, Selection, project, typing_names};
 use crate::theme::Presence;
 use crate::ui::workspace::ChannelKind;
 
+/// Navigation built from the small numbers the fixture is written in.
+///
+/// The fixture issues real snowflakes now, so a test cannot name a guild by
+/// writing `Id::new(10)` - that number is not the id of anything.
 fn guild_nav(guild: u64, channel: Option<u64>) -> Navigation {
+    use concord::discord::fixtures::{demo_channel_id, demo_guild};
     Navigation {
-        selection: Selection::Guild(concord::discord::Id::new(guild)),
-        channel: channel.map(concord::discord::Id::new),
+        selection: Selection::Guild(demo_guild(guild)),
+        channel: channel.map(demo_channel_id),
     }
 }
 
@@ -136,7 +141,7 @@ fn messages_project_in_order_with_grouping() {
     let state = demo_state();
     let rows = project_messages(
         &state,
-        concord::discord::Id::new(111),
+        concord::discord::fixtures::demo_channel_id(111),
         state.current_user_id(),
     );
 
@@ -163,7 +168,7 @@ fn replies_break_grouping_and_carry_context() {
     let state = demo_state();
     let rows = project_messages(
         &state,
-        concord::discord::Id::new(111),
+        concord::discord::fixtures::demo_channel_id(111),
         state.current_user_id(),
     );
 
@@ -186,7 +191,7 @@ fn reactions_and_edits_project() {
     let state = demo_state();
     let rows = project_messages(
         &state,
-        concord::discord::Id::new(111),
+        concord::discord::fixtures::demo_channel_id(111),
         state.current_user_id(),
     );
 
@@ -217,7 +222,7 @@ fn message_timestamps_are_recent_not_epoch() {
     let state = demo_state();
     let rows = project_messages(
         &state,
-        concord::discord::Id::new(111),
+        concord::discord::fixtures::demo_channel_id(111),
         state.current_user_id(),
     );
 
@@ -236,8 +241,8 @@ fn typing_indicator_resolves_display_names() {
     let state = demo_state();
     let names = typing_names(
         &state,
-        concord::discord::Id::new(112),
-        Some(concord::discord::Id::new(10)),
+        concord::discord::fixtures::demo_channel_id(112),
+        Some(concord::discord::fixtures::demo_guild_id()),
     );
 
     assert_eq!(names, vec!["ferris".to_string()]);
@@ -250,7 +255,10 @@ fn selection_is_identity_based_not_positional() {
 
     let selected = &model.channels[model.selected_channel];
     assert_eq!(selected.name, "gui-rewrite");
-    assert_eq!(selected.id, Some(concord::discord::Id::new(112)));
+    assert_eq!(
+        selected.id,
+        Some(concord::discord::fixtures::demo_channel_id(112))
+    );
 }
 
 #[test]
@@ -337,7 +345,7 @@ fn message_bodies_resolve_mentions_against_guild_state() {
     let state = demo_state();
     let rows = project_messages(
         &state,
-        concord::discord::Id::new(111),
+        concord::discord::fixtures::demo_channel_id(111),
         state.current_user_id(),
     );
 
@@ -369,7 +377,7 @@ fn author_role_colours_resolve_for_guild_messages() {
     let state = demo_state();
     let rows = project_messages(
         &state,
-        concord::discord::Id::new(111),
+        concord::discord::fixtures::demo_channel_id(111),
         state.current_user_id(),
     );
 
@@ -384,7 +392,11 @@ fn author_role_colours_resolve_for_guild_messages() {
 #[test]
 fn dm_messages_have_no_guild_scope() {
     let state = demo_state();
-    let rows = project_messages(&state, concord::discord::Id::new(300), None);
+    let rows = project_messages(
+        &state,
+        concord::discord::fixtures::demo_channel_id(300),
+        None,
+    );
 
     assert!(!rows.is_empty(), "fixture defines a DM conversation");
     assert!(
@@ -424,7 +436,7 @@ fn spoilers_are_hidden_until_revealed() {
     let state = demo_state();
     let rows = project_messages(
         &state,
-        concord::discord::Id::new(112),
+        concord::discord::fixtures::demo_channel_id(112),
         state.current_user_id(),
     );
 
@@ -441,7 +453,7 @@ fn timestamp_format_follows_the_hour_setting() {
     let state = demo_state();
     let rows = project_messages(
         &state,
-        concord::discord::Id::new(111),
+        concord::discord::fixtures::demo_channel_id(111),
         state.current_user_id(),
     );
     let row = rows.first().expect("fixture defines messages");
@@ -532,7 +544,7 @@ fn demo_history_paging_terminates() {
     use concord_fixtures::world as fixtures;
 
     let mut state = demo_state();
-    let channel = concord::discord::Id::new(111);
+    let channel = concord::discord::fixtures::demo_channel_id(111);
     let before = state.messages_for_channel(channel).len();
 
     // Paging must add messages, then stop, rather than growing forever.
@@ -553,7 +565,7 @@ fn demo_history_prepends_older_messages_in_order() {
     use concord_fixtures::world as fixtures;
 
     let mut state = demo_state();
-    let channel = concord::discord::Id::new(111);
+    let channel = concord::discord::fixtures::demo_channel_id(111);
     fixtures::prepend_history(&mut state, channel, 0);
 
     let rows = project_messages(&state, channel, state.current_user_id());
@@ -571,12 +583,12 @@ fn demo_attachments_land_on_the_sent_message() {
     use concord_fixtures::world as fixtures;
 
     let mut state = demo_state();
-    let channel = concord::discord::Id::new(111);
+    let channel = concord::discord::fixtures::demo_channel_id(111);
 
     fixtures::append_message(
         &mut state,
         channel,
-        Some(concord::discord::Id::new(10)),
+        Some(concord::discord::fixtures::demo_guild_id()),
         fixtures::demo_user_id(),
         "blu",
         "here you go",
@@ -596,12 +608,12 @@ fn demo_send_updates_the_channel_last_message() {
     use concord_fixtures::world as fixtures;
 
     let mut state = demo_state();
-    let channel = concord::discord::Id::new(111);
+    let channel = concord::discord::fixtures::demo_channel_id(111);
 
     let id = fixtures::append_message(
         &mut state,
         channel,
-        Some(concord::discord::Id::new(10)),
+        Some(concord::discord::fixtures::demo_guild_id()),
         fixtures::demo_user_id(),
         "blu",
         "hello",
@@ -717,7 +729,7 @@ fn replies_carry_their_target_id_for_jumping() {
     let state = demo_state();
     let rows = project_messages(
         &state,
-        concord::discord::Id::new(111),
+        concord::discord::fixtures::demo_channel_id(111),
         state.current_user_id(),
     );
 
@@ -787,7 +799,7 @@ fn polls_project_with_shares_that_sum_sensibly() {
     let state = demo_state();
     let rows = project_messages(
         &state,
-        concord::discord::Id::new(111),
+        concord::discord::fixtures::demo_channel_id(111),
         state.current_user_id(),
     );
 
@@ -825,11 +837,11 @@ fn an_empty_poll_does_not_divide_by_zero() {
     };
 
     let mut state = demo_state();
-    let channel = concord::discord::Id::new(111);
+    let channel = concord::discord::fixtures::demo_channel_id(111);
     let id = concord_fixtures::world::append_message(
         &mut state,
         channel,
-        Some(concord::discord::Id::new(10)),
+        Some(concord::discord::fixtures::demo_guild_id()),
         concord_fixtures::world::demo_user_id(),
         "blu",
         "",
@@ -851,7 +863,7 @@ fn voting_updates_counts_and_withdraws_the_previous_choice() {
     use concord_fixtures::world as fixtures;
 
     let mut state = demo_state();
-    let channel = concord::discord::Id::new(111);
+    let channel = concord::discord::fixtures::demo_channel_id(111);
     let rows = project_messages(&state, channel, state.current_user_id());
     let target = rows
         .iter()
@@ -891,8 +903,12 @@ fn slash_picker_offers_builtins_before_application_commands() {
     use concord::discord::ApplicationCommandInfo;
 
     let app = ApplicationCommandInfo {
-        id: concord::discord::Id::new(1),
-        application_id: concord::discord::Id::new(2),
+        id: concord::discord::Id::new(
+            concord::discord::Id::<()>::from_parts(1_700_000_000_000, 1, 0, 1).get(),
+        ),
+        application_id: concord::discord::Id::new(
+            concord::discord::Id::<()>::from_parts(1_700_000_000_000, 1, 0, 2).get(),
+        ),
         version: "1".into(),
         name: "shipit".into(),
         application_name: Some("Deploybot".into()),
@@ -919,8 +935,12 @@ fn application_commands_complete_with_a_trailing_space() {
     use concord::discord::ApplicationCommandInfo;
 
     let app = ApplicationCommandInfo {
-        id: concord::discord::Id::new(1),
-        application_id: concord::discord::Id::new(2),
+        id: concord::discord::Id::new(
+            concord::discord::Id::<()>::from_parts(1_700_000_000_000, 1, 0, 1).get(),
+        ),
+        application_id: concord::discord::Id::new(
+            concord::discord::Id::<()>::from_parts(1_700_000_000_000, 1, 0, 2).get(),
+        ),
         version: "1".into(),
         name: "weather".into(),
         application_name: None,
@@ -942,11 +962,11 @@ fn message_links_are_collected_from_the_rendered_body() {
     use concord_fixtures::world as fixtures;
 
     let mut state = demo_state();
-    let channel = concord::discord::Id::new(111);
+    let channel = concord::discord::fixtures::demo_channel_id(111);
     fixtures::append_message(
         &mut state,
         channel,
-        Some(concord::discord::Id::new(10)),
+        Some(concord::discord::fixtures::demo_guild_id()),
         fixtures::demo_user_id(),
         "blu",
         "see https://example.com/one and https://example.com/two",
@@ -967,7 +987,7 @@ fn plain_messages_expose_no_links() {
     let state = demo_state();
     let rows = project_messages(
         &state,
-        concord::discord::Id::new(111),
+        concord::discord::fixtures::demo_channel_id(111),
         state.current_user_id(),
     );
 
@@ -1000,12 +1020,12 @@ fn zoom_scales_type_and_clamps_at_both_ends() {
 
 #[test]
 fn demo_acking_a_channel_clears_its_unread_state() {
-    use concord::discord::{ChannelUnreadState, Id};
+    use concord::discord::ChannelUnreadState;
     use concord_fixtures::world as fixtures;
 
     let mut state = demo_state();
     // 112 carries mentions in the fixture, the strongest unread state.
-    let channel = Id::new(112);
+    let channel = concord::discord::fixtures::demo_channel_id(112);
     assert!(
         !matches!(state.channel_unread(channel), ChannelUnreadState::Seen),
         "the fixture should start with this channel unread"
@@ -1025,11 +1045,10 @@ fn demo_acking_a_channel_clears_its_unread_state() {
 
 #[test]
 fn demo_thread_pinning_preserves_other_flags() {
-    use concord::discord::Id;
     use concord_fixtures::world as fixtures;
 
     let mut state = demo_state();
-    let thread = Id::new(130);
+    let thread = concord::discord::fixtures::demo_channel_id(130);
 
     // A bit this client does not interpret, which must survive a pin/unpin.
     const OTHER: u64 = 1 << 4;
@@ -1049,11 +1068,10 @@ fn demo_thread_pinning_preserves_other_flags() {
 
 #[test]
 fn demo_forum_post_creates_a_thread_with_its_opening_message() {
-    use concord::discord::Id;
     use concord_fixtures::world as fixtures;
 
     let mut state = demo_state();
-    let forum = Id::new(114);
+    let forum = concord::discord::fixtures::demo_channel_id(114);
 
     let post = fixtures::create_forum_post(&mut state, forum, "how do i rust", "borrow checker");
 
@@ -1258,7 +1276,7 @@ fn forwarding_targets_the_picked_channel_not_the_current_one() {
     // forward to the channel already open.
     let purpose = SwitcherPurpose::Forward {
         message_id: Id::new(42),
-        source_channel_id: Id::new(111),
+        source_channel_id: concord::discord::fixtures::demo_channel_id(111),
     };
 
     assert_ne!(purpose, SwitcherPurpose::Navigate);
@@ -1360,8 +1378,6 @@ fn demo_mode_answers_every_command_the_ui_can_send() {
 
 #[test]
 fn activities_reach_the_member_list_and_profile() {
-    use concord::discord::Id;
-
     let state = demo_state();
     // The member list only projects inside a guild, so the DM default would
     // give an empty list and prove nothing.
@@ -1400,10 +1416,17 @@ fn activities_reach_the_member_list_and_profile() {
     // Profiles are populated on demand, the same way the real client fetches
     // them, so the test asks for one first.
     let mut state = state;
-    concord_fixtures::world::add_profile(&mut state, Id::new(1004), Some(Id::new(10)));
-    let profile =
-        crate::model::projection::project_profile(&state, Id::new(1004), Some(Id::new(10)))
-            .expect("fixture defines a profile");
+    concord_fixtures::world::add_profile(
+        &mut state,
+        concord::discord::fixtures::demo_user(1004),
+        Some(concord::discord::fixtures::demo_guild_id()),
+    );
+    let profile = crate::model::projection::project_profile(
+        &state,
+        concord::discord::fixtures::demo_user(1004),
+        Some(concord::discord::fixtures::demo_guild_id()),
+    )
+    .expect("fixture defines a profile");
     // A custom status shows its own text, never Discord's internal name for
     // the activity.
     assert!(
@@ -1717,7 +1740,7 @@ fn the_voice_tick_moves_the_speaker_on() {
             state
                 .voice_participants_for_channel(
                     fixtures::demo_guild_id(),
-                    concord::discord::Id::new(121),
+                    fixtures::demo_channel_id(121),
                 )
                 .into_iter()
                 .filter(|participant| participant.speaking)
@@ -1739,7 +1762,7 @@ fn the_kitchen_sink_message_is_one_that_could_be_sent() {
     // that cannot happen. Easy to break by adding one more example to it.
     let state = concord::discord::fixtures::demo_state();
     let sink = state
-        .messages_for_channel(concord::discord::Id::new(111))
+        .messages_for_channel(concord::discord::fixtures::demo_channel_id(111))
         .into_iter()
         .find(|message| {
             message
@@ -1781,14 +1804,16 @@ fn the_kitchen_sink_message_is_one_that_could_be_sent() {
         "```rust",
         "[masked link](",
         "<https://example.invalid/no-embed>",
-        "<@1002>",
-        "<@&2>",
-        "<#112>",
         "</settings:1>",
+        // The mentions are checked by shape rather than by id: the ids are
+        // real snowflakes now and change with the fixture's clock.
+        "<@",
+        "<@&",
+        "<#",
+        "<:ferris:",
+        "<a:crab_party:",
         "@everyone",
         "@here",
-        "<:ferris:4001>",
-        "<a:crab_party:4002>",
         "<t:1756000000:R>",
     ] {
         assert!(
@@ -1819,7 +1844,7 @@ fn the_block_quote_is_last_in_the_kitchen_sink_message() {
     // exists for is worthless from that point down.
     let state = concord::discord::fixtures::demo_state();
     let sink = state
-        .messages_for_channel(concord::discord::Id::new(111))
+        .messages_for_channel(concord::discord::fixtures::demo_channel_id(111))
         .into_iter()
         .find_map(|message| {
             message
@@ -1842,5 +1867,62 @@ fn the_block_quote_is_last_in_the_kitchen_sink_message() {
             .all(|line| !line.starts_with(['#', '-', '>', '`'])),
         "syntax after the block quote would be swallowed by it: {:?}",
         &lines[block + 1..]
+    );
+}
+
+#[test]
+fn every_id_in_the_fixture_looks_like_a_real_snowflake() {
+    use concord::discord::Id;
+
+    // The fixture used to hand out 10, 111 and 1001. Those are not
+    // snowflakes: decoded, each claims to have been created in the first
+    // millisecond of Discord's existence, so anything reading a creation date
+    // out of an id - account age, "created on", sorting by id - got the same
+    // wrong answer for the whole fixture, and got it silently.
+    let state = concord::discord::fixtures::demo_state();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_millis() as u64)
+        .expect("the clock is after 1970");
+
+    let mut checked = 0usize;
+    let mut bad: Vec<String> = Vec::new();
+
+    let mut check = |what: &str, raw: u64| {
+        checked += 1;
+        if !Id::<()>::new(raw).is_plausible(now_ms) {
+            bad.push(format!("{what} {raw}"));
+        }
+    };
+
+    for guild in state.guilds() {
+        check("guild", guild.id.get());
+    }
+    for channel in state.channels_for_guild(None) {
+        check("channel", channel.id.get());
+    }
+    for guild in state.guilds() {
+        for channel in state.channels_for_guild(Some(guild.id)) {
+            check("channel", channel.id.get());
+            for message in state.messages_for_channel(channel.id) {
+                check("message", message.id.get());
+                check("author", message.author_id.get());
+                for attachment in &message.attachments {
+                    check("attachment", attachment.id.get());
+                }
+            }
+        }
+        for role in state.roles_for_guild(guild.id) {
+            check("role", role.id.get());
+        }
+    }
+
+    assert!(
+        checked > 50,
+        "only {checked} ids checked - the walk found almost nothing"
+    );
+    assert!(
+        bad.is_empty(),
+        "these are not plausible snowflakes: {bad:?}"
     );
 }

@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use super::{blank_channel, channel_id, role_id};
+use super::{blank_channel, channel_id, emoji_id, role_id};
 use crate::discord::{
     ChannelState, DiscordState, GuildEmojiInfo, Id, NewChannelKind, RoleState, marker,
 };
@@ -231,14 +231,14 @@ pub fn reorder_roles(
 pub fn emojis() -> Vec<GuildEmojiInfo> {
     vec![
         GuildEmojiInfo {
-            id: Id::new(4001),
+            id: emoji_id(4001),
             name: "ferris".to_string(),
             animated: false,
             role_restricted: false,
         },
         // Animated and restricted, so both flags have somewhere to show.
         GuildEmojiInfo {
-            id: Id::new(4002),
+            id: emoji_id(4002),
             name: "crab_party".to_string(),
             animated: true,
             role_restricted: true,

@@ -1853,7 +1853,7 @@ mod voice_tick_tests {
 
         backend.handle(AppCommand::JoinVoiceChannel {
             scope,
-            channel_id: concord::discord::Id::new(121),
+            channel_id: fixtures::demo_channel_id(121),
             self_mute: false,
             self_deaf: false,
             input_source: None,
@@ -1887,7 +1887,7 @@ mod voice_tick_tests {
                 .state()
                 .voice_participants_for_channel(
                     fixtures::demo_guild_id(),
-                    concord::discord::Id::new(121),
+                    fixtures::demo_channel_id(121),
                 )
                 .into_iter()
                 .filter(|participant| participant.speaking)
