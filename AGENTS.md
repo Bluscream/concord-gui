@@ -327,8 +327,14 @@ Every icon needs a tooltip, and every tooltip goes through the catalogue. Use
   `--no-test` builds without. That default must flip before the first real
   release; a shipped build should not carry synthetic state or accept the
   literal `test` token.
-- **Graphical Testing via Linux GUI MCP**:
-  - **MANDATORY**: ALWAYS use the registered `linux-gui` MCP tools (`list_windows`, `find_window`, `run_app`, `click`, `type_text`, `press_keys`, etc.) directly for all GUI interaction and testing. NEVER call raw python scripts or sub-process imports to emulate or bypass MCP tool calls.
+- **Graphical Testing**: The Linux GUI MCP server allows direct GUI interactions (clicking, typing, screenshots). Always use native MCP tools (`list_windows`, `interact`, `screenshot`) directly rather than calling Python scripts or bash wrappers.
+
+### 14. Font Rendering & Icon Glyph Rules (Critical)
+
+- **No High-Codepoint Emojis (> U+FFFF)**: GPUI and shipped fonts do **NOT** include color emoji glyph coverage for Supplementary Multilingual Plane codepoints (codepoints above `U+FFFF`, e.g. `U+1F515`, `U+1F4D6`, `U+1F4AC`, `U+1F4DE`).
+- **Symptom**: Higher codepoint emojis will render as **empty boxes / blank squares** in the UI.
+- **Allowed Glyphs**: Always use **Basic Multilingual Plane (BMP)** symbols below `U+FFFF`. Geometric and technical Unicode symbols (e.g. `U+25xx`, `U+26xx`, `U+27xx`) work reliably (`\u{2606}` star, `\u{2573}` cross, `\u{25B2}` pin, `\u{270F}` pencil, `\u{25A3}` lock, `\u{2715}` delete, `\u{25A6}` archive, `\u{260E}` phone).
+- **Automated Validation**: Run `cargo test --workspace --features fixtures -- no_icon_glyph_needs_a_font_we_do_not_ship` to validate glyph codepoint ranges.
   - Always check if an existing `concord-gui` window/process exists (`find_window` or `list_windows`) before launching a new instance, and kill lingering processes to prevent duplicate windows.
   - Launch using `run_app` with `executable: "distrobox"`, `args: ["enter", "arch", "--", "/path/to/concord-gui"]`, and explicit Wayland/KDE environment variables (`DISPLAY=:0`, `WAYLAND_DISPLAY=wayland-0`, `XDG_RUNTIME_DIR=/run/user/1000`, `RUST_LOG=debug`). Do not pass an auto-connect token argument if testing the login picker screen.
 - **Verify in release too.** A dead-code warning that only the release profile
@@ -343,6 +349,18 @@ Every icon needs a tooltip, and every tooltip goes through the catalogue. Use
 - **Parity tracking**: `docs/PARITY.md` records what is done, what is missing,
   and the checks used to tell the difference. Keep it honest — it exists
   because "done" was claimed several times when it was not.
+
+### 15. Feature Architecture: Caching & Multi-Account Merging
+
+When designing new features, models, or data flows in `concord-gui` or `concord`, structure the architecture around two core principles:
+
+1. **Cache-First File Storage**:
+   - **Local File Cache First**: Always attempt to resolve and render assets (avatars, images, attachments, guild icons, message attachments) from local disk storage (`crates/cache` / disk cache path) before issuing network requests.
+   - **Lazy Downloading**: If an asset is missing locally, trigger an asynchronous background fetch to populate the cache file, then update the UI once stored. Direct HTTP fetches straight to views are strictly fallback/development paths.
+
+2. **Multi-Account Account-Merging Compatibility**:
+   - **Account-Aware Context**: Any action that modifies state (sending messages, reacting, joining voice, changing status, server moderation) must be explicitly scoped to a target `AccountContext` / `UserMarker`.
+   - **Deduplicated & Merged Projections**: When multiple accounts share access to the same resources (such as mutual guilds or DMs), state projections must fold multiple `DiscordState` instances into a unified view, attributing individual actions to the active account while avoiding redundant UI rows or duplicated notifications.
 
 ## A caution
 

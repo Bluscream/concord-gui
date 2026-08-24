@@ -128,10 +128,11 @@ fn main() {
     }
 
     // GPUI needs an HTTP client before it will load images from a URI.
+    let app_guard = runtime::enter();
     Application::new()
         .with_http_client(http::ReqwestClient::shared())
         .run(move |cx: &mut App| {
-            let _app_guard = runtime::enter();
+            let _app_guard = app_guard;
             let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
 
             let window = cx
@@ -145,7 +146,7 @@ fn main() {
                         model.status_line = "connecting…".to_string();
                         // With a stored credential the workspace opens directly;
                         // otherwise the login screen is the entry point.
-                        let screen = if status.has_token {
+                        let screen = if existing_token().is_some() {
                             Screen::Ready
                         } else {
                             Screen::Login(Box::default())

@@ -71,6 +71,7 @@ pub struct GuildEntry {
     /// `None` for the Direct Messages pseudo-guild.
     pub id: Option<Id<marker::GuildMarker>>,
     pub name: String,
+    pub icon: Option<String>,
     pub unread: bool,
     pub mentions: u32,
     /// Folder this guild sits in, if any: its id, name and colour.
@@ -1137,6 +1138,8 @@ pub struct Workspace {
     pub picker: Option<EmojiPicker<Id<marker::MessageMarker>>>,
     /// Profile panel target, and the projected profile once it arrives.
     pub profile: Option<(Id<marker::UserMarker>, Option<ProfileView>)>,
+    /// Self profile popout card in the bottom-left corner with status selector.
+    pub self_profile_popout: bool,
     /// Whether the window has focus. Notifications for the channel being read
     /// are suppressed only while it does.
     pub window_focused: bool,
@@ -1275,6 +1278,7 @@ impl Workspace {
             search: None,
             picker: None,
             profile: None,
+            self_profile_popout: false,
             window_focused: true,
             options,
             settings_note: None,
@@ -2943,6 +2947,9 @@ impl Workspace {
         }
 
         self.nav.channel = Some(channel_id);
+        if let Some(pos) = self.model.channels.iter().position(|c| c.id == Some(channel_id)) {
+            self.model.selected_channel = pos;
+        }
         self.messages.clear();
 
         if let Some(handle) = &self.handle {
@@ -6670,7 +6677,7 @@ impl Workspace {
 
         match view {
             Some(view) => container
-                .child(profile_view(view, self.options.display.circular_avatars, Some(close_listener.clone())))
+                .child(profile_view(view, self.options.display.circular_avatars, Some(close_listener)))
                 .children(friendship)
                 .children(moderation),
             // The fetch is in flight. A skeleton with the id keeps the panel
@@ -7005,26 +7012,15 @@ impl Workspace {
                     .cursor_pointer()
                     .hover(|s| s.bg(rgb(active().surface_hover)))
                     .on_click(cx.listener(|this, _event, _window, cx| {
-                        if let Some(state) = &this.last_state {
-                            let user_id = state.current_user_id();
-                            this.profile = user_id.map(|id| (id, None));
-                            cx.notify();
-                        }
+                        this.self_profile_popout = !this.self_profile_popout;
+                        cx.notify();
                     }))
                     .child(
                         gpui::div()
                             .id("bar-avatar")
                             .relative()
-                            .cursor_pointer()
                             .child(avatar(32., &user_name))
-                            .child(presence_dot(Presence::Online))
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                // Without this the row's own handler also runs
-                                // and opens the profile behind the file picker.
-                                cx.stop_propagation();
-                                this.change_avatar(cx);
-                                cx.notify();
-                            })),
+                            .child(presence_dot(Presence::Online)),
                     )
                     .child(
                         column()
@@ -7270,10 +7266,19 @@ impl Workspace {
     /// Whether the open channel is a thread, which decides if thread controls
     /// apply at all.
     fn in_thread(&self) -> bool {
-        self.nav
-            .channel
-            .and_then(|id| self.last_state.as_ref().and_then(|s| s.channel(id)))
-            .is_some_and(|c| c.is_thread())
+        let Some(channel_id) = self.nav.channel else {
+            return false;
+        };
+        if let Some(state) = &self.last_state {
+            if let Some(c) = state.channel(channel_id) {
+                return c.is_thread();
+            }
+        }
+        self.model
+            .channels
+            .iter()
+            .find(|c| c.id == Some(channel_id))
+            .is_some_and(|c| c.kind == ChannelKind::Thread)
     }
 
     /// A DM or group DM with no call already running can be called.
@@ -8429,23 +8434,7 @@ impl Workspace {
                 self.model.status_line = format!("Preview failed: {message}");
             }
 
-            AppEvent::UserProfileLoaded { profile, .. } => {
-                if let Some((user_id, target_view)) = &mut self.profile
-                    && *user_id == profile.user.id
-                {
-                    *target_view = Some(ProfileView {
-                        display_name: profile.user.global_name.clone().unwrap_or_else(|| profile.user.username.clone()),
-                        handle: profile.user.discriminator.as_deref().filter(|d| *d != "0").map(|d| format!("#{}", d)),
-                        avatar: profile.user.avatar.clone(),
-                        pronouns: profile.pronouns.clone(),
-                        bio: profile.bio.clone(),
-                        activities: Vec::new(),
-                        roles: profile.guild_member.as_ref().map(|m| m.roles.clone()).unwrap_or_default(),
-                        mutual_guilds: Vec::new(),
-                        loaded: true,
-                    });
-                }
-            }
+
 
             AppEvent::UserProfileLoadFailed { message, .. } => {
                 // The panel is closed rather than left on a spinner that will
@@ -8749,7 +8738,7 @@ impl Workspace {
                         )
                     })
                     .relative()
-                    .child(avatar(44., &guild.name))
+                    .child(avatar_with_url(44., &guild.name, guild.icon.as_deref(), true))
                     .when(selected, |d| {
                         d.border_2()
                             .border_color(rgb(active().accent))
@@ -8760,26 +8749,39 @@ impl Workspace {
                             .border_color(rgb(active().text_muted))
                             .rounded_full()
                     })
-                    // Mention count, which the projection computed but the
-                    // rail never showed. Without it a server with unread
-                    // mentions looks the same as one with idle chatter.
-                    .when(guild.mentions > 0, |d| {
+                    // Mention count (Red badge) / Unread badge (White badge) positioned over lower right
+                    .when(guild.mentions > 0 || guild.unread, |d| {
                         d.child(
                             gpui::div()
                                 .absolute()
-                                .bottom(px(-2.))
-                                .right(px(-2.))
-                                .px(px(5.))
+                                .bottom(px(-4.))
+                                .right(px(-4.))
+                                .min_w(px(18.))
+                                .h(px(18.))
+                                .px(px(4.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
                                 .rounded_full()
-                                .bg(rgb(active().danger))
+                                .bg(rgb(if guild.mentions > 0 {
+                                    active().danger
+                                } else {
+                                    active().surface
+                                }))
+                                .border_2()
+                                .border_color(rgb(active().bg))
                                 .text_size(px(scaled(text::XS)))
-                                .text_color(rgb(active().on_accent))
-                                // Capped, because a four-digit badge is wider
-                                // than the avatar it sits on.
+                                .text_color(rgb(if guild.mentions > 0 {
+                                    active().on_accent
+                                } else {
+                                    active().text
+                                }))
                                 .child(if guild.mentions > 99 {
                                     "99+".to_string()
-                                } else {
+                                } else if guild.mentions > 0 {
                                     guild.mentions.to_string()
+                                } else {
+                                    "•".to_string()
                                 }),
                         )
                     }),
@@ -9022,7 +9024,7 @@ impl Workspace {
                 continue;
             }
 
-            let selected = index == self.model.selected_channel;
+            let selected = channel.id.is_some() && channel.id == self.nav.channel;
             let is_thread = channel.kind == ChannelKind::Thread;
 
             let mut entry = sidebar_row(selected)
@@ -9282,6 +9284,45 @@ impl Workspace {
         pane
     }
 
+    fn self_status_item(
+        label: &'static str,
+        target_status: PresenceStatus,
+        current_status: PresenceStatus,
+        on_click: impl Fn(&mut gpui::App) + 'static,
+    ) -> gpui::Stateful<gpui::Div> {
+        let is_selected = target_status == current_status;
+        row()
+            .id(label)
+            .w_full()
+            .px(px(space::SM))
+            .py(px(space::XS))
+            .rounded(px(layout::RADIUS))
+            .cursor_pointer()
+            .hover(|s| s.bg(rgb(active().surface_hover)))
+            .on_click(move |_, _, cx| on_click(cx))
+            .child(
+                row()
+                    .items_center()
+                    .gap(px(space::SM))
+                    .child(presence_dot(match target_status {
+                        PresenceStatus::Online => Presence::Online,
+                        PresenceStatus::Idle => Presence::Idle,
+                        PresenceStatus::DoNotDisturb => Presence::Dnd,
+                        _ => Presence::Offline,
+                    }))
+                    .child(
+                        gpui::div()
+                            .text_size(px(scaled(text::SM)))
+                            .text_color(rgb(if is_selected {
+                                active().text
+                            } else {
+                                active().text_muted
+                            }))
+                            .child(label),
+                    ),
+            )
+    }
+
     /// The single open modal, if any.
     ///
     /// Ordered by urgency: a confirmation blocks whatever opened it, so it
@@ -9289,6 +9330,190 @@ impl Workspace {
     /// drawn over the first would leave the one underneath clickable.
     fn overlays(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
         let entity = cx.entity();
+
+        if self.self_profile_popout {
+            let user_name = self
+                .last_state
+                .as_ref()
+                .and_then(|s| s.current_user())
+                .unwrap_or("blu")
+                .to_string();
+
+            let dismiss = {
+                let entity = entity.clone();
+                move |cx: &mut gpui::App| {
+                    entity.update(cx, |workspace, cx| {
+                        workspace.self_profile_popout = false;
+                        cx.notify();
+                    });
+                }
+            };
+
+            let presence_entity = entity.clone();
+            let set_presence = move |status: PresenceStatus, cx: &mut gpui::App| {
+                presence_entity.update(cx, |workspace, cx| {
+                    workspace.status = status;
+                    workspace.self_profile_popout = false;
+                    workspace.set_status(status);
+                    cx.notify();
+                });
+            };
+
+            let edit_status_fn = {
+                let entity = entity.clone();
+                move |cx: &mut gpui::App| {
+                    entity.update(cx, |workspace, cx| {
+                        workspace.self_profile_popout = false;
+                        let mut text = Composer::default();
+                        text.set_text(&workspace.custom_status);
+                        workspace.editing_status = Some(text);
+                        cx.notify();
+                    });
+                }
+            };
+
+            let open_settings_fn = {
+                let entity = entity.clone();
+                move |cx: &mut gpui::App| {
+                    entity.update(cx, |workspace, cx| {
+                        workspace.self_profile_popout = false;
+                        workspace.open_settings_window(cx);
+                    });
+                }
+            };
+
+            let current_status = self.status;
+
+            let card = gpui::div()
+                .absolute()
+                .bottom(px(80.))
+                .left(px(72.))
+                .w(px(280.))
+                .bg(rgb(active().surface_sunken))
+                .border_1()
+                .border_color(rgb(active().border))
+                .rounded(px(layout::RADIUS_LG))
+                .shadow_lg()
+                .overflow_hidden()
+                .child(
+                    column()
+                        .w_full()
+                        .child(
+                            gpui::div()
+                                .w_full()
+                                .h(px(60.))
+                                .bg(rgb(active().accent)),
+                        )
+                        .child(
+                            column()
+                                .p(px(space::MD))
+                                .gap(px(space::SM))
+                                .child(
+                                    row()
+                                        .items_center()
+                                        .gap(px(space::SM))
+                                        .child(avatar(48., &user_name))
+                                        .child(
+                                            column()
+                                                .child(
+                                                    gpui::div()
+                                                        .text_size(px(scaled(text::BASE)))
+                                                        .font_weight(gpui::FontWeight::BOLD)
+                                                        .text_color(rgb(active().text))
+                                                        .child(user_name.clone()),
+                                                )
+                                                .child(
+                                                    gpui::div()
+                                                        .text_size(px(scaled(text::XS)))
+                                                        .text_color(rgb(active().text_subtle))
+                                                        .child(format!("@{user_name}")),
+                                                ),
+                                        ),
+                                )
+                                .child(
+                                    gpui::div()
+                                        .w_full()
+                                        .h(px(1.))
+                                        .bg(rgb(active().border)),
+                                )
+                                // Status selectors
+                                .child(
+                                    column()
+                                        .gap(px(2.))
+                                        .child(Self::self_status_item("Online", PresenceStatus::Online, current_status, {
+                                            let sp = set_presence.clone();
+                                            move |cx| sp(PresenceStatus::Online, cx)
+                                        }))
+                                        .child(Self::self_status_item("Idle", PresenceStatus::Idle, current_status, {
+                                            let sp = set_presence.clone();
+                                            move |cx| sp(PresenceStatus::Idle, cx)
+                                        }))
+                                        .child(Self::self_status_item("Do Not Disturb", PresenceStatus::DoNotDisturb, current_status, {
+                                            let sp = set_presence.clone();
+                                            move |cx| sp(PresenceStatus::DoNotDisturb, cx)
+                                        }))
+                                        .child(Self::self_status_item("Offline", PresenceStatus::Offline, current_status, {
+                                            let sp = set_presence.clone();
+                                            move |cx| sp(PresenceStatus::Offline, cx)
+                                        })),
+                                )
+                                .child(
+                                    gpui::div()
+                                        .w_full()
+                                        .h(px(1.))
+                                        .bg(rgb(active().border)),
+                                )
+                                .child(
+                                    row()
+                                        .id("popout-edit-status")
+                                        .w_full()
+                                        .px(px(space::SM))
+                                        .py(px(space::XS))
+                                        .rounded(px(layout::RADIUS))
+                                        .cursor_pointer()
+                                        .hover(|s| s.bg(rgb(active().surface_hover)))
+                                        .on_click(move |_, _, cx| edit_status_fn(cx))
+                                        .child(
+                                            gpui::div()
+                                                .text_size(px(scaled(text::SM)))
+                                                .text_color(rgb(active().text))
+                                                .child("Set Custom Status"),
+                                        ),
+                                )
+                                .child(
+                                    row()
+                                        .id("popout-edit-profile")
+                                        .w_full()
+                                        .px(px(space::SM))
+                                        .py(px(space::XS))
+                                        .rounded(px(layout::RADIUS))
+                                        .cursor_pointer()
+                                        .hover(|s| s.bg(rgb(active().surface_hover)))
+                                        .on_click(move |_, _, cx| open_settings_fn(cx))
+                                        .child(
+                                            gpui::div()
+                                                .text_size(px(scaled(text::SM)))
+                                                .text_color(rgb(active().text))
+                                                .child("Edit Profile"),
+                                        ),
+                                ),
+                        ),
+                );
+
+            return Some(
+                gpui::div()
+                    .absolute()
+                    .inset_0()
+                    .child(
+                        gpui::div()
+                            .id("self-profile-dismiss")
+                            .absolute()
+                            .inset_0()
+                            .on_click(move |_event, _window, cx| dismiss(cx)),
+                    )
+                    .child(card),
+            );
+        }
 
         if let Some(pending) = &self.confirming {
             let prompt = pending.action.prompt();
@@ -10913,12 +11138,19 @@ impl Workspace {
             .channel
             .and_then(|id| self.last_state.as_ref().and_then(|s| s.channel(id)));
 
+        let model_channel = self
+            .nav
+            .channel
+            .and_then(|id| self.model.channels.iter().find(|c| c.id == Some(id)));
+
         let channel_name = selected_channel_opt
             .map(|c| c.name.clone())
+            .or_else(|| model_channel.map(|c| c.name.clone()))
             .unwrap_or_default();
 
         let channel_glyph = selected_channel_opt
-            .map(|c| if c.is_thread() { "\u{1F4AC}" } else { ChannelKind::Text.glyph() })
+            .map(|c| if c.is_thread() { ChannelKind::Thread.glyph() } else { ChannelKind::Text.glyph() })
+            .or_else(|| model_channel.map(|c| if c.kind == ChannelKind::Thread { ChannelKind::Thread.glyph() } else { c.kind.glyph() }))
             .unwrap_or_else(|| ChannelKind::Text.glyph());
 
         column()
@@ -10954,14 +11186,14 @@ impl Workspace {
                                     })),
                             )
                             .child(
-                                icon_button("thread-mute", "\u{1F515}", "Mute thread notifications", false)
+                                icon_button("thread-mute", "\u{2573}", "Mute thread notifications", false)
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.set_thread_muted(true);
                                         cx.notify();
                                     })),
                             )
                             .child(
-                                icon_button("thread-pin", "\u{1F4D6}", "Pin thread", false)
+                                icon_button("thread-pin", "\u{25B2}", "Pin thread", false)
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.set_thread_pinned(true);
                                         cx.notify();
@@ -10976,21 +11208,21 @@ impl Workspace {
                                     })),
                             )
                             .child(
-                                icon_button("thread-lock", "\u{1F512}", "Lock thread", false)
+                                icon_button("thread-lock", "\u{25A3}", "Lock thread", false)
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.set_thread_locked(true);
                                         cx.notify();
                                     })),
                             )
                             .child(
-                                icon_button("thread-delete", "\u{1F5D1}", "Delete thread", true)
+                                icon_button("thread-delete", "\u{2715}", "Delete thread", true)
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.delete_thread();
                                         cx.notify();
                                     })),
                             )
                             .child(
-                                icon_button("thread-archive", "\u{1F4E6}", "Archive thread", false)
+                                icon_button("thread-archive", "\u{25A6}", "Archive thread", false)
                                     .on_click(cx.listener(|this, _event, _window, cx| {
                                         this.set_thread_archived(true);
                                         cx.notify();
@@ -11001,7 +11233,7 @@ impl Workspace {
                     // than disabled: unlike a per-member action, there is no
                     // per-channel reason to explain - either the account may
                     // administer this server or it may not.
-                    .when(self.can_manage_channels(), |header| {
+                    .when(self.can_manage_channels() && !self.in_thread(), |header| {
                         header
                             .child(
                                 icon_button(
@@ -11170,7 +11402,7 @@ impl Workspace {
                         let call_channel = self.nav.channel;
                         let call_name = channel_name.clone();
                         header.child(
-                            icon_button("dm-call", "\u{1F4DE}", "Start voice call", false)
+                            icon_button("dm-call", "\u{260E}", "Start voice call", false)
                                 .on_click(cx.listener(move |this, _event, _window, cx| {
                                     if let Some(channel_id) = call_channel {
                                         this.join_voice(channel_id, call_name.clone());

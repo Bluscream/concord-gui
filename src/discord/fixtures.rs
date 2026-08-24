@@ -76,6 +76,7 @@ fn guild(id: u64, name: &str, members: u64, online: u32) -> GuildState {
     GuildState {
         id: guild_id(id),
         name: name.to_string(),
+        icon: None,
         member_count: Some(members),
         online_count: Some(online),
         owner_id: Some(user_id(1001)),
@@ -220,9 +221,9 @@ pub fn demo_state() -> DiscordState {
     let navigation = Arc::make_mut(&mut state.navigation);
 
     // ---- guilds ------------------------------------------------------------
-    navigation
-        .guilds
-        .insert(guild_id(10), guild(10, "RostFaden", 128, 34));
+    let mut rostfaden = guild(10, "RostFaden", 128, 34);
+    rostfaden.icon = Some("https://cdn.discordapp.com/icons/747967102895390741/4ed9b9516ae3bb878c8e15f4ca089141.webp?size=1024".to_string());
+    navigation.guilds.insert(guild_id(10), rostfaden);
     navigation
         .guilds
         .insert(guild_id(20), guild(20, "Rust Community", 4210, 812));
@@ -478,6 +479,15 @@ pub fn demo_state() -> DiscordState {
             7095,
         ),
         message(4, 111, Some(10), 1002, "ferris", "and this one too", 7090),
+        message(
+            41,
+            111,
+            Some(10),
+            1002,
+            "ferris",
+            "check out our guild icon: https://cdn.discordapp.com/icons/747967102895390741/4ed9b9516ae3bb878c8e15f4ca089141.webp?size=1024",
+            7080,
+        ),
         message(
             5,
             111,

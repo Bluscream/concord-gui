@@ -126,11 +126,15 @@ pub fn avatar(size: f32, seed: &str) -> Div {
         .text_size(px(size * 0.4))
         .text_color(rgb(0xffffff))
         .child(
-            seed.chars()
-                .next()
-                .unwrap_or('?')
-                .to_uppercase()
-                .to_string(),
+            if seed == "Direct Messages" {
+                "DM".to_string()
+            } else {
+                seed.chars()
+                    .next()
+                    .unwrap_or('?')
+                    .to_uppercase()
+                    .to_string()
+            },
         )
 }
 

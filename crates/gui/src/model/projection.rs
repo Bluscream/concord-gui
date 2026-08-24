@@ -132,6 +132,7 @@ fn project_guilds(state: &DiscordState) -> Vec<GuildEntry> {
     let mut entries = vec![GuildEntry {
         id: None,
         name: "Direct Messages".to_string(),
+        icon: None,
         unread: dm_unread > 0,
         mentions: dm_unread as u32,
         folder: None,
@@ -169,6 +170,7 @@ fn project_guilds(state: &DiscordState) -> Vec<GuildEntry> {
         GuildEntry {
             id: Some(guild.id),
             name: guild.name.clone(),
+            icon: guild.icon.clone(),
             unread: !matches!(unread, ChannelUnreadState::Seen),
             mentions: mention_count(unread),
             folder: folder_of.get(&guild.id).cloned(),
@@ -193,15 +195,19 @@ fn project_channels(state: &DiscordState, nav: &Navigation) -> Vec<ChannelEntry>
     let (threads, roots): (Vec<_>, Vec<_>) = channels.into_iter().partition(|c| c.is_thread());
 
     let mut ordered = Vec::with_capacity(roots.len() + threads.len());
+    let mut placed_threads = std::collections::HashSet::new();
     for channel in roots {
         let id = channel.id;
         ordered.push(channel);
-        ordered.extend(
-            threads
-                .iter()
-                .filter(|thread| thread.parent_id == Some(id))
-                .copied(),
-        );
+        for thread in threads.iter().filter(|t| t.parent_id == Some(id)) {
+            ordered.push(*thread);
+            placed_threads.insert(thread.id);
+        }
+    }
+    for thread in &threads {
+        if !placed_threads.contains(&thread.id) {
+            ordered.push(*thread);
+        }
     }
 
     ordered

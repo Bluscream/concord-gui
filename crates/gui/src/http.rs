@@ -80,27 +80,34 @@ impl HttpClient for ReqwestClient {
         let (parts, body) = request.into_parts();
 
         Box::pin(async move {
-            let bytes = body_bytes(body).await;
+            let handle = crate::runtime::spawn(async move {
+                let bytes = body_bytes(body).await;
 
-            let mut outgoing = client.request(parts.method, parts.uri.to_string());
-            for (name, value) in parts.headers.iter() {
-                outgoing = outgoing.header(name, value);
+                let mut outgoing = client.request(parts.method, parts.uri.to_string());
+                for (name, value) in parts.headers.iter() {
+                    outgoing = outgoing.header(name, value);
+                }
+                if !bytes.is_empty() {
+                    outgoing = outgoing.body(bytes);
+                }
+
+                let response = outgoing.send().await?;
+                let status = response.status();
+                let headers = response.headers().clone();
+                let payload = response.bytes().await?;
+
+                let mut builder = http::Response::builder().status(status);
+                for (name, value) in headers.iter() {
+                    builder = builder.header(name, value);
+                }
+                let body = AsyncBody::from(payload.to_vec());
+                builder.body(body).map_err(anyhow::Error::from)
+            });
+
+            match handle {
+                Some(h) => h.await?,
+                None => Err(anyhow::anyhow!("tokio runtime unavailable")),
             }
-            if !bytes.is_empty() {
-                outgoing = outgoing.body(bytes);
-            }
-
-            let response = outgoing.send().await?;
-            let status = response.status();
-            let headers = response.headers().clone();
-            let payload = response.bytes().await?;
-
-            let mut builder = http::Response::builder().status(status);
-            for (name, value) in headers.iter() {
-                builder = builder.header(name, value);
-            }
-
-            Ok(builder.body(AsyncBody::from(payload.to_vec()))?)
         })
     }
 }

@@ -14,6 +14,7 @@ use crate::discord::state::DiscordState;
 pub struct GuildState {
     pub id: Id<GuildMarker>,
     pub name: String,
+    pub icon: Option<String>,
     pub member_count: Option<u64>,
     pub online_count: Option<u32>,
     /// Snowflake of the guild owner. Owners short-circuit permission checks
