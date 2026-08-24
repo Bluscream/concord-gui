@@ -1697,3 +1697,37 @@ fn no_key_binding_is_shadowed_by_an_unguarded_one_above_it() {
         problems.join("\n")
     );
 }
+
+#[test]
+fn the_voice_tick_moves_the_speaker_on() {
+    use concord::discord::{VoiceScope, fixtures};
+    use std::time::Instant;
+
+    // The first version derived the step from `now.elapsed()`, which is the
+    // time since `now` - nearly zero, every time - so the index never moved
+    // and one person appeared to talk for the whole session. Nothing failed;
+    // the room simply sat still.
+    let mut state = fixtures::demo_state();
+    let scope = VoiceScope::Guild(fixtures::demo_guild_id());
+
+    let start = Instant::now();
+    let speakers: Vec<_> = (0..4)
+        .map(|step| {
+            fixtures::voice::tick(&mut state, scope, start + fixtures::voice::TICK * step);
+            state
+                .voice_participants_for_channel(
+                    fixtures::demo_guild_id(),
+                    concord::discord::Id::new(121),
+                )
+                .into_iter()
+                .filter(|participant| participant.speaking)
+                .map(|participant| participant.user_id)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    assert!(
+        speakers.iter().any(|now| now != &speakers[0]),
+        "the speaker never changed across four ticks: {speakers:?}"
+    );
+}

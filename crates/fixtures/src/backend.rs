@@ -119,6 +119,8 @@ enum Action {
         channel: concord::discord::Id<concord::discord::marker::ChannelMarker>,
         user: concord::discord::Id<concord::discord::marker::UserMarker>,
     },
+    /// Move the voice room on: who is talking, whose camera is on.
+    VoiceTick { scope: concord::discord::VoiceScope },
     /// Stop typing and post the reply.
     Reply {
         channel: concord::discord::Id<concord::discord::marker::ChannelMarker>,
@@ -146,6 +148,18 @@ fn fire_due(
         match item.action {
             Action::StartTyping { channel, user } => {
                 fixtures::set_typing(state, channel, user);
+            }
+            Action::VoiceTick { scope } => {
+                fixtures::voice::tick(state, scope, now);
+                // Rearmed here rather than by the command, so it keeps
+                // running for as long as the room is occupied and stops on
+                // its own when the last person leaves.
+                if !fixtures::voice::participants(state, scope).is_empty() {
+                    pending.push(Scheduled {
+                        at: now + fixtures::voice::TICK,
+                        action: Action::VoiceTick { scope },
+                    });
+                }
             }
             Action::Reply {
                 channel,
@@ -260,6 +274,20 @@ fn handle_command(
             ..
         } => {
             fixtures::join_voice(state, scope, channel_id, self_mute, self_deaf);
+
+            // A voice room that never changes looks frozen, and the panel's
+            // whole job is showing who is talking. One tick is enough: it
+            // rearms itself while anyone is still in the room.
+            let ticking = pending.iter().any(
+                |item| matches!(item.action, Action::VoiceTick { scope: held } if held == scope),
+            );
+            if !ticking {
+                pending.push(Scheduled {
+                    at: std::time::Instant::now() + fixtures::voice::TICK,
+                    action: Action::VoiceTick { scope },
+                });
+            }
+
             publish_state!();
         }
 
@@ -1806,4 +1834,76 @@ fn guild_of(
     state
         .channel(channel_id)
         .and_then(|channel| channel.guild_id)
+}
+
+#[cfg(test)]
+mod voice_tick_tests {
+    use super::*;
+    use concord::discord::{AppCommand, VoiceScope, fixtures};
+
+    /// Joining a voice channel has to arm the tick, and the tick has to keep
+    /// itself armed. Tested through the backend rather than by calling
+    /// `voice::tick` directly, because the tick function was correct and
+    /// working while the room on screen sat perfectly still - the fault was
+    /// entirely in the wiring around it.
+    #[test]
+    fn joining_a_voice_channel_starts_the_room_moving() {
+        let mut backend = FakeBackend::new();
+        let scope = VoiceScope::Guild(fixtures::demo_guild_id());
+
+        backend.handle(AppCommand::JoinVoiceChannel {
+            scope,
+            channel_id: concord::discord::Id::new(121),
+            self_mute: false,
+            self_deaf: false,
+            input_source: None,
+            output_source: None,
+            allow_microphone_transmit: false,
+            noise_suppression: true,
+            microphone_sensitivity: Default::default(),
+            microphone_volume: Default::default(),
+            voice_output_volume: Default::default(),
+            participant_playback_settings: Vec::new(),
+        });
+
+        assert!(
+            backend.next_deadline().is_some(),
+            "joining armed no tick, so the room never moves"
+        );
+
+        // And firing it must leave another armed, or the room moves once and
+        // then stops.
+        std::thread::sleep(fixtures::voice::TICK);
+        let emissions = backend.fire_due();
+        assert!(!emissions.is_empty(), "the tick published nothing");
+        assert!(
+            backend.next_deadline().is_some(),
+            "the tick did not rearm, so the room stops after one step"
+        );
+
+        // And the room must actually look different afterwards.
+        let speakers = |backend: &FakeBackend| -> Vec<u64> {
+            backend
+                .state()
+                .voice_participants_for_channel(
+                    fixtures::demo_guild_id(),
+                    concord::discord::Id::new(121),
+                )
+                .into_iter()
+                .filter(|participant| participant.speaking)
+                .map(|participant| participant.user_id.get())
+                .collect()
+        };
+
+        let mut seen = vec![speakers(&backend)];
+        for _ in 0..3 {
+            std::thread::sleep(fixtures::voice::TICK);
+            backend.fire_due();
+            seen.push(speakers(&backend));
+        }
+        assert!(
+            seen.iter().any(|now| now != &seen[0]),
+            "the room published updates but nobody's microphone ever moved: {seen:?}"
+        );
+    }
 }
