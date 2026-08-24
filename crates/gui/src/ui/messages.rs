@@ -749,7 +749,85 @@ enum Segment {
 }
 
 /// Render a body, drawing custom emoji as images.
+/// Split a body into runs of lines that share a block style.
+///
+/// Headings and subtext change the font size, and `HighlightStyle` cannot:
+/// GPUI lays out one `StyledText` at a single size. So a heading has to be
+/// its own element, which means finding where one stops.
+fn block_ranges(parsed: &markdown::Parsed) -> Vec<(std::ops::Range<usize>, u8, bool)> {
+    let mut blocks: Vec<(std::ops::Range<usize>, u8, bool)> = Vec::new();
+    let mut offset = 0usize;
+
+    for line in parsed.text.split('\n') {
+        let end = offset + line.len();
+        // The style of the first run covering this line. A line with no runs
+        // is ordinary text, which is the default.
+        let (heading, subtext) = parsed
+            .runs
+            .iter()
+            .find(|(range, _)| range.start <= offset && range.end > offset)
+            .map_or((0, false), |(_, style)| (style.heading, style.subtext));
+
+        match blocks.last_mut() {
+            // Consecutive lines of the same shape stay one element, so a
+            // paragraph still wraps as a paragraph.
+            Some((range, held_heading, held_subtext))
+                if *held_heading == heading && *held_subtext == subtext =>
+            {
+                range.end = end;
+            }
+            _ => blocks.push((offset..end, heading, subtext)),
+        }
+        // Past the newline.
+        offset = end + 1;
+    }
+
+    blocks
+}
+
 fn rich_body(
+    parsed: &markdown::Parsed,
+    reveal_spoilers: bool,
+    show_emoji: bool,
+    animate: bool,
+) -> Div {
+    let blocks = block_ranges(parsed);
+
+    // More than one shape in the body, so each needs its own element at its
+    // own size.
+    if blocks.len() > 1 || blocks.iter().any(|(_, heading, sub)| *heading > 0 || *sub) {
+        let mut stack = column().w_full().min_w(px(0.));
+        for (range, heading, subtext) in blocks {
+            let slice = sub_parsed(parsed, range);
+            let size = match (heading, subtext) {
+                (1, _) => text::BASE * 1.6,
+                (2, _) => text::BASE * 1.35,
+                (3, _) => text::BASE * 1.15,
+                (_, true) => text::XS,
+                _ => text::BASE,
+            };
+            stack = stack.child(
+                gpui::div()
+                    .w_full()
+                    .min_w(px(0.))
+                    .text_size(px(scaled(size)))
+                    .when(heading > 0, |d| d.font_weight(gpui::FontWeight::BOLD))
+                    .when(subtext, |d| d.text_color(rgb(active().text_subtle)))
+                    .child(rich_body_inner(
+                        &slice,
+                        reveal_spoilers,
+                        show_emoji,
+                        animate,
+                    )),
+            );
+        }
+        return stack;
+    }
+
+    rich_body_inner(parsed, reveal_spoilers, show_emoji, animate)
+}
+
+fn rich_body_inner(
     parsed: &markdown::Parsed,
     reveal_spoilers: bool,
     show_emoji: bool,
@@ -813,6 +891,9 @@ fn sub_parsed(parsed: &markdown::Parsed, range: std::ops::Range<usize>) -> markd
     markdown::Parsed {
         text: parsed.text[range].to_string(),
         runs,
+        // Carried whole: a link's address is referenced by index, so dropping
+        // the table would leave those runs pointing at nothing.
+        links: parsed.links.clone(),
     }
 }
 
@@ -843,7 +924,8 @@ fn rich_text(parsed: &markdown::Parsed, reveal_spoilers: bool) -> impl IntoEleme
         highlight.color = Some(
             match style.kind {
                 Kind::Mention(_) | Kind::Role(_) => rgb(active().accent),
-                Kind::Channel(_) | Kind::Url => rgb(active().accent_hover),
+                Kind::Channel(_) | Kind::Url | Kind::Link(_) => rgb(active().accent_hover),
+                Kind::Command(_) => rgb(active().accent),
                 Kind::Emoji { .. } | Kind::Timestamp => rgb(active().text_muted),
                 Kind::Text => {
                     if style.code {
