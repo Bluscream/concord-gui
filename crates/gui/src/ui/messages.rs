@@ -951,7 +951,12 @@ fn rich_text(parsed: &markdown::Parsed, reveal_spoilers: bool) -> impl IntoEleme
             match style.kind {
                 Kind::Mention(_) | Kind::Role(_) => rgb(active().accent),
                 Kind::Channel(_) | Kind::Url | Kind::Link(_) => rgb(active().accent_hover),
-                Kind::Command(_) => rgb(active().accent),
+                // An in-app reference is a mention, not a link: Discord
+                // colours it like the channel or navigation item it points at
+                // rather than like an address that leaves the app.
+                Kind::ChannelLink { .. } | Kind::StaticRoute => rgb(active().accent),
+                Kind::AttachmentLink | Kind::Tel => rgb(active().accent_hover),
+                Kind::Command(_) | Kind::Sound { .. } => rgb(active().accent),
                 Kind::Emoji { .. } | Kind::Timestamp => rgb(active().text_muted),
                 Kind::Text => {
                     if style.code {

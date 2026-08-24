@@ -62,6 +62,26 @@ pub enum Kind {
     Command(u64),
     /// `<t:unix:style>` - a rendered timestamp.
     Timestamp,
+    /// `<id:name>` - one of Discord's server-navigation pseudo-channels.
+    ///
+    /// The live client accepts exactly five names and nothing else, so this
+    /// carries no payload: which one it was is in the run's own text.
+    StaticRoute,
+    /// `<sound:id:guild>` - a soundboard sound.
+    Sound {
+        id: u64,
+        guild: u64,
+    },
+    /// `<tel:number>` - a telephone link.
+    Tel,
+    /// A `discord.com/channels/...` address, which the client renders as an
+    /// in-app reference rather than a bare URL.
+    ChannelLink {
+        channel: u64,
+        message: Option<u64>,
+    },
+    /// A `cdn.discordapp.com/attachments/...` address, shown as its filename.
+    AttachmentLink,
 }
 
 /// Supplies display names for mention targets.
@@ -125,6 +145,16 @@ impl Parsed {
     }
 }
 
+/// The shrug, which Discord's parser protects as a single unit.
+const SHRUG: &str = "\u{af}\\_(\u{30c4})_/\u{af}";
+
+/// The prefix that sends a message without pinging anyone.
+///
+/// Only at the very start of a message and only when the whole word is
+/// `@silent` - `@silently` is an ordinary mention attempt, which is what the
+/// live client's negative lookahead enforces.
+const SILENT_PREFIX: &str = "@silent";
+
 /// Parse a message body.
 ///
 /// Fenced blocks are extracted *before* line splitting, because they span
@@ -138,6 +168,17 @@ pub fn parse(input: &str) -> Parsed {
 /// Parse, resolving mention targets to display names.
 pub fn parse_with(input: &str, mentions: &dyn Mentions) -> Parsed {
     let mut out = Parsed::default();
+
+    // `@silent` at the very start is an instruction to Discord, not text, and
+    // the sender never sees it in their own message. Stripped rather than
+    // rendered, which is what left it looking like a failed mention.
+    let input = match input.strip_prefix(SILENT_PREFIX) {
+        Some(after) if after.is_empty() || after.starts_with(char::is_whitespace) => {
+            after.strip_prefix(' ').unwrap_or(after)
+        }
+        _ => input,
+    };
+
     let mut rest = input;
 
     while let Some(start) = rest.find("```") {
@@ -369,15 +410,36 @@ fn parse_inline(input: &str, base: Style, mentions: &dyn Mentions, out: &mut Par
         // Bare URLs.
         if rest.starts_with("http://") || rest.starts_with("https://") {
             let end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
+            let url = &rest[..end];
             flush!(index);
-            out.push(
-                &rest[..end],
-                Style {
-                    kind: Kind::Url,
-                    ..style
-                },
-            );
+
+            // Discord's own addresses are references rather than links: a
+            // channel URL renders as the channel, an attachment as its
+            // filename. Left as plain URLs they were a wall of snowflakes.
+            match discord_link(url) {
+                Some((label, kind)) => out.push(&label, Style { kind, ..style }),
+                None => out.push(
+                    url,
+                    Style {
+                        kind: Kind::Url,
+                        ..style
+                    },
+                ),
+            }
             index += end;
+            plain_start = index;
+            continue;
+        }
+
+        // `\u{af}\_(\u{30c4})_/\u{af}` survives intact.
+        //
+        // Discord protects it as a unit, and has to: the `\_` is an escape
+        // and the `_..._` around it is emphasis, so a shrug run through the
+        // ordinary rules comes out as mangled italics with the arms eaten.
+        if rest.starts_with(SHRUG) {
+            flush!(index);
+            out.push(SHRUG, style);
+            index += SHRUG.len();
             plain_start = index;
             continue;
         }
@@ -399,6 +461,19 @@ fn parse_inline(input: &str, base: Style, mentions: &dyn Mentions, out: &mut Par
         if let Some((token, len)) = marker {
             // Only treat it as a delimiter if it closes later on this line.
             let closes = rest[len..].contains(token);
+
+            // A single `*` will not open across a space, and it is the only
+            // marker that will not: `* x*` is literal on Discord, while
+            // `** x**`, `__ x__`, `~~ x~~`, `|| x||`, `_ x_` and `*** x***`
+            // all emphasise happily. Checked one marker at a time against a
+            // live client rather than assumed to be symmetric, because it
+            // is not.
+            let opens_across_space =
+                token == "*" && !style.italic && rest[len..].starts_with(char::is_whitespace);
+            if opens_across_space {
+                index += len;
+                continue;
+            }
             let active = match token {
                 "***" => style.bold && style.italic,
                 "**" => style.bold,
@@ -519,7 +594,102 @@ fn entity(rest: &str, mentions: &dyn Mentions) -> Option<(usize, String, Kind)> 
         return Some((consumed, render_timestamp(seconds, style), Kind::Timestamp));
     }
 
+    // Server navigation: <id:name>.
+    //
+    // Exactly these five. The live client's rule rejects everything else -
+    // `<id:shop>`, `<id:settings>` and `<id:member-safety>` were all checked
+    // and all refused - so an allow-list is the rule, not a shortcut.
+    if let Some(name) = body.strip_prefix("id:") {
+        let label = match name {
+            "customize" => "Channels & Roles",
+            "browse" => "Browse Channels",
+            "home" => "Server Home",
+            "guide" => "Server Guide",
+            "linked-roles" => "Linked Roles",
+            _ => return None,
+        };
+        return Some((consumed, label.to_owned(), Kind::StaticRoute));
+    }
+
+    // Soundboard: <sound:id:guild>. Both ids are required; `<sound:id>` is
+    // refused by the live client and is refused here.
+    if let Some(spec) = body.strip_prefix("sound:") {
+        let (raw_id, raw_guild) = spec.split_once(':')?;
+        let id: u64 = raw_id.parse().ok()?;
+        let guild: u64 = raw_guild.parse().ok()?;
+        return Some((
+            consumed,
+            "\u{1f50a} sound".to_owned(),
+            Kind::Sound { id, guild },
+        ));
+    }
+
+    // Telephone: <tel:number>. The label keeps the scheme, as Discord does.
+    if body.starts_with("tel:") {
+        return Some((consumed, body.to_owned(), Kind::Tel));
+    }
+
+    // A suppressed link - `<https://...>` - is not an entity. Returning None
+    // lets the scanner fall through to the URL branch, which is what strips
+    // the brackets and leaves the address unembedded.
     None
+}
+
+/// Discord's own addresses, which the client renders as in-app references.
+///
+/// Returns (bytes consumed, display text, kind) for a URL the caller has
+/// already found the extent of.
+fn discord_link(url: &str) -> Option<(String, Kind)> {
+    // Attachments show as the filename. Both hosts are accepted, matching the
+    // live client's rule, which takes cdn.discordapp.com and
+    // media.discordapp.net and nothing else.
+    for host in [
+        "https://cdn.discordapp.com/attachments/",
+        "https://media.discordapp.net/attachments/",
+    ] {
+        if let Some(path) = url.strip_prefix(host) {
+            let filename = path.rsplit('/').next()?;
+            let filename = filename.split(['?', '#']).next()?;
+            if filename.is_empty() {
+                return None;
+            }
+            return Some((filename.to_owned(), Kind::AttachmentLink));
+        }
+    }
+
+    // Channel and message links, on any of the three web hosts.
+    let path = [
+        "https://discord.com/",
+        "https://canary.discord.com/",
+        "https://ptb.discord.com/",
+    ]
+    .into_iter()
+    .find_map(|host| url.strip_prefix(host))?;
+    let rest = path.strip_prefix("channels/")?;
+
+    let mut parts = rest.split('/');
+    // The guild segment is a snowflake or the literal `@me` for a DM. A
+    // non-numeric anything else is refused, which is what stops
+    // `/channels/abc/456` being read as a channel link.
+    let guild = parts.next()?;
+    if guild != "@me" && !guild.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let channel: u64 = parts.next()?.parse().ok()?;
+    let message = match parts.next() {
+        Some(raw) => Some(raw.parse().ok()?),
+        None => None,
+    };
+    if parts.next().is_some() {
+        return None;
+    }
+
+    let label = if message.is_some() {
+        "#message".to_owned()
+    } else {
+        "#channel".to_owned()
+    };
+    Some((label, Kind::ChannelLink { channel, message }))
 }
 
 /// Split `[label](url)` into its two halves.
@@ -872,5 +1042,206 @@ mod discord_syntax_tests {
         assert_eq!(relative_time(Duration::seconds(-30)), "in 30 seconds");
         assert_eq!(relative_time(Duration::hours(1)), "1 hour ago");
         assert_eq!(relative_time(Duration::days(3)), "3 days ago");
+    }
+}
+
+/// Rules read off a live Discord client rather than remembered.
+///
+/// Every expectation here was checked by running the client's own matcher
+/// against the same input, so a disagreement is a real disagreement and not
+/// a guess about what Discord probably does.
+#[cfg(test)]
+mod live_client_tests {
+    use super::{Kind, parse};
+
+    fn kinds(body: &str) -> Vec<(String, Kind)> {
+        let p = parse(body);
+        p.runs
+            .iter()
+            .map(|(r, s)| (p.text[r.clone()].to_string(), s.kind))
+            .collect()
+    }
+
+    fn text(body: &str) -> String {
+        parse(body).text
+    }
+
+    #[test]
+    fn the_shrug_survives_intact() {
+        // The `\_` is an escape and the `_..._` is emphasis, so without a
+        // rule of its own this comes out with its arms eaten.
+        let shrug = "\u{af}\\_(\u{30c4})_/\u{af}";
+        assert_eq!(text(shrug), shrug);
+        assert_eq!(
+            text(&format!("{shrug} oh well")),
+            format!("{shrug} oh well")
+        );
+    }
+
+    #[test]
+    fn silent_prefix_is_stripped_only_at_the_start_and_only_whole() {
+        assert_eq!(text("@silent hello"), "hello");
+        assert_eq!(text("@silent"), "");
+        // `@silently` is not the prefix; the live rule has a negative
+        // lookahead that refuses it.
+        assert_eq!(text("@silently hello"), "@silently hello");
+        // Not at the start, so not a prefix.
+        assert_eq!(text("say @silent here"), "say @silent here");
+    }
+
+    #[test]
+    fn server_navigation_links_resolve_to_their_names() {
+        assert_eq!(
+            kinds("<id:customize>"),
+            vec![("Channels & Roles".to_string(), Kind::StaticRoute)]
+        );
+        for (raw, label) in [
+            ("<id:browse>", "Browse Channels"),
+            ("<id:home>", "Server Home"),
+            ("<id:guide>", "Server Guide"),
+            ("<id:linked-roles>", "Linked Roles"),
+        ] {
+            assert_eq!(text(raw), label, "{raw}");
+        }
+    }
+
+    /// The live rule takes five names and refuses the rest. These were all
+    /// tried against it and all refused.
+    #[test]
+    fn an_unknown_navigation_name_is_left_as_text() {
+        for raw in ["<id:shop>", "<id:settings>", "<id:member-safety>", "<id:>"] {
+            assert_eq!(text(raw), raw, "{raw} should not resolve");
+        }
+    }
+
+    #[test]
+    fn soundboard_needs_both_ids() {
+        let runs = kinds("<sound:123:456>");
+        assert_eq!(
+            runs.first().map(|(_, k)| *k),
+            Some(Kind::Sound {
+                id: 123,
+                guild: 456
+            })
+        );
+        // `<sound:123>` is refused by the live client, and here too.
+        assert_eq!(text("<sound:123>"), "<sound:123>");
+    }
+
+    #[test]
+    fn tel_links_are_recognised() {
+        assert_eq!(
+            kinds("<tel:+15551234567>"),
+            vec![("tel:+15551234567".to_string(), Kind::Tel)]
+        );
+    }
+
+    #[test]
+    fn channel_urls_become_references() {
+        assert_eq!(
+            kinds("https://discord.com/channels/123/456")
+                .first()
+                .map(|(_, k)| *k),
+            Some(Kind::ChannelLink {
+                channel: 456,
+                message: None
+            })
+        );
+        assert_eq!(
+            kinds("https://discord.com/channels/123/456/789")
+                .first()
+                .map(|(_, k)| *k),
+            Some(Kind::ChannelLink {
+                channel: 456,
+                message: Some(789)
+            })
+        );
+        // A DM link uses `@me` where the guild id would be.
+        assert_eq!(
+            kinds("https://discord.com/channels/@me/456")
+                .first()
+                .map(|(_, k)| *k),
+            Some(Kind::ChannelLink {
+                channel: 456,
+                message: None
+            })
+        );
+        // canary and ptb are the same client.
+        assert_eq!(
+            kinds("https://canary.discord.com/channels/123/456")
+                .first()
+                .map(|(_, k)| *k),
+            Some(Kind::ChannelLink {
+                channel: 456,
+                message: None
+            })
+        );
+    }
+
+    /// The live rule refuses a non-numeric guild segment, which is what keeps
+    /// `/channels/abc/456` an ordinary link.
+    #[test]
+    fn a_channel_url_with_a_bad_guild_stays_a_plain_url() {
+        assert_eq!(
+            kinds("https://discord.com/channels/abc/456")
+                .first()
+                .map(|(_, k)| *k),
+            Some(Kind::Url)
+        );
+        assert_eq!(
+            kinds("https://discord.com/invite/abc")
+                .first()
+                .map(|(_, k)| *k),
+            Some(Kind::Url)
+        );
+    }
+
+    #[test]
+    fn attachment_urls_show_their_filename() {
+        for host in [
+            "https://cdn.discordapp.com/attachments/1/2/report.pdf",
+            "https://media.discordapp.net/attachments/1/2/report.pdf",
+        ] {
+            assert_eq!(
+                kinds(host),
+                vec![("report.pdf".to_string(), Kind::AttachmentLink)],
+                "{host}"
+            );
+        }
+        // A query string is not part of the name.
+        assert_eq!(
+            text("https://cdn.discordapp.com/attachments/1/2/a.png?ex=deadbeef"),
+            "a.png"
+        );
+        // Another host entirely is just a link.
+        assert_eq!(
+            kinds("https://example.com/attachments/1/2/a.png")
+                .first()
+                .map(|(_, k)| *k),
+            Some(Kind::Url)
+        );
+    }
+
+    /// A single `*` is the only marker that will not open across a space.
+    ///
+    /// Each of these was run through the live client's own matcher. The
+    /// asymmetry is real: `* x*` is literal, everything else emphasises.
+    #[test]
+    fn only_a_single_asterisk_refuses_a_leading_space() {
+        let italic = |body: &str| parse(body).runs.iter().any(|(_, style)| style.italic);
+        assert!(italic("*x*"), "*x* is italic");
+        assert!(italic("*x *"), "*x * is italic - trailing space is fine");
+        assert!(!italic("* x*"), "* x* is literal on Discord");
+        assert!(!italic("* x *"), "* x * is literal on Discord");
+
+        // Everything else takes a leading space without complaint.
+        assert!(parse("** x**").runs.iter().any(|(_, s)| s.bold));
+        assert!(parse("__ x__").runs.iter().any(|(_, s)| s.underline));
+        assert!(parse("~~ x~~").runs.iter().any(|(_, s)| s.strike));
+        assert!(parse("|| x||").runs.iter().any(|(_, s)| s.spoiler));
+        assert!(
+            italic("_ x_"),
+            "_ x_ is italic - underscore has no such rule"
+        );
     }
 }
