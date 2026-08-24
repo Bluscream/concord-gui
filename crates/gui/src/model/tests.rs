@@ -1301,6 +1301,13 @@ fn demo_mode_answers_every_command_the_ui_can_send() {
     let ui = extract(
         &[
             include_str!("../ui/workspace/mod.rs"),
+            include_str!("../ui/workspace/types.rs"),
+            include_str!("../ui/workspace/types.rs"),
+            include_str!("../ui/workspace/overlays.rs"),
+            include_str!("../ui/workspace/channel_sidebar.rs"),
+            include_str!("../ui/workspace/guild_rail.rs"),
+            include_str!("../ui/workspace/member_pane.rs"),
+            include_str!("../ui/workspace/profile_pane.rs"),
             include_str!("../ui/messages.rs"),
         ]
         .concat(),
@@ -1387,8 +1394,23 @@ fn no_icon_glyph_needs_a_font_we_do_not_ship() {
     //
     // Checked over source rather than at runtime: a glyph that fails to render
     // looks like a layout quirk, not an error, so nothing would ever raise it.
-    const SOURCES: [(&str, &str); 3] = [
+    const SOURCES: [(&str, &str); 6] = [
         ("workspace/mod.rs", include_str!("../ui/workspace/mod.rs")),
+        // overlays.rs draws glyphs too and was never scanned. types.rs and
+        // keys.rs are where a split moved workspace code, so they are
+        // covered whether or not they carry a glyph today.
+        (
+            "workspace/overlays.rs",
+            include_str!("../ui/workspace/overlays.rs"),
+        ),
+        (
+            "workspace/types.rs",
+            include_str!("../ui/workspace/types.rs"),
+        ),
+        (
+            "workspace/keys.rs",
+            include_str!("../ui/workspace/types.rs"),
+        ),
         ("messages.rs", include_str!("../ui/messages.rs")),
         ("chrome.rs", include_str!("../ui/chrome.rs")),
     ];
@@ -1523,9 +1545,9 @@ fn no_key_binding_is_shadowed_by_an_unguarded_one_above_it() {
     // equal to `key == "tab"`. Only the first pair, which happened to be
     // textually identical, was flagged.
     //
-    // Checked over source because the chain lives inside a GPUI closure that
-    // needs a window to run, so there is nothing to press keys against here.
-    const SOURCE: &str = include_str!("../ui/workspace/mod.rs");
+    // Checked over source because the chain runs inside a GPUI listener that
+    // needs a window, so there is nothing to press keys against here.
+    const SOURCE: &str = include_str!("../ui/workspace/keys.rs");
 
     /// Keys a condition tests for, and whether it tests for anything else.
     fn keys_of(condition: &str) -> (Vec<String>, bool) {
@@ -1560,7 +1582,10 @@ fn no_key_binding_is_shadowed_by_an_unguarded_one_above_it() {
         }
         // Anything beyond the key itself - a modifier, a piece of state -
         // means the arm does not claim the key for every situation.
+        // `self.` and `this.` both appear: the chain reads `self` as a method
+        // and `this` inside any nested GPUI listener closure.
         let guarded = condition.contains("modifiers")
+            || condition.contains("self.")
             || condition.contains("this.")
             || condition.contains("event.keystroke.key");
         (keys, guarded)
@@ -1569,6 +1594,7 @@ fn no_key_binding_is_shadowed_by_an_unguarded_one_above_it() {
     // The chain is the run of `} else if` arms at one indentation level.
     let mut claimed: Vec<(String, usize)> = Vec::new();
     let mut problems = Vec::new();
+    let mut examined = 0usize;
     let lines: Vec<&str> = SOURCE.lines().collect();
     for (number, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
@@ -1592,6 +1618,7 @@ fn no_key_binding_is_shadowed_by_an_unguarded_one_above_it() {
         if keys.is_empty() {
             continue;
         }
+        examined += 1;
         for key in &keys {
             if let Some((_, claimed_at)) = claimed.iter().find(|(held, _)| held == key) {
                 problems.push(format!(
@@ -1609,6 +1636,16 @@ fn no_key_binding_is_shadowed_by_an_unguarded_one_above_it() {
             }
         }
     }
+
+    // A guard that scans the wrong file passes for the wrong reason. This
+    // chain has already moved once, out of mod.rs into keys.rs; if it moves
+    // again this is what says so, rather than quietly finding nothing to
+    // check and reporting success.
+    assert!(
+        examined > 20,
+        "only {examined} key arms found in keys.rs - has the chain moved? \
+         this test is checking nothing"
+    );
 
     assert!(
         problems.is_empty(),
