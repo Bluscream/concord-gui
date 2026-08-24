@@ -293,6 +293,11 @@ pub struct ServerAdmin {
     pub apps: Vec<crate::discord::AuthorisedApp>,
     pub backup_codes: Vec<crate::discord::BackupCode>,
     pub totp_enabled: bool,
+    /// Live stages, by the channel running them.
+    pub stages: std::collections::HashMap<
+        crate::discord::Id<crate::discord::marker::ChannelMarker>,
+        StageInstance,
+    >,
     /// Where the next generated id comes from.
     ///
     /// A counter rather than a hash of the name: two stickers may share a
@@ -325,6 +330,14 @@ impl ServerAdmin {
             apps: super::demo_authorised_apps(),
             backup_codes: super::demo_backup_codes(),
             totp_enabled: false,
+            // Seeded with the one the canned data says is running, so
+            // "end stage" has something to end on a fresh session.
+            stages: [(
+                super::channel_id(121),
+                stage_instance(super::channel_id(121)).expect("seeded stage"),
+            )]
+            .into_iter()
+            .collect(),
             next_id: 50_000,
         }
     }

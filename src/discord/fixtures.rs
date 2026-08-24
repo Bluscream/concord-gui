@@ -60,6 +60,7 @@ pub mod account;
 pub mod guild;
 pub mod people;
 pub mod server;
+pub mod voice;
 
 pub use people::{
     autocomplete_choices, member_name, relationship, set_member_timeout,

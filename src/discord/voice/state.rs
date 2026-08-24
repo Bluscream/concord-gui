@@ -610,6 +610,70 @@ impl crate::discord::state::caches::VoiceStateCache {
         }
     }
 
+    /// Change one flag on one participant, leaving the rest alone.
+    ///
+    /// Separate from `set_fixture_participants`, which rebuilds a whole room:
+    /// a demo that moves one person's microphone should not have to restate
+    /// everybody else's camera and mute along with it.
+    fn edit_fixture(
+        &mut self,
+        scope: VoiceScope,
+        user: Id<UserMarker>,
+        edit: impl FnOnce(&mut VoiceState),
+    ) {
+        if let Some(existing) = self.states.get_mut(&(scope, user)) {
+            edit(existing);
+        }
+    }
+
+    pub(in crate::discord) fn set_fixture_speaking(
+        &mut self,
+        scope: VoiceScope,
+        user: Id<UserMarker>,
+        speaking: bool,
+    ) {
+        self.edit_fixture(scope, user, |state| state.speaking = speaking);
+    }
+
+    pub(in crate::discord) fn set_fixture_self_mute(
+        &mut self,
+        scope: VoiceScope,
+        user: Id<UserMarker>,
+        muted: bool,
+    ) {
+        self.edit_fixture(scope, user, |state| state.self_mute = muted);
+    }
+
+    pub(in crate::discord) fn set_fixture_video(
+        &mut self,
+        scope: VoiceScope,
+        user: Id<UserMarker>,
+        on: bool,
+    ) {
+        self.edit_fixture(scope, user, |state| state.self_video = on);
+    }
+
+    pub(in crate::discord) fn set_fixture_stream(
+        &mut self,
+        scope: VoiceScope,
+        user: Id<UserMarker>,
+        on: bool,
+    ) {
+        self.edit_fixture(scope, user, |state| state.self_stream = on);
+    }
+
+    /// Who is in a scope, for a caller that wants to move them about.
+    pub(in crate::discord) fn fixture_participants(
+        &self,
+        scope: VoiceScope,
+    ) -> Vec<Id<UserMarker>> {
+        self.states
+            .keys()
+            .filter(|(held, _)| *held == scope)
+            .map(|(_, user)| *user)
+            .collect()
+    }
+
     /// Remove one participant from a scope.
     pub(in crate::discord) fn remove_fixture_participant(
         &mut self,

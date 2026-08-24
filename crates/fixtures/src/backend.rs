@@ -756,6 +756,64 @@ fn handle_command(
             publish_event!(AppEvent::StreamBroadcastEnded { scope, channel_id });
         }
 
+        // ---- the stage -----------------------------------------------------
+        //
+        // A stage is a voice room with one rule over it: speakers are unmuted
+        // and the audience is not. So promoting somebody is unmuting them,
+        // which is what it looks like on Discord and needs no field of its
+        // own that nothing would read.
+        AppCommand::StartStageInstance { channel_id, topic } => {
+            let id = admin.fresh_id();
+            let instance = fixtures::voice::start_stage(id, channel_id, &topic);
+            admin.stages.insert(channel_id, instance.clone());
+            publish_event!(AppEvent::StageInstanceLoaded {
+                channel_id,
+                instance: Some(instance),
+            });
+        }
+
+        AppCommand::ModifyStageTopic { channel_id, topic } => {
+            if let Some(instance) = admin.stages.get_mut(&channel_id) {
+                instance.topic = topic;
+            }
+            publish_event!(AppEvent::StageInstanceLoaded {
+                channel_id,
+                instance: admin.stages.get(&channel_id).cloned(),
+            });
+        }
+
+        AppCommand::EndStageInstance { channel_id, .. } => {
+            admin.stages.remove(&channel_id);
+            publish_event!(AppEvent::StageInstanceLoaded {
+                channel_id,
+                instance: None,
+            });
+        }
+
+        AppCommand::RequestToSpeak {
+            guild_id,
+            requesting,
+            ..
+        } => {
+            // Granted at once. There is nobody else signed in to approve it,
+            // and a request that can never be answered would leave the button
+            // stuck on "requested" for the rest of the session.
+            let scope = concord::discord::VoiceScope::Guild(guild_id);
+            fixtures::voice::set_speaker(state, scope, fixtures::demo_user_id(), requesting);
+            publish_state!();
+        }
+
+        AppCommand::SetStageSpeaker {
+            guild_id,
+            user_id,
+            speaking,
+            ..
+        } => {
+            let scope = concord::discord::VoiceScope::Guild(guild_id);
+            fixtures::voice::set_speaker(state, scope, user_id, speaking);
+            publish_state!();
+        }
+
         // ---- the account ---------------------------------------------------
         //
         // Nothing here reaches a real account, and the parts that would need
@@ -1670,7 +1728,7 @@ fn handle_command(
         AppCommand::LoadStageInstance { channel_id } => {
             publish_event!(AppEvent::StageInstanceLoaded {
                 channel_id,
-                instance: fixtures::server::stage_instance(channel_id),
+                instance: admin.stages.get(&channel_id).cloned(),
             });
         }
 
@@ -1732,20 +1790,11 @@ fn handle_command(
             publish_event!(AppEvent::BackupCodesLoaded {
                 codes: admin.backup_codes.clone(),
             });
-        }
-
-        // Server administration a fixture cannot answer honestly either: each
-        // reports what Discord holds, and a demo number would be a guess
-        // presented as a fact - a prune count most of all.
-        AppCommand::StartStageInstance { .. }
-        | AppCommand::ModifyStageTopic { .. }
-        | AppCommand::EndStageInstance { .. }
-        | AppCommand::RequestToSpeak { .. }
-        | AppCommand::SetStageSpeaker { .. } => {} // No catch-all: the match is exhaustive on purpose. Demo mode is the
-                                                   // default build while the project is pre-release, so a command with no
-                                                   // arm would silently do nothing for anyone who has not signed in.
-                                                   // Adding one to the core now fails to compile here instead - which is
-                                                   // how the 36 that had gone unnoticed were meant to be caught.
+        } // No catch-all: the match is exhaustive on purpose. Demo mode is the
+          // default build while the project is pre-release, so a command with no
+          // arm would silently do nothing for anyone who has not signed in.
+          // Adding one to the core now fails to compile here instead - which is
+          // how the 36 that had gone unnoticed were meant to be caught.
     }
 }
 
