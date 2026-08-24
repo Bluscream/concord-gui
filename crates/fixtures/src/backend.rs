@@ -1024,29 +1024,65 @@ fn handle_command(
         // These reach outside the process - a browser, a media player, the
         // file system, an audio device - so offline they would either do the
         // real thing or nothing. Nothing is the safer default in a demo.
+        // Watching someone's stream has no pixels behind it offline, but the
+        // client still has to move into the watching state or the button does
+        // nothing when clicked.
+        AppCommand::WatchVoiceStream {
+            scope, channel_id, ..
+        } => {
+            publish_event!(AppEvent::StreamBroadcastStarted { scope, channel_id });
+        }
+
+        // These change what this client plays or captures, which is local
+        // state the fixture holds like any other.
+        AppCommand::UpdateVoiceAudioSources { .. }
+        | AppCommand::UpdateVoiceCapturePermission { .. }
+        | AppCommand::UpdateVoiceParticipantPlayback { .. } => {
+            publish_state!();
+        }
+
         AppCommand::OpenUrl { .. }
         | AppCommand::PlayMedia { .. }
-        | AppCommand::DownloadAttachment { .. }
-        | AppCommand::WatchVoiceStream { .. }
-        | AppCommand::UpdateVoiceAudioSources { .. }
-        | AppCommand::UpdateVoiceCapturePermission { .. }
-        | AppCommand::UpdateVoiceParticipantPlayback { .. } => {}
+        | AppCommand::DownloadAttachment { .. } => {}
 
         // Account-wide things a fixture has no answer for: they describe a
         // real Discord account, and inventing one would put made-up sessions,
         // linked accounts and backup codes on screen as though they were real.
-        AppCommand::LoadConnections
-        | AppCommand::ModifyConnection { .. }
+        // Answered rather than left inert: these panels are most of the
+        // account settings, and with nothing coming back they sit on
+        // "loading" forever, which reads as broken rather than as offline.
+        AppCommand::LoadConnections => {
+            publish_event!(AppEvent::ConnectionsLoaded {
+                connections: fixtures::demo_connections(),
+            });
+        }
+
+        AppCommand::LoadAuthSessions => {
+            publish_event!(AppEvent::AuthSessionsLoaded {
+                sessions: fixtures::demo_auth_sessions(),
+            });
+        }
+
+        AppCommand::LoadAuthorisedApps => {
+            publish_event!(AppEvent::AuthorisedAppsLoaded {
+                apps: fixtures::demo_authorised_apps(),
+            });
+        }
+
+        AppCommand::LoadBackupCodes { .. } => {
+            publish_event!(AppEvent::BackupCodesLoaded {
+                codes: fixtures::demo_backup_codes(),
+            });
+        }
+
+        AppCommand::ModifyConnection { .. }
         | AppCommand::DeleteConnection { .. }
         | AppCommand::ModifyPrivacySettings { .. }
-        | AppCommand::LoadAuthSessions
         | AppCommand::RevokeAuthSessions { .. }
-        | AppCommand::LoadAuthorisedApps
         | AppCommand::RevokeAuthorisedApp { .. }
         | AppCommand::ModifyAccount { .. }
         | AppCommand::EnableTotp { .. }
-        | AppCommand::DisableTotp { .. }
-        | AppCommand::LoadBackupCodes { .. } => {}
+        | AppCommand::DisableTotp { .. } => {}
 
         // Server administration a fixture cannot answer honestly either: each
         // reports what Discord holds, and a demo number would be a guess

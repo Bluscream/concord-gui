@@ -1610,6 +1610,100 @@ pub fn demo_preview_gif(seed: u64) -> Vec<u8> {
     out
 }
 
+/// Linked accounts, for the connections panel.
+pub fn demo_connections() -> Vec<crate::discord::Connection> {
+    use crate::discord::{Connection, ConnectionVisibility};
+    vec![
+        Connection {
+            id: "gh-1".to_string(),
+            kind: "github".to_string(),
+            name: "bluscream".to_string(),
+            verified: true,
+            show_activity: true,
+            visibility: ConnectionVisibility::Everyone,
+        },
+        Connection {
+            id: "sp-1".to_string(),
+            kind: "spotify".to_string(),
+            name: "blu".to_string(),
+            verified: true,
+            show_activity: true,
+            visibility: ConnectionVisibility::Everyone,
+        },
+        // Unverified and hidden, so the panel shows both states rather than
+        // a list where every row looks the same.
+        Connection {
+            id: "st-1".to_string(),
+            kind: "steam".to_string(),
+            name: "rostfaden".to_string(),
+            verified: false,
+            show_activity: false,
+            visibility: ConnectionVisibility::Hidden,
+        },
+    ]
+}
+
+/// Signed-in devices, for the sessions panel.
+pub fn demo_auth_sessions() -> Vec<crate::discord::AuthSession> {
+    use crate::discord::AuthSession;
+    vec![
+        AuthSession {
+            id_hash: "current".to_string(),
+            os: "Linux".to_string(),
+            platform: "concord".to_string(),
+            location: Some("Berlin, DE".to_string()),
+            last_used: Some("just now".to_string()),
+            current: true,
+        },
+        AuthSession {
+            id_hash: "phone".to_string(),
+            os: "Android".to_string(),
+            platform: "Discord Android".to_string(),
+            location: Some("Berlin, DE".to_string()),
+            last_used: Some("yesterday".to_string()),
+            current: false,
+        },
+        // No location, which Discord does for a session it cannot place.
+        AuthSession {
+            id_hash: "unknown".to_string(),
+            os: "Windows".to_string(),
+            platform: "Discord Desktop".to_string(),
+            location: None,
+            last_used: Some("last week".to_string()),
+            current: false,
+        },
+    ]
+}
+
+/// Authorised applications, for the apps panel.
+pub fn demo_authorised_apps() -> Vec<crate::discord::AuthorisedApp> {
+    use crate::discord::AuthorisedApp;
+    vec![
+        AuthorisedApp {
+            id: "app-1".to_string(),
+            name: "RostFaden CI".to_string(),
+            scopes: vec!["identify".to_string(), "guilds".to_string()],
+        },
+        // Discord allows an app with no scopes, and the panel has a line for
+        // it that would otherwise never be exercised.
+        AuthorisedApp {
+            id: "app-2".to_string(),
+            name: "Old Bot".to_string(),
+            scopes: Vec::new(),
+        },
+    ]
+}
+
+/// Two-factor backup codes, one already spent.
+pub fn demo_backup_codes() -> Vec<crate::discord::BackupCode> {
+    (0..8)
+        .map(|index| crate::discord::BackupCode {
+            code: format!("{:04}-{:04}", 1000 + index * 7, 4321 + index * 13),
+            consumed: index == 2,
+        })
+        .collect()
+}
+
 /// Mute or unmute a guild.
 pub fn set_guild_muted(state: &mut DiscordState, guild_id: Id<marker::GuildMarker>, muted: bool) {
     let notifications = Arc::make_mut(&mut state.notifications);
