@@ -3,7 +3,7 @@ use super::*;
 pub(super) const VOICE_GATEWAY_VERSION: u8 = 9;
 pub(super) const VOICE_WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(not(feature = "stream-broadcast"))]
-const STREAM_BROADCAST_FEATURE_DISABLED: &str =
+pub(super) const STREAM_BROADCAST_FEATURE_DISABLED: &str =
     "stream broadcasting requires the stream-broadcast feature";
 
 pub(crate) fn ensure_stream_broadcast_available() -> Result<(), String> {

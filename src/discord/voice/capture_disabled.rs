@@ -1,6 +1,7 @@
 use tokio::sync::mpsc;
 
-use super::{STREAM_BROADCAST_FEATURE_DISABLED, StreamCaptureTarget, preview::StreamPreviewFrame};
+use super::constants::STREAM_BROADCAST_FEATURE_DISABLED;
+use super::{StreamCaptureTarget, preview::StreamPreviewFrame};
 
 pub(super) const STREAM_CAPTURE_WIDTH: u32 = 1280;
 pub(super) const STREAM_CAPTURE_HEIGHT: u32 = 720;
