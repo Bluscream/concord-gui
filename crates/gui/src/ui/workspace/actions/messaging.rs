@@ -514,6 +514,10 @@ impl Workspace {
             || self.switcher.take().is_some()
             || self.inbox.take().is_some()
             || self.pane_filter.take().is_some()
+            // The composer's two popouts dismiss like everything else, so
+            // escape does not skip past them to mark the channel read.
+            || std::mem::take(&mut self.attach_menu)
+            || std::mem::take(&mut self.composer_emoji)
         {
             return true;
         }

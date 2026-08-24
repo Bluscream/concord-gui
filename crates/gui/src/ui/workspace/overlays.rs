@@ -15,7 +15,44 @@ use crate::ui::workspace::{
     audit_line, emoji_summary, invite_summary,
 };
 
+/// What a message can have attached to it, in the order the menu lists them.
+///
+/// A table rather than six hand-written rows: the glyph, the label and the
+/// action belong together, and split apart they drift - a menu whose third
+/// icon belongs to its fourth entry is worse than no icons at all.
+/// Discord's own menu also offers a poll and a voice message. Neither is on
+/// here because neither is built yet, and a row that does nothing when
+/// clicked is worse than one that is absent - it looks like a bug in the
+/// feature rather than the absence of it.
+const ATTACH_ITEMS: [(&str, &str, AttachAction); 4] = [
+    ("\u{2191}", "attach-upload-file", AttachAction::UploadFile),
+    ("\u{229A}", "attach-sticker", AttachAction::Sticker),
+    ("\u{25B7}", "attach-gif", AttachAction::Gif),
+    ("\u{2318}", "attach-use-apps", AttachAction::UseApps),
+];
+
+/// One entry on the attach menu.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AttachAction {
+    UploadFile,
+    Sticker,
+    Gif,
+    UseApps,
+}
+
 impl Workspace {
+    /// Carry out whichever entry of the attach menu was chosen.
+    ///
+    /// Kept beside the table so a new entry is a compiler error here until it
+    /// is given something to do, rather than a menu row that does nothing.
+    pub(super) fn run_attach_action(&mut self, action: AttachAction, cx: &mut Context<Self>) {
+        match action {
+            AttachAction::UploadFile => self.attach_files(cx),
+            AttachAction::Sticker | AttachAction::Gif => self.open_sticker_picker(),
+            AttachAction::UseApps => self.load_app_commands(),
+        }
+    }
+
     pub(super) fn overlays(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
         let entity = cx.entity();
 
@@ -1300,6 +1337,88 @@ impl Workspace {
                     }
                 },
             )));
+        }
+
+        if self.attach_menu {
+            // Anchored to the bottom-left, over the composer's attach button,
+            // because a menu that opens away from the control it belongs to
+            // reads as a different thing entirely.
+            return Some(
+                overlay::scrim().child(
+                    column()
+                        .absolute()
+                        .left(px(space::LG))
+                        .bottom(px(72.))
+                        .w(px(230.))
+                        .py(px(space::XS))
+                        .rounded(px(layout::RADIUS_LG))
+                        .bg(rgb(active().surface_sunken))
+                        .border_1()
+                        .border_color(rgb(active().border))
+                        .children(ATTACH_ITEMS.iter().enumerate().map(
+                            |(index, (glyph, key, action))| {
+                                let action = *action;
+                                row()
+                                    .id(("attach-item", index))
+                                    .w_full()
+                                    .px(px(space::MD))
+                                    .py(px(space::SM))
+                                    .gap(px(space::MD))
+                                    .items_center()
+                                    .cursor_pointer()
+                                    .text_size(px(scaled(text::SM)))
+                                    .text_color(rgb(active().text))
+                                    .hover(|style| style.bg(rgb(active().surface_hover)))
+                                    .child(
+                                        gpui::div()
+                                            .w(px(18.))
+                                            .text_color(rgb(active().text_muted))
+                                            .child(*glyph),
+                                    )
+                                    .child(gpui::div().child(t!(key)))
+                                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                                        this.attach_menu = false;
+                                        this.run_attach_action(action, cx);
+                                        cx.notify();
+                                    }))
+                            },
+                        )),
+                ),
+            );
+        }
+
+        if self.composer_emoji {
+            return Some(
+                overlay::scrim().child(
+                    row()
+                        .absolute()
+                        .right(px(space::LG))
+                        .bottom(px(72.))
+                        .w(px(300.))
+                        .flex_wrap()
+                        .p(px(space::SM))
+                        .rounded(px(layout::RADIUS_LG))
+                        .bg(rgb(active().surface_sunken))
+                        .border_1()
+                        .border_color(rgb(active().border))
+                        .children(emoji::flat().iter().enumerate().map(|(index, glyph)| {
+                            let glyph = (*glyph).to_string();
+                            gpui::div()
+                                .id(("composer-emoji", index))
+                                .p(px(space::XS))
+                                .rounded(px(layout::RADIUS))
+                                .cursor_pointer()
+                                .hover(|style| style.bg(rgb(active().surface_hover)))
+                                .child(glyph.clone())
+                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                    // The popout stays open: picking one
+                                    // emoji is usually picking two.
+                                    this.composer.insert(&glyph);
+                                    cx.notify();
+                                }))
+                        })),
+                ),
+            );
         }
 
         if self.sticker_picker {

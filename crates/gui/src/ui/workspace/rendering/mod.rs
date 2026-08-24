@@ -7,7 +7,7 @@ use gpui::{ClipboardItem, Context, Window, prelude::*, px, rgb};
 use crate::model::projection::Selection;
 use crate::theme::{Presence, active, layout, scaled, space, text};
 use crate::ui::chrome::{column, header, icon_button, presence_dot, row};
-use crate::ui::composer::{Composer, composer_view};
+use crate::ui::composer::{Composer, character_counter, composer_view};
 use crate::ui::forum;
 use crate::ui::login::login_view;
 use crate::ui::messages::{RenderOptions, message_list};
@@ -565,13 +565,6 @@ impl Workspace {
                     .py(px(space::XS))
                     .gap(px(space::SM))
                     .items_center()
-                    .child(
-                        icon_button("sticker-open", "\u{229A}", t!("action-sticker"), false)
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.open_sticker_picker();
-                                cx.notify();
-                            })),
-                    )
                     .children(self.pending_stickers.iter().enumerate().map(|(slot, _)| {
                         gpui::div()
                             .id(("staged-sticker", slot))
@@ -689,7 +682,97 @@ impl Workspace {
                 self.focus.is_focused(window),
                 enabled,
                 &placeholder,
+                self.composer_leading(cx),
+                self.composer_trailing(enabled, cx),
             ))
+    }
+
+    /// The attach button, at the left of the composer.
+    fn composer_leading(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        vec![
+            icon_button(
+                "composer-attach",
+                "\u{FF0B}",
+                t!("action-attach"),
+                self.attach_menu,
+            )
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.attach_menu = !this.attach_menu;
+                this.composer_emoji = false;
+                cx.notify();
+            }))
+            .into_any_element(),
+        ]
+    }
+
+    /// The counter and the buttons at the right of the composer.
+    ///
+    /// Send is here as well as on the Enter key: a manual button is the only
+    /// way to send from a touchscreen, and it is where anyone who has not
+    /// learnt the keyboard will look for it.
+    fn composer_trailing(&self, enabled: bool, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let mut out = Vec::new();
+
+        // The account's limit, not a constant: Nitro doubles it, and a
+        // counter warning at 1500 for a 4000-character allowance would be on
+        // screen for most of a message it has no business warning about.
+        let limit = self
+            .nav
+            .channel
+            .zip(self.last_state.as_ref())
+            .map_or(2_000, |(channel_id, state)| {
+                state.message_send_limits(channel_id).max_content_chars
+            });
+        if let Some(counter) = character_counter(self.composer.text().chars().count(), limit) {
+            out.push(counter.into_any_element());
+        }
+
+        out.push(
+            icon_button("composer-gif", "\u{25B7}", t!("action-gif"), false)
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.open_sticker_picker();
+                    cx.notify();
+                }))
+                .into_any_element(),
+        );
+        out.push(
+            icon_button("composer-sticker", "\u{229A}", t!("action-sticker"), false)
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.open_sticker_picker();
+                    cx.notify();
+                }))
+                .into_any_element(),
+        );
+        out.push(
+            icon_button(
+                "composer-emoji",
+                "\u{263A}",
+                t!("action-emoji"),
+                self.composer_emoji,
+            )
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.composer_emoji = !this.composer_emoji;
+                this.attach_menu = false;
+                cx.notify();
+            }))
+            .into_any_element(),
+        );
+
+        // Only once there is something to send, so the button is never a
+        // control that does nothing when pressed.
+        let ready = enabled && !self.composer.is_empty();
+        if ready {
+            out.push(
+                icon_button("composer-send", "\u{27A4}", t!("action-send"), true)
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.send_message();
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+            );
+        }
+
+        out
     }
 
     pub(crate) fn accept_command_choice(&mut self, value: &str) {

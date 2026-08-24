@@ -207,6 +207,18 @@ pub struct Workspace {
     pub pending_stickers: Vec<Id<marker::StickerMarker>>,
     /// Sticker picker, open while choosing one.
     pub sticker_picker: bool,
+    /// Whether the composer's attach menu is showing.
+    ///
+    /// A menu rather than a single button because everything on it starts by
+    /// attaching something to this message, and six buttons in a row would
+    /// crowd the field they belong to.
+    pub attach_menu: bool,
+    /// Whether the composer's emoji popout is showing.
+    ///
+    /// Separate from `picker`, which targets a message to react to. An emoji
+    /// going into the draft and an emoji going onto somebody else's message
+    /// are different actions that happen to share a grid.
+    pub composer_emoji: bool,
     /// Invite being previewed, once resolved or while resolving.
     pub invite: Option<InviteState>,
     /// Custom status as last set, shown in the status bar.
@@ -356,6 +368,8 @@ impl Workspace {
             editing_roles: None,
             pending_stickers: Vec::new(),
             sticker_picker: false,
+            attach_menu: false,
+            composer_emoji: false,
             invite: None,
             custom_status: String::new(),
             editing_status: None,

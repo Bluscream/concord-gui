@@ -455,7 +455,19 @@ mod tests {
 
 /// Render the composer. `enabled` is false when no channel is open, in which
 /// case it shows why rather than accepting input that could not be sent.
-pub fn composer_view(composer: &Composer, focused: bool, enabled: bool, placeholder: &str) -> Div {
+///
+/// `leading` and `trailing` sit inside the border, either side of the text,
+/// which is where the attach button and the send button belong: outside it
+/// they float against the background with nothing tying them to the field
+/// they act on.
+pub fn composer_view(
+    composer: &Composer,
+    focused: bool,
+    enabled: bool,
+    placeholder: &str,
+    leading: Vec<gpui::AnyElement>,
+    trailing: Vec<gpui::AnyElement>,
+) -> Div {
     // Disabled and empty look the same on purpose: both show the placeholder,
     // which in the disabled case is the explanation of why.
     let content: Div = if !enabled || composer.text().is_empty() {
@@ -501,6 +513,8 @@ pub fn composer_view(composer: &Composer, focused: bool, enabled: bool, placehol
         if let Some((head, _)) = before_head {
             column_view = column_view.child(
                 gpui::div()
+                    .w_full()
+                    .min_w(px(0.))
                     .text_color(rgb(active().text))
                     .child(head.to_string()),
             );
@@ -511,8 +525,14 @@ pub fn composer_view(composer: &Composer, focused: bool, enabled: bool, placehol
 
         column_view = column_view.child(
             row()
+                // The caret line is three spans in a row, and a row does not
+                // wrap on its own - so a long line ran off the end of the
+                // field instead of growing it downwards.
+                .flex_wrap()
+                .w_full()
                 .child(
                     gpui::div()
+                        .min_w(px(0.))
                         .text_color(rgb(active().text))
                         .child(caret_before.to_string()),
                 )
@@ -526,6 +546,7 @@ pub fn composer_view(composer: &Composer, focused: bool, enabled: bool, placehol
                 })
                 .child(
                     gpui::div()
+                        .min_w(px(0.))
                         .text_color(rgb(active().text))
                         .child(caret_after.to_string()),
                 ),
@@ -549,6 +570,12 @@ pub fn composer_view(composer: &Composer, focused: bool, enabled: bool, placehol
         .child(
             row()
                 .w_full()
+                // A flex item will not shrink below its content unless told
+                // it may, so a long placeholder or an unbroken run of text
+                // pushed the box wider than the pane and spilled out of it.
+                // These two are what keep the text inside the border.
+                .min_w(px(0.))
+                .overflow_hidden()
                 .min_h(px(42.))
                 .px(px(space::MD))
                 .py(px(space::SM))
@@ -560,9 +587,50 @@ pub fn composer_view(composer: &Composer, focused: bool, enabled: bool, placehol
                 } else {
                     active().border
                 }))
+                .gap(px(space::SM))
                 .text_size(px(scaled(text::BASE)))
-                .child(content),
+                .children(leading)
+                // The text takes the space the buttons leave, and may shrink:
+                // without this it claims its content's width and pushes the
+                // trailing buttons off the end of the row.
+                .child(
+                    // Clipped horizontally so nothing escapes the border, but
+                    // free to grow downwards: a long message makes the field
+                    // taller, as it does everywhere else.
+                    gpui::div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .overflow_x_hidden()
+                        .child(content),
+                )
+                .children(trailing),
         )
+}
+
+/// The character counter, shown only when the limit is close enough to matter.
+///
+/// Discord hides this until you are near the limit, which is the right
+/// default: a counter that is always there is noise for the ninety-nine
+/// messages out of a hundred that are nowhere near it.
+pub fn character_counter(used: usize, limit: usize) -> Option<Div> {
+    // A quarter of the limit left. Far enough out to be a warning rather than
+    // a surprise, close enough that it is not on screen most of the time.
+    let threshold = limit - limit / 4;
+    if used < threshold {
+        return None;
+    }
+
+    let over = used > limit;
+    Some(
+        gpui::div()
+            .text_size(px(scaled(text::XS)))
+            .text_color(rgb(if over {
+                active().danger
+            } else {
+                active().warning
+            }))
+            .child(format!("{used}/{limit}")),
+    )
 }
 
 #[cfg(test)]
@@ -699,5 +767,33 @@ mod selection_tests {
 
         composer.insert("x");
         assert_eq!(composer.text(), "x");
+    }
+}
+
+#[cfg(test)]
+mod counter_tests {
+    use super::character_counter;
+
+    #[test]
+    fn the_counter_stays_hidden_until_the_limit_is_close() {
+        // Always-on would be noise for the ninety-nine messages in a hundred
+        // nowhere near the limit, so the interesting property is that it is
+        // absent, not how it looks.
+        assert!(character_counter(0, 2000).is_none());
+        assert!(character_counter(1_400, 2000).is_none());
+
+        // A quarter left is where it appears.
+        assert!(character_counter(1_500, 2000).is_some());
+        assert!(character_counter(1_999, 2000).is_some());
+        assert!(character_counter(2_400, 2000).is_some());
+    }
+
+    #[test]
+    fn the_counter_scales_with_the_limit_it_is_given() {
+        // The limit is the account's, not a constant: a Nitro account gets
+        // 4000, and a counter that appeared at 1500 for them would be on
+        // screen for most of a message it had no business warning about.
+        assert!(character_counter(1_500, 4_000).is_none());
+        assert!(character_counter(3_000, 4_000).is_some());
     }
 }
