@@ -1,6 +1,6 @@
-use super::*;
 #[cfg(feature = "voice-playback")]
 use super::noise::VoiceNoiseSuppressor;
+use super::*;
 
 #[cfg(feature = "voice-playback")]
 async fn stop_voice_transmission(
@@ -46,7 +46,7 @@ pub(crate) fn publish_local_speaking_edge(
 }
 
 #[cfg(any(test, feature = "voice-playback"))]
-pub(super) fn advance_voice_media_clock(
+pub(crate) fn advance_voice_media_clock(
     sender: &mut VoiceOutboundSendState,
     previous_frame_at: &mut Option<Instant>,
     captured_at: Instant,
@@ -327,7 +327,7 @@ pub(crate) async fn run_voice_udp_transmit(
 }
 
 #[cfg(feature = "voice-playback")]
-pub(super) fn drain_voice_microphone_pcm_queue(pcm_rx: &mut mpsc::Receiver<VoiceMicrophoneFrame>) {
+pub(crate) fn drain_voice_microphone_pcm_queue(pcm_rx: &mut mpsc::Receiver<VoiceMicrophoneFrame>) {
     while pcm_rx.try_recv().is_ok() {}
 }
 

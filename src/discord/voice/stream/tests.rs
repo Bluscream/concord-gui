@@ -1,36 +1,10 @@
-use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
-    io::Write,
-    net::{Ipv4Addr, SocketAddrV4},
-    path::Path,
-    process::Stdio,
-    sync::atomic::{AtomicBool, Ordering},
-};
-
-use rand::random;
-use tempfile::NamedTempFile;
-use tokio::{
-    io::{AsyncBufReadExt, AsyncRead, BufReader},
-    process::Command,
-};
-use uuid::Uuid;
-
-use crate::support::media_player::MediaPlayerIpcEndpoint;
-
-use super::media::{
-    GatewayChildTasks, annex_b_nals, build_rtcp_sender_report, current_unix_time,
-    packetize_h264_payloads,
-};
-use super::runtime::MAX_VOICE_RECONNECT_ATTEMPTS;
-use super::*;
-
+use super::media::GatewayChildTasks;
 use super::*;
 
 #[cfg(test)]
-pub mod tests {
+pub mod shared {
     use super::*;
 
-    use super::*;
     use tokio::sync::oneshot;
 
     pub struct TaskDropSignal(Option<oneshot::Sender<()>>);
@@ -43,7 +17,8 @@ pub mod tests {
         }
     }
 
-    pub fn cancellable_test_task() -> (JoinHandle<()>, oneshot::Receiver<()>, oneshot::Receiver<()>) {
+    pub fn cancellable_test_task() -> (JoinHandle<()>, oneshot::Receiver<()>, oneshot::Receiver<()>)
+    {
         let (started_tx, started_rx) = oneshot::channel();
         let (dropped_tx, dropped_rx) = oneshot::channel();
         let task = tokio::spawn(async move {
@@ -431,5 +406,4 @@ pub mod tests {
             })
         );
     }
-
 }

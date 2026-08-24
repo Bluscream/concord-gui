@@ -482,7 +482,10 @@ impl VoiceChildTasks {
     }
 
     #[cfg(feature = "voice-playback")]
-    pub(super) fn replace_voice_audio_output(&mut self, output_source: Option<&str>) -> Result<(), String> {
+    pub(super) fn replace_voice_audio_output(
+        &mut self,
+        output_source: Option<&str>,
+    ) -> Result<(), String> {
         let Some(decoded_audio_output) = self.decoded_audio_output.clone() else {
             return Ok(());
         };

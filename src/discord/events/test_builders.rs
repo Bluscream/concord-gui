@@ -1,16 +1,21 @@
-/// Gateway events, built the way the gateway would send them.
-///
-/// The point is fidelity: a fixture that omits a field the real payload
-/// carries makes a front end look correct until it meets Discord.
-///
-/// Here rather than in `concord-fixtures` because this crate's own tests use
-/// them, and a crate cannot depend on something that depends on it. That crate
-/// re-exports these, so a front end still has one place to import from.
-#[allow(
+//! Gateway events, built the way the gateway would send them.
+//!
+//! The point is fidelity: a fixture that omits a field the real payload
+//! carries makes a front end look correct until it meets Discord.
+//!
+//! Here rather than in `concord-fixtures` because this crate's own tests use
+//! them, and a crate cannot depend on something that depends on it. That crate
+//! re-exports these, so a front end still has one place to import from.
+
+// Both of these were written as outer attributes on the `use` below, where a
+// doc comment documents the import and an allow covers nothing - which is why
+// twenty-two new_without_default warnings came through anyway.
+#![allow(
     clippy::new_without_default,
     reason = "a fixture's `new` takes the fields a test cares about; a Default \
               would invite tests to depend on values nothing chose"
 )]
+
 use crate::discord::ids::{Id, marker::*};
 
 // A glob because these build whole events and touch most of the event
@@ -44,10 +49,7 @@ impl MessageCreateFixture {
         }
     }
 
-    pub fn direct_message(
-        channel_id: Id<ChannelMarker>,
-        message_id: Id<MessageMarker>,
-    ) -> Self {
+    pub fn direct_message(channel_id: Id<ChannelMarker>, message_id: Id<MessageMarker>) -> Self {
         Self {
             channel_id,
             message_id,
@@ -341,9 +343,7 @@ impl VoiceConnectionStatusChangedFixture {
     }
 }
 
-pub fn voice_connection_status_changed_event(
-    f: VoiceConnectionStatusChangedFixture,
-) -> AppEvent {
+pub fn voice_connection_status_changed_event(f: VoiceConnectionStatusChangedFixture) -> AppEvent {
     AppEvent::VoiceConnectionStatusChanged {
         scope: f.scope,
         channel_id: f.channel_id,

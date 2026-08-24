@@ -1,54 +1,19 @@
 use super::super::*;
-use std::collections::{BTreeSet, HashSet};
-use std::path::PathBuf;
 
-use concord::config::{self, AppOptions, CredentialStoreMode, UiStateOptions};
-use concord::discord::{
-    AccountField, AccountForm, ActivityInfo, ActivityKind, AppCommand, AppEvent,
-    ApplicationCommandAutocompleteInvocation, ApplicationCommandInfo, ApplicationCommandInvocation,
-    AttachmentDownloadId, AuditLogAction, AuditLogEntryInfo, BuiltinSlashCommandParse,
-    BuiltinSlashCommandSubmit, DownloadAttachmentSource, ForumPostArchiveState, ForumPostCreate,
-    FriendStatus, GlobalUserProfileUpdate, GuildEmojiInfo, GuildInviteInfo, GuildUserProfileUpdate,
-    Id, MAX_MESSAGE_STICKERS, MAX_UPLOAD_ATTACHMENT_COUNT, MediaPlaybackSource, MediaPlaybackTarget,
-    MessageAttachmentUpload, MessageHistoryAfterMode, MessageSearchQuery, MuteDuration,
-    NewChannelKind, OnboardingRow, PresenceStatus, PrivacySetting, PrivacyState,
-    ProfileAvatarUpload, ReactionEmoji, ReplyReference, Secret, SoundboardSound,
-    StreamCaptureTargetsRequestId, UserProfileUpdate, VoiceConnectionStatus,
-    VoiceParticipantPlaybackSettings, VoiceParticipantVolumePercent, VoiceScope, VoiceVolumePercent,
-    application_command_content_is_complete, invite_code_from, marker, next_message_nonce,
-    parse_builtin_slash_command,
-};
-use concord::t;
-use concord::token_store;
-use concord_ui::model::AttachmentViewerZoom;
-use gpui::{Context, FocusHandle, PathPromptOptions, Window, WindowHandle, px, rgb};
+use concord::config::{self};
+use concord::discord::{AppCommand, Id, ReplyReference, marker, next_message_nonce};
+use gpui::{Context, WindowHandle};
 use tokio::sync::mpsc;
 
-use crate::model::message::{self, MessageRow};
-use crate::model::projection::{self, Navigation, Selection};
+use crate::model::message::{self};
+use crate::model::projection::{self, Selection};
 use crate::notify;
 use crate::session::{SessionHandle, Update};
 
-use crate::keymap::Keymap;
-use crate::theme::{self, Presence, active, layout, scaled, space, text};
-use crate::ui::chrome::{column, header, icon_button, presence_dot, row, section_label};
-use crate::ui::composer::{Composer, composer_view};
-use crate::ui::emoji::{self, EmojiPicker};
-use crate::ui::forum::{self, ForumPost, ForumView};
-use crate::ui::login::{LoginEvent, LoginHandle, LoginScreen, login_view};
-use crate::ui::messages::{MessageAction, RenderOptions, message_list};
-use crate::ui::overlay;
-use crate::ui::profile::ProfileView;
-use crate::ui::settings::{OnChange, SettingsWindow};
-use crate::ui::slash::{SlashPicker, slash_view};
-use crate::ui::stream::StreamPicker;
-use crate::ui::switcher::Switcher;
-use super::*;
-use crate::ui::workspace::{RiskAction, SwitcherPurpose, MfaMethod, PasswordAuthEvent, QrEvent};
-
+use crate::ui::composer::Composer;
+use crate::ui::messages::MessageAction;
 
 impl Workspace {
-
     pub fn open_focused_pane_action(&mut self) {
         match self.focus_pane {
             Pane::Guilds | Pane::Channels => self.toggle_pane_filter(),

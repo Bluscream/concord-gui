@@ -1,51 +1,26 @@
 use std::{
-    collections::{HashMap, VecDeque},
-    sync::{
-        Arc, Mutex as StdMutex,
-        atomic::{AtomicU32, Ordering},
-    },
-    time::{Duration, Instant},
+    collections::HashMap,
+    sync::{Arc, Mutex as StdMutex},
+    time::Duration,
 };
 
-use futures::StreamExt;
 use rand::random;
-use serde_json::{Value, json};
 use tokio::{
-    net::UdpSocket,
-    sync::{Mutex, mpsc, oneshot},
-    task::JoinHandle,
-    time::{Instant as TokioInstant, sleep, sleep_until, timeout},
+    sync::{mpsc, oneshot},
+    time::sleep,
 };
-use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
-use uuid::Uuid;
 
-use super::super::media::{
-    GatewayChildTasks, build_rtcp_sender_report, current_unix_time, packetize_h264_payloads,
-};
 use super::super::runtime::MAX_VOICE_RECONNECT_ATTEMPTS;
 use super::super::{
-    DISCORD_OPUS_TIMESTAMP_INCREMENT, DISCORD_STREAM_VIDEO_PAYLOAD_TYPE,
-    DISCORD_STREAM_VIDEO_RTX_PAYLOAD_TYPE, DISCORD_VOICE_PAYLOAD_TYPE, DiscoveredVoiceAddress,
-    RTP_AEAD_NONCE_SUFFIX_BYTES, RTP_AEAD_TAG_BYTES, RTP_HEADER_EXTENSION_BYTES,
-    RTP_HEADER_MIN_LEN, RTP_VERSION, StreamBroadcastRequest, StreamCreateInfo, StreamServerInfo,
-    VOICE_OP_READY, VOICE_OP_SESSION_DESCRIPTION, VOICE_OP_SPEAKING,
-    VOICE_WEBSOCKET_CONNECT_TIMEOUT, VoiceConnectionEnd, VoiceDaveState, VoiceRuntimeEvent,
-    VoiceScope, VoiceSessionDescription, VoiceStatusPublisher, capture,
-    dave::VoiceDaveOutboundPayload,
-    gateway,
-    opus::VoiceOpusEncode,
+    StreamBroadcastRequest, StreamCreateInfo, StreamServerInfo, VoiceConnectionEnd,
+    VoiceRuntimeEvent, VoiceScope, VoiceStatusPublisher, capture,
     preview::{StreamPreviewUploadTask, StreamPreviewUploader},
-    rtp::{
-        VoiceRtpDecryptor, VoiceRtpEncryptor, build_voice_rtp_packet_with_marker,
-        looks_like_rtcp_packet, parse_rtp_header,
-    },
-    system_audio::{self, SYSTEM_AUDIO_FRAME_QUEUE},
 };
 use super::*;
 
 use crate::{
     discord::{
-        StreamCaptureTarget, StreamCaptureTargetKind,
+        StreamCaptureTarget,
         ids::{
             Id,
             marker::{ChannelMarker, UserMarker},
@@ -217,7 +192,7 @@ impl StreamBroadcastCaptureRegistry {
             request_id,
             capture,
             preview_task: None,
-            };
+        };
         let mut state = self
             .state
             .lock()

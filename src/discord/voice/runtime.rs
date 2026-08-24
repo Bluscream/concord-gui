@@ -1320,7 +1320,7 @@ async fn reap_stream_broadcast_task(task: &mut JoinHandle<()>) {
     }
 }
 
-pub(super) async fn stop_voice_connection_task(
+pub(crate) async fn stop_voice_connection_task(
     connection_task: &mut Option<JoinHandle<()>>,
     connection_session: &mut Option<VoiceGatewaySession>,
     audio_sources_tx: &mut Option<watch::Sender<VoiceAudioSourceSelection>>,

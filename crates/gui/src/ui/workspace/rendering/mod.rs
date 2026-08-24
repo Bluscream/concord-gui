@@ -1,10 +1,9 @@
-use concord::discord::PresenceStatus;
 use crate::ui::workspace::ChannelKind;
+use concord::discord::PresenceStatus;
 
 use concord::t;
 use gpui::{ClipboardItem, Context, Window, prelude::*, px, rgb};
 
-use crate::model::message;
 use crate::model::projection::Selection;
 use crate::theme::{Presence, active, layout, scaled, space, text};
 use crate::ui::chrome::{column, header, icon_button, presence_dot, row};

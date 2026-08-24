@@ -577,7 +577,7 @@ fn build_voice_output_stream_attempt(
 }
 
 #[cfg(feature = "voice-playback")]
-pub(super) fn voice_output_buffer_size(
+pub(crate) fn voice_output_buffer_size(
     use_low_latency_pulse_audio: bool,
     supported: &cpal::SupportedBufferSize,
 ) -> cpal::BufferSize {

@@ -53,7 +53,8 @@ pub(super) const DISCORD_OPUS_20MS_STEREO_SAMPLES: usize =
 #[cfg(any(test, feature = "voice-playback"))]
 pub(super) const DISCORD_OPUS_FRAME_DURATION: Duration = Duration::from_millis(20);
 #[allow(dead_code)]
-pub(super) const DISCORD_OPUS_TIMESTAMP_INCREMENT: u32 = DISCORD_OPUS_FRAME_SAMPLES_PER_CHANNEL as u32;
+pub(super) const DISCORD_OPUS_TIMESTAMP_INCREMENT: u32 =
+    DISCORD_OPUS_FRAME_SAMPLES_PER_CHANNEL as u32;
 #[allow(dead_code)]
 pub(super) const DISCORD_OPUS_SILENCE_FRAME: [u8; 3] = [0xf8, 0xff, 0xfe];
 #[allow(dead_code)]
@@ -80,9 +81,11 @@ pub(super) const VOICE_MIC_HANDLING_NOISE_SUPPRESSION_FRAMES: u8 = 12;
 #[cfg(any(test, feature = "voice-playback"))]
 pub(super) const VOICE_MIC_OVERLOAD_MIN_CLIPPED_SAMPLES: usize = 8;
 #[cfg(any(test, feature = "voice-playback"))]
-pub(super) const VOICE_MIC_OVERLOAD_SEVERE_CLIPPED_SAMPLES: usize = DISCORD_OPUS_20MS_STEREO_SAMPLES / 20;
+pub(super) const VOICE_MIC_OVERLOAD_SEVERE_CLIPPED_SAMPLES: usize =
+    DISCORD_OPUS_20MS_STEREO_SAMPLES / 20;
 #[cfg(any(test, feature = "voice-playback"))]
-pub(super) const VOICE_MIC_OVERLOAD_EXTREME_CLIPPED_SAMPLES: usize = DISCORD_OPUS_20MS_STEREO_SAMPLES / 8;
+pub(super) const VOICE_MIC_OVERLOAD_EXTREME_CLIPPED_SAMPLES: usize =
+    DISCORD_OPUS_20MS_STEREO_SAMPLES / 8;
 #[cfg(any(test, feature = "voice-playback"))]
 pub(super) const VOICE_MIC_HANDLING_NOISE_DELTA: i32 = 42_000;
 #[cfg(any(test, feature = "voice-playback"))]
@@ -139,7 +142,8 @@ pub(super) const VOICE_OUTPUT_LOW_PASS_CUTOFF_HZ: f32 = 8_000.0;
 #[cfg(feature = "voice-playback")]
 pub(super) const VOICE_AUDIO_OUTPUT_QUEUE: usize = 64;
 #[cfg(feature = "voice-playback")]
-pub(super) const VOICE_AUDIO_OUTPUT_PREBUFFER_FRAMES: u64 = DISCORD_VOICE_SAMPLE_RATE as u64 * 60 / 1_000;
+pub(super) const VOICE_AUDIO_OUTPUT_PREBUFFER_FRAMES: u64 =
+    DISCORD_VOICE_SAMPLE_RATE as u64 * 60 / 1_000;
 #[cfg(feature = "voice-playback")]
 pub(super) const VOICE_PULSE_OUTPUT_BUFFER_FRAMES: u32 = 2_400;
 pub(super) const AEAD_AES256_GCM_RTPSIZE: &str = "aead_aes256_gcm_rtpsize";

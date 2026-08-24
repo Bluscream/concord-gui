@@ -13,10 +13,9 @@ use crate::discord::{
     ActivityInfo, ApplicationCommandChoiceInfo, ApplicationCommandInfo, ChannelInfo,
     ChannelRecipientInfo, CustomEmojiInfo, GuildBoostTier, GuildOnboardingInfo,
     GuildVerificationLevel, MemberInfo, MessageInfo, PremiumTier, PresenceStatus, ReactionUserInfo,
-    ReadStateInfo, RelationshipInfo, RelationshipUpdateInfo, RoleInfo, SnapshotAreas,
-    StreamCaptureTarget, StreamCreateInfo, StreamDeleteInfo, StreamServerInfo, StreamUpdateInfo,
-    UserProfileInfo, UserSettingsInfo, VoiceConnectionStatus, VoiceScope, VoiceServerInfo,
-    VoiceSoundKind, VoiceStateInfo,
+    ReadStateInfo, RelationshipInfo, RoleInfo, StreamCaptureTarget, StreamCreateInfo,
+    StreamDeleteInfo, StreamServerInfo, StreamUpdateInfo, UserProfileInfo, UserSettingsInfo,
+    VoiceConnectionStatus, VoiceScope, VoiceServerInfo, VoiceSoundKind, VoiceStateInfo,
 };
 
 use super::types::{

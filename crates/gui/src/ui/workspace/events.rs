@@ -1,7 +1,5 @@
-use concord::discord::{
-    ActivityKind, AppCommand, AppEvent, VoiceConnectionStatus,
-};
 use super::image_format_for;
+use concord::discord::{ActivityKind, AppCommand, AppEvent, VoiceConnectionStatus};
 
 use crate::model::projection::Selection;
 

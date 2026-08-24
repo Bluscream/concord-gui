@@ -5,61 +5,40 @@
 //! rebuilds from `DiscordState` on every snapshot revision. Nothing here
 //! touches core types directly except to issue commands.
 
-use concord::config::{self, AppOptions, CredentialStoreMode, UiStateOptions};
+use concord::config::{self, AppOptions, UiStateOptions};
 use concord::discord::{
-    ActivityInfo, ActivityKind, AppCommand, AppEvent, ApplicationCommandAutocompleteInvocation,
-    ApplicationCommandInfo, ApplicationCommandInvocation, AttachmentDownloadId,
-    BuiltinSlashCommandParse, BuiltinSlashCommandSubmit, DownloadAttachmentSource,
-    ForumPostArchiveState, ForumPostCreate, FriendStatus, GlobalUserProfileUpdate,
-    GuildUserProfileUpdate, Id, MAX_MESSAGE_STICKERS, MAX_UPLOAD_ATTACHMENT_COUNT,
-    MediaPlaybackSource, MediaPlaybackTarget, MessageAttachmentUpload, MessageHistoryAfterMode,
-    MessageSearchQuery, MuteDuration, PresenceStatus, ProfileAvatarUpload, ReactionEmoji,
-    ReplyReference, StreamCaptureTargetsRequestId, UserProfileUpdate, VoiceConnectionStatus,
-    VoiceParticipantPlaybackSettings, VoiceParticipantVolumePercent, VoiceScope,
-    VoiceVolumePercent, application_command_content_is_complete, invite_code_from, marker,
-    next_message_nonce, parse_builtin_slash_command,
+    ActivityInfo, ApplicationCommandInfo, AttachmentDownloadId, Id, MessageAttachmentUpload,
+    PresenceStatus, VoiceScope, marker,
     password_auth::{MfaMethod, PasswordAuthEvent},
     qr_auth::QrEvent,
 };
-use concord::t;
-use concord::token_store;
 use concord_ui::model::AttachmentViewerZoom;
-use gpui::{
-    ClipboardItem, Context, FocusHandle, PathPromptOptions, Window, WindowHandle, prelude::*, px,
-    rgb,
-};
-use tokio::sync::mpsc;
+use gpui::{Context, FocusHandle, prelude::*};
 
-use crate::model::message::{self, MessageRow};
-use crate::model::projection::{self, Navigation, Selection};
-use crate::notify;
-use crate::session::{SessionHandle, Update};
+use crate::model::message::MessageRow;
+use crate::model::projection::{Navigation, Selection};
+use crate::session::SessionHandle;
 
 use crate::keymap::Keymap;
-use crate::theme::{self, Presence, active, layout, scaled, space, text};
-use crate::ui::chrome::{column, header, icon_button, presence_dot, row, section_label};
-use crate::ui::composer::{Composer, composer_view};
-use crate::ui::emoji::{self, EmojiPicker};
-use crate::ui::forum::{self, ForumPost, ForumView};
-use crate::ui::login::{LoginEvent, LoginHandle, LoginScreen, login_view};
-use crate::ui::messages::{MessageAction, RenderOptions, message_list};
-use crate::ui::overlay;
+use crate::theme::{self, Presence};
+use crate::ui::composer::Composer;
+use crate::ui::emoji::EmojiPicker;
+use crate::ui::forum::ForumView;
 use crate::ui::profile::ProfileView;
-use crate::ui::settings::{OnChange, SettingsWindow};
-use crate::ui::slash::{SlashPicker, slash_view};
+use crate::ui::slash::SlashPicker;
 use crate::ui::stream::StreamPicker;
 use crate::ui::switcher::Switcher;
 
+pub mod actions;
 mod channel_sidebar;
 mod events;
 mod guild_rail;
 mod keys;
 mod member_pane;
 mod overlays;
-pub mod actions;
-pub use actions::*;
 mod profile_pane;
 mod rendering;
+#[cfg(test)]
 mod tests;
 
 mod types;
@@ -273,7 +252,6 @@ pub struct Workspace {
 }
 
 impl Workspace {
-
     pub fn new(model: WorkspaceModel, screen: Screen, cx: &mut Context<Self>) -> Self {
         // Warnings are kept, not discarded. The parsers are deliberately
         // tolerant - one bad line is skipped rather than failing the file -
@@ -404,13 +382,6 @@ impl Workspace {
     }
 }
 
-
-
-
-
-
-
-
 /// Pick a decoder from a URL's file extension.
 ///
 /// Discord's CDN serves the content type in a header the image bytes do not
@@ -433,6 +404,3 @@ pub fn image_format_for(url: &str) -> Option<gpui::ImageFormat> {
         _ => None,
     }
 }
-
-
-

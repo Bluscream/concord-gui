@@ -183,11 +183,11 @@ fn parse_user_account_event_data(event_type: &str, data: &Value) -> Vec<AppEvent
 mod tests;
 
 #[cfg(test)]
+mod test_channels;
+#[cfg(test)]
 mod test_guilds;
 #[cfg(test)]
 mod test_messages;
-#[cfg(test)]
-mod test_channels;
 #[cfg(test)]
 mod test_misc;
 #[cfg(test)]

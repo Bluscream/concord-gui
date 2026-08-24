@@ -1,6 +1,5 @@
-use super::*;
-use super::super::dave::VoiceDaveOutboundPayload;
 use super::super::rtp::{build_voice_rtp_packet, build_voice_rtp_packet_with_marker};
+use super::*;
 use ::opus::{Channels, Decoder as OpusDecoder, SampleRate as OpusSampleRate};
 use aes_gcm::{
     Aes256Gcm, Nonce as AesGcmNonce,
@@ -435,7 +434,15 @@ fn fake_outbound_sends_trailing_silence_when_stopping_speech() {
                 ssrc: 42,
             },
             VoiceOutboundSendEvent::Packet {
-                bytes: fake_packet_bytes(AEAD_AES256_GCM_RTPSIZE, 7, 960, 42, b"speech", [0, 0, 0, 20], true),
+                bytes: fake_packet_bytes(
+                    AEAD_AES256_GCM_RTPSIZE,
+                    7,
+                    960,
+                    42,
+                    b"speech",
+                    [0, 0, 0, 20],
+                    true
+                ),
             },
             VoiceOutboundSendEvent::Speaking {
                 speaking: false,
@@ -524,7 +531,7 @@ fn rtp_header_rejects_rtcp_reports_before_payload_type_masking() {
     );
 }
 
-fn fake_outbound_state(mode: &str, nonce_suffix: u32) -> VoiceOutboundSendState {
+pub(crate) fn fake_outbound_state(mode: &str, nonce_suffix: u32) -> VoiceOutboundSendState {
     VoiceOutboundSendState::new(
         mode,
         &[9u8; 32],
@@ -550,7 +557,7 @@ pub(super) fn test_voice_gateway_session() -> VoiceGatewaySession {
     }
 }
 
-fn assert_fake_packet(
+pub(crate) fn assert_fake_packet(
     mode: &str,
     event: &VoiceOutboundSendEvent,
     sequence: u16,
@@ -634,8 +641,9 @@ fn fake_packet_bytes(
     nonce_suffix: [u8; RTP_AEAD_NONCE_SUFFIX_BYTES],
     marker: bool,
 ) -> Vec<u8> {
-    let packet = build_voice_rtp_packet_with_marker(sequence, timestamp, ssrc, marker, opus_payload)
-        .expect("fake RTP packet should build");
+    let packet =
+        build_voice_rtp_packet_with_marker(sequence, timestamp, ssrc, marker, opus_payload)
+            .expect("fake RTP packet should build");
     let encryptor = VoiceRtpEncryptor::new(mode, &[9u8; 32]).expect("encryptor should build");
     encryptor
         .encrypt_packet(&packet, nonce_suffix)

@@ -1,20 +1,8 @@
 use crate::discord::ids::Id;
-use serde_json::{Value, json};
+use serde_json::json;
 
-use super::{
-    parse_channel_info, parse_guild_create, parse_guild_emojis_update, parse_guild_update,
-    parse_message_create, parse_message_info, parse_message_update, parse_user_account_dispatch,
-    parse_user_account_event,
-};
-use crate::discord::{
-    ActivityKind, AppEvent, AttachmentUpdate, ChannelVisibilityStats, DiscordState, FriendStatus,
-    GuildMemberListItem, GuildMemberListOperation, GuildOnboardingMode, GuildVerificationLevel,
-    MentionInfo, MessageKind, NotificationLevel, PollAnswerInfo, PollInfo, PremiumTier,
-    PresenceStatus, ReactionEmoji, ReplyInfo,
-};
-
-
-
+use super::{parse_guild_create, parse_message_create, parse_user_account_event};
+use crate::discord::{AppEvent, DiscordState, MentionInfo};
 
 #[test]
 fn message_create_parser_preserves_content_and_sticker_names() {

@@ -43,7 +43,7 @@ fn poll_result_info_from_fields<'a>(
 }
 
 #[cfg(test)]
-mod tests {
+mod cases {
     use super::*;
 
     #[test]
@@ -146,7 +146,10 @@ mod tests {
             (
                 "ready user directory joins guild and message identity",
                 AppEvent::ReadyUserDirectory {
-                    users: vec![crate::discord::ChannelRecipientInfo::test(Id::new(20), "Ready User")],
+                    users: vec![crate::discord::ChannelRecipientInfo::test(
+                        Id::new(20),
+                        "Ready User",
+                    )],
                 },
                 Some(SnapshotAreas::navigation_and_message()),
                 false,

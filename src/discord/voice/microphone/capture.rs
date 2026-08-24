@@ -1,5 +1,5 @@
-use super::*;
 use super::super::devices;
+use super::*;
 
 #[cfg(feature = "voice-playback")]
 impl VoiceMicrophoneCapture {
@@ -132,7 +132,7 @@ pub(super) fn voice_input_config_rank(config: &cpal::SupportedStreamConfigRange)
 }
 
 #[cfg(feature = "voice-playback")]
-pub(super) fn voice_input_channel_rank(channels: u16) -> u8 {
+pub(crate) fn voice_input_channel_rank(channels: u16) -> u8 {
     match channels {
         1 => 0,
         DISCORD_VOICE_CHANNELS => 1,
@@ -141,7 +141,7 @@ pub(super) fn voice_input_channel_rank(channels: u16) -> u8 {
 }
 
 #[cfg(feature = "voice-playback")]
-pub(super) fn voice_input_sample_format_rank(format: cpal::SampleFormat) -> u8 {
+pub(crate) fn voice_input_sample_format_rank(format: cpal::SampleFormat) -> u8 {
     match format {
         cpal::SampleFormat::F32 => 0,
         cpal::SampleFormat::I16 => 1,
@@ -153,7 +153,7 @@ pub(super) fn voice_input_sample_format_rank(format: cpal::SampleFormat) -> u8 {
 }
 
 #[cfg(feature = "voice-playback")]
-pub(super) fn voice_input_buffer_size(supported: &cpal::SupportedBufferSize) -> cpal::BufferSize {
+pub(crate) fn voice_input_buffer_size(supported: &cpal::SupportedBufferSize) -> cpal::BufferSize {
     match supported {
         cpal::SupportedBufferSize::Range { min, max } => {
             cpal::BufferSize::Fixed(VOICE_MIC_PREFERRED_BUFFER_FRAMES.clamp(*min, *max))
@@ -180,7 +180,7 @@ impl Default for VoiceMicrophoneCaptureStats {
 
 #[cfg(feature = "voice-playback")]
 impl VoiceMicrophonePcmFrames {
-    pub(super) fn new(
+    pub(crate) fn new(
         frames_tx: mpsc::Sender<VoiceMicrophoneFrame>,
         stats: Arc<VoiceMicrophoneCaptureStats>,
         source_sample_rate: u32,
@@ -195,7 +195,7 @@ impl VoiceMicrophonePcmFrames {
         }
     }
 
-    pub(super) fn push_stereo_samples(&mut self, samples: &[i16]) {
+    pub(crate) fn push_stereo_samples(&mut self, samples: &[i16]) {
         if self.source_sample_rate == DISCORD_VOICE_SAMPLE_RATE {
             self.output_pending.extend_from_slice(samples);
             self.flush_output_frames();
@@ -442,14 +442,14 @@ pub(super) fn build_voice_input_stream_u8(
 }
 
 #[cfg(feature = "voice-playback")]
-pub(super) fn voice_input_f32_to_stereo_i16(input: &[f32], channels: usize) -> Vec<i16> {
+pub(crate) fn voice_input_f32_to_stereo_i16(input: &[f32], channels: usize) -> Vec<i16> {
     voice_input_to_stereo_i16(input, channels, |sample| {
         (sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)).round() as i16
     })
 }
 
 #[cfg(feature = "voice-playback")]
-pub(super) fn voice_input_i16_to_stereo_i16(input: &[i16], channels: usize) -> Vec<i16> {
+pub(crate) fn voice_input_i16_to_stereo_i16(input: &[i16], channels: usize) -> Vec<i16> {
     voice_input_to_stereo_i16(input, channels, |sample| sample)
 }
 
@@ -462,7 +462,7 @@ pub(super) fn voice_input_u16_to_stereo_i16(input: &[u16], channels: usize) -> V
 }
 
 #[cfg(feature = "voice-playback")]
-pub(super) fn voice_input_u8_to_stereo_i16(input: &[u8], channels: usize) -> Vec<i16> {
+pub(crate) fn voice_input_u8_to_stereo_i16(input: &[u8], channels: usize) -> Vec<i16> {
     voice_input_to_stereo_i16(input, channels, |sample| (i16::from(sample) - 128) << 8)
 }
 
@@ -494,7 +494,7 @@ where
 }
 
 #[cfg(feature = "voice-playback")]
-pub(super) fn record_voice_input_chunk(
+pub(crate) fn record_voice_input_chunk(
     sample_count: usize,
     channels: usize,
     stats: &VoiceMicrophoneCaptureStats,
@@ -514,7 +514,7 @@ pub(super) fn record_voice_input_chunk(
 }
 
 #[cfg(feature = "voice-playback")]
-pub(super) fn record_voice_input_pcm_stats(samples: &[i16], stats: &VoiceMicrophoneCaptureStats) {
+pub(crate) fn record_voice_input_pcm_stats(samples: &[i16], stats: &VoiceMicrophoneCaptureStats) {
     let peak = samples
         .iter()
         .map(|sample| i32::from(*sample).unsigned_abs() as u64)
@@ -533,7 +533,7 @@ pub(super) fn record_voice_input_pcm_stats(samples: &[i16], stats: &VoiceMicroph
 }
 
 #[cfg(feature = "voice-playback")]
-pub(super) fn voice_microphone_min_callback_frames(stats: &VoiceMicrophoneCaptureStats) -> u64 {
+pub(crate) fn voice_microphone_min_callback_frames(stats: &VoiceMicrophoneCaptureStats) -> u64 {
     let min = stats.min_callback_frames.load(Ordering::Relaxed);
     if min == u64::MAX { 0 } else { min }
 }

@@ -9,8 +9,7 @@ mod tests;
 pub mod test_builders;
 
 pub use app_event::AppEvent;
-pub(crate) use app_event::AppEventKind;
-pub use metadata::{AppEventMetadata, SequencedAppEvent};
+pub use metadata::SequencedAppEvent;
 pub use types::{
     ChannelUnreadInfo, GatewayDispatchInfo, GuildMemberListItem, GuildMemberListOperation,
     GuildMemberListUpdateInfo, GuildMembersChunkInfo, MessageHistoryLoadTarget,

@@ -1270,6 +1270,46 @@ fn forwarding_targets_the_picked_channel_not_the_current_one() {
     assert_eq!(held, SwitcherPurpose::Navigate);
 }
 
+/// Every `.rs` file under `src/ui`, read from disk at test time.
+///
+/// Walked rather than named with `include_str!`. A hardcoded list cannot
+/// notice code moving out of the files it names, and the guards below all
+/// answer "is anything wrong in this source?" - which reads as a pass when
+/// the source is missing. That failed three times in two days: a workspace
+/// split left the command scan reading 13 of 181 command sites and still
+/// reporting success, and twice a list quietly held the same file twice
+/// where a moved one should have been.
+///
+/// Reading the tree means a new file is covered the moment it exists.
+fn ui_sources() -> Vec<(String, String)> {
+    fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(String, String)>) {
+        for entry in std::fs::read_dir(dir).expect("read src/ui").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, root, out);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                let name = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string();
+                out.push((name, std::fs::read_to_string(&path).expect("read source")));
+            }
+        }
+    }
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui");
+    let mut out = Vec::new();
+    walk(&root, &root, &mut out);
+    out.sort();
+    assert!(
+        out.len() > 20,
+        "only {} files found under src/ui - the walk is not finding the source",
+        out.len()
+    );
+    out
+}
+
 #[test]
 fn demo_mode_answers_every_command_the_ui_can_send() {
     // Demo mode is the default build while the project is pre-release, so a
@@ -1298,19 +1338,13 @@ fn demo_mode_answers_every_command_the_ui_can_send() {
             .collect()
     };
 
+    let sources = ui_sources();
     let ui = extract(
-        &[
-            include_str!("../ui/workspace/mod.rs"),
-            include_str!("../ui/workspace/types.rs"),
-            include_str!("../ui/workspace/types.rs"),
-            include_str!("../ui/workspace/overlays.rs"),
-            include_str!("../ui/workspace/channel_sidebar.rs"),
-            include_str!("../ui/workspace/guild_rail.rs"),
-            include_str!("../ui/workspace/member_pane.rs"),
-            include_str!("../ui/workspace/profile_pane.rs"),
-            include_str!("../ui/messages.rs"),
-        ]
-        .concat(),
+        &sources
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<Vec<_>>()
+            .concat(),
     );
     // The handler lives in `concord-fixtures` now, shared with the terminal
     // client. Scanned by path rather than by importing it, for the reason
@@ -1394,28 +1428,13 @@ fn no_icon_glyph_needs_a_font_we_do_not_ship() {
     //
     // Checked over source rather than at runtime: a glyph that fails to render
     // looks like a layout quirk, not an error, so nothing would ever raise it.
-    const SOURCES: [(&str, &str); 6] = [
-        ("workspace/mod.rs", include_str!("../ui/workspace/mod.rs")),
-        // overlays.rs draws glyphs too and was never scanned. types.rs and
-        // keys.rs are where a split moved workspace code, so they are
-        // covered whether or not they carry a glyph today.
-        (
-            "workspace/overlays.rs",
-            include_str!("../ui/workspace/overlays.rs"),
-        ),
-        (
-            "workspace/types.rs",
-            include_str!("../ui/workspace/types.rs"),
-        ),
-        (
-            "workspace/keys.rs",
-            include_str!("../ui/workspace/types.rs"),
-        ),
-        ("messages.rs", include_str!("../ui/messages.rs")),
-        ("chrome.rs", include_str!("../ui/chrome.rs")),
-    ];
+    // Walked, not listed: two of these files were named twice while a moved
+    // one went unnamed, and 36 glyph sites in channel_sidebar.rs and
+    // rendering/mod.rs were scanned by nothing at all.
+    let sources = ui_sources();
 
-    for (name, source) in SOURCES {
+    for (name, source) in &sources {
+        let (name, source) = (name.as_str(), source.as_str());
         for (index, _) in source.match_indices("\\u{") {
             let rest = &source[index + 3..];
             let Some(end) = rest.find('}') else { continue };

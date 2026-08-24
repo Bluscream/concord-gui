@@ -197,10 +197,7 @@ pub fn voice_pcm_peak(frame: &[i16]) -> i32 {
 
 #[cfg(feature = "voice-playback")]
 impl VoiceMicrophoneGateState {
-    pub fn overload_decision(
-        &mut self,
-        frame: &[i16],
-    ) -> Option<VoiceMicrophoneOverloadDecision> {
+    pub fn overload_decision(&mut self, frame: &[i16]) -> Option<VoiceMicrophoneOverloadDecision> {
         if let Some(decision) = voice_microphone_overload_decision(frame) {
             if decision.kind == VoiceMicrophoneOverloadKind::HandlingNoise {
                 self.handling_noise_suppression_frames =
@@ -241,11 +238,7 @@ impl VoiceMicrophoneGateState {
         None
     }
 
-    pub fn allows_frame(
-        &mut self,
-        frame: &[i16],
-        sensitivity: MicrophoneSensitivityDb,
-    ) -> bool {
+    pub fn allows_frame(&mut self, frame: &[i16], sensitivity: MicrophoneSensitivityDb) -> bool {
         if voice_pcm_frame_reaches_sensitivity(frame, sensitivity) {
             self.hangover_frames = VOICE_MIC_GATE_HANGOVER_FRAMES;
             return true;

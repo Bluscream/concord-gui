@@ -77,8 +77,6 @@ use self::opus::mix_voice_decoded_samples;
 use self::outbound::VoiceOutboundSendBlockReason;
 #[cfg(any(test, feature = "voice-playback"))]
 use self::outbound::{VoiceOutboundSendEvent, VoiceOutboundSendOutcome, VoiceOutboundSendState};
-#[cfg(test)]
-use ::opus::{Channels, Decoder as OpusDecoder, SampleRate as OpusSampleRate};
 #[cfg(all(test, feature = "voice-playback"))]
 use audio_buffer::{VoiceAudioBuffer, VoiceAudioOutputStats};
 use audio_runtime::VoiceAudioRuntime;
@@ -101,13 +99,6 @@ use rtp::{
     rtcp_sender_ssrc,
 };
 
-#[cfg(test)]
-use aes_gcm::{
-    Aes256Gcm, Nonce as AesGcmNonce,
-    aead::{Aead, KeyInit, Payload},
-};
-#[cfg(test)]
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 #[cfg(feature = "voice-playback")]
 use cpal::traits::{DeviceTrait, StreamTrait};
 use futures::{SinkExt, StreamExt};
@@ -137,7 +128,7 @@ pub use levels::{
 use super::{client::AppEventPublisher, events::AppEvent, gateway::GatewayCommand};
 
 pub(crate) use constants::*;
-pub(crate) use tasks::*;
+use tasks::*;
 pub(crate) use types::*;
 
 type VoiceGatewayStream =

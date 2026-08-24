@@ -1,14 +1,4 @@
-#[cfg(feature = "voice-playback")]
-use super::audio_buffer::voice_output_prebuffer_frames;
-use super::dave::VoiceDaveOutboundPayload;
-use super::opus::VoicePlaybackDecodeState;
-#[cfg(feature = "voice-playback")]
-use super::playback::voice_output_buffer_size;
-use super::rtp::build_voice_rtp_packet;
-use super::runtime::stop_voice_connection_task;
 use super::*;
-#[cfg(feature = "voice-playback")]
-use crate::support::audio_output::{f32_sample_to_i16, f32_sample_to_u8, f32_sample_to_u16};
 
 fn requested_voice() -> CurrentVoiceConnectionState {
     CurrentVoiceConnectionState {

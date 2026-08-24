@@ -348,11 +348,7 @@ impl Workspace {
         sidebar
     }
 
-    pub(super) fn voice_connected_card(
-        &self,
-        name: &str,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    pub(super) fn voice_connected_card(&self, name: &str, cx: &mut Context<Self>) -> gpui::Div {
         let mute = self.self_mute;
         let deaf = self.self_deaf;
 
