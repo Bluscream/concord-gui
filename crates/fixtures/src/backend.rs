@@ -546,7 +546,27 @@ fn handle_command(
             // itself. Answering it here would put a generated gradient over
             // the top of the actual picture, which is worse than offline -
             // it looks like the image loaded and is wrong.
-            if url.starts_with("http://") || url.starts_with("https://") {
+            //
+            // Except when the address cannot have a picture behind it: an
+            // emoji URL built from an id this fixture invented names nothing
+            // on Discord's CDN, so there is no real image to cover up. Left
+            // unanswered those drew as blank gaps mid-sentence.
+            let invented = fixtures::is_fixture_emoji_url(&url);
+            if !invented && (url.starts_with("http://") || url.starts_with("https://")) {
+                return;
+            }
+            if invented {
+                let seed = url.bytes().map(u64::from).sum::<u64>();
+                // Discord marks an animated custom emoji with `animated=true`
+                // and names it `.webp`. A GIF is sent back instead, because
+                // there is no WebP encoder to hand and the front end reads
+                // the format off the bytes rather than off the name.
+                let bytes = if url.contains("animated=true") {
+                    fixtures::demo_emoji_gif(seed)
+                } else {
+                    fixtures::demo_emoji_png(seed)
+                };
+                publish_event!(AppEvent::AttachmentPreviewLoaded { url, bytes });
                 return;
             }
             // Seeded from the URL so each attachment gets a distinguishable

@@ -2182,3 +2182,213 @@ pub fn leave_guild(state: &mut DiscordState, guild_id: Id<marker::GuildMarker>) 
         .channels
         .retain(|_, channel| channel.guild_id != Some(guild_id));
 }
+
+/// The ids of every custom emoji this fixture invents.
+///
+/// Listed rather than derived, so adding an emoji to the fixture without
+/// adding it here shows up as a blank gap rather than as a picture that
+/// silently comes from somewhere else.
+const FIXTURE_EMOJI: [u64; 3] = [4001, 4002, 9001];
+
+/// Whether an emoji CDN address names an emoji this fixture made up.
+///
+/// Demo mode answers a preview request for one of these, because there is
+/// nothing real behind the address to cover up - the ids do not exist on
+/// Discord's CDN and never will. Every other address is left alone.
+pub fn is_fixture_emoji_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://cdn.discordapp.com/emojis/") else {
+        return false;
+    };
+    // The id ends at the extension; the query string that marks an animated
+    // emoji comes after that and is not part of it.
+    let rest = rest.split(['?', '#']).next().unwrap_or(rest);
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    let Ok(id) = digits.parse::<u64>() else {
+        return false;
+    };
+    FIXTURE_EMOJI.iter().any(|raw| emoji_id(*raw).get() == id)
+}
+
+/// A small square standing in for a custom emoji.
+///
+/// Its own generator rather than [`demo_preview_png`] scaled down: that draws
+/// a 640x400 mock screenshot, and squeezing one into 22 pixels gives a grey
+/// smudge that reads as a failed load. A flat disc on a transparent ground is
+/// what an emoji looks like at that size, and the colour comes from the id so
+/// two different emoji are visibly two different emoji.
+pub fn demo_emoji_png(id: u64) -> Vec<u8> {
+    use image::{ImageEncoder, codecs::png::PngEncoder};
+
+    const SIDE: u32 = 64;
+    let radius = (SIDE / 2) as f32 - 1.0;
+    let centre = (SIDE as f32 - 1.0) / 2.0;
+
+    // Spread around the wheel by the id, at a fixed saturation, so every
+    // emoji is legible against both themes rather than occasionally black.
+    let hue = (id % 360) as f32;
+    let (r, g, b) = hue_to_rgb(hue);
+
+    let mut pixels = Vec::with_capacity((SIDE * SIDE * 4) as usize);
+    for y in 0..SIDE {
+        for x in 0..SIDE {
+            let dx = x as f32 - centre;
+            let dy = y as f32 - centre;
+            let distance = (dx * dx + dy * dy).sqrt();
+            // One pixel of feather, so the disc does not have a staircase
+            // edge at the size it is actually drawn.
+            let alpha = ((radius - distance).clamp(0.0, 1.0) * 255.0) as u8;
+            // A lighter upper-left quadrant reads as a highlight, which is
+            // enough to stop it looking like a coloured dot.
+            let lift = if dx + dy < -radius * 0.4 { 40 } else { 0 };
+            pixels.push(r.saturating_add(lift));
+            pixels.push(g.saturating_add(lift));
+            pixels.push(b.saturating_add(lift));
+            pixels.push(alpha);
+        }
+    }
+
+    let mut out = Vec::new();
+    if PngEncoder::new(&mut out)
+        .write_image(&pixels, SIDE, SIDE, image::ExtendedColorType::Rgba8)
+        .is_err()
+    {
+        return Vec::new();
+    }
+    out
+}
+
+/// An animated stand-in for an animated custom emoji.
+///
+/// The same disc as [`demo_emoji_png`], pulsing. Animation is the whole
+/// difference between an animated emoji and a still one, so a still image
+/// here would make the two indistinguishable and prove nothing.
+pub fn demo_emoji_gif(id: u64) -> Vec<u8> {
+    use image::{Delay, Frame, RgbaImage, codecs::gif::GifEncoder};
+    use std::time::Duration;
+
+    const SIDE: u32 = 64;
+    const FRAMES: u32 = 8;
+
+    let hue = (id % 360) as f32;
+    let (r, g, b) = hue_to_rgb(hue);
+    let centre = (SIDE as f32 - 1.0) / 2.0;
+
+    let mut out = Vec::new();
+    {
+        let mut encoder = GifEncoder::new(&mut out);
+        if encoder
+            .set_repeat(image::codecs::gif::Repeat::Infinite)
+            .is_err()
+        {
+            return Vec::new();
+        }
+        for index in 0..FRAMES {
+            // Breathes between two thirds and full size and back, so the loop
+            // has no seam where it restarts.
+            let phase = (index as f32 / FRAMES as f32) * std::f32::consts::TAU;
+            let radius = (SIDE / 2) as f32 * (0.82 + 0.18 * phase.sin());
+
+            let mut image = RgbaImage::new(SIDE, SIDE);
+            for (x, y, pixel) in image.enumerate_pixels_mut() {
+                let dx = x as f32 - centre;
+                let dy = y as f32 - centre;
+                let distance = (dx * dx + dy * dy).sqrt();
+                let alpha = ((radius - distance).clamp(0.0, 1.0) * 255.0) as u8;
+                *pixel = image::Rgba([r, g, b, alpha]);
+            }
+
+            if encoder
+                .encode_frame(Frame::from_parts(
+                    image,
+                    0,
+                    0,
+                    Delay::from_saturating_duration(Duration::from_millis(90)),
+                ))
+                .is_err()
+            {
+                return Vec::new();
+            }
+        }
+    }
+    out
+}
+
+/// A fully saturated colour for a hue in degrees.
+fn hue_to_rgb(hue: f32) -> (u8, u8, u8) {
+    let sector = hue / 60.0;
+    let rising = ((sector % 2.0) - 1.0).abs();
+    let x = ((1.0 - rising) * 200.0) as u8;
+    match sector as u32 {
+        0 => (220, x, 40),
+        1 => (x, 220, 40),
+        2 => (40, 220, x),
+        3 => (40, x, 220),
+        4 => (x, 40, 220),
+        _ => (220, 40, x),
+    }
+}
+
+#[cfg(test)]
+mod emoji_url_tests {
+    use super::{FIXTURE_EMOJI, emoji_id, is_fixture_emoji_url};
+    use crate::discord::custom_emoji_image_url;
+
+    #[test]
+    fn recognises_every_emoji_the_fixture_hands_out() {
+        for raw in FIXTURE_EMOJI {
+            for animated in [false, true] {
+                let url = custom_emoji_image_url(emoji_id(raw).get(), animated);
+                assert!(
+                    is_fixture_emoji_url(&url),
+                    "{url} is the fixture's own emoji {raw} and was not recognised"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn leaves_real_addresses_alone() {
+        for url in [
+            // A real Discord emoji: answering this would cover up the actual
+            // picture with a generated one.
+            "https://cdn.discordapp.com/emojis/123456789012345678.png",
+            "https://cdn.discordapp.com/attachments/1/2/photo.png",
+            "https://example.com/emojis/4001.png",
+            "not a url at all",
+        ] {
+            assert!(!is_fixture_emoji_url(url), "{url} should be left alone");
+        }
+    }
+}
+
+#[cfg(test)]
+mod emoji_image_tests {
+    use super::{demo_emoji_gif, demo_emoji_png};
+
+    #[test]
+    fn the_still_emoji_is_a_decodable_png() {
+        let bytes = demo_emoji_png(4001);
+        assert!(!bytes.is_empty(), "encoding produced nothing");
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "not a PNG");
+        let decoded = image::load_from_memory(&bytes).expect("should decode");
+        assert_eq!((decoded.width(), decoded.height()), (64, 64));
+    }
+
+    #[test]
+    fn the_animated_emoji_is_a_decodable_gif() {
+        let bytes = demo_emoji_gif(4002);
+        assert!(!bytes.is_empty(), "encoding produced nothing");
+        assert_eq!(&bytes[..3], b"GIF", "not a GIF");
+        image::load_from_memory(&bytes).expect("should decode");
+    }
+
+    /// Two emoji must not come out looking like the same emoji.
+    #[test]
+    fn different_ids_give_different_pictures() {
+        assert_ne!(
+            demo_emoji_png(4001),
+            demo_emoji_png(4002),
+            "every emoji would look identical"
+        );
+    }
+}

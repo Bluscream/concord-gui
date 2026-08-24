@@ -1,4 +1,4 @@
-use super::image_format_for;
+use super::image_format_for_bytes;
 use concord::discord::{ActivityKind, AppCommand, AppEvent, VoiceConnectionStatus};
 
 use crate::model::projection::Selection;
@@ -468,7 +468,7 @@ impl Workspace {
             }
 
             AppEvent::AttachmentPreviewLoaded { url, bytes } => {
-                match image_format_for(url) {
+                match image_format_for_bytes(url, bytes) {
                     Some(format) => {
                         self.attachment_previews.insert(
                             url.clone(),

@@ -544,6 +544,7 @@ fn message_body(
                     message.spoiler_revealed,
                     options.show_emoji,
                     options.animate,
+                    options.previews,
                 )),
         );
 
@@ -757,6 +758,7 @@ enum Segment {
 fn block_ranges(parsed: &markdown::Parsed) -> Vec<(std::ops::Range<usize>, u8, bool)> {
     let mut blocks: Vec<(std::ops::Range<usize>, u8, bool)> = Vec::new();
     let mut offset = 0usize;
+    let mut held_emoji = false;
 
     for line in parsed.text.split('\n') {
         let end = offset + line.len();
@@ -768,16 +770,34 @@ fn block_ranges(parsed: &markdown::Parsed) -> Vec<(std::ops::Range<usize>, u8, b
             .find(|(range, _)| range.start <= offset && range.end > offset)
             .map_or((0, false), |(_, style)| (style.heading, style.subtext));
 
+        // A line with a custom emoji on it gets a block to itself, and so
+        // does the line after it.
+        //
+        // Emoji cannot live inside a `StyledText`, so such a block is laid
+        // out as a wrapping row of text and images. A row whose text child
+        // spans ten lines is as wide and as tall as the whole paragraph, so
+        // the emoji were pushed past it and came out floating at the
+        // paragraph's vertical centre, far to the right of the line they
+        // belong to. One line per block keeps the text child one line wide,
+        // which puts the emoji back where they were written.
+        let has_emoji = parsed.runs.iter().any(|(range, style)| {
+            matches!(style.kind, Kind::Emoji { .. }) && range.start < end && range.end > offset
+        });
+
         match blocks.last_mut() {
             // Consecutive lines of the same shape stay one element, so a
             // paragraph still wraps as a paragraph.
             Some((range, held_heading, held_subtext))
-                if *held_heading == heading && *held_subtext == subtext =>
+                if *held_heading == heading
+                    && *held_subtext == subtext
+                    && !has_emoji
+                    && !held_emoji =>
             {
                 range.end = end;
             }
             _ => blocks.push((offset..end, heading, subtext)),
         }
+        held_emoji = has_emoji;
         // Past the newline.
         offset = end + 1;
     }
@@ -790,6 +810,7 @@ fn rich_body(
     reveal_spoilers: bool,
     show_emoji: bool,
     animate: bool,
+    previews: &Previews,
 ) -> Div {
     let blocks = block_ranges(parsed);
 
@@ -818,13 +839,14 @@ fn rich_body(
                         reveal_spoilers,
                         show_emoji,
                         animate,
+                        previews,
                     )),
             );
         }
         return stack;
     }
 
-    rich_body_inner(parsed, reveal_spoilers, show_emoji, animate)
+    rich_body_inner(parsed, reveal_spoilers, show_emoji, animate, previews)
 }
 
 fn rich_body_inner(
@@ -832,6 +854,7 @@ fn rich_body_inner(
     reveal_spoilers: bool,
     show_emoji: bool,
     animate: bool,
+    previews: &Previews,
 ) -> Div {
     let parts = segments(parsed);
 
@@ -859,16 +882,19 @@ fn rich_body_inner(
                 }
             }
             Segment::Emoji { id, animated } => {
-                wrapper = wrapper.child(
-                    gpui::img(gpui::SharedUri::from(custom_emoji_image_url(
-                        id,
-                        // Animation is a display choice, so a still emoji is
-                        // a different URL rather than a paused decode.
-                        animated && animate,
-                    )))
-                    .w(px(EMOJI_SIZE))
-                    .h(px(EMOJI_SIZE)),
-                );
+                // Animation is a display choice, so a still emoji is a
+                // different URL rather than a paused decode.
+                let url = custom_emoji_image_url(id, animated && animate);
+                // The shared cache first, for the same reason attachments use
+                // it: one fetch, with the session's headers, and a demo that
+                // has no CDN behind it can answer from its own fixtures.
+                // Falling through to GPUI's loader keeps an emoji visible
+                // while its preview is still in flight.
+                let image = match previews.get(&url) {
+                    Some(image) => gpui::img(image.clone()),
+                    None => gpui::img(gpui::SharedUri::from(url)),
+                };
+                wrapper = wrapper.child(image.w(px(EMOJI_SIZE)).h(px(EMOJI_SIZE)));
             }
         }
     }
@@ -1318,4 +1344,46 @@ fn picture(
         ));
     }
     None
+}
+
+#[cfg(test)]
+mod block_tests {
+    use super::block_ranges;
+    use crate::model::markdown;
+
+    fn lines_of(body: &str) -> Vec<String> {
+        let parsed = markdown::parse(body);
+        block_ranges(&parsed)
+            .into_iter()
+            .map(|(range, _, _)| parsed.text[range].to_string())
+            .collect()
+    }
+
+    /// A paragraph must stay one block, or it stops wrapping as a paragraph.
+    #[test]
+    fn plain_lines_merge_into_one_block() {
+        assert_eq!(
+            lines_of("first line\nsecond line\nthird line"),
+            vec!["first line\nsecond line\nthird line"]
+        );
+    }
+
+    /// The regression this split exists for: an emoji inside a merged
+    /// paragraph was laid out beside the whole paragraph rather than beside
+    /// its own line, and came out floating at the paragraph's centre-right.
+    #[test]
+    fn a_line_with_a_custom_emoji_stands_alone() {
+        let blocks = lines_of("before\nhas <:ferris:12345> in it\nafter");
+        assert_eq!(blocks.len(), 3, "got {blocks:?}");
+        assert_eq!(blocks[0], "before");
+        assert!(blocks[1].contains("ferris"), "got {blocks:?}");
+        assert_eq!(blocks[2], "after");
+    }
+
+    #[test]
+    fn headings_still_split_from_body_text() {
+        let blocks = lines_of("# Title\nbody one\nbody two");
+        assert_eq!(blocks.len(), 2, "got {blocks:?}");
+        assert_eq!(blocks[1], "body one\nbody two");
+    }
 }

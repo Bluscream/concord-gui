@@ -407,6 +407,42 @@ impl Workspace {
     }
 }
 
+/// Pick a decoder for some image bytes.
+///
+/// The bytes decide when they can - every format here except SVG starts with
+/// a signature - and the URL's extension is the fallback for the ones that
+/// cannot, and for an empty body.
+///
+/// Bytes first because an extension is a claim and a signature is evidence.
+/// Discord names an animated custom emoji `.webp` regardless of what it
+/// actually sends, and a demo standing in for one has no WebP encoder to
+/// answer with; either way the extension sent the wrong decoder and the emoji
+/// drew as a blank gap.
+pub fn image_format_for_bytes(url: &str, bytes: &[u8]) -> Option<gpui::ImageFormat> {
+    // Ordered longest-first so no signature is a prefix of another.
+    const SIGNATURES: [(&[u8], gpui::ImageFormat); 6] = [
+        (b"\x89PNG\r\n\x1a\n", gpui::ImageFormat::Png),
+        (b"GIF87a", gpui::ImageFormat::Gif),
+        (b"GIF89a", gpui::ImageFormat::Gif),
+        (b"\xff\xd8\xff", gpui::ImageFormat::Jpeg),
+        (b"BM", gpui::ImageFormat::Bmp),
+        (b"II\x2a\x00", gpui::ImageFormat::Tiff),
+    ];
+
+    for (magic, format) in SIGNATURES {
+        if bytes.starts_with(magic) {
+            return Some(format);
+        }
+    }
+    // RIFF....WEBP - the size sits between the two halves, so it cannot be
+    // matched as one run.
+    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        return Some(gpui::ImageFormat::Webp);
+    }
+
+    image_format_for(url)
+}
+
 /// Pick a decoder from a URL's file extension.
 ///
 /// Discord's CDN serves the content type in a header the image bytes do not

@@ -360,8 +360,27 @@ impl Workspace {
                 })
                 .filter(|url| !url.is_empty());
 
+            // Custom emoji, through the same cache. They used to go straight
+            // to GPUI's URL loader, which meant a separate unauthenticated
+            // fetch per emoji and - in a demo, where the ids are invented and
+            // the CDN has nothing at them - a blank gap mid-sentence.
+            let emoji = self
+                .messages
+                .iter()
+                .flat_map(|row| row.body.runs.iter())
+                .filter_map(|(_, style)| match style.kind {
+                    crate::model::markdown::Kind::Emoji { id, animated } => {
+                        Some(concord::discord::custom_emoji_image_url(
+                            id,
+                            animated && self.options.display.animate_images,
+                        ))
+                    }
+                    _ => None,
+                });
+
             let urls: Vec<_> = attachments
                 .chain(embedded)
+                .chain(emoji)
                 .filter(|url| self.requested_previews.insert(url.clone()))
                 .collect();
 

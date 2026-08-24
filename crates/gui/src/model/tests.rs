@@ -1926,3 +1926,40 @@ fn every_id_in_the_fixture_looks_like_a_real_snowflake() {
         "these are not plausible snowflakes: {bad:?}"
     );
 }
+
+/// Bytes beat the extension, because an extension is a claim.
+#[test]
+fn image_format_is_sniffed_from_the_bytes_first() {
+    use crate::ui::workspace::image_format_for_bytes;
+
+    // The case this exists for: Discord names an animated custom emoji
+    // `.webp` whatever it actually sends, so the extension picked a decoder
+    // that produced nothing and the emoji drew as a blank gap.
+    assert_eq!(
+        image_format_for_bytes("https://cdn.example/1.webp?animated=true", b"GIF89a...."),
+        Some(gpui::ImageFormat::Gif)
+    );
+    assert_eq!(
+        image_format_for_bytes("https://cdn.example/1.webp", b"\x89PNG\r\n\x1a\n"),
+        Some(gpui::ImageFormat::Png)
+    );
+    assert_eq!(
+        image_format_for_bytes("https://cdn.example/1.png", b"\xff\xd8\xff\xe0"),
+        Some(gpui::ImageFormat::Jpeg)
+    );
+    assert_eq!(
+        image_format_for_bytes("https://cdn.example/1.png", b"RIFF\0\0\0\0WEBPVP8 "),
+        Some(gpui::ImageFormat::Webp)
+    );
+
+    // No signature to go on: SVG is text, so the extension is all there is.
+    assert_eq!(
+        image_format_for_bytes("https://cdn.example/1.svg", b"<svg xmlns=\"...\">"),
+        Some(gpui::ImageFormat::Svg)
+    );
+    // Nothing usable either way, rather than a guess that decodes to nothing.
+    assert_eq!(
+        image_format_for_bytes("https://cdn.example/1.heic", b"\0\0\0\x20ftypheic"),
+        None
+    );
+}
