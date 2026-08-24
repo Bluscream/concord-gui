@@ -78,11 +78,34 @@ impl Toggle {
 /// config.toml while the running UI kept stale values until restart.
 pub type OnChange = std::rc::Rc<dyn Fn(&concord::config::AppOptions, &mut gpui::App)>;
 
+/// The categories, in the order they appear in the body.
+///
+/// One table for both the sidebar and the anchors it jumps to: kept as two
+/// separate lists they drift, and a sidebar entry with no section behind it
+/// scrolls nowhere and looks broken. "Server Endpoint" was exactly that -
+/// listed in the sidebar with nothing in the body under it.
+const SECTIONS: [(&str, &str); 5] = [
+    ("\u{25D0}", "settings-nav-appearance"),
+    ("\u{25A3}", "settings-nav-display"),
+    ("\u{2606}", "settings-nav-notifications"),
+    ("\u{266A}", "settings-nav-voice"),
+    ("\u{25CF}", "settings-nav-presence"),
+];
+
 pub struct SettingsWindow {
     pub options: concord::config::AppOptions,
     pub settings_note: Option<String>,
     on_change: Option<OnChange>,
     focus: FocusHandle,
+    /// The body's scroll position, so the sidebar can move it.
+    body_scroll: gpui::ScrollHandle,
+    /// Which category the sidebar shows as current.
+    section: usize,
+    /// A category the sidebar asked to jump to, applied on the next render.
+    ///
+    /// Deferred because the anchor positions are only known while the body
+    /// is being built, and the click happens long before that.
+    pending_jump: Option<usize>,
 }
 
 impl SettingsWindow {
@@ -92,6 +115,9 @@ impl SettingsWindow {
             settings_note: None,
             on_change: None,
             focus: cx.focus_handle(),
+            section: 0,
+            body_scroll: gpui::ScrollHandle::new(),
+            pending_jump: None,
         }
     }
 
@@ -131,6 +157,12 @@ impl Render for SettingsWindow {
             &DARK
         };
 
+        // The body's children are the sections, one each and in SECTIONS
+        // order, so a category's index is the item to scroll to.
+        if let Some(section) = self.pending_jump.take() {
+            self.body_scroll.scroll_to_item(section);
+        }
+
         let options = &self.options;
         let saved_note = self.settings_note.as_deref();
 
@@ -165,36 +197,20 @@ impl Render for SettingsWindow {
                             .text_color(rgb(theme.text_subtle))
                             .child(concord::t!("settings-app-settings")),
                     )
-                    .child(sidebar_nav_item(
-                        format!("\u{25D0} {}", t!("settings-nav-appearance")),
-                        true,
-                        theme,
-                    ))
-                    .child(sidebar_nav_item(
-                        format!("\u{25C8} {}", t!("settings-nav-endpoint")),
-                        false,
-                        theme,
-                    ))
-                    .child(sidebar_nav_item(
-                        format!("\u{25A3} {}", t!("settings-nav-display")),
-                        false,
-                        theme,
-                    ))
-                    .child(sidebar_nav_item(
-                        format!("\u{2606} {}", t!("settings-nav-notifications")),
-                        false,
-                        theme,
-                    ))
-                    .child(sidebar_nav_item(
-                        format!("\u{266A} {}", t!("settings-nav-voice")),
-                        false,
-                        theme,
-                    ))
-                    .child(sidebar_nav_item(
-                        format!("\u{25CF} {}", t!("settings-nav-presence")),
-                        false,
-                        theme,
-                    ))
+                    .children(SECTIONS.iter().enumerate().map(|(index, (glyph, key))| {
+                        sidebar_nav_item(
+                            format!("{glyph} {}", t!(key)),
+                            index == self.section,
+                            theme,
+                        )
+                        .id(("settings-nav", index))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.section = index;
+                            this.pending_jump = Some(index);
+                            cx.notify();
+                        }))
+                    }))
                     .child(
                         column()
                             .flex_1()
@@ -245,219 +261,256 @@ impl Render for SettingsWindow {
                             .py(px(space::LG))
                             .gap(px(space::XL))
                             .overflow_y_scroll()
+                            .track_scroll(&self.body_scroll)
                             // --- Section 1: Appearance & Theme ---
-                            .child(section_title(t!("settings-appearance-theme"), theme))
                             .child(
-                                row()
+                                column()
                                     .w_full()
                                     .gap(px(space::MD))
+                                    .child(section_title(t!("settings-appearance-theme"), theme))
                                     .child(
-                                        column()
-                                            .id("card-theme-dark")
-                                            .flex_1()
-                                            .p(px(space::LG))
-                                            .gap(px(space::XS))
-                                            .rounded(px(layout::RADIUS))
-                                            .bg(rgb(if !options.display.light_mode {
-                                                theme.surface_active
-                                            } else {
-                                                theme.surface_sunken
-                                            }))
-                                            .border_2()
-                                            .border_color(rgb(if !options.display.light_mode {
-                                                theme.accent
-                                            } else {
-                                                theme.border
-                                            }))
-                                            .cursor_pointer()
-                                            .hover(|s| s.bg(rgb(theme.surface_hover)))
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.options.display.light_mode = false;
-                                                this.save_options(cx);
-                                                cx.notify();
-                                            }))
+                                        row()
+                                            .w_full()
+                                            .gap(px(space::MD))
                                             .child(
-                                                gpui::div()
-                                                    .text_size(px(scaled(text::BASE)))
-                                                    .text_color(rgb(theme.text))
-                                                    .child(format!(
-                                                        "\u{25D1} {}",
-                                                        t!("settings-dark-mode")
-                                                    )),
+                                                column()
+                                                    .id("card-theme-dark")
+                                                    .flex_1()
+                                                    .p(px(space::LG))
+                                                    .gap(px(space::XS))
+                                                    .rounded(px(layout::RADIUS))
+                                                    .bg(rgb(if !options.display.light_mode {
+                                                        theme.surface_active
+                                                    } else {
+                                                        theme.surface_sunken
+                                                    }))
+                                                    .border_2()
+                                                    .border_color(rgb(
+                                                        if !options.display.light_mode {
+                                                            theme.accent
+                                                        } else {
+                                                            theme.border
+                                                        },
+                                                    ))
+                                                    .cursor_pointer()
+                                                    .hover(|s| s.bg(rgb(theme.surface_hover)))
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.options.display.light_mode = false;
+                                                        this.save_options(cx);
+                                                        cx.notify();
+                                                    }))
+                                                    .child(
+                                                        gpui::div()
+                                                            .text_size(px(scaled(text::BASE)))
+                                                            .text_color(rgb(theme.text))
+                                                            .child(format!(
+                                                                "\u{25D1} {}",
+                                                                t!("settings-dark-mode")
+                                                            )),
+                                                    )
+                                                    .child(
+                                                        gpui::div()
+                                                            .text_size(px(scaled(text::XS)))
+                                                            .text_color(rgb(theme.text_subtle))
+                                                            .child(concord::t!(
+                                                                "settings-theme-dark"
+                                                            )),
+                                                    ),
                                             )
                                             .child(
-                                                gpui::div()
-                                                    .text_size(px(scaled(text::XS)))
-                                                    .text_color(rgb(theme.text_subtle))
-                                                    .child(concord::t!("settings-theme-dark")),
-                                            ),
-                                    )
-                                    .child(
-                                        column()
-                                            .id("card-theme-light")
-                                            .flex_1()
-                                            .p(px(space::LG))
-                                            .gap(px(space::XS))
-                                            .rounded(px(layout::RADIUS))
-                                            .bg(rgb(if options.display.light_mode {
-                                                theme.surface_active
-                                            } else {
-                                                theme.surface_sunken
-                                            }))
-                                            .border_2()
-                                            .border_color(rgb(if options.display.light_mode {
-                                                theme.accent
-                                            } else {
-                                                theme.border
-                                            }))
-                                            .cursor_pointer()
-                                            .hover(|s| s.bg(rgb(theme.surface_hover)))
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.options.display.light_mode = true;
-                                                this.save_options(cx);
-                                                cx.notify();
-                                            }))
-                                            .child(
-                                                gpui::div()
-                                                    .text_size(px(scaled(text::BASE)))
-                                                    .text_color(rgb(theme.text))
-                                                    .child(format!(
-                                                        "\u{25CB} {}",
-                                                        t!("settings-light-mode")
-                                                    )),
-                                            )
-                                            .child(
-                                                gpui::div()
-                                                    .text_size(px(scaled(text::XS)))
-                                                    .text_color(rgb(theme.text_subtle))
-                                                    .child(concord::t!("settings-theme-light")),
+                                                column()
+                                                    .id("card-theme-light")
+                                                    .flex_1()
+                                                    .p(px(space::LG))
+                                                    .gap(px(space::XS))
+                                                    .rounded(px(layout::RADIUS))
+                                                    .bg(rgb(if options.display.light_mode {
+                                                        theme.surface_active
+                                                    } else {
+                                                        theme.surface_sunken
+                                                    }))
+                                                    .border_2()
+                                                    .border_color(rgb(
+                                                        if options.display.light_mode {
+                                                            theme.accent
+                                                        } else {
+                                                            theme.border
+                                                        },
+                                                    ))
+                                                    .cursor_pointer()
+                                                    .hover(|s| s.bg(rgb(theme.surface_hover)))
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.options.display.light_mode = true;
+                                                        this.save_options(cx);
+                                                        cx.notify();
+                                                    }))
+                                                    .child(
+                                                        gpui::div()
+                                                            .text_size(px(scaled(text::BASE)))
+                                                            .text_color(rgb(theme.text))
+                                                            .child(format!(
+                                                                "\u{25CB} {}",
+                                                                t!("settings-light-mode")
+                                                            )),
+                                                    )
+                                                    .child(
+                                                        gpui::div()
+                                                            .text_size(px(scaled(text::XS)))
+                                                            .text_color(rgb(theme.text_subtle))
+                                                            .child(concord::t!(
+                                                                "settings-theme-light"
+                                                            )),
+                                                    ),
                                             ),
                                     ),
                             )
                             // --- Section 3: Interface & Display ---
-                            .child(section_title(
-                                concord::t!("settings-interface-display"),
-                                theme,
-                            ))
-                            // Language, first in this section because it
-                            // changes every other label under it.
-                            .child(language_row(options.display.language, theme, cx))
-                            .child(toggle_row(
-                                Toggle::ShowAvatars,
-                                options.display.show_avatars,
-                                theme,
-                                cx.listener(|this, _, _, cx| {
-                                    this.options.display.show_avatars =
-                                        !this.options.display.show_avatars;
-                                    this.save_options(cx);
-                                    cx.notify();
-                                }),
-                            ))
-                            .child(toggle_row(
-                                Toggle::CircularAvatars,
-                                options.display.circular_avatars,
-                                theme,
-                                cx.listener(|this, _, _, cx| {
-                                    this.options.display.circular_avatars =
-                                        !this.options.display.circular_avatars;
-                                    this.save_options(cx);
-                                    cx.notify();
-                                }),
-                            ))
-                            .child(toggle_row(
-                                Toggle::AnimateImages,
-                                options.display.animate_images,
-                                theme,
-                                cx.listener(|this, _, _, cx| {
-                                    this.options.display.animate_images =
-                                        !this.options.display.animate_images;
-                                    this.save_options(cx);
-                                    cx.notify();
-                                }),
-                            ))
-                            .child(toggle_row(
-                                Toggle::ShowCustomEmoji,
-                                options.display.show_custom_emoji,
-                                theme,
-                                cx.listener(|this, _, _, cx| {
-                                    this.options.display.show_custom_emoji =
-                                        !this.options.display.show_custom_emoji;
-                                    this.save_options(cx);
-                                    cx.notify();
-                                }),
-                            ))
-                            .child(toggle_row(
-                                Toggle::Hour24,
-                                options.display.hour_format_24,
-                                theme,
-                                cx.listener(|this, _, _, cx| {
-                                    this.options.display.hour_format_24 =
-                                        !this.options.display.hour_format_24;
-                                    this.save_options(cx);
-                                    cx.notify();
-                                }),
-                            ))
-                            .child(toggle_row(
-                                Toggle::MediaPlayback,
-                                options.display.media_playback,
-                                theme,
-                                cx.listener(|this, _, _, cx| {
-                                    this.options.display.media_playback =
-                                        !this.options.display.media_playback;
-                                    this.save_options(cx);
-                                    cx.notify();
-                                }),
-                            ))
+                            .child(
+                                column()
+                                    .w_full()
+                                    .gap(px(space::MD))
+                                    .child(section_title(
+                                        concord::t!("settings-interface-display"),
+                                        theme,
+                                    ))
+                                    // Language, first in this section because it
+                                    // changes every other label under it.
+                                    .child(language_row(options.display.language, theme, cx))
+                                    .child(toggle_row(
+                                        Toggle::ShowAvatars,
+                                        options.display.show_avatars,
+                                        theme,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.options.display.show_avatars =
+                                                !this.options.display.show_avatars;
+                                            this.save_options(cx);
+                                            cx.notify();
+                                        }),
+                                    ))
+                                    .child(toggle_row(
+                                        Toggle::CircularAvatars,
+                                        options.display.circular_avatars,
+                                        theme,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.options.display.circular_avatars =
+                                                !this.options.display.circular_avatars;
+                                            this.save_options(cx);
+                                            cx.notify();
+                                        }),
+                                    ))
+                                    .child(toggle_row(
+                                        Toggle::AnimateImages,
+                                        options.display.animate_images,
+                                        theme,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.options.display.animate_images =
+                                                !this.options.display.animate_images;
+                                            this.save_options(cx);
+                                            cx.notify();
+                                        }),
+                                    ))
+                                    .child(toggle_row(
+                                        Toggle::ShowCustomEmoji,
+                                        options.display.show_custom_emoji,
+                                        theme,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.options.display.show_custom_emoji =
+                                                !this.options.display.show_custom_emoji;
+                                            this.save_options(cx);
+                                            cx.notify();
+                                        }),
+                                    ))
+                                    .child(toggle_row(
+                                        Toggle::Hour24,
+                                        options.display.hour_format_24,
+                                        theme,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.options.display.hour_format_24 =
+                                                !this.options.display.hour_format_24;
+                                            this.save_options(cx);
+                                            cx.notify();
+                                        }),
+                                    ))
+                                    .child(toggle_row(
+                                        Toggle::MediaPlayback,
+                                        options.display.media_playback,
+                                        theme,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.options.display.media_playback =
+                                                !this.options.display.media_playback;
+                                            this.save_options(cx);
+                                            cx.notify();
+                                        }),
+                                    )),
+                            )
                             // --- Section 4: Notifications ---
-                            .child(section_title(concord::t!("settings-notifications"), theme))
-                            .child(toggle_row(
-                                Toggle::DesktopNotifications,
-                                options.notifications.desktop_notifications,
-                                theme,
-                                cx.listener(|this, _, _, cx| {
-                                    this.options.notifications.desktop_notifications =
-                                        !this.options.notifications.desktop_notifications;
-                                    this.save_options(cx);
-                                    cx.notify();
-                                }),
-                            ))
-                            .child(toggle_row(
-                                Toggle::NotificationSounds,
-                                options.notifications.notification_sounds,
-                                theme,
-                                cx.listener(|this, _, _, cx| {
-                                    this.options.notifications.notification_sounds =
-                                        !this.options.notifications.notification_sounds;
-                                    this.save_options(cx);
-                                    cx.notify();
-                                }),
-                            ))
+                            .child(
+                                column()
+                                    .w_full()
+                                    .gap(px(space::MD))
+                                    .child(section_title(
+                                        concord::t!("settings-notifications"),
+                                        theme,
+                                    ))
+                                    .child(toggle_row(
+                                        Toggle::DesktopNotifications,
+                                        options.notifications.desktop_notifications,
+                                        theme,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.options.notifications.desktop_notifications =
+                                                !this.options.notifications.desktop_notifications;
+                                            this.save_options(cx);
+                                            cx.notify();
+                                        }),
+                                    ))
+                                    .child(toggle_row(
+                                        Toggle::NotificationSounds,
+                                        options.notifications.notification_sounds,
+                                        theme,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.options.notifications.notification_sounds =
+                                                !this.options.notifications.notification_sounds;
+                                            this.save_options(cx);
+                                            cx.notify();
+                                        }),
+                                    )),
+                            )
                             // --- Section 5: Voice & Audio ---
-                            .child(section_title(concord::t!("settings-voice"), theme))
-                            .child(toggle_row(
-                                Toggle::NoiseSuppression,
-                                options.voice.noise_suppression,
-                                theme,
-                                cx.listener(|this, _, _, cx| {
-                                    this.options.voice.noise_suppression =
-                                        !this.options.voice.noise_suppression;
-                                    this.save_options(cx);
-                                    cx.notify();
-                                }),
-                            ))
+                            .child(
+                                column()
+                                    .w_full()
+                                    .gap(px(space::MD))
+                                    .child(section_title(concord::t!("settings-voice"), theme))
+                                    .child(toggle_row(
+                                        Toggle::NoiseSuppression,
+                                        options.voice.noise_suppression,
+                                        theme,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.options.voice.noise_suppression =
+                                                !this.options.voice.noise_suppression;
+                                            this.save_options(cx);
+                                            cx.notify();
+                                        }),
+                                    )),
+                            )
                             // --- Section 6: Presence ---
-                            .child(section_title(concord::t!("settings-presence"), theme))
-                            .child(toggle_row(
-                                Toggle::ShareRichPresence,
-                                options.presence.share_rich_presence,
-                                theme,
-                                cx.listener(|this, _, _, cx| {
-                                    this.options.presence.share_rich_presence =
-                                        !this.options.presence.share_rich_presence;
-                                    this.save_options(cx);
-                                    cx.notify();
-                                }),
-                            )),
+                            .child(
+                                column()
+                                    .w_full()
+                                    .gap(px(space::MD))
+                                    .child(section_title(concord::t!("settings-presence"), theme))
+                                    .child(toggle_row(
+                                        Toggle::ShareRichPresence,
+                                        options.presence.share_rich_presence,
+                                        theme,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.options.presence.share_rich_presence =
+                                                !this.options.presence.share_rich_presence;
+                                            this.save_options(cx);
+                                            cx.notify();
+                                        }),
+                                    )),
+                            ),
                     )
                     // Footer Bar
                     .child(

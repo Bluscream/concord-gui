@@ -400,8 +400,10 @@ pub fn one_line(
     }
 
     // Paced by distance rather than a fixed duration, so a long name does not
-    // race past while a short one crawls.
-    let seconds = (overflow / 28.).clamp(2.5, 12.);
+    // race past while a short one crawls. Slow on purpose: this sits in the
+    // corner of the eye while the reader is doing something else, and
+    // movement there is a distraction long before it is unreadable.
+    let seconds = (overflow / 9.).clamp(7., 30.);
 
     gpui::div()
         .w(px(width))

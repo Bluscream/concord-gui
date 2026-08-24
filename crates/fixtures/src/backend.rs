@@ -217,6 +217,11 @@ fn handle_command(
                 fixtures::attach_to_last_message(state, channel_id, &files);
             }
 
+            // Discord unfurls links server-side and sends the embed after the
+            // message; offline the fixture stands in, so pasting a link shows
+            // something rather than nothing.
+            fixtures::unfurl_last_message(state, channel_id);
+
             publish_state!();
 
             // A canned reply, so the typing indicator and an incoming message
@@ -597,6 +602,13 @@ fn handle_command(
         }
 
         AppCommand::LoadAttachmentPreview { url } => {
+            // A real address is left to the front end, which can fetch it
+            // itself. Answering it here would put a generated gradient over
+            // the top of the actual picture, which is worse than offline -
+            // it looks like the image loaded and is wrong.
+            if url.starts_with("http://") || url.starts_with("https://") {
+                return;
+            }
             // Seeded from the URL so each attachment gets a distinguishable
             // image rather than every preview looking identical.
             let seed = url.bytes().map(u64::from).sum::<u64>();

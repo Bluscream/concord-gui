@@ -115,7 +115,6 @@ label-reacted-with = Reacted with { $emoji }
 settings-light-mode = Light Mode
 settings-nav-appearance = Appearance
 settings-nav-display = Display & UI
-settings-nav-endpoint = Server Endpoint
 settings-nav-notifications = Notifications
 settings-nav-presence = Presence
 settings-nav-voice = Voice & Audio

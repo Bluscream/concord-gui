@@ -596,7 +596,7 @@ fn message_body(
         // also uses.
         if attachment.is_image
             && options.show_images
-            && let Some(image) = options.previews.get(attachment.url.as_str())
+            && let Some(image) = picture(attachment.url.as_str(), options, 400., 300.)
         {
             let view = on_action.clone();
             body = body.child(
@@ -610,12 +610,7 @@ fn message_body(
                     .on_click(move |_event, _window, cx| {
                         view(index, MessageAction::ViewImage(position), cx)
                     })
-                    .child(
-                        gpui::img(image.clone())
-                            .max_w(px(400.))
-                            .max_h(px(300.))
-                            .rounded(px(layout::RADIUS)),
-                    ),
+                    .child(image),
             );
         }
 
@@ -1173,23 +1168,13 @@ fn embed_card(id: usize, embed: &EmbedRow, options: RenderOptions) -> impl IntoE
     // network from here.
     if options.show_images {
         if let Some(url) = &embed.image_url
-            && let Some(image) = options.previews.get(url.as_str())
+            && let Some(image) = picture(url.as_str(), options, 400., 300.)
         {
-            card = card.child(
-                gpui::img(image.clone())
-                    .max_w(px(400.))
-                    .max_h(px(300.))
-                    .rounded(px(layout::RADIUS)),
-            );
+            card = card.child(image);
         } else if let Some(url) = &embed.thumbnail_url
-            && let Some(image) = options.previews.get(url.as_str())
+            && let Some(image) = picture(url.as_str(), options, 80., 80.)
         {
-            card = card.child(
-                gpui::img(image.clone())
-                    .max_w(px(80.))
-                    .max_h(px(80.))
-                    .rounded(px(layout::RADIUS)),
-            );
+            card = card.child(image);
         }
     }
 
@@ -1203,4 +1188,41 @@ fn embed_card(id: usize, embed: &EmbedRow, options: RenderOptions) -> impl IntoE
     }
 
     card.id(("embed", id))
+}
+
+/// A picture, from the preview cache or straight from its URL.
+///
+/// The cache is preferred: the core fetches with the session's headers and
+/// both front ends share the result. But a cache miss used to mean nothing
+/// was drawn at all, which is wrong for an ordinary `https://` link - GPUI
+/// can fetch that itself, and a link to an image is one of the commonest
+/// things in a channel.
+fn picture(
+    url: &str,
+    options: RenderOptions,
+    max_width: f32,
+    max_height: f32,
+) -> Option<gpui::AnyElement> {
+    // The bounds go on the image itself, not on a box around it: a wrapper
+    // only clips, so a large picture came out cropped to its top-left corner
+    // rather than scaled down to fit.
+    fn bound(image: gpui::Img, max_width: f32, max_height: f32) -> gpui::AnyElement {
+        image
+            .max_w(px(max_width))
+            .max_h(px(max_height))
+            .rounded(px(layout::RADIUS))
+            .into_any_element()
+    }
+
+    if let Some(image) = options.previews.get(url) {
+        return Some(bound(gpui::img(image.clone()), max_width, max_height));
+    }
+    if url.starts_with("http://") || url.starts_with("https://") {
+        return Some(bound(
+            gpui::img(gpui::SharedUri::from(url.to_owned())),
+            max_width,
+            max_height,
+        ));
+    }
+    None
 }

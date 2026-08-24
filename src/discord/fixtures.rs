@@ -690,7 +690,7 @@ pub fn demo_state() -> DiscordState {
         Some(10),
         1005,
         "ci-bot",
-        "build finished: https://example.invalid/builds/482",
+        "build finished: https://github.com/bluscream/concord/actions/runs/482",
         400,
     );
     linked.embeds.push(crate::discord::EmbedInfo {
@@ -710,8 +710,13 @@ pub fn demo_state() -> DiscordState {
             },
         ],
         footer_text: Some("finished a moment ago".to_string()),
-        url: Some("https://example.invalid/builds/482".to_string()),
-        image_url: Some("concord-demo://attachment/build-graph.png".to_string()),
+        url: Some("https://github.com/bluscream/concord/actions/runs/482".to_string()),
+        // A real, resolvable PNG: the embed picture is fetched over the
+        // network in demo mode, so a dead link shows an empty card and
+        // proves nothing about the rendering.
+        image_url: Some(
+            "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png".to_string(),
+        ),
         ..Default::default()
     });
     general.push(linked);
@@ -720,9 +725,12 @@ pub fn demo_state() -> DiscordState {
     gifv.embeds.push(crate::discord::EmbedInfo {
         provider_name: Some("Tenor".to_string()),
         title: Some("shipping it".to_string()),
+        url: Some("https://tenor.com/view/shipping-it-gif-1234567".to_string()),
         // A gifv embed carries the animation separately, because Discord
         // reports only a video URL for this kind.
-        gifv_image_url: Some("concord-demo://attachment/mood.gif".to_string()),
+        gifv_image_url: Some(
+            "https://media.tenor.com/x8v1oNUOmg4AAAAM/rickroll-roll.gif".to_string(),
+        ),
         ..Default::default()
     });
     general.push(gifv);
@@ -1608,6 +1616,109 @@ pub fn demo_preview_gif(seed: u64) -> Vec<u8> {
         }
     }
     out
+}
+
+/// Build an embed for a link, the way Discord's unfurler would.
+///
+/// Discord does this server-side: the client sends a message with a link in
+/// it and the embed arrives afterwards in a MESSAGE_UPDATE. Offline there is
+/// no server to do it, so the fixture stands in - otherwise pasting a link
+/// in demo mode shows nothing at all and the embed rendering can only be
+/// seen on messages that were canned in advance.
+///
+/// Recognises the shapes worth showing rather than pretending to fetch: a
+/// direct image, a GitHub repository, and a Tenor GIF.
+pub fn unfurl(url: &str) -> Option<crate::discord::EmbedInfo> {
+    let trimmed = url.trim_end_matches(['.', ',', ')', '>']);
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        return None;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    let host = lower
+        .split_once("://")
+        .map(|(_, rest)| rest.split('/').next().unwrap_or(""))
+        .unwrap_or("");
+
+    // A link straight to an image is its own preview.
+    if [".png", ".jpg", ".jpeg", ".gif", ".webp"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+    {
+        return Some(crate::discord::EmbedInfo {
+            provider_name: Some(host.to_string()),
+            image_url: Some(trimmed.to_string()),
+            ..Default::default()
+        });
+    }
+
+    if host.ends_with("tenor.com") {
+        return Some(crate::discord::EmbedInfo {
+            provider_name: Some("Tenor".to_string()),
+            title: Some(tenor_slug(trimmed)),
+            url: Some(trimmed.to_string()),
+            ..Default::default()
+        });
+    }
+
+    if host.ends_with("github.com") {
+        let path: Vec<&str> = trimmed
+            .split_once("github.com/")
+            .map(|(_, rest)| rest.split('/').collect())
+            .unwrap_or_default();
+        if path.len() >= 2 {
+            return Some(crate::discord::EmbedInfo {
+                color: Some(0x24_29_2F),
+                provider_name: Some("GitHub".to_string()),
+                author_name: Some(path[0].to_string()),
+                title: Some(format!("{}/{}", path[0], path[1])),
+                description: Some(
+                    "Offline: the fixture recognises the link but cannot read the page."
+                        .to_string(),
+                ),
+                url: Some(trimmed.to_string()),
+                ..Default::default()
+            });
+        }
+    }
+
+    None
+}
+
+/// The words out of a Tenor share link, which is where its title lives.
+fn tenor_slug(url: &str) -> String {
+    let slug = url.rsplit('/').next().unwrap_or("");
+    let words: Vec<&str> = slug
+        .split('-')
+        .filter(|part| *part != "gif" && !part.chars().all(|c| c.is_ascii_digit()))
+        .collect();
+    if words.is_empty() {
+        "Tenor".to_string()
+    } else {
+        words.join(" ")
+    }
+}
+
+/// Attach an unfurled embed to the last message in a channel.
+pub fn unfurl_last_message(state: &mut DiscordState, channel_id: Id<marker::ChannelMarker>) {
+    let cache = Arc::make_mut(&mut state.message_cache);
+    let Some(timeline) = cache.timelines.get_mut(&channel_id) else {
+        return;
+    };
+    let Some(message) = timeline.messages.back_mut() else {
+        return;
+    };
+    let Some(content) = message.content.clone() else {
+        return;
+    };
+
+    // Only the first link, as Discord does for an ordinary message.
+    for word in content.split_whitespace() {
+        if let Some(embed) = unfurl(word) {
+            message.embeds.push(embed);
+            return;
+        }
+    }
 }
 
 /// The bot in the fixture, which answers slash commands.

@@ -113,7 +113,6 @@ label-reacted-with = Reagiert mit { $emoji }
 settings-light-mode = Heller Modus
 settings-nav-appearance = Erscheinungsbild
 settings-nav-display = Anzeige & Oberfläche
-settings-nav-endpoint = Server-Endpunkt
 settings-nav-notifications = Benachrichtigungen
 settings-nav-presence = Status
 settings-nav-voice = Sprache & Audio
