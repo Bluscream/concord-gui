@@ -249,16 +249,18 @@ fn attachment(
     }
 }
 
-/// One message containing every part the renderer can draw.
+/// One message containing everything Discord's own client will render.
 ///
-/// Every markdown style, all three kinds of mention, `@everyone` and `@here`,
-/// unicode and custom emoji, a timestamp, a link that unfurls and one that
-/// does not. Attachments and an embed are added alongside it.
+/// Deliberately wider than what this client parses: headings, lists, masked
+/// links and subtext are all Discord syntax that [`crate::discord`]'s
+/// markdown does not handle yet. They are here so the gap is visible when
+/// this message is put beside the same text in the official client, rather
+/// than being something nobody notices until a user asks about it.
 ///
 /// Here as a constant so its length can be asserted: it has to stay under the
 /// limit, or it is not a message anyone could send and stops being a fair
 /// test of the thing it is testing.
-const KITCHEN_SINK: &str = "**bold** *italic* _also italic_ __underline__ ~~strike~~ `inline code` ||spoiler||\n> a blockquote, which wraps onto a second line when the pane is narrow enough to make it\n```\na fenced block\n  keeping its indentation\n```\nMentions: <@1002> a person, <@&2> a role, <#112> a channel, @everyone and @here.\nEmoji: unicode \u{2764} and custom <:ferris:4001> and animated <a:crab_party:4002>.\nA timestamp: <t:1756000000:f>. A bare link that unfurls: https://github.com/bluscream/concord\nAnd one that does not: https://example.invalid/nothing-here";
+const KITCHEN_SINK: &str = "# Heading 1\n## Heading 2\n### Heading 3\n-# Subtext under a heading\n**bold** *italic* _italic_ __underline__ ~~strike~~ ***bold italic*** __**underline bold**__ __*underline italic*__\n`inline code`, ||a spoiler||, and \\*escaped\\* \\_markers\\_\n> a single-line quote\n> a second quote line\n- bullet one\n- bullet two\n  - nested bullet\n    - twice nested\n1. ordered one\n2. ordered two\n   1. nested ordered\n```rust\nfn main() {\n    println!(\"fenced, with a language\");\n}\n```\n```\nfenced, no language\n```\n[masked link](https://github.com/bluscream/concord), bare https://github.com/bluscream/concord, and suppressed <https://example.invalid/no-embed>\nMentions: <@1002> a user, <@&2> a role, <#112> a channel, </settings:1> a command, @everyone, @here\nEmoji: ❤ 🦀 <:ferris:4001> <a:crab_party:4002>\nTimes: <t:1756000000:t> <t:1756000000:T> <t:1756000000:d> <t:1756000000:D> <t:1756000000:f> <t:1756000000:F> <t:1756000000:R>\nA long unbroken token to test wrapping: https://example.invalid/a/very/long/path/that/keeps/going/and/going/until/it/has/to/wrap/somewhere\n-# and a closing subtext line\n>>> a block quote that swallows\neverything after it on its own lines";
 
 /// Servers that exist only to make the rail longer than the window.
 ///

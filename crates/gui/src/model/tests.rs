@@ -1745,7 +1745,7 @@ fn the_kitchen_sink_message_is_one_that_could_be_sent() {
             message
                 .content
                 .as_deref()
-                .is_some_and(|body| body.contains("||spoiler||"))
+                .is_some_and(|body| body.starts_with("# Heading 1"))
         })
         .expect("the kitchen-sink message is in #general");
 
@@ -1757,25 +1757,39 @@ fn the_kitchen_sink_message_is_one_that_could_be_sent() {
     );
 
     // And it has to keep containing one of everything, or it quietly decays
-    // into an ordinary message that proves nothing.
+    // into an ordinary message that proves nothing. Several of these are
+    // Discord syntax this client does not parse yet - they are in the list
+    // on purpose, because the point of the message is to show the gap.
     for part in [
+        "# Heading 1",
+        "## Heading 2",
+        "### Heading 3",
+        "-# Subtext",
         "**bold**",
         "*italic*",
         "__underline__",
         "~~strike~~",
+        "***bold italic***",
         "`inline code`",
-        "||spoiler||",
-        "> a blockquote",
-        "```",
+        "||a spoiler||",
+        "\\*escaped\\*",
+        "> a single-line quote",
+        ">>> a block quote",
+        "- bullet one",
+        "  - nested bullet",
+        "1. ordered one",
+        "```rust",
+        "[masked link](",
+        "<https://example.invalid/no-embed>",
         "<@1002>",
         "<@&2>",
         "<#112>",
+        "</settings:1>",
         "@everyone",
         "@here",
         "<:ferris:4001>",
         "<a:crab_party:4002>",
-        "<t:1756000000:f>",
-        "https://github.com/bluscream/concord",
+        "<t:1756000000:R>",
     ] {
         assert!(
             body.contains(part),
@@ -1783,9 +1797,50 @@ fn the_kitchen_sink_message_is_one_that_could_be_sent() {
         );
     }
 
+    // Every timestamp style Discord defines, so a renderer that handles some
+    // of them is caught rather than looking finished.
+    for style in ['t', 'T', 'd', 'D', 'f', 'F', 'R'] {
+        let stamp = format!("<t:1756000000:{style}>");
+        assert!(body.contains(&stamp), "missing timestamp style {style}");
+    }
+
     assert!(
         sink.attachments.len() >= 4,
         "it should carry an image, a video, a text file and an archive"
     );
     assert!(!sink.embeds.is_empty(), "it should carry an embed");
+}
+
+#[test]
+fn the_block_quote_is_last_in_the_kitchen_sink_message() {
+    // Discord's `>>>` quotes every remaining line. Anywhere but the end and
+    // it swallows the rest of the message, so the official client renders
+    // everything below it as one quote and the comparison this message
+    // exists for is worthless from that point down.
+    let state = concord::discord::fixtures::demo_state();
+    let sink = state
+        .messages_for_channel(concord::discord::Id::new(111))
+        .into_iter()
+        .find_map(|message| {
+            message
+                .content
+                .clone()
+                .filter(|body| body.starts_with("# Heading 1"))
+        })
+        .expect("the kitchen-sink message is in #general");
+
+    let lines: Vec<&str> = sink.lines().collect();
+    let block = lines
+        .iter()
+        .position(|line| line.starts_with(">>>"))
+        .expect("it should demonstrate a block quote");
+
+    // Only the block quote's own continuation may follow it.
+    assert!(
+        lines[block + 1..]
+            .iter()
+            .all(|line| !line.starts_with(['#', '-', '>', '`'])),
+        "syntax after the block quote would be swallowed by it: {:?}",
+        &lines[block + 1..]
+    );
 }
