@@ -2,26 +2,58 @@
 
 ## What this is
 
-**concord** is a third-party Discord client written in Rust, with a terminal
-UI. Its `src/discord/` is a complete, front-end-agnostic Discord
-implementation — gateway, REST, state, permissions, voice — with no terminal
-coupling. `src/tui/` is one front end on top of it.
+**concord** is a third-party Discord client written in Rust. Its `src/discord/`
+is a complete, front-end-agnostic Discord implementation — gateway, REST,
+state, permissions, voice — with no terminal coupling and no renderer.
 
-**concord-gui** is this fork. It adds `crates/gui/`, a second front end built
-on GPUI (Zed's GPU-accelerated toolkit), reusing that same core unchanged.
+**concord-gui** is this fork. It adds a GPUI front end (Zed's GPU-accelerated
+toolkit) beside the terminal one, reusing that same core unchanged.
 
 The goal is a Discord client that is fast, native, and free of the official
 client's bloat — no Nitro upsells, no activities, no discovery, no telemetry
 beyond what the API requires. It should be good enough to daily-drive, on
 hardware as modest as a Raspberry Pi.
 
+## Branches
+
+**Work on `gui`. It is the default branch and holds everything.**
+
+| Branch | What it is |
+| --- | --- |
+| `gui` | This fork's work. Branch from it, and open pull requests against it. |
+| `main` | A mirror of upstream (`chojs23/concord`), untouched by us. Only ever fast-forwarded from `origin/main`. |
+
+Never commit to `main`. It exists so upstream changes can be fetched and
+merged deliberately, and it is worth nothing the moment our work is mixed into
+it. `origin` is the fork (`Bluscream/concord-gui`); `upstream` is the original.
+
+## The crates
+
+The workspace is split by what each part talks to, because the awkwardness is
+always in the thing being talked to:
+
+| Crate | What it is |
+| --- | --- |
+| `concord` (root) | The core. Gateway, REST, state. No renderer, no database. |
+| `crates/ui` | What both front ends share: key bindings, theme resolution, fuzzy matching, the vocabulary of panes and action menus. |
+| `crates/cache` | The offline store, attached to the core as a `ClientExtension`. |
+| `crates/fixtures` | A fake Discord to develop and test against. |
+| `crates/merge` | One view across several signed-in accounts. Early. |
+| `crates/tui` | The terminal client. |
+| `crates/gui` | The GPUI client. |
+
+The test for `crates/ui` is a renderer, not the core: depending on `concord` is
+fine, since it sits below both front ends. Needing ratatui or GPUI is what
+makes a thing one front end's.
+
 ## Rules
 
 ### 1. Put it in the core, and give it to both front ends
 
 Anything beyond parity with the TUI goes in `src/discord/` first, then lands
-in **both** `src/tui/` and `crates/gui/`. A feature that exists in one client
-only means the core grows capabilities half its front ends cannot reach.
+in **both** `crates/tui/` and `crates/gui/`. A feature that exists in one
+client only means the core grows capabilities half its front ends cannot
+reach.
 
 This has been got wrong before: invites and forwarding were built for the GUI
 and had to be retrofitted into the TUI afterwards. Do it in the right order.
@@ -267,7 +299,8 @@ goes and changeable without leaving the input.
 Worth knowing before starting:
 
 - **Where the merge lives.** Not in the GUI, and not tangled into the core
-  either: a layer of its own, above `src/discord/` and below both front ends.
+  either: a layer of its own, above `src/discord/` and below both front ends
+  (`crates/merge`).
   The core stays single-session and unaware - one `DiscordState` per account,
   exactly as today - and the merge tier owns fanning commands out to the right
   session and folding several sessions' state into one view.
@@ -340,7 +373,7 @@ Every icon needs a tooltip, and every tooltip goes through the catalogue. Use
 - **Verify in release too.** A dead-code warning that only the release profile
   reports has already caught a feature whose button was never actually added.
   `cargo build --release` before claiming a UI change landed.
-- **Demo mode**: `--token test` or `--token demo` (or selecting Demo Mode on the login screen) loads offline fixture data — guilds, channels, DMs, messages, voice — so the UI can be exercised without an account. New commands should be answered in `crates/gui/src/demo.rs`, or the feature silently does nothing there.
+- **Demo mode**: `--token test` or `--token demo` (or selecting Demo Mode on the login screen) loads offline fixture data — guilds, channels, DMs, messages, voice — so the UI can be exercised without an account. New commands should be answered in `crates/fixtures/src/backend.rs`, which both front ends share, or the feature silently does nothing in demo mode.
 - **References**: `.references/` holds 114 surveyed third-party clients. Read
   them before guessing at a request shape. Moderation endpoints came from
   Abaddon; the sticker payload was confirmed against two independent
