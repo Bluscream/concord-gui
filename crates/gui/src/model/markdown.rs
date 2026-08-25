@@ -76,10 +76,23 @@ pub enum Kind {
     Tel,
     /// A `discord.com/channels/...` address, which the client renders as an
     /// in-app reference rather than a bare URL.
+    ///
+    /// The channel is optional: `/channels/{guild}` on its own is a link to
+    /// the server, which the live rule accepts with both trailing groups
+    /// empty.
     ChannelLink {
-        channel: u64,
+        channel: Option<u64>,
         message: Option<u64>,
     },
+    /// `/channels/{guild}/{channel}/threads/{thread}/{message}` - a link to a
+    /// post inside a forum or media channel.
+    MediaPostLink {
+        thread: u64,
+        message: u64,
+    },
+    /// `<@$id>` - a game mention. The `$` is what distinguishes it from an
+    /// ordinary user mention.
+    Game(u64),
     /// A `cdn.discordapp.com/attachments/...` address, shown as its filename.
     AttachmentLink,
 }
@@ -416,17 +429,27 @@ fn parse_inline(input: &str, base: Style, mentions: &dyn Mentions, out: &mut Par
             // Discord's own addresses are references rather than links: a
             // channel URL renders as the channel, an attachment as its
             // filename. Left as plain URLs they were a wall of snowflakes.
+            //
+            // The rule consumes only as much as it matched, because Discord's
+            // own regexes are not anchored at the end - so a reference
+            // followed by a comma is still a reference, and the comma is
+            // still a comma.
             match discord_link(url) {
-                Some((label, kind)) => out.push(&label, Style { kind, ..style }),
-                None => out.push(
-                    url,
-                    Style {
-                        kind: Kind::Url,
-                        ..style
-                    },
-                ),
+                Some((consumed, label, kind)) => {
+                    out.push(&label, Style { kind, ..style });
+                    index += consumed;
+                }
+                None => {
+                    out.push(
+                        url,
+                        Style {
+                            kind: Kind::Url,
+                            ..style
+                        },
+                    );
+                    index += end;
+                }
             }
-            index += end;
             plain_start = index;
             continue;
         }
@@ -557,6 +580,14 @@ fn entity(rest: &str, mentions: &dyn Mentions) -> Option<(usize, String, Kind)> 
         return Some((consumed, format!(":{name}:"), Kind::Emoji { id, animated }));
     }
 
+    // Game mention: <@$id>. Must come before the user branch: that one
+    // strips the `@`, fails to parse `$123` as an id, and returns None for
+    // the whole entity - so a game mention placed after it renders as text.
+    if let Some(raw) = body.strip_prefix("@$") {
+        let id: u64 = raw.parse().ok()?;
+        return Some((consumed, "a game".to_owned(), Kind::Game(id)));
+    }
+
     // Role: <@&id>
     if let Some(raw) = body.strip_prefix("@&") {
         let id: u64 = raw.parse().ok()?;
@@ -600,6 +631,18 @@ fn entity(rest: &str, mentions: &dyn Mentions) -> Option<(usize, String, Kind)> 
     // `<id:shop>`, `<id:settings>` and `<id:member-safety>` were all checked
     // and all refused - so an allow-list is the rule, not a shortcut.
     if let Some(name) = body.strip_prefix("id:") {
+        // An optional `:id` suffix targets a specific item - the live regex
+        // is `<id:(home|browse|customize|guide|linked-roles)(?::(\d+))?>`.
+        // It changes where the link goes, not what it says.
+        let (name, suffix) = match name.split_once(':') {
+            Some((name, digits)) => (name, Some(digits)),
+            None => (name, None),
+        };
+        if let Some(digits) = suffix
+            && (digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()))
+        {
+            return None;
+        }
         let label = match name {
             "customize" => "Channels & Roles",
             "browse" => "Browse Channels",
@@ -637,12 +680,16 @@ fn entity(rest: &str, mentions: &dyn Mentions) -> Option<(usize, String, Kind)> 
 
 /// Discord's own addresses, which the client renders as in-app references.
 ///
-/// Returns (bytes consumed, display text, kind) for a URL the caller has
-/// already found the extent of.
-fn discord_link(url: &str) -> Option<(String, Kind)> {
-    // Attachments show as the filename. Both hosts are accepted, matching the
-    // live client's rule, which takes cdn.discordapp.com and
-    // media.discordapp.net and nothing else.
+/// Returns how many bytes of `url` actually formed the reference, so a
+/// trailing comma or bracket stays outside it. Discord's own rules behave
+/// this way: the regexes have no end anchor, so `exec` stops at the first
+/// character that does not fit and leaves the rest alone.
+///
+/// Hosts and shapes taken from the live client's regexes rather than guessed:
+/// it accepts `discordapp.com` as well as `discord.com`, the canary and ptb
+/// subdomains of either, and `staging.discord.co`.
+fn discord_link(url: &str) -> Option<(usize, String, Kind)> {
+    // Attachments show as the filename.
     for host in [
         "https://cdn.discordapp.com/attachments/",
         "https://media.discordapp.net/attachments/",
@@ -653,43 +700,142 @@ fn discord_link(url: &str) -> Option<(String, Kind)> {
             if filename.is_empty() {
                 return None;
             }
-            return Some((filename.to_owned(), Kind::AttachmentLink));
+            // The whole address belongs to the attachment; there is no
+            // prefix rule to stop short of.
+            return Some((url.len(), filename.to_owned(), Kind::AttachmentLink));
         }
     }
 
-    // Channel and message links, on any of the three web hosts.
-    let path = [
+    let (prefix_len, rest) = discord_channels_path(url)?;
+
+    // The guild is a snowflake or the literal `@me`.
+    let mut at = if rest.starts_with("@me") {
+        3
+    } else {
+        leading_digits(rest, 0)?
+    };
+
+    let after_channel = match segment(rest, at) {
+        Segment::Id(end) => end,
+        // A word where the channel belongs voids the address.
+        Segment::Word => return None,
+        Segment::None => {
+            return Some((
+                prefix_len + at,
+                "#server".to_owned(),
+                Kind::ChannelLink {
+                    channel: None,
+                    message: None,
+                },
+            ));
+        }
+    };
+    let channel: u64 = rest[at + 1..after_channel].parse().ok()?;
+    at = after_channel;
+
+    // A forum or media post: /{guild}/{channel}/threads/{thread}/{message}.
+    if let Some(tail) = rest.get(at..)
+        && tail.starts_with("/threads")
+    {
+        let threads_end = at + "/threads".len();
+        if let Segment::Id(thread_end) = segment(rest, threads_end)
+            && let Segment::Id(message_end) = segment(rest, thread_end)
+        {
+            return Some((
+                prefix_len + message_end,
+                "#post".to_owned(),
+                Kind::MediaPostLink {
+                    thread: rest[threads_end + 1..thread_end].parse().ok()?,
+                    message: rest[thread_end + 1..message_end].parse().ok()?,
+                },
+            ));
+        }
+    }
+
+    match segment(rest, at) {
+        Segment::Id(message_end) => Some((
+            prefix_len + message_end,
+            "#message".to_owned(),
+            Kind::ChannelLink {
+                channel: Some(channel),
+                message: rest[at + 1..message_end].parse().ok(),
+            },
+        )),
+        // `/threads` that did not go on to be a post lands here, as does any
+        // other word, and voids the address exactly as the live rule does.
+        Segment::Word => None,
+        Segment::None => Some((
+            prefix_len + at,
+            "#channel".to_owned(),
+            Kind::ChannelLink {
+                channel: Some(channel),
+                message: None,
+            },
+        )),
+    }
+}
+
+/// What follows a `/` in a Discord channels path.
+///
+/// Three outcomes, because Discord's rule has three. Its groups are
+/// `(\d+|[a-zA-Z-]+)` and its wrapper then throws the whole match away if
+/// either one contains a non-digit - so a word where an id belongs is not a
+/// short match, it is no match at all, and the address stays a plain link.
+enum Segment {
+    /// A snowflake, ending at this byte offset.
+    Id(usize),
+    /// A word, which invalidates the whole address.
+    Word,
+    /// Nothing that could be a segment; the address ends here.
+    None,
+}
+
+/// Classify the segment starting at `at`.
+///
+/// Only the leading digit run counts for an id, because a regex matches a
+/// prefix - so `456,` is the id `456` with a comma after it.
+fn segment(rest: &str, at: usize) -> Segment {
+    if rest.as_bytes().get(at) != Some(&b'/') {
+        return Segment::None;
+    }
+    if let Some(digits) = leading_digits(rest, at + 1) {
+        return Segment::Id(at + 1 + digits);
+    }
+    let tail = &rest[at + 1..];
+    let word = tail
+        .find(|c: char| !c.is_ascii_alphabetic() && c != '-')
+        .unwrap_or(tail.len());
+    if word > 0 {
+        Segment::Word
+    } else {
+        Segment::None
+    }
+}
+
+/// How many ASCII digits `rest` has at `from`, or `None` if it has none.
+fn leading_digits(rest: &str, from: usize) -> Option<usize> {
+    let tail = rest.get(from..)?;
+    let len = tail
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(tail.len());
+    (len > 0).then_some(len)
+}
+
+/// The part of a Discord web address after `/channels/`, if it is one.
+fn discord_channels_path(url: &str) -> Option<(usize, &str)> {
+    const HOSTS: [&str; 7] = [
         "https://discord.com/",
         "https://canary.discord.com/",
         "https://ptb.discord.com/",
-    ]
-    .into_iter()
-    .find_map(|host| url.strip_prefix(host))?;
-    let rest = path.strip_prefix("channels/")?;
-
-    let mut parts = rest.split('/');
-    // The guild segment is a snowflake or the literal `@me` for a DM. A
-    // non-numeric anything else is refused, which is what stops
-    // `/channels/abc/456` being read as a channel link.
-    let guild = parts.next()?;
-    if guild != "@me" && !guild.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let channel: u64 = parts.next()?.parse().ok()?;
-    let message = match parts.next() {
-        Some(raw) => Some(raw.parse().ok()?),
-        None => None,
-    };
-    if parts.next().is_some() {
-        return None;
-    }
-
-    let label = if message.is_some() {
-        "#message".to_owned()
-    } else {
-        "#channel".to_owned()
-    };
-    Some((label, Kind::ChannelLink { channel, message }))
+        "https://discordapp.com/",
+        "https://canary.discordapp.com/",
+        "https://ptb.discordapp.com/",
+        "https://staging.discord.co/",
+    ];
+    HOSTS.into_iter().find_map(|host| {
+        let rest = url.strip_prefix(host)?.strip_prefix("channels/")?;
+        Some((host.len() + "channels/".len(), rest))
+    })
 }
 
 /// Split `[label](url)` into its two halves.
@@ -1143,7 +1289,7 @@ mod live_client_tests {
                 .first()
                 .map(|(_, k)| *k),
             Some(Kind::ChannelLink {
-                channel: 456,
+                channel: Some(456),
                 message: None
             })
         );
@@ -1152,7 +1298,7 @@ mod live_client_tests {
                 .first()
                 .map(|(_, k)| *k),
             Some(Kind::ChannelLink {
-                channel: 456,
+                channel: Some(456),
                 message: Some(789)
             })
         );
@@ -1162,7 +1308,7 @@ mod live_client_tests {
                 .first()
                 .map(|(_, k)| *k),
             Some(Kind::ChannelLink {
-                channel: 456,
+                channel: Some(456),
                 message: None
             })
         );
@@ -1172,7 +1318,7 @@ mod live_client_tests {
                 .first()
                 .map(|(_, k)| *k),
             Some(Kind::ChannelLink {
-                channel: 456,
+                channel: Some(456),
                 message: None
             })
         );
@@ -1243,5 +1389,142 @@ mod live_client_tests {
             italic("_ x_"),
             "_ x_ is italic - underscore has no such rule"
         );
+    }
+}
+
+/// The rules whose accepted form only came out of reading the client's own
+/// regexes, after probing them by hand had failed.
+///
+/// Every probe below was tried against the live matcher first. The lesson
+/// worth keeping is in the two that returned null for everything: the shapes
+/// were not close to what a reasonable guess produced.
+#[cfg(test)]
+mod live_regex_tests {
+    use super::{Kind, parse};
+
+    fn kind(body: &str) -> Option<Kind> {
+        let p = parse(body);
+        p.runs.first().map(|(_, s)| s.kind)
+    }
+
+    fn text(body: &str) -> String {
+        parse(body).text
+    }
+
+    /// `<@$id>`, not `<game:id>`. The `$` is the whole difference from an
+    /// ordinary user mention, and every guessed form returned null.
+    #[test]
+    fn a_game_mention_uses_a_dollar_sign() {
+        assert_eq!(kind("<@$123>"), Some(Kind::Game(123)));
+        // Still an ordinary mention without it.
+        assert_eq!(kind("<@123>"), Some(Kind::Mention(123)));
+        assert_eq!(text("<@$>"), "<@$>");
+    }
+
+    /// Five segments, not four: `/{guild}/{channel}/threads/{thread}/{message}`.
+    #[test]
+    fn a_media_post_link_needs_all_five_segments() {
+        assert_eq!(
+            kind("https://discord.com/channels/1/2/threads/3/4"),
+            Some(Kind::MediaPostLink {
+                thread: 3,
+                message: 4
+            })
+        );
+        // Four is not a match, which the live rule confirmed.
+        assert_eq!(
+            kind("https://discord.com/channels/1/2/threads/3"),
+            Some(Kind::Url)
+        );
+    }
+
+    /// The host list is wider than discord.com, which the first pass missed.
+    #[test]
+    fn every_host_the_live_rule_accepts_is_accepted() {
+        for host in [
+            "https://discord.com",
+            "https://canary.discord.com",
+            "https://ptb.discord.com",
+            "https://discordapp.com",
+            "https://staging.discord.co",
+        ] {
+            assert_eq!(
+                kind(&format!("{host}/channels/123/456")),
+                Some(Kind::ChannelLink {
+                    channel: Some(456),
+                    message: None
+                }),
+                "{host}"
+            );
+        }
+        // Not one of Discord's, so an ordinary link.
+        assert_eq!(
+            kind("https://discord.example/channels/1/2"),
+            Some(Kind::Url)
+        );
+    }
+
+    /// Both trailing groups are optional, so a guild on its own is a match.
+    #[test]
+    fn a_guild_only_url_links_to_the_server() {
+        assert_eq!(
+            kind("https://discord.com/channels/123"),
+            Some(Kind::ChannelLink {
+                channel: None,
+                message: None
+            })
+        );
+        assert_eq!(text("https://discord.com/channels/123"), "#server");
+    }
+
+    /// `<id:customize:123>` targets a specific item; the suffix is optional
+    /// and must be digits.
+    #[test]
+    fn a_navigation_link_takes_an_optional_id() {
+        assert_eq!(kind("<id:customize:123>"), Some(Kind::StaticRoute));
+        assert_eq!(text("<id:customize:123>"), "Channels & Roles");
+        assert_eq!(kind("<id:customize>"), Some(Kind::StaticRoute));
+        // A non-numeric suffix is not the rule.
+        assert_eq!(text("<id:customize:abc>"), "<id:customize:abc>");
+    }
+
+    /// A reference followed by punctuation is still a reference.
+    ///
+    /// Discord's rules are regexes with no end anchor, so they match a prefix
+    /// and leave the rest. Requiring the whole whitespace-delimited token to
+    /// be valid turned a comma-separated list of channel links back into a
+    /// wall of snowflakes.
+    #[test]
+    fn punctuation_after_a_reference_stays_outside_it() {
+        assert_eq!(
+            text("https://discord.com/channels/123/456, and more"),
+            "#channel, and more"
+        );
+        assert_eq!(
+            text("see https://discord.com/channels/123/456/789."),
+            "see #message."
+        );
+        assert_eq!(text("(https://discord.com/channels/123)"), "(#server)");
+        assert_eq!(
+            text("https://discord.com/channels/1/2/threads/3/4, next"),
+            "#post, next"
+        );
+    }
+
+    /// Discord's groups are `(\d+|[a-zA-Z-]+)` and its wrapper then discards
+    /// the match if either holds a non-digit. So a word where an id belongs
+    /// is not a short match - it is no match, and the address stays a link.
+    #[test]
+    fn a_word_where_an_id_belongs_voids_the_address() {
+        for url in [
+            "https://discord.com/channels/123/456/abc",
+            "https://discord.com/channels/123/abc",
+            // Four segments: too few for a post, and `threads` is a word
+            // where the message id belongs.
+            "https://discord.com/channels/1/2/threads/3",
+        ] {
+            assert_eq!(kind(url), Some(Kind::Url), "{url}");
+            assert_eq!(text(url), url, "{url}");
+        }
     }
 }
