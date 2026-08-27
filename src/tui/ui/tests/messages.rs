@@ -826,9 +826,10 @@ fn fenced_code_block_preserves_space_indentation() {
 }
 
 #[test]
-fn fenced_code_block_expands_tabs_like_discord() {
+fn fenced_code_block_expands_tabs_at_display_column_stops() {
     let message = message_with_content(Some(
-        "```\nfunc f() {\n\tif ok {\n\t\treturn\n\t}\n}\n```".to_owned(),
+        "```\nfunc f() {\n\tif ok {\n\t\treturn\n\t}\n}\na\tX\nab\tX\nabcd\tX\n漢\tX\n👩‍💻\tX\n```"
+            .to_owned(),
     ));
     let lines = format_message_content_lines(&message, &DashboardState::new(), 80);
     assert_eq!(
@@ -840,9 +841,35 @@ fn fenced_code_block_expands_tabs_like_discord() {
             "│         return │",
             "│     }          │",
             "│ }              │",
+            "│ a   X          │",
+            "│ ab  X          │",
+            "│ abcd    X      │",
+            "│ 漢  X          │",
+            "│ 👩‍💻  X          │",
             "╰────────────────╯",
         ]
     );
+}
+
+#[test]
+fn fenced_code_block_preserves_tab_sensitive_syntax_highlighting() {
+    let message = message_with_content(Some(
+        "```make\ntarget:\n\t@echo one\n    @echo two\n```".to_owned(),
+    ));
+    let lines = format_message_content_lines(&message, &DashboardState::new(), 80);
+
+    let recipe_echo = lines[2]
+        .spans()
+        .into_iter()
+        .find(|span| span.content == "echo")
+        .expect("tab-indented recipe should use shell highlighting");
+    let inconsistent_echo = lines[3]
+        .spans()
+        .into_iter()
+        .find(|span| span.content == "echo two")
+        .expect("space-indented recipe should keep inconsistent highlighting");
+
+    assert_ne!(recipe_echo.style.fg, inconsistent_echo.style.fg);
 }
 
 #[test]

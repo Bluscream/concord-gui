@@ -2,7 +2,8 @@
 //! fenced code boxes with syntax highlight, and inline marker styling.
 
 use ratatui::style::{Modifier, Style};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use crate::tui::state::DashboardState;
 use crate::tui::text::{InlineEmojiSlot, RenderedText, TextHighlight, truncate_display_width};
@@ -190,8 +191,10 @@ fn wrap_code_block_lines_and_highlight(
     let style = markdown_code_style();
     let text_lines = code_lines
         .into_iter()
-        .map(|rt| expand_tabs(&rt.text, CODE_TAB_WIDTH))
+        .map(|rendered| rendered.text)
         .collect::<Vec<_>>();
+    // Tab-sensitive grammars need the original source. Expand tabs only after
+    // syntax highlighting has assigned styles to the raw text.
     let highlighted_lines = {
         if let Some(language) = label.as_ref().filter(|l| !l.is_empty()) {
             state
@@ -203,7 +206,10 @@ fn wrap_code_block_lines_and_highlight(
                 .map(|text| vec![(style, text)])
                 .collect()
         }
-    };
+    }
+    .into_iter()
+    .map(|regions| expand_tabs_in_styled_regions(regions, CODE_TAB_WIDTH))
+    .collect::<Vec<_>>();
 
     let inner_width = width.saturating_sub(4).max(1);
     let mut body_lines = Vec::new();
@@ -369,21 +375,31 @@ fn markdown_code_style() -> Style {
     Style::default()
 }
 
-fn expand_tabs(line: &str, tab_width: usize) -> String {
+fn expand_tabs_in_styled_regions(
+    regions: Vec<(Style, String)>,
+    tab_width: usize,
+) -> Vec<(Style, String)> {
     let tab_width = tab_width.max(1);
-    let mut out = String::with_capacity(line.len());
+    // A tab can follow a syntax token boundary, so the display column belongs
+    // to the whole line rather than to each styled region.
     let mut col = 0usize;
-    for ch in line.chars() {
-        if ch == '\t' {
-            let spaces = tab_width - (col % tab_width);
-            out.extend(std::iter::repeat_n(' ', spaces));
-            col += spaces;
-        } else {
-            out.push(ch);
-            col = col.saturating_add(ch.width().unwrap_or(0));
-        }
-    }
-    out
+    regions
+        .into_iter()
+        .map(|(style, text)| {
+            let mut expanded = String::with_capacity(text.len());
+            for grapheme in text.graphemes(true) {
+                if grapheme == "\t" {
+                    let spaces = tab_width - (col % tab_width);
+                    expanded.extend(std::iter::repeat_n(' ', spaces));
+                    col += spaces;
+                } else {
+                    expanded.push_str(grapheme);
+                    col = col.saturating_add(grapheme.width());
+                }
+            }
+            (style, expanded)
+        })
+        .collect()
 }
 
 fn inline_code_style() -> Style {
