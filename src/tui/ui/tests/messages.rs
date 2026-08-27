@@ -725,6 +725,10 @@ fn message_content_applies_supported_markdown_formatting() {
     assert_eq!(line_texts(&emoji_lines), vec!["  "]);
     assert_eq!(emoji_lines[0].image_slots[0].col, 0);
     assert_eq!(emoji_lines[0].image_slots[0].byte_start, 0);
+    assert_eq!(
+        emoji_lines[0].image_slots[0].image_size,
+        EmojiImageSize::Compact
+    );
 
     let quote = message_with_content(Some("> **bold quote**".to_owned()));
     let quote_lines = format_message_content_lines(&quote, &DashboardState::new(), 200);
