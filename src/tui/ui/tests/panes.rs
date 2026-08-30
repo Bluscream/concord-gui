@@ -741,6 +741,96 @@ fn channel_pane_shows_voice_participants_under_voice_channel() {
 }
 
 #[test]
+fn channel_pane_shows_capacity_only_for_limited_voice_channels() {
+    let guild_id = Id::new(1);
+    let limited_voice_id = Id::new(10);
+    let unlimited_voice_id = Id::new(11);
+    let alice = Id::new(20);
+    let bob = Id::new(21);
+    let carol = Id::new(22);
+    let mut state = DashboardState::new();
+    state.push_event(guild_create_event(GuildCreateFixture {
+        channels: vec![
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                position: Some(0),
+                name: "Limited Lobby".to_owned(),
+                user_limit: Some(5),
+                ..ChannelInfo::test(limited_voice_id, "GuildVoice")
+            },
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                position: Some(1),
+                name: "Unlimited Lobby".to_owned(),
+                user_limit: Some(0),
+                ..ChannelInfo::test(unlimited_voice_id, "GuildVoice")
+            },
+        ],
+        members: vec![
+            MemberInfo::test(alice, "Alice"),
+            MemberInfo::test(bob, "Bob"),
+            MemberInfo::test(carol, "Carol"),
+        ],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+    for (channel_id, user_id) in [
+        (limited_voice_id, alice),
+        (limited_voice_id, bob),
+        (unlimited_voice_id, carol),
+    ] {
+        state.push_event(AppEvent::VoiceStateUpdate {
+            state: VoiceStateInfo::test(guild_id, Some(channel_id), user_id),
+        });
+    }
+    state.confirm_selected_guild();
+    state.set_channel_view_height(8);
+
+    let backend = TestBackend::new(40, 9);
+    let mut terminal = Terminal::new(backend).expect("test terminal should build");
+    terminal
+        .draw(|frame| render_channels(frame, frame.area(), &state, &[]))
+        .expect("draw should succeed");
+
+    let buffer = terminal.backend().buffer();
+    let rows = (0..buffer.area.height)
+        .map(|row| {
+            (0..buffer.area.width)
+                .map(|col| buffer[(col, row)].symbol().to_owned())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    let limited_row = rows
+        .iter()
+        .find(|row| row.contains("Limited Lobby"))
+        .expect("limited voice channel should render");
+    let unlimited_row = rows
+        .iter()
+        .find(|row| row.contains("Unlimited Lobby"))
+        .expect("unlimited voice channel should render");
+
+    assert!(limited_row.contains("[2/5]"), "{limited_row}");
+    assert!(limited_row.ends_with("[2/5]│"), "{limited_row}");
+    assert!(!unlimited_row.contains('/'), "{unlimited_row}");
+
+    let backend = TestBackend::new(18, 9);
+    let mut terminal = Terminal::new(backend).expect("narrow test terminal should build");
+    terminal
+        .draw(|frame| render_channels(frame, frame.area(), &state, &[]))
+        .expect("narrow draw should succeed");
+    let buffer = terminal.backend().buffer();
+    let limited_row = (0..buffer.area.height)
+        .map(|row| {
+            (0..buffer.area.width)
+                .map(|col| buffer[(col, row)].symbol().to_owned())
+                .collect::<String>()
+        })
+        .find(|row| row.contains("[2/5]"))
+        .expect("narrow limited voice row should keep its capacity");
+
+    assert!(limited_row.ends_with("[2/5]│"), "{limited_row}");
+}
+
+#[test]
 fn channel_pane_keeps_voice_participant_indicators_visible_after_name_truncation() {
     let guild_id = Id::new(1);
     let voice_id = Id::new(10);

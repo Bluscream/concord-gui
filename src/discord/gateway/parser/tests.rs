@@ -918,6 +918,22 @@ fn channel_parser_keeps_last_message_id() {
 }
 
 #[test]
+fn channel_parser_reads_voice_user_limit() {
+    let channel = parse_channel_info(
+        &json!({
+            "id": "10",
+            "type": 2,
+            "name": "Lobby",
+            "user_limit": 5
+        }),
+        Some(Id::new(1)),
+    )
+    .expect("voice channel should parse");
+
+    assert_eq!(channel.user_limit, Some(5));
+}
+
+#[test]
 fn channel_parser_reads_dm_message_request_and_spam_flags() {
     let channel = parse_channel_info(
         &json!({

@@ -601,6 +601,7 @@ fn channel_with_recipients(kind: &str, statuses: &[PresenceStatus]) -> ChannelSt
         kind: kind.to_owned(),
         message_count: None,
         member_count: None,
+        user_limit: None,
         total_message_sent: None,
         thread_metadata: None,
         flags: None,
