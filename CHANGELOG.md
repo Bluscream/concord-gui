@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.14] - 2026-08-30
+
+### Bug Fixes
+
+- _(tui)_ Expand tabs in fenced code blocks (#336) in [#336](https://github.com/chojs23/concord/pull/336) by @gandol
+- _(tui)_ Preserve syntax semantics when expanding code tabs by @chojs23
+- _(voice)_ Satisfy Rust 1.91 clippy (#334) in [#334](https://github.com/chojs23/concord/pull/334) by @Andiveli
+- _(ci)_ Skip CI for unrelated repository changes by @chojs23
+- _(messages)_ Fix Components V2 section thumbnail layout by @chojs23
+
+### Features
+
+- _(tui)_ Enlarge standalone custom emoji previews (#335) in [#335](https://github.com/chojs23/concord/pull/335) by @gandol
+- _(messages)_ Support Components V2 and improve embed rendering (#340) in [#340](https://github.com/chojs23/concord/pull/340) by @chojs23
+- _(tui)_ Show voice channel capacity in channel pane by @chojs23
+
+### New Contributors
+
+- @Andiveli made their first contribution in [#334](https://github.com/chojs23/concord/pull/334)
+
 ## [2.5.13] - 2026-08-24
 
 ### Bug Fixes
@@ -1023,7 +1043,7 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
-- _(tui)_ Detect URLs in reply quotes and forwarded messages (#107) in [#107](https://github.com/chojs23/concord/pull/107) by @SAY-5
+- _(tui)_ Detect URLs in reply quotes and forwarded messages (#107) by @SAY-5
 - Use transient typing display names for TYPING_START by @chojs23
 - Clear typing indicator when a typer sends a message by @chojs23
 - Composer newline fallbacks (#112) in [#112](https://github.com/chojs23/concord/pull/112) by @chojs23
@@ -1045,7 +1065,7 @@ All notable changes to this project will be documented in this file.
 
 ### New Contributors
 
-- @SAY-5 made their first contribution in [#107](https://github.com/chojs23/concord/pull/107)
+- @SAY-5 made their first contribution
 
 ## [2.0.3] - 2026-05-19
 
