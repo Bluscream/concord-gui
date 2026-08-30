@@ -136,12 +136,24 @@ impl MessageState {
     }
 
     pub fn inline_previews(&self) -> Vec<InlinePreviewInfo<'_>> {
+        self.inline_previews_with_section_thumbnails(true)
+    }
+
+    pub(crate) fn flow_inline_previews(&self) -> Vec<InlinePreviewInfo<'_>> {
+        self.inline_previews_with_section_thumbnails(false)
+    }
+
+    fn inline_previews_with_section_thumbnails(
+        &self,
+        include_section_thumbnails: bool,
+    ) -> Vec<InlinePreviewInfo<'_>> {
         let mut previews = Vec::new();
         if self.flags & MESSAGE_FLAG_IS_COMPONENTS_V2 != 0 {
-            previews.extend(MessageComponentInfo::inline_previews(
-                &self.components,
-                &self.attachments,
-            ));
+            previews.extend(if include_section_thumbnails {
+                MessageComponentInfo::inline_previews(&self.components, &self.attachments)
+            } else {
+                MessageComponentInfo::flow_inline_previews(&self.components, &self.attachments)
+            });
         } else {
             previews.extend(
                 self.attachments
@@ -149,12 +161,21 @@ impl MessageState {
                     .filter_map(AttachmentInfo::inline_preview_info),
             );
         }
-        for snapshot in &self.forwarded_snapshots {
+        for (index, snapshot) in self.forwarded_snapshots.iter().enumerate() {
             if snapshot.flags & MESSAGE_FLAG_IS_COMPONENTS_V2 != 0 {
-                previews.extend(MessageComponentInfo::inline_previews(
-                    &snapshot.components,
-                    &snapshot.attachments,
-                ));
+                // Only the first forwarded snapshot is formatted into the body.
+                // Later snapshots keep the existing shared media flow.
+                previews.extend(if include_section_thumbnails || index > 0 {
+                    MessageComponentInfo::inline_previews(
+                        &snapshot.components,
+                        &snapshot.attachments,
+                    )
+                } else {
+                    MessageComponentInfo::flow_inline_previews(
+                        &snapshot.components,
+                        &snapshot.attachments,
+                    )
+                });
             } else {
                 previews.extend(
                     snapshot
@@ -190,6 +211,32 @@ impl MessageState {
                 .filter_map(StickerInfo::inline_preview_info),
         );
         dedupe_inline_previews(previews)
+    }
+
+    pub(crate) fn section_thumbnail_previews(&self) -> Vec<(usize, InlinePreviewInfo<'_>)> {
+        let mut previews = Vec::new();
+        let mut next_index = 0;
+        if self.flags & MESSAGE_FLAG_IS_COMPONENTS_V2 != 0 {
+            MessageComponentInfo::collect_section_thumbnail_previews(
+                &self.components,
+                &self.attachments,
+                &mut next_index,
+                &mut previews,
+            );
+        }
+        if let Some(snapshot) = self
+            .forwarded_snapshots
+            .first()
+            .filter(|snapshot| snapshot.flags & MESSAGE_FLAG_IS_COMPONENTS_V2 != 0)
+        {
+            MessageComponentInfo::collect_section_thumbnail_previews(
+                &snapshot.components,
+                &snapshot.attachments,
+                &mut next_index,
+                &mut previews,
+            );
+        }
+        previews
     }
 
     pub(crate) fn summary_text(&self) -> Option<&str> {

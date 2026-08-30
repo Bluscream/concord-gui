@@ -317,11 +317,8 @@ impl DashboardMediaRuntime {
             let Some(row_plan) = plan.row(target.message_index) else {
                 continue;
             };
-            let row = row_plan
-                .body_top
-                .saturating_add(row_plan.metrics.body_rows() as isize)
-                .saturating_add(target.preview_y_offset_rows as isize)
-                .saturating_sub(1);
+            let row =
+                row_plan.image_preview_row(target.body_line_index, target.preview_y_offset_rows);
             let Some(mut preview_area) = ui::inline_image_preview_screen_area(
                 list,
                 row,
@@ -459,11 +456,7 @@ fn clip_image_preview_targets_for_occlusions(
         let Some(row_plan) = plan.row(target.message_index) else {
             continue;
         };
-        let row = row_plan
-            .body_top
-            .saturating_add(row_plan.metrics.body_rows() as isize)
-            .saturating_add(target.preview_y_offset_rows as isize)
-            .saturating_sub(1);
+        let row = row_plan.image_preview_row(target.body_line_index, target.preview_y_offset_rows);
         let Some(area) = ui::inline_image_preview_screen_area(
             list,
             row,
@@ -900,6 +893,7 @@ mod tests {
             thread_card: false,
             message_index: 0,
             preview_index: 0,
+            body_line_index: None,
             preview_x_offset_columns: 0,
             preview_y_offset_rows: 0,
             preview_width: 20,

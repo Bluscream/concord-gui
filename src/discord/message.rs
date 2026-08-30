@@ -1135,31 +1135,131 @@ impl MessageComponentInfo {
         attachments: &'a [AttachmentInfo],
     ) -> Vec<InlinePreviewInfo<'a>> {
         let mut previews = Vec::new();
-        Self::collect_inline_previews(components, attachments, None, &mut previews);
+        Self::collect_inline_previews(components, attachments, None, true, &mut previews);
         previews
+    }
+
+    pub(crate) fn flow_inline_previews<'a>(
+        components: &'a [Self],
+        attachments: &'a [AttachmentInfo],
+    ) -> Vec<InlinePreviewInfo<'a>> {
+        let mut previews = Vec::new();
+        Self::collect_inline_previews(components, attachments, None, false, &mut previews);
+        previews
+    }
+
+    pub(crate) fn collect_section_thumbnail_previews<'a>(
+        components: &'a [Self],
+        attachments: &'a [AttachmentInfo],
+        next_index: &mut usize,
+        previews: &mut Vec<(usize, InlinePreviewInfo<'a>)>,
+    ) {
+        Self::collect_section_thumbnail_previews_with_accent(
+            components,
+            attachments,
+            None,
+            next_index,
+            previews,
+        );
+    }
+
+    fn collect_section_thumbnail_previews_with_accent<'a>(
+        components: &'a [Self],
+        attachments: &'a [AttachmentInfo],
+        accent_color: Option<u32>,
+        next_index: &mut usize,
+        previews: &mut Vec<(usize, InlinePreviewInfo<'a>)>,
+    ) {
+        for component in components {
+            match component {
+                Self::ActionRow { components } => {
+                    Self::collect_section_thumbnail_previews_with_accent(
+                        components,
+                        attachments,
+                        accent_color,
+                        next_index,
+                        previews,
+                    )
+                }
+                Self::Section {
+                    components,
+                    accessory,
+                } => {
+                    if let Some(Self::Thumbnail { media, .. }) = accessory.as_deref() {
+                        let index = *next_index;
+                        *next_index = (*next_index).saturating_add(1);
+                        if let Some(preview) = media.inline_preview_info(attachments, accent_color)
+                        {
+                            previews.push((index, preview));
+                        }
+                    }
+                    Self::collect_section_thumbnail_previews_with_accent(
+                        components,
+                        attachments,
+                        accent_color,
+                        next_index,
+                        previews,
+                    );
+                }
+                Self::Container {
+                    components,
+                    accent_color: container_accent,
+                    ..
+                } => Self::collect_section_thumbnail_previews_with_accent(
+                    components,
+                    attachments,
+                    container_accent.or(accent_color),
+                    next_index,
+                    previews,
+                ),
+                Self::Button { .. }
+                | Self::Select { .. }
+                | Self::TextDisplay { .. }
+                | Self::Thumbnail { .. }
+                | Self::MediaGallery { .. }
+                | Self::File { .. }
+                | Self::Separator { .. }
+                | Self::Unknown { .. } => {}
+            }
+        }
     }
 
     fn collect_inline_previews<'a>(
         components: &'a [Self],
         attachments: &'a [AttachmentInfo],
         accent_color: Option<u32>,
+        include_section_thumbnails: bool,
         previews: &mut Vec<InlinePreviewInfo<'a>>,
     ) {
         for component in components {
             match component {
-                Self::ActionRow { components } => {
-                    Self::collect_inline_previews(components, attachments, accent_color, previews)
-                }
+                Self::ActionRow { components } => Self::collect_inline_previews(
+                    components,
+                    attachments,
+                    accent_color,
+                    include_section_thumbnails,
+                    previews,
+                ),
                 Self::Section {
                     components,
                     accessory,
                 } => {
-                    Self::collect_inline_previews(components, attachments, accent_color, previews);
-                    if let Some(accessory) = accessory {
+                    Self::collect_inline_previews(
+                        components,
+                        attachments,
+                        accent_color,
+                        include_section_thumbnails,
+                        previews,
+                    );
+                    if let Some(accessory) = accessory
+                        && (include_section_thumbnails
+                            || !matches!(accessory.as_ref(), Self::Thumbnail { .. }))
+                    {
                         Self::collect_inline_previews(
                             std::slice::from_ref(accessory.as_ref()),
                             attachments,
                             accent_color,
+                            include_section_thumbnails,
                             previews,
                         );
                     }
@@ -1186,6 +1286,7 @@ impl MessageComponentInfo {
                     components,
                     attachments,
                     container_accent.or(accent_color),
+                    include_section_thumbnails,
                     previews,
                 ),
                 Self::Button { .. }

@@ -14,9 +14,16 @@ use crate::{
 };
 
 use super::{
-    MessageContentLine, embed_color, prefix_message_content_line_with_style,
+    MessageContentLine, MessageContentPreviewSlot, embed_color,
+    prefix_message_content_line_with_style,
     wrap_markdown_message_lines_with_loaded_custom_emoji_urls,
 };
+
+const SECTION_THUMBNAIL_MAX_WIDTH: u16 = 18;
+const SECTION_THUMBNAIL_MIN_WIDTH: u16 = 8;
+const SECTION_THUMBNAIL_HEIGHT: u16 = 6;
+const SECTION_THUMBNAIL_GAP: usize = 2;
+const SECTION_TEXT_MIN_WIDTH: usize = 16;
 
 pub(super) struct ComponentFormatContext<'a> {
     pub(super) guild_id: Option<Id<GuildMarker>>,
@@ -32,8 +39,16 @@ pub(super) fn format_component_lines(
     state: &DashboardState,
     width: usize,
     loaded_custom_emoji_urls: &[String],
+    next_section_thumbnail_index: &mut usize,
 ) -> Vec<MessageContentLine> {
-    let mut lines = format_components(components, context, state, width, loaded_custom_emoji_urls);
+    let mut lines = format_components(
+        components,
+        context,
+        state,
+        width,
+        loaded_custom_emoji_urls,
+        next_section_thumbnail_index,
+    );
     if lines.is_empty() && !components.is_empty() {
         lines.push(MessageContentLine::styled_text(
             truncate_text("<unsupported message components>", width),
@@ -53,13 +68,20 @@ fn format_components(
     state: &DashboardState,
     width: usize,
     loaded_custom_emoji_urls: &[String],
+    next_section_thumbnail_index: &mut usize,
 ) -> Vec<MessageContentLine> {
-    components
-        .iter()
-        .flat_map(|component| {
-            format_component(component, context, state, width, loaded_custom_emoji_urls)
-        })
-        .collect()
+    let mut lines = Vec::new();
+    for component in components {
+        lines.extend(format_component(
+            component,
+            context,
+            state,
+            width,
+            loaded_custom_emoji_urls,
+            next_section_thumbnail_index,
+        ));
+    }
+    lines
 }
 
 fn format_component(
@@ -68,11 +90,17 @@ fn format_component(
     state: &DashboardState,
     width: usize,
     loaded_custom_emoji_urls: &[String],
+    next_section_thumbnail_index: &mut usize,
 ) -> Vec<MessageContentLine> {
     match component {
-        MessageComponentInfo::ActionRow { components } => {
-            format_components(components, context, state, width, loaded_custom_emoji_urls)
-        }
+        MessageComponentInfo::ActionRow { components } => format_components(
+            components,
+            context,
+            state,
+            width,
+            loaded_custom_emoji_urls,
+            next_section_thumbnail_index,
+        ),
         MessageComponentInfo::Button {
             label,
             emoji,
@@ -127,8 +155,45 @@ fn format_component(
             components,
             accessory,
         } => {
-            let mut lines =
-                format_components(components, context, state, width, loaded_custom_emoji_urls);
+            let section_thumbnail = accessory.as_deref().and_then(|accessory| match accessory {
+                MessageComponentInfo::Thumbnail { media, .. } => {
+                    let index = *next_section_thumbnail_index;
+                    *next_section_thumbnail_index =
+                        (*next_section_thumbnail_index).saturating_add(1);
+                    Some((index, media))
+                }
+                _ => None,
+            });
+            if let Some((index, media)) = section_thumbnail
+                && let Some((text_width, slot)) =
+                    section_thumbnail_slot(index, media, context, state, width)
+            {
+                let mut lines = format_components(
+                    components,
+                    context,
+                    state,
+                    text_width,
+                    loaded_custom_emoji_urls,
+                    next_section_thumbnail_index,
+                );
+                if lines.is_empty() {
+                    lines.push(MessageContentLine::plain(String::new()));
+                }
+                while lines.len() < usize::from(slot.height) {
+                    lines.push(MessageContentLine::plain(String::new()));
+                }
+                lines[0].preview_slots.push(slot);
+                return lines;
+            }
+
+            let mut lines = format_components(
+                components,
+                context,
+                state,
+                width,
+                loaded_custom_emoji_urls,
+                next_section_thumbnail_index,
+            );
             if let Some(accessory) = accessory {
                 lines.extend(format_component(
                     accessory,
@@ -136,6 +201,7 @@ fn format_component(
                     state,
                     width,
                     loaded_custom_emoji_urls,
+                    next_section_thumbnail_index,
                 ));
             }
             lines
@@ -207,6 +273,7 @@ fn format_component(
                 state,
                 inner_width,
                 loaded_custom_emoji_urls,
+                next_section_thumbnail_index,
             )
             .into_iter()
             .map(|line| prefix_message_content_line_with_style(PREFIX, gutter_style, line))
@@ -214,6 +281,51 @@ fn format_component(
         }
         MessageComponentInfo::Unknown { .. } => Vec::new(),
     }
+}
+
+fn section_thumbnail_slot(
+    section_thumbnail_index: usize,
+    media: &ComponentMediaInfo,
+    context: &ComponentFormatContext<'_>,
+    state: &DashboardState,
+    width: usize,
+) -> Option<(usize, MessageContentPreviewSlot)> {
+    if !state.show_images() {
+        return None;
+    }
+    let attachment = media.attachment_filename().and_then(|filename| {
+        context
+            .attachments
+            .iter()
+            .find(|attachment| attachment.filename == filename)
+    });
+    let media_type = attachment
+        .and_then(AttachmentInfo::media_type)
+        .or_else(|| media.media_type());
+    if media_type != Some(AttachmentMediaType::Image) {
+        return None;
+    }
+
+    let available = width.saturating_sub(SECTION_TEXT_MIN_WIDTH + SECTION_THUMBNAIL_GAP);
+    let slot_width = u16::try_from(available)
+        .unwrap_or(u16::MAX)
+        .min(SECTION_THUMBNAIL_MAX_WIDTH);
+    if slot_width < SECTION_THUMBNAIL_MIN_WIDTH {
+        return None;
+    }
+    let text_width = width
+        .saturating_sub(usize::from(slot_width) + SECTION_THUMBNAIL_GAP)
+        .max(1);
+    let col = u16::try_from(text_width + SECTION_THUMBNAIL_GAP).unwrap_or(u16::MAX);
+    Some((
+        text_width,
+        MessageContentPreviewSlot {
+            section_thumbnail_index,
+            col,
+            width: slot_width,
+            height: SECTION_THUMBNAIL_HEIGHT,
+        },
+    ))
 }
 
 fn format_text(

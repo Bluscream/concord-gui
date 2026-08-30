@@ -72,6 +72,7 @@ pub(in crate::tui) struct MessageContentLine {
     mention_highlights: Vec<TextHighlight>,
     styled_prefixes: Vec<StyledPrefix>,
     pub(in crate::tui) image_slots: Vec<MessageContentImageSlot>,
+    pub(in crate::tui) preview_slots: Vec<MessageContentPreviewSlot>,
 }
 
 #[derive(Clone, Copy)]
@@ -94,6 +95,14 @@ pub(in crate::tui) struct MessageContentImageSlot {
     pub(in crate::tui) url: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::tui) struct MessageContentPreviewSlot {
+    pub(in crate::tui) section_thumbnail_index: usize,
+    pub(in crate::tui) col: u16,
+    pub(in crate::tui) width: u16,
+    pub(in crate::tui) height: u16,
+}
+
 impl MessageContentLine {
     pub(in crate::tui) fn plain(text: String) -> Self {
         Self::styled_text(text, Style::default(), Vec::new())
@@ -106,6 +115,7 @@ impl MessageContentLine {
             mention_highlights,
             styled_prefixes: Vec::new(),
             image_slots: Vec::new(),
+            preview_slots: Vec::new(),
         }
     }
 
@@ -410,6 +420,7 @@ pub(in crate::tui) fn format_message_content_sections_with_loaded_custom_emoji_u
             loaded_custom_emoji_urls,
         ));
     }
+    let mut next_section_thumbnail_index = 0;
     lines.extend(format_component_lines(
         &message.components,
         &ComponentFormatContext {
@@ -422,6 +433,7 @@ pub(in crate::tui) fn format_message_content_sections_with_loaded_custom_emoji_u
         state,
         width,
         loaded_custom_emoji_urls,
+        &mut next_section_thumbnail_index,
     ));
     for attachment in attachment_summary_lines {
         lines.push(MessageContentLine::attachment(truncate_text(
@@ -435,6 +447,7 @@ pub(in crate::tui) fn format_message_content_sections_with_loaded_custom_emoji_u
             state,
             width,
             loaded_custom_emoji_urls,
+            &mut next_section_thumbnail_index,
         ));
     }
     if lines.is_empty() {
@@ -860,6 +873,9 @@ fn prefix_message_content_line(prefix: &str, mut line: MessageContentLine) -> Me
         slot.col = slot.col.saturating_add(col_shift);
         slot.byte_start = slot.byte_start.saturating_add(byte_shift);
     }
+    for slot in &mut line.preview_slots {
+        slot.col = slot.col.saturating_add(col_shift);
+    }
     line.text.insert_str(0, prefix);
     line
 }
@@ -997,6 +1013,7 @@ mod tests {
                 patch_base: false,
             }],
             image_slots: Vec::new(),
+            preview_slots: Vec::new(),
         };
 
         let spans = line.spans();

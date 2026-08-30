@@ -2921,6 +2921,7 @@ fn image_preview_target(id: u64) -> ImagePreviewTarget {
         thread_card: false,
         message_index: 0,
         preview_index: 0,
+        body_line_index: None,
         preview_x_offset_columns: 0,
         preview_y_offset_rows: 0,
         preview_width: 16,

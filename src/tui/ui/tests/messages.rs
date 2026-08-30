@@ -1,6 +1,7 @@
 use ratatui::style::Stylize;
 
 use super::*;
+use crate::discord::ComponentMediaItemInfo;
 use crate::discord::test_builders::{
     GuildCreateFixture, MessageHistoryLoadedFixture, MessageReactionAddFixture, guild_create_event,
     message_history_loaded_event, message_reaction_add_event,
@@ -372,10 +373,6 @@ fn components_v2_message_renders_text_layout_and_link_fallback() {
                 MessageComponentInfo::TextDisplay {
                     content: "# Last.fm\n**neo** listened to a track".to_owned(),
                 },
-                MessageComponentInfo::Separator {
-                    divider: true,
-                    spacing: 1,
-                },
                 MessageComponentInfo::Section {
                     components: vec![MessageComponentInfo::TextDisplay {
                         content: "Artist · Album".to_owned(),
@@ -388,6 +385,23 @@ fn components_v2_message_renders_text_layout_and_link_fallback() {
                         description: Some("Album cover".to_owned()),
                         spoiler: false,
                     })),
+                },
+                MessageComponentInfo::Separator {
+                    divider: true,
+                    spacing: 1,
+                },
+                MessageComponentInfo::MediaGallery {
+                    items: vec![ComponentMediaItemInfo {
+                        media: ComponentMediaInfo {
+                            url: "https://example.com/gallery.png".to_owned(),
+                            content_type: Some("image/png".to_owned()),
+                            width: Some(1280),
+                            height: Some(720),
+                            ..ComponentMediaInfo::default()
+                        },
+                        description: Some("Gallery image".to_owned()),
+                        spoiler: false,
+                    }],
                 },
                 MessageComponentInfo::ActionRow {
                     components: vec![MessageComponentInfo::Button {
@@ -412,12 +426,26 @@ fn components_v2_message_renders_text_layout_and_link_fallback() {
     assert!(text.contains("# Last.fm"));
     assert!(text.contains("neo listened to a track"));
     assert!(text.contains("Artist · Album"));
-    assert!(text.contains("[image: Album cover]"));
+    assert!(!text.contains("[image: Album cover]"));
+    assert!(text.contains("[image: Gallery image]"));
     assert!(text.contains("[Open Last.fm] https://www.last.fm/user/neo"));
     assert!(!text.contains("<empty message>"));
-    assert_eq!(message.inline_previews().len(), 1);
-    assert_eq!(message.inline_previews()[0].filename, "cover.png");
-    assert_eq!(message.inline_previews()[0].accent_color, Some(0x3366cc));
+    assert_eq!(message.inline_previews().len(), 2);
+    let flow_previews = message.flow_inline_previews();
+    assert_eq!(flow_previews.len(), 1);
+    assert_eq!(flow_previews[0].filename, "gallery.png");
+    let section_thumbnails = message.section_thumbnail_previews();
+    assert_eq!(section_thumbnails.len(), 1);
+    assert_eq!(section_thumbnails[0].1.filename, "cover.png");
+    assert_eq!(section_thumbnails[0].1.accent_color, Some(0x3366cc));
+    let preview_slots = lines
+        .iter()
+        .flat_map(|line| line.preview_slots.iter())
+        .collect::<Vec<_>>();
+    assert_eq!(preview_slots.len(), 1);
+    assert!(preview_slots[0].col > 0);
+    assert!((8..=18).contains(&preview_slots[0].width));
+    assert_eq!(preview_slots[0].height, 6);
     assert_eq!(message.attachments_in_display_order().count(), 1);
 }
 

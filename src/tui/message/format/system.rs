@@ -264,6 +264,7 @@ pub(super) fn format_forwarded_snapshot(
     state: &DashboardState,
     width: usize,
     loaded_custom_emoji_urls: &[String],
+    next_section_thumbnail_index: &mut usize,
 ) -> Vec<MessageContentLine> {
     let is_components_v2 = snapshot.flags & MESSAGE_FLAG_IS_COMPONENTS_V2 != 0;
     let attachment_summary_lines = if is_components_v2 || snapshot.attachments.is_empty() {
@@ -329,6 +330,7 @@ pub(super) fn format_forwarded_snapshot(
             state,
             width.saturating_sub(2).max(1),
             loaded_custom_emoji_urls,
+            next_section_thumbnail_index,
         )
         .into_iter()
         .map(|line| prefix_message_content_line_without_underline("│ ", line)),

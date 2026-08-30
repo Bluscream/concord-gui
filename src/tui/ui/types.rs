@@ -17,6 +17,7 @@ pub struct ImagePreview<'a> {
     pub viewer: bool,
     pub thread_card: bool,
     pub message_index: usize,
+    pub body_line_index: Option<usize>,
     pub preview_x_offset_columns: u16,
     pub preview_y_offset_rows: usize,
     pub preview_width: u16,
