@@ -388,13 +388,13 @@ desktop_notifications = true
 # Optional notification icon to include in notifications. May not work on all platforms.
 # When unset, no icon is used. It must either be a name of an icon (typically in /usr/share/icons)
 # or a path to an icon.
-notification_icon = "/path/to/icon.svg"
+# notification_icon = "/path/to/icon.svg"
 
 # Optional WAV files for message, voice join/leave notification sounds.
 # When unset, Concord uses built-in generated tones.
-notification_sound = "/path/to/message.wav"
-voice_join_sound = "/path/to/join.wav"
-voice_leave_sound = "/path/to/leave.wav"
+# notification_sound = "/path/to/message.wav"
+# voice_join_sound = "/path/to/join.wav"
+# voice_leave_sound = "/path/to/leave.wav"
 
 [voice]
 # Join or update Discord voice with Concord self-muted.
