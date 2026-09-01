@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.15] - 2026-09-01
+
+### Bug Fixes
+
+- _(notifications)_ Use OSC protocols for macOS terminal alerts (#343) in [#343](https://github.com/chojs23/concord/pull/343) by @chojs23
+- Disable Opus SIMD only for ARM32 Linux targets (#344) in [#344](https://github.com/chojs23/concord/pull/344) by @chojs23
+
 ## [2.5.14] - 2026-08-30
 
 ### Bug Fixes
