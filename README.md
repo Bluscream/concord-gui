@@ -931,6 +931,10 @@ bold = true
 [highlight.InlineCode]
 foreground = "#FFA500"
 
+[highlight.InlineTimestamp]
+foreground = "#DBDEE1"
+background = "#3B3C43"
+
 [highlight.MessageLink]
 foreground = "cyan"
 underline = true

@@ -8,7 +8,7 @@ use crate::discord::{ChannelState, MessageHistoryAfterMode, MessageState, Sticke
 use crate::tui::text;
 use crate::tui::text::{
     MentionTarget, RenderedText, TextHighlightKind, render_user_mentions,
-    render_user_mentions_with_highlights, replace_custom_emoji_markup,
+    render_user_mentions_in_rendered_text, replace_custom_emoji_markup,
 };
 
 use super::scroll::{
@@ -1412,13 +1412,13 @@ impl DashboardState {
         mentions: &[MentionInfo],
         mention_everyone: bool,
         mention_roles: &[Id<RoleMarker>],
-        value: &str,
+        value: impl Into<RenderedText>,
     ) -> RenderedText {
         let current_user_id = self.discord.current_user_id.map(|id| id.get());
         let current_user_role_ids = guild_id
             .and_then(|guild_id| self.discord.cache.current_user_role_ids_for_guild(guild_id));
-        let mut rendered = render_user_mentions_with_highlights(
-            value,
+        let mut rendered = render_user_mentions_in_rendered_text(
+            value.into(),
             |user_id| self.resolve_mention_display_name(guild_id, mentions, user_id),
             |role_id| self.resolve_role_mention_name(guild_id, role_id),
             |channel_id| self.resolve_channel_mention_name(channel_id),
@@ -1460,7 +1460,7 @@ impl DashboardState {
             add_literal_mention_highlights(&mut rendered, "@everyone", everyone_kind);
             add_literal_mention_highlights(&mut rendered, "@here", everyone_kind);
         }
-        normalize_text_highlights(&mut rendered.highlights);
+        normalize_mention_highlights(&mut rendered.highlights);
         text::replace_custom_emoji_markup_in_rendered_with_images(
             rendered,
             self.show_custom_emoji(),

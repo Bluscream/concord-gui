@@ -103,7 +103,7 @@ fn poll_box_line(mut line: MessageContentLine, inner_width: usize) -> MessageCon
     let suffix = " │";
     let padding = inner_width.saturating_sub(line.text.width());
     let shift = prefix.len();
-    for highlight in &mut line.mention_highlights {
+    for highlight in &mut line.text_highlights {
         highlight.start = highlight.start.saturating_add(shift);
         highlight.end = highlight.end.saturating_add(shift);
     }

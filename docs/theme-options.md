@@ -247,6 +247,7 @@ from its built-in parent.
 | `MarkdownMarker` | dark gray foreground | Markdown heading, quote, and list markers. |
 | `MessageAttachment` | cyan foreground | Attachment summaries. |
 | `InlineCode` | `#FFA500` foreground | Inline code. |
+| `InlineTimestamp` | `#DBDEE1` on `#3B3C43` | Text rendered from Discord timestamp markup. |
 | `MessageLink` | cyan foreground, underline | Raw URLs and Markdown links. |
 | `MentionSelf` | yellow on `#5C4C23` | Mentions that notify the current user. Colored role mentions keep their Discord foreground. |
 | `MentionOther` | `#C1CEF7` on `#28325C` | Other user, channel, and uncolored role mentions. |

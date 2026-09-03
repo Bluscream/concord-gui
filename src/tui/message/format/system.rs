@@ -244,14 +244,14 @@ pub(super) fn format_forwarded_snapshot(
         && let Some(content) =
             display_text_with_stickers(snapshot.content.as_deref(), &snapshot.stickers)
     {
-        let content = message_time::render_discord_timestamps(&content, state.hour_format_24());
         let content_width = width.saturating_sub(2).max(1);
+        let content = message_time::render_discord_timestamps(content, state.hour_format_24());
         let content = state.render_user_mentions_with_highlights(
             state.forwarded_snapshot_mention_guild_id(snapshot),
             &snapshot.mentions,
             false,
             &[],
-            &content,
+            content,
         );
         lines.extend(
             wrap_rendered_text_lines_with_loaded_custom_emoji_urls(

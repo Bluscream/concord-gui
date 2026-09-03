@@ -517,6 +517,7 @@ define_highlight_groups! {
     MessageAttachment => "MessageAttachment",
     ImageOverflow => "ImageOverflow",
     InlineCode => "InlineCode",
+    InlineTimestamp => "InlineTimestamp",
     MessageLink => "MessageLink",
     MentionSelf => "MentionSelf",
     MentionOther => "MentionOther",

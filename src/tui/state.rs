@@ -42,7 +42,7 @@ use composer::ComposerUiState;
 use discord_ui::DiscordUiState;
 use layout_cache::{LayoutCacheState, MessageRowContentMetrics, MessageRowContentMetricsCacheKey};
 use message_history_refresh::MessageHistoryRefreshState;
-use message_render::{add_literal_mention_highlights, normalize_text_highlights};
+use message_render::{add_literal_mention_highlights, normalize_mention_highlights};
 use message_viewport::{MessageViewportState, ThreadReturnTarget};
 use model::ChannelPaneCursor;
 use navigation::{ActiveGuildScope, FolderKey, FolderSettingsState, NavigationState};

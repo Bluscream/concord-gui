@@ -70,7 +70,7 @@ pub(in crate::tui) fn wrap_plain_text_at_words(value: &str, width: usize) -> Vec
 pub(in crate::tui) struct MessageContentLine {
     pub(in crate::tui) text: String,
     pub(in crate::tui) style: Style,
-    mention_highlights: Vec<TextHighlight>,
+    text_highlights: Vec<TextHighlight>,
     styled_prefixes: Vec<StyledPrefix>,
     pub(in crate::tui) image_slots: Vec<MessageContentImageSlot>,
     pub(in crate::tui) preview_slots: Vec<MessageContentPreviewSlot>,
@@ -109,11 +109,11 @@ impl MessageContentLine {
         Self::styled_text(text, Style::default(), Vec::new())
     }
 
-    fn styled_text(text: String, style: Style, mention_highlights: Vec<TextHighlight>) -> Self {
+    fn styled_text(text: String, style: Style, text_highlights: Vec<TextHighlight>) -> Self {
         Self {
             text,
             style,
-            mention_highlights,
+            text_highlights,
             styled_prefixes: Vec::new(),
             image_slots: Vec::new(),
             preview_slots: Vec::new(),
@@ -173,7 +173,7 @@ impl MessageContentLine {
 
     pub(in crate::tui) fn spans(&self) -> Vec<Span<'static>> {
         let mut boundaries = vec![0, self.text.len()];
-        for highlight in &self.mention_highlights {
+        for highlight in &self.text_highlights {
             push_range_boundaries(
                 &mut boundaries,
                 highlight.start,
@@ -223,11 +223,11 @@ impl MessageContentLine {
         }
 
         if let Some(highlight) = self
-            .mention_highlights
+            .text_highlights
             .iter()
             .find(|highlight| highlight.start <= start && end <= highlight.end)
         {
-            style = style.patch(mention_highlight_style(highlight.kind));
+            style = style.patch(text_highlight_style(highlight.kind));
         }
 
         style
@@ -355,13 +355,13 @@ pub(in crate::tui) fn format_message_content_sections_with_loaded_custom_emoji_u
     } else if let Some(poll) = message.poll.as_ref() {
         let content = display_text_with_stickers(message.content.as_deref(), &message.stickers)
             .map(|value| {
-                let value = render_discord_timestamps(&value, state.hour_format_24());
+                let rendered = render_discord_timestamps(value, state.hour_format_24());
                 state.render_user_mentions_with_highlights(
                     message.guild_id,
                     &message.mentions,
                     message.mention_everyone,
                     &message.mention_roles,
-                    &value,
+                    rendered,
                 )
             });
         lines.extend(format_poll_lines(
@@ -381,13 +381,13 @@ pub(in crate::tui) fn format_message_content_sections_with_loaded_custom_emoji_u
         .then(|| display_text_with_stickers(message.content.as_deref(), &message.stickers))
         .flatten();
     if let Some(value) = standalone_content {
-        let value = render_discord_timestamps(&value, state.hour_format_24());
+        let rendered = render_discord_timestamps(value, state.hour_format_24());
         let rendered = state.render_user_mentions_with_highlights(
             message.guild_id,
             &message.mentions,
             message.mention_everyone,
             &message.mention_roles,
-            &value,
+            rendered,
         );
         let body_style = theme::current().style(theme::HighlightGroup::MessageBody);
         if state.show_custom_emoji()
@@ -654,7 +654,7 @@ fn wrap_rendered_text_lines_with_styled_ranges(
     .into_iter()
     .map(|wrapped| {
         let mut line =
-            MessageContentLine::styled_text(wrapped.text, style, wrapped.mention_highlights)
+            MessageContentLine::styled_text(wrapped.text, style, wrapped.text_highlights)
                 .with_image_slots(wrapped.image_slots);
         for range in
             styled_ranges_for_range(styled_ranges, wrapped.source_start, wrapped.source_end)
@@ -865,7 +865,7 @@ fn truncate_rendered_text(rendered: RenderedText, limit: usize) -> RenderedText 
 fn prefix_message_content_line(prefix: &str, mut line: MessageContentLine) -> MessageContentLine {
     let byte_shift = prefix.len();
     let col_shift = u16::try_from(prefix.width()).unwrap_or(u16::MAX);
-    for highlight in &mut line.mention_highlights {
+    for highlight in &mut line.text_highlights {
         highlight.start = highlight.start.saturating_add(byte_shift);
         highlight.end = highlight.end.saturating_add(byte_shift);
     }
@@ -937,9 +937,9 @@ fn format_reply_line(
 ) -> MessageContentLine {
     let content = display_text_with_stickers(reply.content.as_deref(), &reply.stickers)
         .unwrap_or_else(|| "<empty message>".to_owned());
-    let content = render_discord_timestamps(&content, state.hour_format_24());
+    let content = render_discord_timestamps(content, state.hour_format_24());
     let content =
-        state.render_user_mentions_with_highlights(guild_id, &reply.mentions, false, &[], &content);
+        state.render_user_mentions_with_highlights(guild_id, &reply.mentions, false, &[], content);
     let content = prepend_rendered_text(format!("╭─ {} : ", reply.author), content);
     rendered_text_line(
         truncate_rendered_text(content, width),
@@ -968,7 +968,7 @@ fn sticker_display_text(stickers: &[StickerInfo]) -> Option<String> {
     })
 }
 
-pub(in crate::tui) fn mention_highlight_style(kind: TextHighlightKind) -> Style {
+pub(in crate::tui) fn text_highlight_style(kind: TextHighlightKind) -> Style {
     let theme = theme::current();
     match kind {
         TextHighlightKind::SelfMention => theme.style(theme::HighlightGroup::MentionSelf),
@@ -991,6 +991,7 @@ pub(in crate::tui) fn mention_highlight_style(kind: TextHighlightKind) -> Style 
             apply_discord_foreground(style, Some(color))
         }
         TextHighlightKind::Url => theme.style(theme::HighlightGroup::MessageLink),
+        TextHighlightKind::Timestamp => theme.style(theme::HighlightGroup::InlineTimestamp),
     }
 }
 
@@ -1005,7 +1006,7 @@ mod tests {
         let line = MessageContentLine {
             text: ">> hello @alice".to_owned(),
             style: Style::default().add_modifier(Modifier::UNDERLINED),
-            mention_highlights: vec![TextHighlight {
+            text_highlights: vec![TextHighlight {
                 start: mention_start,
                 end: mention_start + "@alice".len(),
                 kind: TextHighlightKind::SelfMention,
@@ -1031,7 +1032,7 @@ mod tests {
         assert!(spans[2].style.add_modifier.contains(Modifier::UNDERLINED));
         assert_eq!(
             spans[2].style.bg,
-            mention_highlight_style(TextHighlightKind::SelfMention).bg
+            text_highlight_style(TextHighlightKind::SelfMention).bg
         );
     }
 

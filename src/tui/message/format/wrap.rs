@@ -1,4 +1,4 @@
-//! Plain-text wrap engine. Wraps at display width while distributing mention
+//! Plain-text wrap engine. Wraps at display width while distributing semantic
 //! highlights, styled ranges, and custom-emoji image slots per wrapped line.
 
 use ratatui::style::Style;
@@ -13,7 +13,7 @@ pub(in crate::tui) struct WrappedTextLine {
     pub(in crate::tui) text: String,
     pub(in crate::tui) source_start: usize,
     pub(in crate::tui) source_end: usize,
-    pub(super) mention_highlights: Vec<TextHighlight>,
+    pub(super) text_highlights: Vec<TextHighlight>,
     pub(super) image_slots: Vec<MessageContentImageSlot>,
 }
 
@@ -23,7 +23,7 @@ impl WrappedTextLine {
             text: String::new(),
             source_start: 0,
             source_end: 0,
-            mention_highlights: Vec::new(),
+            text_highlights: Vec::new(),
             image_slots: Vec::new(),
         }
     }
@@ -112,7 +112,7 @@ pub(super) fn wrap_text_line_with_styles(
     lines
 }
 
-/// Wraps `value` to `width`, distributing mention highlights and custom-
+/// Wraps `value` to `width`, distributing text highlights and custom-
 /// emoji slots per line. Each slot is treated as an atomic `display_width`
 /// unit so the `:name:` fallback cannot straddle a wrap edge.
 #[cfg(test)]
@@ -124,7 +124,7 @@ fn wrap_text_with_extras(
 ) -> Vec<(String, Vec<TextHighlight>, Vec<MessageContentImageSlot>)> {
     wrap_text_with_metadata(value, highlights, emoji_slots, width)
         .into_iter()
-        .map(|line| (line.text, line.mention_highlights, line.image_slots))
+        .map(|line| (line.text, line.text_highlights, line.image_slots))
         .collect()
 }
 
@@ -139,7 +139,7 @@ fn wrapped_line(
         text,
         source_start,
         source_end,
-        mention_highlights: highlights_for_range(highlights, source_start, source_end),
+        text_highlights: highlights_for_range(highlights, source_start, source_end),
         image_slots,
     }
 }

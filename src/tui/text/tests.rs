@@ -2,10 +2,48 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{
     InlineEmojiSlot, RenderedText, TextHighlight, TextHighlightKind, render_user_mentions,
-    replace_custom_emoji_markup, replace_custom_emoji_markup_in_rendered,
-    replace_custom_emoji_markup_in_rendered_with_images, sanitize_for_display_width,
-    truncate_display_width, truncate_text,
+    render_user_mentions_in_rendered_text, replace_custom_emoji_markup,
+    replace_custom_emoji_markup_in_rendered, replace_custom_emoji_markup_in_rendered_with_images,
+    sanitize_for_display_width, truncate_display_width, truncate_text,
 };
+
+#[test]
+fn mention_rendering_preserves_existing_semantic_highlights() {
+    let input = RenderedText {
+        text: "<@10> 09:00".to_owned(),
+        highlights: vec![TextHighlight {
+            start: 6,
+            end: 11,
+            kind: TextHighlightKind::Timestamp,
+        }],
+        emoji_slots: Vec::new(),
+    };
+
+    let output = render_user_mentions_in_rendered_text(
+        input,
+        |user_id| (user_id == 10).then(|| "alice".to_owned()),
+        |_| None,
+        |_| None,
+        |_| Some(TextHighlightKind::OtherMention),
+    );
+
+    assert_eq!(output.text, "@alice 09:00");
+    assert_eq!(
+        output.highlights,
+        vec![
+            TextHighlight {
+                start: 0,
+                end: 6,
+                kind: TextHighlightKind::OtherMention,
+            },
+            TextHighlight {
+                start: 7,
+                end: 12,
+                kind: TextHighlightKind::Timestamp,
+            },
+        ]
+    );
+}
 
 #[test]
 fn rendered_replacer_emits_text_fallback_and_records_slot() {

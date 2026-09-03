@@ -227,6 +227,58 @@ pub struct RenderedText {
     pub emoji_slots: Vec<InlineEmojiSlot>,
 }
 
+/// Maps one source byte range to its rewritten range so semantic metadata can
+/// follow text transformations without reparsing generated output.
+pub(in crate::tui) struct TextReplacement {
+    pub(in crate::tui) input_start: usize,
+    pub(in crate::tui) input_end: usize,
+    pub(in crate::tui) output_start: usize,
+    pub(in crate::tui) output_len: usize,
+}
+
+pub(in crate::tui) fn remap_text_offset(
+    replacements: &[TextReplacement],
+    position: usize,
+) -> usize {
+    let mut delta = 0isize;
+    for replacement in replacements {
+        if position < replacement.input_start {
+            break;
+        }
+        if position < replacement.input_end {
+            let inside = position.saturating_sub(replacement.input_start);
+            return replacement
+                .output_start
+                .saturating_add(inside.min(replacement.output_len));
+        }
+        delta += replacement.output_len as isize
+            - replacement
+                .input_end
+                .saturating_sub(replacement.input_start) as isize;
+    }
+
+    if delta < 0 {
+        position.saturating_sub(delta.unsigned_abs())
+    } else {
+        position.saturating_add(delta as usize)
+    }
+}
+
+impl From<String> for RenderedText {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            ..Self::default()
+        }
+    }
+}
+
+impl From<&str> for RenderedText {
+    fn from(text: &str) -> Self {
+        Self::from(text.to_owned())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::tui) enum EmojiImageSize {
     Compact,
@@ -267,7 +319,7 @@ pub struct TextHighlight {
     pub kind: TextHighlightKind,
 }
 
-/// Style class for an inline mention or link highlight.
+/// Style class for semantic inline content that needs distinct presentation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TextHighlightKind {
     /// The current user is being notified (`<@me>`, `@everyone`, `@here`).
@@ -281,10 +333,12 @@ pub enum TextHighlightKind {
     },
     /// A detected URL that can be opened from message actions.
     Url,
+    /// Text rendered from Discord's `<t:...>` timestamp markup.
+    Timestamp,
 }
 
-pub fn render_user_mentions_with_highlights<U, R, C, H>(
-    value: &str,
+pub fn render_user_mentions_in_rendered_text<U, R, C, H>(
+    mut input: RenderedText,
     mut resolve_user_name: U,
     mut resolve_role_name: R,
     mut resolve_channel_name: C,
@@ -296,21 +350,19 @@ where
     C: FnMut(u64) -> Option<String>,
     H: FnMut(MentionTarget) -> Option<TextHighlightKind>,
 {
-    if !contains_any_mention_prefix(value) {
-        return RenderedText {
-            text: value.to_owned(),
-            highlights: Vec::new(),
-            emoji_slots: Vec::new(),
-        };
+    if !contains_any_mention_prefix(&input.text) {
+        return input;
     }
 
+    let value = std::mem::take(&mut input.text);
     let mut rendered = String::with_capacity(value.len());
-    let mut highlights = Vec::new();
+    let mut mention_highlights = Vec::new();
+    let mut replacements = Vec::new();
     let mut cursor = 0usize;
-    while let Some(start) = next_mention_start(value, cursor) {
+    while let Some(start) = next_mention_start(&value, cursor) {
         rendered.push_str(&value[cursor..start]);
 
-        let Some((end, target)) = parse_mention(value, start) else {
+        let Some((end, target)) = parse_mention(&value, start) else {
             rendered.push('<');
             cursor = start.saturating_add(1);
             continue;
@@ -323,17 +375,24 @@ where
         };
         match resolved {
             Some(name) => {
+                let output_start = rendered.len();
                 let highlight_start = rendered.len();
                 rendered.push(mention_prefix(target));
                 rendered.push_str(&name);
                 let highlight_end = rendered.len();
                 if let Some(kind) = highlight_kind(target) {
-                    highlights.push(TextHighlight {
+                    mention_highlights.push(TextHighlight {
                         start: highlight_start,
                         end: highlight_end,
                         kind,
                     });
                 }
+                replacements.push(TextReplacement {
+                    input_start: start,
+                    input_end: end,
+                    output_start,
+                    output_len: rendered.len().saturating_sub(output_start),
+                });
             }
             None => rendered.push_str(&value[start..end]),
         }
@@ -341,11 +400,19 @@ where
     }
     rendered.push_str(&value[cursor..]);
 
-    RenderedText {
-        text: rendered,
-        highlights,
-        emoji_slots: Vec::new(),
+    for highlight in &mut input.highlights {
+        highlight.start = remap_text_offset(&replacements, highlight.start);
+        highlight.end = remap_text_offset(&replacements, highlight.end);
     }
+    for slot in &mut input.emoji_slots {
+        slot.byte_start = remap_text_offset(&replacements, slot.byte_start);
+    }
+    input.highlights.extend(mention_highlights);
+    input
+        .highlights
+        .sort_by_key(|highlight| (highlight.start, highlight.end));
+    input.text = rendered;
+    input
 }
 
 /// String-only fallback used by thread/channel previews where no image
@@ -411,7 +478,7 @@ pub fn replace_custom_emoji_markup_with_ids(value: &str) -> String {
 
 /// Image-overlay variant of [`replace_custom_emoji_markup`]: rewrites each
 /// match to its `:name:` fallback and records a slot the renderer can blit
-/// the image over. Mention highlights are remapped through the byte-shift.
+/// the image over. Text highlights are remapped through the byte-shift.
 #[cfg(test)]
 pub fn replace_custom_emoji_markup_in_rendered(rendered: RenderedText) -> RenderedText {
     replace_custom_emoji_markup_in_rendered_with_images(rendered, true)

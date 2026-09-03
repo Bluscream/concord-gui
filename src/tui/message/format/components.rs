@@ -122,6 +122,7 @@ fn format_component(
                 width,
                 theme::current().style(theme::HighlightGroup::MessageBody),
                 loaded_custom_emoji_urls,
+                false,
             )
         }
         MessageComponentInfo::Select {
@@ -151,6 +152,7 @@ fn format_component(
                 width,
                 theme::current().style(theme::HighlightGroup::MessageBody),
                 loaded_custom_emoji_urls,
+                false,
             )
         }
         MessageComponentInfo::Section {
@@ -208,17 +210,15 @@ fn format_component(
             }
             lines
         }
-        MessageComponentInfo::TextDisplay { content } => {
-            let content = render_discord_timestamps(content, state.hour_format_24());
-            format_text(
-                &content,
-                context,
-                state,
-                width,
-                theme::current().style(theme::HighlightGroup::MessageBody),
-                loaded_custom_emoji_urls,
-            )
-        }
+        MessageComponentInfo::TextDisplay { content } => format_text(
+            content,
+            context,
+            state,
+            width,
+            theme::current().style(theme::HighlightGroup::MessageBody),
+            loaded_custom_emoji_urls,
+            true,
+        ),
         MessageComponentInfo::Thumbnail {
             media, description, ..
         } => vec![format_component_media_line(
@@ -340,10 +340,16 @@ fn format_text(
     width: usize,
     style: Style,
     loaded_custom_emoji_urls: &[String],
+    render_timestamps: bool,
 ) -> Vec<MessageContentLine> {
     if content.is_empty() {
         return Vec::new();
     }
+    let content = if render_timestamps {
+        render_discord_timestamps(content, state.hour_format_24())
+    } else {
+        content.into()
+    };
     let rendered = state.render_user_mentions_with_highlights(
         context.guild_id,
         context.mentions,

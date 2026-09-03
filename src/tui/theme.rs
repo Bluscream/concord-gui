@@ -505,6 +505,13 @@ fn default_definitions() -> [HighlightDefinition; HighlightGroup::COUNT] {
         Style::default().fg(Color::Rgb(255, 165, 0)),
     );
     define(
+        H::InlineTimestamp,
+        None,
+        Style::default()
+            .fg(Color::Rgb(219, 222, 225))
+            .bg(Color::Rgb(59, 60, 67)),
+    );
+    define(
         H::MessageLink,
         None,
         Style::default()

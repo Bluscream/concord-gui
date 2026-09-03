@@ -355,17 +355,16 @@ fn push_embed_text(
     let Some(value) = value.filter(|value| !value.is_empty()) else {
         return;
     };
-    let value = render_discord_timestamps(value, hour_format_24);
     // Skip the mention pass. Embeds never carry user mentions but custom
     // emojis in title/fields/footer must still produce slots.
-    let rendered = replace_custom_emoji_markup_in_rendered_with_images(
+    let rendered = render_discord_timestamps(
         RenderedText {
             text: value.to_owned(),
-            highlights: Vec::new(),
-            emoji_slots: Vec::new(),
+            ..RenderedText::default()
         },
-        show_custom_emoji,
+        hour_format_24,
     );
+    let rendered = replace_custom_emoji_markup_in_rendered_with_images(rendered, show_custom_emoji);
     lines.extend(wrap_rendered_text_lines_with_loaded_custom_emoji_urls(
         rendered,
         width,
