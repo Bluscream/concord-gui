@@ -157,8 +157,12 @@ pub(super) async fn run_dashboard(
     // input responsive. Flicker is no longer a reason to suppress redraws: the
     // image emission tracker re-emits a surface only when it actually changes.
     const BACKGROUND_REDRAW_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(80);
+    const RELATIVE_TIMESTAMP_REFRESH_INTERVAL: std::time::Duration =
+        std::time::Duration::from_secs(60);
     let mut pending_redraw_deadline: Option<tokio::time::Instant> = None;
     let mut animation_frame_deadline: Option<tokio::time::Instant> = None;
+    let mut relative_timestamp_deadline =
+        tokio::time::Instant::now() + RELATIVE_TIMESTAMP_REFRESH_INTERVAL;
     #[cfg(feature = "voice-playback")]
     let mut push_to_talk = GlobalPushToTalkRuntime::new(client.clone());
     #[cfg(feature = "voice-playback")]
@@ -502,6 +506,12 @@ pub(super) async fn run_dashboard(
                 animation_frame_deadline = Some(
                     tokio::time::Instant::now() + LOADING_ANIMATION_FRAME_INTERVAL,
                 );
+                dirty = true;
+            }
+            _ = tokio::time::sleep_until(relative_timestamp_deadline) => {
+                relative_timestamp_deadline =
+                    tokio::time::Instant::now() + RELATIVE_TIMESTAMP_REFRESH_INTERVAL;
+                state.clear_message_row_content_metrics_cache();
                 dirty = true;
             }
             _ = async {

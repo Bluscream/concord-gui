@@ -48,6 +48,7 @@ use crate::discord::{
     MESSAGE_FLAG_IS_COMPONENTS_V2, MessageState, ReplyInfo, StickerInfo, unicode_emoji_image_url,
 };
 use crate::tui::{
+    message::time::render_discord_timestamps,
     state::{DashboardState, apply_discord_foreground, discord_role_mention_background},
     text::{
         EmojiImageSize, InlineEmojiSlot, RenderedText, TextHighlight, TextHighlightKind,
@@ -354,6 +355,7 @@ pub(in crate::tui) fn format_message_content_sections_with_loaded_custom_emoji_u
     } else if let Some(poll) = message.poll.as_ref() {
         let content = display_text_with_stickers(message.content.as_deref(), &message.stickers)
             .map(|value| {
+                let value = render_discord_timestamps(&value, state.hour_format_24());
                 state.render_user_mentions_with_highlights(
                     message.guild_id,
                     &message.mentions,
@@ -379,6 +381,7 @@ pub(in crate::tui) fn format_message_content_sections_with_loaded_custom_emoji_u
         .then(|| display_text_with_stickers(message.content.as_deref(), &message.stickers))
         .flatten();
     if let Some(value) = standalone_content {
+        let value = render_discord_timestamps(&value, state.hour_format_24());
         let rendered = state.render_user_mentions_with_highlights(
             message.guild_id,
             &message.mentions,
@@ -934,6 +937,7 @@ fn format_reply_line(
 ) -> MessageContentLine {
     let content = display_text_with_stickers(reply.content.as_deref(), &reply.stickers)
         .unwrap_or_else(|| "<empty message>".to_owned());
+    let content = render_discord_timestamps(&content, state.hour_format_24());
     let content =
         state.render_user_mentions_with_highlights(guild_id, &reply.mentions, false, &[], &content);
     let content = prepend_rendered_text(format!("╭─ {} : ", reply.author), content);
