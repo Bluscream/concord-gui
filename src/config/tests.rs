@@ -4,7 +4,7 @@ use std::{
 };
 
 use super::{
-    AppOptions, BorderShape, BorderSurface, ComposerOptions, CredentialOptions,
+    AnimatePreviews, AppOptions, BorderShape, BorderSurface, ComposerOptions, CredentialOptions,
     CredentialStoreMode, DisplayOptions, HighlightGroup, ImagePreviewQualityPreset,
     ImageProtocolPreference, KeymapBinding, KeymapFileOptions, KeymapOptions, NotificationOptions,
     PresenceOptions, ThemeOptions, VoiceOptions, load_keymap_options_from_path,
@@ -26,6 +26,7 @@ fn display_options_default_to_all_media_enabled() {
         ImagePreviewQualityPreset::Balanced
     );
     assert_eq!(options.image_protocol, ImageProtocolPreference::Auto);
+    assert_eq!(options.animate_previews, AnimatePreviews::Always);
 }
 
 #[test]
@@ -38,6 +39,7 @@ fn global_disable_overrides_individual_toggles() {
         image_preview_quality: ImagePreviewQualityPreset::Balanced,
         attachment_viewer_quality: ImagePreviewQualityPreset::Original,
         image_protocol: ImageProtocolPreference::Auto,
+        animate_previews: AnimatePreviews::Selected,
         show_custom_emoji: true,
         circular_avatars: false,
         hour_format_24: true,
@@ -715,6 +717,7 @@ fn options_save_and_load_round_trip() {
             image_preview_quality: ImagePreviewQualityPreset::Original,
             attachment_viewer_quality: ImagePreviewQualityPreset::Original,
             image_protocol: ImageProtocolPreference::Kitty,
+            animate_previews: AnimatePreviews::Never,
             show_custom_emoji: false,
             circular_avatars: true,
             hour_format_24: false,
