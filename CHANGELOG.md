@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.16] - 2026-09-04
+
+### Bug Fixes
+
+- _(voice)_ Stop demanding a transition id in DAVE prepare epoch (#325) in [#325](https://github.com/chojs23/concord/pull/325) by @4EEZE
+- Pin the patched thorvg-sys revision for ARM Linux builds (#346) in [#346](https://github.com/chojs23/concord/pull/346) by @chojs23
+
+### Documentation
+
+- Update readme by @chojs23
+
+### Features
+
+- Render timestamps in format <t:1235790:R> (#328) in [#328](https://github.com/chojs23/concord/pull/328) by @jahitosis1
+- _(tui)_ Add distinct styling for timestamps by @chojs23
+
+### Performance
+
+- _(media)_ Bound the media caches by bytes, retry failed fetches, add animate_previews (#318) in [#318](https://github.com/chojs23/concord/pull/318) by @4EEZE
+
+### New Contributors
+
+- @jahitosis1 made their first contribution in [#328](https://github.com/chojs23/concord/pull/328)
+
 ## [2.5.15] - 2026-09-01
 
 ### Bug Fixes
