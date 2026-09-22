@@ -855,6 +855,31 @@ impl UserProfileSettingsState {
         }
     }
 
+    pub(super) fn select_field(&mut self, field: UserProfileSettingsField) -> bool {
+        let (fields, actions, selected) = match self.tab {
+            UserProfileSettingsTab::Global => (
+                Self::GLOBAL_FIELDS.as_slice(),
+                Self::GLOBAL_ACTIONS.as_slice(),
+                &mut self.selected_global,
+            ),
+            UserProfileSettingsTab::Guild => (
+                Self::GUILD_FIELDS.as_slice(),
+                Self::GUILD_ACTIONS.as_slice(),
+                &mut self.selected_guild,
+            ),
+        };
+        let index = fields
+            .iter()
+            .chain(actions)
+            .position(|candidate| *candidate == field);
+        if let Some(index) = index {
+            *selected = index;
+            true
+        } else {
+            false
+        }
+    }
+
     pub(super) fn set_field_value(&mut self, field: UserProfileSettingsField, value: String) {
         match field {
             UserProfileSettingsField::CurrentStatus => {}
@@ -1686,6 +1711,34 @@ impl DashboardState {
 
     pub(in crate::tui) fn next_confirmation_button(&mut self) {
         self.popups.confirmation_button = self.popups.confirmation_button.next();
+    }
+
+    pub(in crate::tui) fn activate_confirmation_button(
+        &mut self,
+        button: ConfirmationButton,
+    ) -> Option<AppCommand> {
+        self.popups.confirmation_button = button;
+        if button == ConfirmationButton::Cancel {
+            self.close_active_popup();
+            return None;
+        }
+
+        match self.active_modal_popup_kind()? {
+            ActiveModalPopupKind::MessageConfirmation => self.confirm_message_confirmation(),
+            ActiveModalPopupKind::LongMessageConfirmation => self.confirm_long_message_upload(),
+            ActiveModalPopupKind::QuitConfirmation => {
+                self.confirm_quit();
+                None
+            }
+            ActiveModalPopupKind::GuildLeaveConfirmation => self.confirm_guild_leave(),
+            ActiveModalPopupKind::ThreadDeleteConfirmation => self.confirm_thread_delete(),
+            ActiveModalPopupKind::NotificationInbox
+                if self.notification_inbox_is_confirming_mark_all() =>
+            {
+                self.confirm_mark_all_notification_inbox_read()
+            }
+            _ => None,
+        }
     }
 
     /// Closes the topmost popup layer using that popup's own back or cancel

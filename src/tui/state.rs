@@ -87,6 +87,7 @@ pub use model::{
 pub use model::{
     ChannelActionKind, GuildActionKind, MemberActionKind, MessageUrlItem, ThreadActionKind,
 };
+pub(in crate::tui) use navigation::FolderSettingsField;
 pub use options::{DisplayOptionGauge, DisplayOptionItem};
 pub(in crate::tui) use popups::{
     ActiveModalPopupKind, ConfirmationButton, DebugLogLine, DebugMediaSnapshot,

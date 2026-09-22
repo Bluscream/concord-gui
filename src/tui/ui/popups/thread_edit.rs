@@ -100,6 +100,42 @@ pub(in crate::tui::ui) fn thread_edit_popup_area(area: Rect) -> Rect {
     )
 }
 
+pub(in crate::tui::ui) fn thread_edit_field_at(
+    area: Rect,
+    state: &DashboardState,
+    column: u16,
+    row: u16,
+) -> Option<ThreadEditField> {
+    let view = state.thread_edit_view()?;
+    let popup = thread_edit_popup_area(area);
+    let content = popup_form_areas(popup).content;
+    if column < content.x
+        || column >= content.x.saturating_add(content.width)
+        || row < content.y
+        || row >= content.y.saturating_add(content.height)
+    {
+        return None;
+    }
+
+    let width = usize::from(content.width.saturating_sub(1)).max(1);
+    let layout = build_edit_layout(&view, width);
+    let document_row = state
+        .thread_edit_scroll()
+        .saturating_add(usize::from(row.saturating_sub(content.y)));
+    if (layout.title_row..layout.tags_row).contains(&document_row) {
+        Some(ThreadEditField::Title)
+    } else if view.is_forum_post && (layout.tags_row..layout.slow_mode_row).contains(&document_row)
+    {
+        Some(ThreadEditField::Tags)
+    } else if (layout.slow_mode_row..layout.auto_archive_row).contains(&document_row) {
+        Some(ThreadEditField::SlowMode)
+    } else if (layout.auto_archive_row..layout.lines.len()).contains(&document_row) {
+        Some(ThreadEditField::AutoArchive)
+    } else {
+        None
+    }
+}
+
 fn build_edit_layout(view: &ThreadEditView, width: usize) -> EditLayout {
     let status_field = view.status_field;
     let mut lines = Vec::new();

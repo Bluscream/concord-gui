@@ -1,7 +1,7 @@
 use ratatui::{layout::Rect, text::Line};
 use ratatui_image::protocol::Protocol;
 
-use super::super::state::{FocusPane, SelectablePopupTarget};
+use super::super::state::{UserProfileSettingsField, UserProfileSettingsTab};
 
 pub(super) const MIN_MESSAGE_INPUT_HEIGHT: u16 = 3;
 pub(super) const IMAGE_PREVIEW_HEIGHT: u16 = 10;
@@ -90,18 +90,35 @@ pub(super) struct MessageAreas {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MouseTarget {
-    Pane(FocusPane),
-    PaneRow {
-        pane: FocusPane,
-        row: usize,
-    },
-    Composer,
-    PopupRow {
-        target: SelectablePopupTarget,
-        row: usize,
-    },
-    ModalBackdrop,
+pub(crate) enum UserProfileControl {
+    Tab(UserProfileSettingsTab),
+    Field(UserProfileSettingsField),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct UserProfileControlRegion {
+    pub(super) control: UserProfileControl,
+    pub(super) row_start: usize,
+    pub(super) row_end: usize,
+    pub(super) column_start: usize,
+    pub(super) column_end: usize,
+}
+
+impl UserProfileControlRegion {
+    pub(super) fn rows(control: UserProfileControl, start: usize, end: usize) -> Self {
+        Self {
+            control,
+            row_start: start,
+            row_end: end,
+            column_start: 0,
+            column_end: usize::MAX,
+        }
+    }
+
+    pub(super) fn contains(self, row: usize, column: usize) -> bool {
+        (self.row_start..self.row_end).contains(&row)
+            && (self.column_start..self.column_end).contains(&column)
+    }
 }
 
 pub(super) struct UserProfilePopupText {
@@ -110,4 +127,5 @@ pub(super) struct UserProfilePopupText {
     pub(super) cursor: Option<(usize, usize)>,
     pub(super) reveal_rows: Option<std::ops::Range<usize>>,
     pub(super) picker_rows: Option<std::ops::Range<usize>>,
+    pub(super) controls: Vec<UserProfileControlRegion>,
 }

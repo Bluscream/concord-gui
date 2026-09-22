@@ -39,7 +39,7 @@ fn left_click_selects_visible_channel_row() {
 #[test]
 fn double_click_activates_pane_rows_like_enter() {
     let mut state = state_with_channel_tree();
-    let mut clicks = MouseClickTracker::default();
+    let mut clicks = MouseInputState::default();
     let (column, row) = channel_row_point(1);
 
     let first = handle_mouse_event(
@@ -73,7 +73,7 @@ fn double_click_activates_pane_rows_like_enter() {
     for value in "random".chars() {
         handle_key(&mut state, char_key(value));
     }
-    let mut clicks = MouseClickTracker::default();
+    let mut clicks = MouseInputState::default();
     let (column, row) = channel_row_point(0);
 
     let first = handle_mouse_event(
@@ -97,7 +97,7 @@ fn double_click_activates_pane_rows_like_enter() {
 
     assert_eq!(second.command, None);
 
-    let mut clicks = MouseClickTracker::default();
+    let mut clicks = MouseInputState::default();
     let first = handle_mouse_event(
         &mut state,
         mouse(MouseEventKind::Down(MouseButton::Left), column, row),
@@ -130,7 +130,7 @@ fn double_click_activates_pane_rows_like_enter() {
     for value in "second".chars() {
         handle_key(&mut state, char_key(value));
     }
-    let mut clicks = MouseClickTracker::default();
+    let mut clicks = MouseInputState::default();
     let event = mouse(MouseEventKind::Down(MouseButton::Left), 1, 2);
 
     let first = handle_mouse_event(&mut state, event, dashboard_area(), &mut clicks);
@@ -141,7 +141,7 @@ fn double_click_activates_pane_rows_like_enter() {
     assert_eq!(state.guild_pane_filter_query(), Some("second"));
     assert_eq!(second.command, None);
 
-    let mut clicks = MouseClickTracker::default();
+    let mut clicks = MouseInputState::default();
     let first = handle_mouse_event(&mut state, event, dashboard_area(), &mut clicks);
     let second = handle_mouse_event(&mut state, event, dashboard_area(), &mut clicks);
 
@@ -176,7 +176,7 @@ fn left_click_selects_channel_switcher_row() {
 fn double_click_activates_channel_switcher_row() {
     let mut state = state_with_channel_tree();
     state.open_channel_switcher();
-    let mut clicks = MouseClickTracker::default();
+    let mut clicks = MouseInputState::default();
     let event = mouse(MouseEventKind::Down(MouseButton::Left), 50, 6);
 
     let first = handle_mouse_event(&mut state, event, dashboard_area(), &mut clicks);
@@ -242,7 +242,7 @@ fn wheel_moves_channel_switcher_selection() {
 #[test]
 fn terminal_click_release_sequence_still_double_clicks_like_enter() {
     let mut state = state_with_channel_tree();
-    let mut clicks = MouseClickTracker::default();
+    let mut clicks = MouseInputState::default();
     let (column, row) = channel_row_point(1);
 
     let first = handle_mouse_event(
@@ -279,7 +279,7 @@ fn terminal_click_release_sequence_still_double_clicks_like_enter() {
 #[test]
 fn scroll_between_clicks_prevents_stale_double_click_activation() {
     let mut state = state_with_channel_tree();
-    let mut clicks = MouseClickTracker::default();
+    let mut clicks = MouseInputState::default();
     let (column, row) = channel_row_point(1);
 
     let first = handle_mouse_event(
@@ -340,7 +340,7 @@ fn mouse_click_outside_dashboard_panes_does_not_change_focus() {
 
     assert!(!handle_mouse(
         &mut state,
-        mouse(MouseEventKind::Down(MouseButton::Right), 1, 1),
+        mouse(MouseEventKind::Down(MouseButton::Right), 10, 0),
         dashboard_area(),
     ));
     assert_eq!(state.focus(), FocusPane::Messages);
@@ -479,6 +479,105 @@ fn mouse_wheel_scrolls_message_viewport_without_changing_selection() {
 }
 
 #[test]
+fn mouse_wheel_at_message_top_requests_older_history() {
+    let mut state = state_with_messages(3);
+    state.focus_pane(FocusPane::Messages);
+    state.scroll_message_viewport_top();
+    state.clamp_message_viewport_for_image_previews(80, 16, 3);
+    let selected = state.selected_message();
+    let mut clicks = MouseInputState::default();
+
+    let outcome = handle_mouse_event(
+        &mut state,
+        mouse(MouseEventKind::ScrollUp, 50, 1),
+        dashboard_area(),
+        &mut clicks,
+    );
+
+    assert!(outcome.handled);
+    assert_eq!(state.selected_message(), selected);
+    assert_eq!(
+        outcome.command,
+        Some(AppCommand::LoadMessageHistory {
+            channel_id: Id::new(2),
+            before: Some(Id::new(1)),
+        })
+    );
+}
+
+#[test]
+fn right_click_selects_dashboard_item_and_opens_its_action_menu() {
+    let mut guild_state = state_with_channel_tree();
+    let guild = interaction_point(
+        &guild_state,
+        dashboard_area(),
+        crate::tui::ui::InteractionTarget::PaneItem {
+            pane: FocusPane::Guilds,
+            row: 0,
+        },
+    );
+    assert!(handle_mouse(
+        &mut guild_state,
+        mouse(MouseEventKind::Down(MouseButton::Right), guild.0, guild.1),
+        dashboard_area(),
+    ));
+    assert!(guild_state.is_guild_action_menu_active());
+
+    let mut channel_state = state_with_channel_tree();
+    let (column, row) = channel_row_point(1);
+
+    assert!(handle_mouse(
+        &mut channel_state,
+        mouse(MouseEventKind::Down(MouseButton::Right), column, row),
+        dashboard_area(),
+    ));
+    assert_eq!(channel_state.focus(), FocusPane::Channels);
+    assert_eq!(channel_state.selected_channel(), 1);
+    assert!(channel_state.is_channel_action_menu_active());
+
+    let mut message_state = state_with_messages(1);
+    message_state.focus_pane(FocusPane::Messages);
+    message_state.set_message_view_height(10);
+    message_state.clamp_message_viewport_for_image_previews(80, 16, 3);
+    let (column, row) = (0..dashboard_area().height)
+        .flat_map(|row| (0..dashboard_area().width).map(move |column| (column, row)))
+        .find(|(column, row)| {
+            matches!(
+                crate::tui::ui::InteractionMap::new(dashboard_area(), &message_state)
+                    .target_at(*column, *row),
+                Some(crate::tui::ui::InteractionTarget::PaneItem {
+                    pane: FocusPane::Messages,
+                    ..
+                })
+            )
+        })
+        .expect("message row is interactive");
+
+    assert!(handle_mouse(
+        &mut message_state,
+        mouse(MouseEventKind::Down(MouseButton::Right), column, row),
+        dashboard_area(),
+    ));
+    assert!(message_state.is_message_action_menu_active());
+
+    let mut member_state = state_with_members(1);
+    let member = interaction_point(
+        &member_state,
+        dashboard_area(),
+        crate::tui::ui::InteractionTarget::PaneItem {
+            pane: FocusPane::Members,
+            row: 1,
+        },
+    );
+    assert!(handle_mouse(
+        &mut member_state,
+        mouse(MouseEventKind::Down(MouseButton::Right), member.0, member.1),
+        dashboard_area(),
+    ));
+    assert!(member_state.is_member_action_menu_active());
+}
+
+#[test]
 fn user_profile_popup_absorbs_all_backdrop_clicks() {
     let mut state = DashboardState::new();
     state.focus_pane(FocusPane::Messages);
@@ -502,11 +601,168 @@ fn user_profile_popup_absorbs_all_backdrop_clicks() {
 }
 
 #[test]
+fn current_user_profile_tabs_and_fields_accept_clicks() {
+    let user_id = Id::new(10);
+    let mut state = DashboardState::new();
+    push_test_ready(&mut state, user_id);
+    state.push_event(AppEvent::UserProfileLoaded {
+        guild_id: None,
+        profile: UserProfileInfo::test(user_id, "neo"),
+    });
+    state.open_current_user_profile_popup();
+    let area = Rect::new(0, 0, 120, 40);
+    crate::tui::ui::sync_view_heights(area, &mut state);
+
+    let guild_tab = interaction_point(
+        &state,
+        area,
+        crate::tui::ui::InteractionTarget::UserProfileControl(
+            crate::tui::ui::UserProfileControl::Tab(UserProfileSettingsTab::Guild),
+        ),
+    );
+    assert!(handle_mouse(
+        &mut state,
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            guild_tab.0,
+            guild_tab.1
+        ),
+        area,
+    ));
+    assert_eq!(
+        state.user_profile_settings_tab(),
+        UserProfileSettingsTab::Guild
+    );
+
+    let global_tab = interaction_point(
+        &state,
+        area,
+        crate::tui::ui::InteractionTarget::UserProfileControl(
+            crate::tui::ui::UserProfileControl::Tab(UserProfileSettingsTab::Global),
+        ),
+    );
+    handle_mouse(
+        &mut state,
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            global_tab.0,
+            global_tab.1,
+        ),
+        area,
+    );
+    assert_eq!(
+        state.user_profile_settings_tab(),
+        UserProfileSettingsTab::Global
+    );
+
+    let pronouns = interaction_point(
+        &state,
+        area,
+        crate::tui::ui::InteractionTarget::UserProfileControl(
+            crate::tui::ui::UserProfileControl::Field(UserProfileSettingsField::GlobalPronouns),
+        ),
+    );
+    assert!(handle_mouse(
+        &mut state,
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            pronouns.0,
+            pronouns.1
+        ),
+        area,
+    ));
+    assert_eq!(
+        state.user_profile_settings_active_field(),
+        Some(UserProfileSettingsField::GlobalPronouns)
+    );
+    assert!(state.is_user_profile_popup_editing());
+}
+
+#[test]
+fn popup_controls_accept_direct_clicks() {
+    let area = dashboard_area();
+
+    let mut confirmation = DashboardState::new();
+    confirmation.open_quit_confirmation();
+    let cancel = interaction_point(
+        &confirmation,
+        area,
+        crate::tui::ui::InteractionTarget::ConfirmationButton(
+            crate::tui::state::ConfirmationButton::Cancel,
+        ),
+    );
+    handle_mouse(
+        &mut confirmation,
+        mouse(MouseEventKind::Down(MouseButton::Left), cancel.0, cancel.1),
+        area,
+    );
+    assert_eq!(confirmation.active_modal_popup_kind(), None);
+
+    let mut search = DashboardState::new();
+    search.open_message_search_popup();
+    let field = interaction_point(
+        &search,
+        area,
+        crate::tui::ui::InteractionTarget::SearchField(3),
+    );
+    handle_mouse(
+        &mut search,
+        mouse(MouseEventKind::Down(MouseButton::Left), field.0, field.1),
+        area,
+    );
+    assert!(
+        search
+            .search_popup_view()
+            .and_then(|view| view.fields.get(3).map(|field| field.active))
+            .unwrap_or(false)
+    );
+
+    let mut inbox = DashboardState::new();
+    inbox.open_notification_inbox();
+    let mentions = interaction_point(
+        &inbox,
+        area,
+        crate::tui::ui::InteractionTarget::NotificationInboxTab(NotificationInboxTab::Mentions),
+    );
+    handle_mouse(
+        &mut inbox,
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            mentions.0,
+            mentions.1,
+        ),
+        area,
+    );
+    assert_eq!(
+        inbox.notification_inbox_tab(),
+        Some(NotificationInboxTab::Mentions)
+    );
+
+    let mut folder = state_with_folder();
+    folder.focus_pane(FocusPane::Guilds);
+    handle_key(&mut folder, char_key(' '));
+    handle_key(&mut folder, char_key('a'));
+    handle_key(&mut folder, char_key('r'));
+    let color = interaction_point(
+        &folder,
+        area,
+        crate::tui::ui::InteractionTarget::FolderSettingsField(FolderSettingsField::Color),
+    );
+    handle_mouse(
+        &mut folder,
+        mouse(MouseEventKind::Down(MouseButton::Left), color.0, color.1),
+        area,
+    );
+    assert!(folder.folder_settings_color_active());
+    assert!(folder.is_folder_settings_editing());
+}
+
+#[test]
 fn mouse_double_click_activates_message_action_row_like_enter() {
     let mut state = state_with_multiselect_poll();
     state.focus_pane(FocusPane::Messages);
     handle_key(&mut state, key(KeyCode::Enter));
-    let mut clicks = MouseClickTracker::default();
+    let mut clicks = MouseInputState::default();
     let poll_row = state
         .selected_message_action_items()
         .iter()
@@ -605,17 +861,32 @@ fn mouse_wheel_moves_active_popup_lists() {
         let (column, row) = (0..dashboard_area().height)
             .flat_map(|row| (0..dashboard_area().width).map(move |column| (column, row)))
             .find(|(column, row)| {
-                crate::tui::ui::mouse_target_at(dashboard_area(), &state, *column, *row)
-                    == Some(crate::tui::ui::MouseTarget::PopupRow {
+                crate::tui::ui::InteractionMap::new(dashboard_area(), &state)
+                    .target_at(*column, *row)
+                    == Some(crate::tui::ui::InteractionTarget::PopupItem {
                         target: SelectablePopupTarget::Options,
                         row: 0,
                     })
             })
             .expect("options row is clickable");
-        let mut clicks = MouseClickTracker::default();
+        let mut clicks = MouseInputState::default();
         let event = mouse(MouseEventKind::Down(MouseButton::Left), column, row);
         handle_mouse_event(&mut state, event, dashboard_area(), &mut clicks);
         handle_mouse_event(&mut state, event, dashboard_area(), &mut clicks);
         assert!(!state.is_options_category_picker_open());
     }
+}
+
+fn interaction_point(
+    state: &DashboardState,
+    area: Rect,
+    expected: crate::tui::ui::InteractionTarget,
+) -> (u16, u16) {
+    (0..area.height)
+        .flat_map(|row| (0..area.width).map(move |column| (column, row)))
+        .find(|(column, row)| {
+            crate::tui::ui::InteractionMap::new(area, state).target_at(*column, *row)
+                == Some(expected)
+        })
+        .expect("interaction target should be visible")
 }

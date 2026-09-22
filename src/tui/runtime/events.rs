@@ -16,7 +16,7 @@ pub(super) fn handle_terminal_event(
     state: &mut DashboardState,
     event: TerminalEvent,
     last_frame_area: &mut Rect,
-    mouse_clicks: &mut input::MouseClickTracker,
+    mouse_input: &mut input::MouseInputState,
 ) -> Result<TerminalEventOutcome> {
     let mut outcome = TerminalEventOutcome::default();
 
@@ -31,7 +31,7 @@ pub(super) fn handle_terminal_event(
         }
         TerminalEvent::Mouse(mouse) => {
             let mouse_outcome =
-                input::handle_mouse_event(state, mouse, *last_frame_area, mouse_clicks);
+                input::handle_mouse_event(state, mouse, *last_frame_area, mouse_input);
             outcome.command = mouse_outcome.command;
             if mouse_outcome.handled {
                 outcome.dirty = true;

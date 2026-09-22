@@ -137,7 +137,7 @@ pub(super) async fn run_dashboard(
     }
     let mut media_runtime = DashboardMediaRuntime::new(options.display.image_protocol);
     let mut terminal_events = EventStream::new();
-    let mut mouse_clicks = input::MouseClickTracker::default();
+    let mut mouse_input = input::MouseInputState::default();
     let (media_decode_tx, mut media_decode_rx) = mpsc::unbounded_channel();
     let (media_protocol_tx, mut media_protocol_rx) = mpsc::unbounded_channel();
     let (local_upload_preview_tx, mut local_upload_preview_rx) =
@@ -284,7 +284,7 @@ pub(super) async fn run_dashboard(
                             &mut state,
                             event,
                             &mut last_frame_area,
-                            &mut mouse_clicks,
+                            &mut mouse_input,
                         )?;
                         if state.take_terminal_refresh_request() {
                             // Redrawing alone cannot recover a picture whose

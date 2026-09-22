@@ -53,6 +53,39 @@ pub(in crate::tui::ui) fn notification_inbox_popup_area(area: Rect) -> Rect {
     centered_rect(area, NOTIFICATION_INBOX_POPUP_WIDTH, height)
 }
 
+pub(in crate::tui::ui) fn notification_inbox_tab_at(
+    area: Rect,
+    state: &DashboardState,
+    column: u16,
+    row: u16,
+) -> Option<NotificationInboxTab> {
+    let popup = notification_inbox_popup_area(area);
+    let inner = panel_block("Inbox", true).inner(popup);
+    let content = Rect {
+        width: inner.width.saturating_sub(1).max(1),
+        ..inner
+    };
+    if row != content.y || column < content.x || column >= content.x.saturating_add(content.width) {
+        return None;
+    }
+
+    let unread_width = format!(" Unreads ({}) ", state.notification_inbox_unread_count()).width();
+    let mentions_start = unread_width.saturating_add(1);
+    let mentions_width = format!(
+        " Mentions ({}) ",
+        state.notification_inbox_unread_mention_count()
+    )
+    .width();
+    let offset = usize::from(column.saturating_sub(content.x));
+    if offset < unread_width {
+        Some(NotificationInboxTab::Unreads)
+    } else if (mentions_start..mentions_start.saturating_add(mentions_width)).contains(&offset) {
+        Some(NotificationInboxTab::Mentions)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 fn notification_inbox_lines(
     state: &DashboardState,

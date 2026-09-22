@@ -272,6 +272,20 @@ impl super::super::DashboardState {
         }
     }
 
+    pub(in crate::tui) fn select_thread_edit_field(&mut self, field: ThreadEditField) -> bool {
+        let Some(popup) = self.popups.thread_edit_mut() else {
+            return false;
+        };
+        if (popup.editing_title && field != ThreadEditField::Title)
+            || (popup.editing_tags && field != ThreadEditField::Tags)
+        {
+            return false;
+        }
+        popup.active_field = field;
+        popup.pending_scroll_reveal = true;
+        true
+    }
+
     pub fn move_thread_edit_selection_down(&mut self) {
         let Some((editing_tags, tag_count)) = self
             .popups

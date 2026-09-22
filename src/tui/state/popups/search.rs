@@ -316,6 +316,18 @@ impl DashboardState {
         self.refresh_message_search_suggestions();
     }
 
+    pub(in crate::tui) fn select_search_field(&mut self, index: usize) -> bool {
+        let Some(search) = self.popups.search_popup_mut() else {
+            return false;
+        };
+        if index >= search.fields.len() {
+            return false;
+        }
+        search.active_field = index;
+        self.refresh_message_search_suggestions();
+        true
+    }
+
     pub fn move_search_result_down(&mut self) -> Option<AppCommand> {
         if let Some(search) = self.popups.search_popup_mut()
             && !search.suggestions.is_empty()

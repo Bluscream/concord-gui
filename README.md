@@ -267,6 +267,14 @@ With default vim-style navigation:
 row movement keys are `SelectNext` and `SelectPrevious` and can be changed in
 `keymap.toml`.
 
+### Mouse controls
+
+| Gesture           | Action                                               |
+| ----------------- | ---------------------------------------------------- |
+| Left click        | Focus a pane, select an item, or use a popup control |
+| Double left click | Activate the selected item like `Enter`              |
+| Right click       | Open the clicked entry actions                       |
+
 #### Leader key
 
 Press `Space` to open the leader shortcut window.

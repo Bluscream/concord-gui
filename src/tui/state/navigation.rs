@@ -99,7 +99,7 @@ pub(super) struct FolderSettingsState {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) enum FolderSettingsField {
+pub(in crate::tui) enum FolderSettingsField {
     #[default]
     Name,
     Color,

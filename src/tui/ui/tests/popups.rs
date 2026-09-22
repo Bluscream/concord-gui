@@ -615,8 +615,8 @@ fn search_popup_message_results_show_sent_time() {
     let area = Rect::new(0, 0, 120, 28);
     let layout = active_selectable_popup_layout(area, &state).expect("search results layout");
     assert_eq!(
-        mouse_target_at(area, &state, layout.list.x, layout.list.y),
-        Some(MouseTarget::PopupRow {
+        interaction_at(area, &state, layout.list.x, layout.list.y),
+        Some(InteractionTarget::PopupItem {
             target: SelectablePopupTarget::SearchResults,
             row: 0,
         })
@@ -674,8 +674,8 @@ fn options_popup_variable_rows_share_paging_and_mouse_mapping() {
     assert_eq!(gauge_rows.len(), 2);
     for row in gauge_rows {
         assert_eq!(
-            mouse_target_at(area, &state, gauge_layout.list.x, row),
-            Some(MouseTarget::PopupRow {
+            interaction_at(area, &state, gauge_layout.list.x, row),
+            Some(InteractionTarget::PopupItem {
                 target: SelectablePopupTarget::Options,
                 row: gauge_index,
             })
@@ -1038,8 +1038,8 @@ fn current_user_profile_settings_render_contract() {
         .find(|row| layout.item_at(layout.list.x, *row) == Some(snapshot.selected))
         .expect("selected status should remain visible in a short popup");
     assert_eq!(
-        mouse_target_at(area, &state, layout.list.x, selected_screen_row),
-        Some(MouseTarget::PopupRow {
+        interaction_at(area, &state, layout.list.x, selected_screen_row),
+        Some(InteractionTarget::PopupItem {
             target: SelectablePopupTarget::UserProfileStatus,
             row: snapshot.selected,
         })

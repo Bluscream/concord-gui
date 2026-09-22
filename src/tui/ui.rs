@@ -43,7 +43,7 @@ pub(in crate::tui) const LOCAL_UPLOAD_PREVIEW_WIDTH: u16 = 32;
 
 mod activity;
 mod emoji_overlay;
-mod hit_test;
+mod interaction;
 mod layout;
 pub(in crate::tui) mod loading_indicator;
 mod message;
@@ -52,7 +52,7 @@ mod popups;
 pub(in crate::tui) mod thread_card;
 mod types;
 
-pub(crate) use self::hit_test::{focus_pane_at, mouse_target_at};
+pub(crate) use self::interaction::{FormButton, InteractionMap, InteractionTarget};
 #[cfg(test)]
 use self::layout::composer_prompt_line_count;
 use self::layout::{
@@ -93,13 +93,14 @@ use self::popups::{
     thread_edit_popup_area, user_profile_popup_has_avatar, user_profile_popup_metrics,
     user_profile_popup_text_geometry,
 };
-pub(crate) use self::types::MouseTarget;
+pub(crate) use self::types::UserProfileControl;
 pub use self::types::{
     AvatarImage, EmojiImage, ImagePreview, ImagePreviewLayout, ImagePreviewState,
 };
 use self::types::{
     EMBED_PREVIEW_GUTTER_PREFIX, MESSAGE_AVATAR_OFFSET, MESSAGE_AVATAR_PLACEHOLDER,
-    MESSAGE_SELECTION_PREFIX_WIDTH, MessageViewportLayout, UserProfilePopupText,
+    MESSAGE_SELECTION_PREFIX_WIDTH, MessageViewportLayout, UserProfileControlRegion,
+    UserProfilePopupText,
 };
 #[cfg(test)]
 use self::{

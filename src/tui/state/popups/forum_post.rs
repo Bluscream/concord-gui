@@ -282,6 +282,21 @@ impl DashboardState {
         }
     }
 
+    pub(in crate::tui) fn select_forum_post_field(
+        &mut self,
+        field: ForumPostComposerField,
+    ) -> bool {
+        let Some(popup) = self.popups.forum_post_composer_mut() else {
+            return false;
+        };
+        if popup.editing.is_some_and(|editing| editing != field) {
+            return false;
+        }
+        popup.active_field = field;
+        popup.pending_scroll_reveal = true;
+        true
+    }
+
     pub fn push_forum_post_char(&mut self, value: char) {
         if let Some(popup) = self.popups.forum_post_composer_mut() {
             match popup.editing {
