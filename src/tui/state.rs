@@ -34,6 +34,7 @@ mod stream_info;
 mod subscriptions;
 mod text_completion;
 mod toast;
+mod translation;
 mod user;
 mod voice_actions;
 
@@ -57,6 +58,8 @@ use runtime_state::{
 };
 pub(in crate::tui) use scroll::SCROLL_OFF;
 use scroll::clamp_selected_index;
+pub(in crate::tui) use translation::MessageTranslationDisplay;
+use translation::TranslationUiState;
 
 pub(in crate::tui) const MINIMUM_ESTABLISHED_DM_MESSAGES: usize = 5;
 

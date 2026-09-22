@@ -72,18 +72,9 @@ pub(super) async fn run_dashboard(
     snapshots: &mut watch::Receiver<SnapshotRevision>,
     commands: mpsc::Sender<AppCommand>,
     client: DiscordClient,
+    options: config::AppOptions,
     mut config_warnings: Vec<String>,
 ) -> Result<DashboardExit> {
-    let options = match config::load_options_with_warnings() {
-        Ok((options, warnings)) => {
-            config_warnings.extend(warnings);
-            options
-        }
-        Err(error) => {
-            logging::error("config", format!("failed to load config: {error}"));
-            config::AppOptions::default()
-        }
-    };
     let ui_state_options = match config::load_ui_state_options_with_warnings() {
         Ok((options, warnings)) => {
             config_warnings.extend(warnings);
@@ -115,6 +106,7 @@ pub(super) async fn run_dashboard(
     );
     state.apply_presence_options(options.presence);
     state.apply_reaction_options(options.reactions);
+    state.apply_translation_options(options.translation);
     drop(snapshots.borrow_and_update());
     let initial_snapshot = client.current_discord_snapshot();
     let mut current_snapshot_revision = initial_snapshot.revision.global;

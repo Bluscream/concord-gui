@@ -71,7 +71,7 @@ pub use commands::{
     GlobalUserProfileUpdate, GuildUserProfileUpdate, MediaPlaybackRequestId, MediaPlaybackSource,
     MediaPlaybackTarget, MessageHistoryAfterMode, MessageSearchAuthorType, MessageSearchHas,
     MessageSearchPage, MessageSearchQuery, MuteDuration, ProfileAvatarUpload, ReplyReference,
-    StreamCaptureTargetsRequestId, UserProfileUpdate,
+    StreamCaptureTargetsRequestId, TranslationTarget, UserProfileUpdate,
 };
 pub use commands::{
     MAX_PROFILE_AVATAR_BYTES, MAX_UPLOAD_ATTACHMENT_COUNT, MAX_UPLOAD_PREVIEW_BYTES,

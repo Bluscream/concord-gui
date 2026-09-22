@@ -51,7 +51,10 @@ use crate::tui::message::{
     },
 };
 use crate::{
-    config::{DisplayOptions, KeymapBinding, KeymapOptions, UiStateOptions, VoiceOptions},
+    config::{
+        DisplayOptions, KeymapBinding, KeymapOptions, TranslationOptions, TranslationProviderKind,
+        UiStateOptions, VoiceOptions,
+    },
     discord::{
         ActivityEmoji, ActivityInfo, ActivityKind, AppEvent, ApplicationCommandInfo,
         ApplicationCommandOptionInfo, AttachmentDownloadId, AttachmentInfo, ChannelInfo,

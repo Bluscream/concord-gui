@@ -18,6 +18,7 @@ use super::{
     message::format::{
         MessageContentLine, ReactionLayout, WrappedTextLine, embed_color,
         format_message_content_sections_with_loaded_custom_emoji_urls, format_message_relative_age,
+        format_message_translation_lines_with_loaded_custom_emoji_urls,
         lay_out_reaction_chips_with_custom_emoji_images, reaction_line_spans,
         wrap_plain_text_at_words, wrap_text_lines, wrap_text_with_metadata,
     },
@@ -33,6 +34,7 @@ use super::{
     },
     text::{EmojiImageSize, sanitize_for_display_width, truncate_display_width},
 };
+
 use crate::discord::{
     ActivityInfo, ChannelState, ChannelUnreadState, FriendStatus, MessageState, PresenceStatus,
     ReactionInfo, RoleState, UserProfileInfo, is_thread_kind,
@@ -250,7 +252,7 @@ fn sync_composer_viewport(area: Rect, state: &mut DashboardState) {
         state.composer_cursor_byte_index(),
         inner_width,
     );
-    let cursor_row = composer_rows_before_input(state).saturating_add(prompt_row);
+    let cursor_row = composer_rows_before_input(state, inner_width).saturating_add(prompt_row);
     let total_lines = usize::from(composer_content_line_count(state, inner_width))
         .max(cursor_row.saturating_add(1));
     state.sync_composer_scroll(view_height, total_lines, cursor_row);

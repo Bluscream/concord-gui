@@ -452,6 +452,7 @@ impl KeyBindings {
             | ComposerAction::InsertNewline
             | ComposerAction::ClearInput
             | ComposerAction::RemoveLastAttachment
+            | ComposerAction::Translate
             | ComposerAction::ToggleReplyPing
             | ComposerAction::Ignore => None,
         }
@@ -988,6 +989,7 @@ impl KeyBindings {
     fn default_message_action_shortcut(&self, kind: MessageActionKind) -> Vec<KeyChord> {
         vec![char_chord(match kind {
             MessageActionKind::CopyContent => 'y',
+            MessageActionKind::Translate => 'T',
             MessageActionKind::OpenReactionPicker => 'r',
             MessageActionKind::Reply => 'R',
             MessageActionKind::OpenDeleteConfirmation => 'd',

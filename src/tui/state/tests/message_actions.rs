@@ -10,6 +10,7 @@ use crate::discord::{
     AppCommand, AttachmentDownloadId, AttachmentMediaType, MESSAGE_FLAG_SUPPRESS_EMBEDS,
     MediaPlaybackSource, MediaPlaybackTarget,
 };
+use crate::tui::message::format::format_message_translation_lines;
 
 fn message_action(actions: &[MessageActionItem], kind: MessageActionKind) -> &MessageActionItem {
     actions
@@ -36,6 +37,7 @@ fn message_action_items_reflect_message_and_channel_capabilities() {
         actions.iter().map(|action| action.kind).collect::<Vec<_>>(),
         vec![
             MessageActionKind::CopyContent,
+            MessageActionKind::Translate,
             MessageActionKind::OpenReactionPicker,
             MessageActionKind::Reply,
             MessageActionKind::OpenDeleteConfirmation,
@@ -53,6 +55,7 @@ fn message_action_items_reflect_message_and_channel_capabilities() {
         ]
     );
     assert!(message_action(&actions, MessageActionKind::CopyContent).is_enabled());
+    assert!(!message_action(&actions, MessageActionKind::Translate).is_enabled());
     assert!(message_action(&actions, MessageActionKind::Reply).is_enabled());
     assert_eq!(
         message_action(&actions, MessageActionKind::ShowProfile).label,
@@ -118,6 +121,135 @@ fn message_action_items_reflect_message_and_channel_capabilities() {
 
     onboarding.direct_edit_selected_message();
     assert!(!onboarding.is_composing());
+}
+
+#[test]
+fn translate_message_action_covers_loading_ready_toggle_and_failure_states() {
+    let mut state = state_with_messages(1);
+    state.focus_pane(FocusPane::Messages);
+    state.apply_translation_options(crate::config::TranslationOptions {
+        provider: Some(crate::config::TranslationProviderKind::LibreTranslate),
+        message_target_language: Some("ko".to_owned()),
+        ..Default::default()
+    });
+    let message = state
+        .selected_message_state()
+        .expect("selected message should exist");
+    let message_id = message.id;
+    let content = message
+        .copyable_content()
+        .expect("selected message should contain text");
+
+    let command = state.activate_message_action_kind(MessageActionKind::Translate);
+
+    assert_eq!(
+        command,
+        Some(AppCommand::Translate {
+            request_id: 1,
+            target: crate::discord::TranslationTarget::Message(message_id),
+            target_language: "ko".to_owned(),
+            content: content.clone(),
+        })
+    );
+    let loading = format_message_translation_lines(
+        state
+            .selected_message_state()
+            .expect("selected message should remain available"),
+        &state,
+        40,
+    );
+    assert!(
+        loading
+            .iter()
+            .flat_map(|line| line.spans())
+            .any(|span| span.content.contains("Translating..."))
+    );
+    state.push_event(AppEvent::TranslationCompleted {
+        request_id: 1,
+        target: crate::discord::TranslationTarget::Message(message_id),
+        translated_text: "안녕하세요".to_owned(),
+    });
+    assert_eq!(
+        format_message_translation_lines(
+            state
+                .selected_message_state()
+                .expect("selected message should remain available"),
+            &state,
+            40,
+        )
+        .len(),
+        1
+    );
+
+    assert_eq!(
+        state.activate_message_action_kind(MessageActionKind::Translate),
+        None
+    );
+    assert!(
+        format_message_translation_lines(
+            state
+                .selected_message_state()
+                .expect("selected message should remain available"),
+            &state,
+            40,
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        state.activate_message_action_kind(MessageActionKind::Translate),
+        None
+    );
+    assert_eq!(
+        format_message_translation_lines(
+            state
+                .selected_message_state()
+                .expect("selected message should remain available"),
+            &state,
+            40,
+        )
+        .len(),
+        1
+    );
+
+    // A separate request in the same lifecycle test covers the terminal error state.
+    let mut state = state_with_messages(1);
+    state.focus_pane(FocusPane::Messages);
+    state.apply_translation_options(crate::config::TranslationOptions {
+        provider: Some(crate::config::TranslationProviderKind::LibreTranslate),
+        message_target_language: Some("ko".to_owned()),
+        ..Default::default()
+    });
+    let command = state
+        .activate_message_action_kind(MessageActionKind::Translate)
+        .expect("configured translation should emit a command");
+    let (request_id, message_id) = match command {
+        AppCommand::Translate {
+            request_id,
+            target: crate::discord::TranslationTarget::Message(message_id),
+            ..
+        } => (request_id, message_id),
+        command => panic!("unexpected command: {command:?}"),
+    };
+
+    state.push_event(AppEvent::TranslationFailed {
+        request_id,
+        target: crate::discord::TranslationTarget::Message(message_id),
+        message: "service unavailable".to_owned(),
+    });
+    let lines = format_message_translation_lines(
+        state
+            .selected_message_state()
+            .expect("selected message should remain available"),
+        &state,
+        80,
+    );
+    let rendered = lines
+        .into_iter()
+        .flat_map(|line| line.spans().into_iter())
+        .map(|span| span.content.into_owned())
+        .collect::<String>();
+
+    assert_eq!(rendered, "╰─ Translation failed: service unavailable");
 }
 
 #[test]

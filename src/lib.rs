@@ -4,6 +4,7 @@ pub mod discord;
 pub mod error;
 pub mod logging;
 mod support;
+mod translation;
 pub mod tui;
 
 pub use app::App;

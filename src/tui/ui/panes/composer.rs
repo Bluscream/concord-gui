@@ -158,14 +158,12 @@ fn composer_cursor_document_position(
     let display_cursor = display_input
         .map_byte_index(cursor)
         .min(display_input.input.len());
-    let (prompt_row, prompt_column) = composer_prompt_cursor_position(
-        &display_input.input,
-        display_cursor,
-        composer_content_width(area.width),
-    );
+    let content_width = composer_content_width(area.width);
+    let (prompt_row, prompt_column) =
+        composer_prompt_cursor_position(&display_input.input, display_cursor, content_width);
 
     (
-        composer_rows_before_input(state).saturating_add(prompt_row),
+        composer_rows_before_input(state, content_width).saturating_add(prompt_row),
         prompt_column,
     )
 }
@@ -665,6 +663,17 @@ pub(in crate::tui::ui) fn composer_lines_with_loaded_custom_emoji_urls(
                 Span::styled(ping_label, ping_style),
             ]));
         }
+        if let Some(original) = state.composer_translation_original() {
+            let original = prefixed_composer_input(original);
+            let original_style = theme::current().style(theme::HighlightGroup::MessageSecondary);
+            for subline in wrap_text_lines(&original, width as usize) {
+                lines.push(Line::from(Span::styled(subline, original_style)));
+            }
+            lines.push(Line::from(Span::styled(
+                composer_status_divider(width, "translated"),
+                original_style,
+            )));
+        }
         let prefixed_input = prefixed_composer_input(&display_input.input);
         let wrapped = wrap_text_lines(&prefixed_input, width as usize);
         for subline in wrapped {
@@ -691,6 +700,19 @@ pub(in crate::tui::ui) fn composer_lines_with_loaded_custom_emoji_urls(
             .collect();
     }
     wrapped.into_iter().map(Line::from).collect()
+}
+
+fn composer_status_divider(width: u16, label: &str) -> String {
+    let label = format!(" {label} ");
+    let width = usize::from(width);
+    if width <= label.len() {
+        return label.trim().chars().take(width).collect();
+    }
+
+    let remaining = width - label.len();
+    let left = remaining / 2;
+    let right = remaining - left;
+    format!("{}{}{}", "─".repeat(left), label, "─".repeat(right))
 }
 
 struct ComposerDisplayInput {
@@ -776,8 +798,9 @@ fn render_composer_custom_emoji_images(
     let ready_urls = ready_custom_emoji_urls(emoji_images);
     let display_input = composer_display_input(state, &ready_urls);
     let input = display_input.input.as_str();
-    let inner_width = composer_content_width(area.width) as usize;
-    let content_row = composer_rows_before_input(state);
+    let content_width = composer_content_width(area.width);
+    let inner_width = usize::from(content_width);
+    let content_row = composer_rows_before_input(state, content_width);
 
     let mut slots = Vec::new();
     for completion in state.composer_emoji_image_completions() {

@@ -1,5 +1,6 @@
 mod completions;
 mod state;
+mod translation;
 
 pub use completions::{
     CommandPickerEntry, EmojiPickerEntry, MAX_MENTION_PICKER_VISIBLE, MentionPickerEntry,
@@ -12,3 +13,4 @@ pub(in crate::tui::state) use completions::{
 };
 pub use state::ComposerLock;
 pub(super) use state::ComposerUiState;
+pub(super) use translation::{ComposerInputSnapshot, ComposerTranslationPlan};

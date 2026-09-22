@@ -246,14 +246,24 @@ pub(super) fn composer_content_line_count(state: &DashboardState, width: u16) ->
     if state.is_composing() && state.reply_target_message_state().is_some() {
         line_count = line_count.saturating_add(1);
     }
+    if let Some(original) = state.composer_translation_original() {
+        line_count = line_count
+            .saturating_add(composer_prompt_line_count(original, width))
+            .saturating_add(1);
+    }
     line_count
 }
 
-pub(super) fn composer_rows_before_input(state: &DashboardState) -> usize {
+pub(super) fn composer_rows_before_input(state: &DashboardState, width: u16) -> usize {
     let mut rows = state.pending_composer_upload_line_count();
     rows = rows.saturating_add(usize::from(composer_upload_preview_line_count(state)));
     if state.reply_target_message_state().is_some() {
         rows = rows.saturating_add(1);
+    }
+    if let Some(original) = state.composer_translation_original() {
+        rows = rows
+            .saturating_add(usize::from(composer_prompt_line_count(original, width)))
+            .saturating_add(1);
     }
     rows
 }

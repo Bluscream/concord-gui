@@ -25,7 +25,10 @@ use ratatui::layout::Rect;
 use super::{MouseInputState, handle_key, handle_mouse, handle_mouse_event, handle_paste};
 use crate::discord::AppCommand;
 use crate::{
-    config::{AppOptions, DisplayOptions, KeymapBinding, KeymapOptions},
+    config::{
+        AppOptions, DisplayOptions, KeymapBinding, KeymapOptions, TranslationOptions,
+        TranslationProviderKind,
+    },
     discord::{
         ActivityInfo, AppEvent, ApplicationCommandInfo, ApplicationCommandOptionInfo,
         AttachmentDownloadId, ChannelInfo, ChannelNotificationOverrideInfo, ChannelRecipientInfo,

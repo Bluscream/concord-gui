@@ -115,6 +115,29 @@ fn message_viewport_scroll_uses_configured_keys() {
 }
 
 #[test]
+fn uppercase_t_translates_the_selected_message() {
+    let mut state = state_with_messages(1);
+    state.apply_translation_options(TranslationOptions {
+        provider: Some(TranslationProviderKind::LibreTranslate),
+        message_target_language: Some("ko".to_owned()),
+        ..Default::default()
+    });
+    state.focus_pane(FocusPane::Messages);
+
+    let command = handle_key(&mut state, char_key('T'));
+
+    assert_eq!(
+        command,
+        Some(AppCommand::Translate {
+            request_id: 1,
+            target: crate::discord::TranslationTarget::Message(Id::new(1)),
+            target_language: "ko".to_owned(),
+            content: "msg 1".to_owned(),
+        })
+    );
+}
+
+#[test]
 fn enter_opens_selected_forum_post_from_message_pane() {
     let mut state = state_with_forum_channel_posts();
     state.focus_pane(FocusPane::Messages);

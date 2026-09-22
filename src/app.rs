@@ -11,6 +11,7 @@ mod notification_commands;
 mod read_state_commands;
 mod session_commands;
 mod shutdown;
+mod translation_commands;
 mod user_commands;
 mod voice_commands;
 
@@ -59,11 +60,22 @@ impl App {
             let effects = client.take_effects();
             let snapshots = client.subscribe_snapshots();
             let (commands_tx, commands_rx) = mpsc::channel(64);
-            let serve_rich_presence = config::load_options()
-                .map(|options| options.presence.share_rich_presence)
-                .unwrap_or(true);
+            let (app_options, app_warnings) = match config::load_options_with_warnings() {
+                Ok(loaded) => loaded,
+                Err(error) => {
+                    logging::error("config", format!("failed to load config: {error}"));
+                    (
+                        config::AppOptions::default(),
+                        vec![format!("config.toml could not be loaded: {error}")],
+                    )
+                }
+            };
+            let mut config_warnings = theme_warnings.clone();
+            config_warnings.extend(app_warnings);
+            let serve_rich_presence = app_options.presence.share_rich_presence;
             let gateway_task = client.start_gateway(serve_rich_presence);
-            let command_task = start_command_loop(client.clone(), commands_rx);
+            let command_task =
+                start_command_loop(client.clone(), commands_rx, app_options.translation.clone());
 
             let version_client = client.clone();
             tokio::spawn(async move {
@@ -88,12 +100,13 @@ impl App {
                         .await;
                 }
 
-                tui::run(
+                tui::run_with_options(
                     effects,
                     snapshots,
                     commands_tx,
                     client.clone(),
-                    theme_warnings.clone(),
+                    app_options,
+                    config_warnings,
                 )
                 .await
             }

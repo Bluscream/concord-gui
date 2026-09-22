@@ -74,6 +74,8 @@ pub(super) fn effect_forces_redraw(event: &AppEvent) -> bool {
             | AppEvent::AttachmentDownloadProgress { .. }
             | AppEvent::AttachmentDownloadCompleted { .. }
             | AppEvent::AttachmentDownloadFailed { .. }
+            | AppEvent::TranslationCompleted { .. }
+            | AppEvent::TranslationFailed { .. }
             | AppEvent::GatewayError { .. }
             | AppEvent::MediaPlaybackWindowReady { .. }
             | AppEvent::GatewayResumed

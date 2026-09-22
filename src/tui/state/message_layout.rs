@@ -220,8 +220,13 @@ impl DashboardState {
         preview_width: u16,
         max_preview_height: u16,
     ) -> MessageRowContentMetrics {
-        let (body_lines, reaction_lines) =
+        let (mut body_lines, reaction_lines) =
             message_format::format_message_content_sections(message, self, content_width);
+        body_lines.extend(message_format::format_message_translation_lines(
+            message,
+            self,
+            content_width,
+        ));
         let previews = message.flow_inline_previews();
         let album = media::image_preview_album_layout(&previews, preview_width, max_preview_height);
         MessageRowContentMetrics {
@@ -306,8 +311,13 @@ impl DashboardState {
         message: &MessageState,
         content_width: usize,
     ) -> usize {
-        let (body_lines, reaction_lines) =
+        let (mut body_lines, reaction_lines) =
             message_format::format_message_content_sections(message, self, content_width);
+        body_lines.extend(message_format::format_message_translation_lines(
+            message,
+            self,
+            content_width,
+        ));
         1 + body_lines.len() + reaction_lines.len()
     }
 
@@ -318,8 +328,13 @@ impl DashboardState {
         preview_width: u16,
         max_preview_height: u16,
     ) -> usize {
-        let (body_lines, reaction_lines) =
+        let (mut body_lines, reaction_lines) =
             message_format::format_message_content_sections(message, self, content_width);
+        body_lines.extend(message_format::format_message_translation_lines(
+            message,
+            self,
+            content_width,
+        ));
         let previews = message.inline_previews();
         let album = media::image_preview_album_layout(&previews, preview_width, max_preview_height);
         standalone_message_rendered_height(

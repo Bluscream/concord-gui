@@ -47,6 +47,7 @@ use super::completions::{
     expand_emoji_shortcodes, is_command_query_char, is_mention_query_char, move_picker_selection,
     should_start_completion_query,
 };
+use super::translation::ComposerInputSnapshot;
 use crate::discord::{AppCommand, ReplyReference};
 use crate::tui::text_cursor::{previous_char_boundary, previous_word_boundary};
 use crate::tui::text_input::{TextEditAction, TextInputState};
@@ -192,6 +193,7 @@ impl DashboardState {
         if !self.can_reply_to_selected_message() {
             return;
         }
+        self.cancel_composer_translation();
         self.cancel_clipboard_paste();
         self.reset_mention_picker_state();
         self.composer.reply_target_message_id = Some(message_id);
@@ -228,6 +230,7 @@ impl DashboardState {
         };
         let channel_id = message.channel_id;
         let message_id = message.id;
+        self.cancel_composer_translation();
         self.composer.composer_input.set_value(content);
         self.clear_composer_attachments();
         self.cancel_clipboard_paste();
@@ -289,6 +292,9 @@ impl DashboardState {
     }
 
     pub fn composer_title(&self) -> String {
+        if self.composer_translation_pending() {
+            return " Translating... ".to_owned();
+        }
         if self.composer.edit_target_message.is_some() {
             " Edit Message ".to_owned()
         } else if self.composer.reply_target_message_id.is_some() {
@@ -647,6 +653,7 @@ impl DashboardState {
         if !self.can_send_in_selected_channel() {
             return;
         }
+        self.cancel_composer_translation();
         self.composer.reply_target_message_id = None;
         self.composer.edit_target_message = None;
         self.composer.composer_active = true;
@@ -656,8 +663,39 @@ impl DashboardState {
     }
 
     pub fn replace_composer_input_from_editor(&mut self, value: String) {
+        self.replace_composer_input(value);
+    }
+
+    pub(in crate::tui::state) fn replace_composer_input(&mut self, value: String) {
+        if self.composer.composer_input.value() == value {
+            return;
+        }
+        self.cancel_pending_composer_translation_request();
         self.composer.composer_input.set_value(value);
         self.reset_mention_picker_state();
+        self.refresh_active_mention_query();
+    }
+
+    pub(in crate::tui::state) fn composer_input_snapshot(&self) -> ComposerInputSnapshot {
+        ComposerInputSnapshot {
+            input: self.composer.composer_input.clone(),
+            mention_completions: self.composer.composer_mention_completions.clone(),
+            emoji_completions: self.composer.composer_emoji_completions.clone(),
+            selected_command_identity: self.composer.composer_selected_command_identity,
+        }
+    }
+
+    pub(in crate::tui::state) fn restore_composer_input_snapshot(
+        &mut self,
+        snapshot: &ComposerInputSnapshot,
+    ) {
+        self.composer.composer_input = snapshot.input.clone();
+        self.composer.composer_mention_completions = snapshot.mention_completions.clone();
+        self.composer.composer_emoji_completions = snapshot.emoji_completions.clone();
+        self.composer.composer_selected_command_identity = snapshot.selected_command_identity;
+        self.composer.composer_picker.close();
+        self.composer.emoji_completion.close();
+        self.composer.application_command_autocomplete = None;
         self.refresh_active_mention_query();
     }
 
@@ -677,6 +715,7 @@ impl DashboardState {
             return;
         }
         self.composer.composer_active = false;
+        self.cancel_composer_translation();
         self.composer.reply_target_message_id = None;
         self.cancel_clipboard_paste();
         self.reset_mention_picker_state();
@@ -1219,6 +1258,7 @@ impl DashboardState {
     }
 
     fn clear_composer_text(&mut self) {
+        self.cancel_composer_translation();
         self.composer.composer_input.clear();
         self.reset_mention_picker_state();
     }
@@ -1670,6 +1710,10 @@ impl DashboardState {
         {
             return;
         }
+        if &self.composer.composer_input.value()[range.clone()] == replacement {
+            return;
+        }
+        self.cancel_pending_composer_translation_request();
         self.adjust_mention_completions_for_replace(range.clone(), replacement.len());
         self.adjust_emoji_completions_for_replace(range.clone(), replacement.len());
         self.composer

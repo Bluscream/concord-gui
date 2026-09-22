@@ -39,6 +39,7 @@ pub(super) fn handle_composer_key(state: &mut DashboardState, key: KeyEvent) -> 
             state.pop_pending_composer_attachment();
             None
         }
+        ComposerAction::Translate => state.translate_composer_input(),
         ComposerAction::EditText(action) => {
             state.edit_composer_text_input(action);
             None

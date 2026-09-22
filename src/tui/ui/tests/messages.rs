@@ -6,6 +6,7 @@ use crate::discord::test_builders::{
     GuildCreateFixture, MessageHistoryLoadedFixture, MessageReactionAddFixture, guild_create_event,
     message_history_loaded_event, message_reaction_add_event,
 };
+use crate::tui::message::format::format_message_translation_lines;
 
 #[test]
 fn server_pane_shows_guild_mention_badge() {
@@ -2078,6 +2079,90 @@ fn message_viewport_lines_keep_reactions_below_reacted_grouped_message() {
     assert_eq!(texts[2], "  oooo  hello");
     assert_eq!(texts[3], "        [👍 1]");
     assert_eq!(texts[4], "        follow-up");
+}
+
+#[test]
+fn translated_message_is_rendered_below_the_original_with_branch_anchor() {
+    let mut state = state_with_message();
+    state.apply_translation_options(TranslationOptions {
+        provider: Some(TranslationProviderKind::LibreTranslate),
+        message_target_language: Some("ko".to_owned()),
+        ..Default::default()
+    });
+    let command = state
+        .activate_message_action_kind(MessageActionKind::Translate)
+        .expect("configured translation should emit a command");
+    let (request_id, message_id) = match command {
+        crate::discord::AppCommand::Translate {
+            request_id,
+            target: crate::discord::TranslationTarget::Message(message_id),
+            ..
+        } => (request_id, message_id),
+        command => panic!("unexpected command: {command:?}"),
+    };
+    state.push_event(AppEvent::TranslationCompleted {
+        request_id,
+        target: crate::discord::TranslationTarget::Message(message_id),
+        translated_text: "숫자 123 https://example.com <#2> **굵게**".to_owned(),
+    });
+    let translated_lines = format_message_translation_lines(
+        state
+            .selected_message_state()
+            .expect("translated message should remain selected"),
+        &state,
+        80,
+    );
+    let translated_spans = translated_lines
+        .first()
+        .expect("translation should fit on one line")
+        .spans();
+    let translated_text = translated_spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+
+    assert_eq!(
+        translated_text,
+        "╰─ 숫자 123 https://example.com #general 굵게"
+    );
+    let number_span = translated_spans
+        .iter()
+        .find(|span| span.content.contains("숫자 123"))
+        .expect("plain translated text should remain visible");
+    assert_eq!(
+        number_span.style,
+        theme::current().style(theme::HighlightGroup::MessageBody)
+    );
+    let url_span = translated_spans
+        .iter()
+        .find(|span| span.content.contains("https://example.com"))
+        .expect("translated URL should remain visible");
+    assert!(url_span.style.add_modifier.contains(Modifier::UNDERLINED));
+    let bold_span = translated_spans
+        .iter()
+        .find(|span| span.content.contains("굵게"))
+        .expect("translated Markdown should remain visible");
+    assert!(bold_span.style.add_modifier.contains(Modifier::BOLD));
+    let messages = state.messages();
+
+    let lines = message_viewport_lines(
+        &messages,
+        None,
+        &state,
+        super::default_message_viewport_layout(),
+        &[],
+    );
+    let texts = line_texts_from_ratatui(&lines);
+    let original = texts
+        .iter()
+        .position(|line| line.contains("hello"))
+        .expect("original message line");
+    let translation = texts
+        .iter()
+        .position(|line| line.contains("╰─ 숫자 123"))
+        .expect("translated message line");
+
+    assert_eq!(translation, original + 1);
 }
 
 #[test]

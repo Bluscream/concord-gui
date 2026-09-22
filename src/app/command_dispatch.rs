@@ -9,12 +9,14 @@ use tokio::task::AbortHandle;
 
 use crate::{
     DiscordClient,
-    discord::{AppCommand, VoiceAudioSettings, VoiceAudioSources},
+    discord::{AppCommand, TranslationTarget, VoiceAudioSettings, VoiceAudioSources},
+    translation::TranslationService,
 };
 
 use super::{
     gateway_commands, history_commands, inbox_commands, media_commands, message_commands,
-    notification_commands, read_state_commands, session_commands, user_commands, voice_commands,
+    notification_commands, read_state_commands, session_commands, translation_commands,
+    user_commands, voice_commands,
 };
 
 const MAX_CONCURRENT_ATTACHMENT_PREVIEWS: usize = 4;
@@ -43,16 +45,51 @@ impl AutocompleteRequestScheduler {
     }
 }
 
+#[derive(Clone, Default)]
+struct ComposerTranslationRequestScheduler {
+    pending: Arc<Mutex<Option<(u64, AbortHandle)>>>,
+}
+
+impl ComposerTranslationRequestScheduler {
+    fn replace(&self, request_id: u64, request: impl Future<Output = ()> + Send + 'static) {
+        let mut pending = self
+            .pending
+            .lock()
+            .expect("translation request lock is not poisoned");
+        if let Some((_, previous)) = pending.take() {
+            previous.abort();
+        }
+        let task = tokio::spawn(request);
+        *pending = Some((request_id, task.abort_handle()));
+    }
+
+    fn cancel(&self, request_id: u64) {
+        let mut pending = self
+            .pending
+            .lock()
+            .expect("translation request lock is not poisoned");
+        if pending
+            .as_ref()
+            .is_some_and(|(pending_request_id, _)| *pending_request_id == request_id)
+            && let Some((_, task)) = pending.take()
+        {
+            task.abort();
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct CommandDispatcher {
     client: DiscordClient,
     attachment_preview_permits: Arc<Semaphore>,
     attachment_download_permits: Arc<Semaphore>,
     autocomplete_requests: AutocompleteRequestScheduler,
+    composer_translation_requests: ComposerTranslationRequestScheduler,
+    translation: TranslationService,
 }
 
 impl CommandDispatcher {
-    pub(super) fn new(client: DiscordClient) -> Self {
+    pub(super) fn new(client: DiscordClient, translation: TranslationService) -> Self {
         Self {
             client,
             attachment_preview_permits: Arc::new(Semaphore::new(
@@ -62,6 +99,8 @@ impl CommandDispatcher {
                 MAX_CONCURRENT_ATTACHMENT_DOWNLOADS,
             )),
             autocomplete_requests: AutocompleteRequestScheduler::default(),
+            composer_translation_requests: ComposerTranslationRequestScheduler::default(),
+            translation,
         }
     }
 
@@ -74,6 +113,17 @@ impl CommandDispatcher {
             self.autocomplete_requests.replace(async move {
                 dispatcher.handle(command).await;
             });
+            return;
+        }
+        if let AppCommand::Translate {
+            request_id,
+            target: TranslationTarget::Composer,
+            ..
+        } = &command
+        {
+            let dispatcher = self.clone();
+            self.composer_translation_requests
+                .replace(*request_id, async move { dispatcher.handle(command).await });
             return;
         }
         if runs_inline(&command) {
@@ -365,6 +415,25 @@ impl CommandDispatcher {
             }
             AppCommand::OpenUrl { url } => {
                 media_commands::open_url(self.client.clone(), url).await;
+            }
+            AppCommand::Translate {
+                request_id,
+                target,
+                target_language,
+                content,
+            } => {
+                translation_commands::translate(
+                    self.client.clone(),
+                    self.translation.clone(),
+                    request_id,
+                    target,
+                    target_language,
+                    content,
+                )
+                .await;
+            }
+            AppCommand::CancelComposerTranslation { request_id } => {
+                self.composer_translation_requests.cancel(request_id);
             }
             AppCommand::PlayMedia { target, request_id } => {
                 media_commands::play_media(self.client.clone(), target, request_id).await;
@@ -724,6 +793,7 @@ fn runs_inline(command: &AppCommand) -> bool {
             | AppCommand::UpdateVoiceCapturePermission { .. }
             | AppCommand::UpdateVoiceAudioSources { .. }
             | AppCommand::UpdateVoiceParticipantPlayback { .. }
+            | AppCommand::CancelComposerTranslation { .. }
             | AppCommand::WatchVoiceStream { .. }
             | AppCommand::StartVoiceStream { .. }
             | AppCommand::StopVoiceStream { .. }
@@ -832,6 +902,58 @@ mod tests {
         assert!(
             !matches!(superseded, Ok(Some(_))),
             "superseded autocomplete request must not run"
+        );
+    }
+
+    #[tokio::test]
+    async fn composer_translation_scheduler_keeps_only_the_latest_request() {
+        let scheduler = ComposerTranslationRequestScheduler::default();
+        let (result_tx, mut result_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let first_tx = result_tx.clone();
+        scheduler.replace(1, async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            first_tx.send(1).expect("result receiver stays open");
+        });
+        scheduler.replace(2, async move {
+            result_tx.send(2).expect("result receiver stays open");
+        });
+
+        let result = tokio::time::timeout(Duration::from_millis(100), result_rx.recv())
+            .await
+            .expect("replacement composer translation should run");
+        assert_eq!(result, Some(2));
+        let superseded = tokio::time::timeout(Duration::from_millis(75), result_rx.recv()).await;
+        assert!(
+            !matches!(superseded, Ok(Some(_))),
+            "superseded composer translation must not run"
+        );
+
+        let (cancelled_tx, mut cancelled_rx) = tokio::sync::mpsc::unbounded_channel();
+        scheduler.replace(3, async move {
+            cancelled_tx
+                .send(3)
+                .expect("cancel result receiver stays open");
+        });
+        scheduler.cancel(2);
+        let stale_cancel = tokio::time::timeout(Duration::from_millis(100), cancelled_rx.recv())
+            .await
+            .expect("stale cancellation must leave the current request running");
+        assert_eq!(stale_cancel, Some(3));
+
+        let (cancelled_tx, mut cancelled_rx) = tokio::sync::mpsc::unbounded_channel();
+        scheduler.replace(4, async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            cancelled_tx
+                .send(4)
+                .expect("cancel result receiver stays open");
+        });
+        scheduler.cancel(4);
+        let matching_cancel =
+            tokio::time::timeout(Duration::from_millis(75), cancelled_rx.recv()).await;
+        assert!(
+            !matches!(matching_cancel, Ok(Some(_))),
+            "matching composer translation cancellation must abort the request"
         );
     }
 }

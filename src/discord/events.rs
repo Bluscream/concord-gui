@@ -10,7 +10,7 @@ use crate::discord::ids::{
 use super::commands::{
     AttachmentDownloadId, DownloadAttachmentSource, MediaPlaybackRequestId,
     MessageHistoryAfterMode, MessageSearchPage, MessageSearchQuery, ReactionEmoji,
-    StreamCaptureTargetsRequestId,
+    StreamCaptureTargetsRequestId, TranslationTarget,
 };
 use super::{
     ActivityInfo, AttachmentUpdate, ChannelInfo, ChannelRecipientInfo, CustomEmojiInfo, EmbedInfo,
@@ -730,6 +730,16 @@ pub enum AppEvent {
         message: String,
         source: DownloadAttachmentSource,
     },
+    TranslationCompleted {
+        request_id: u64,
+        target: TranslationTarget,
+        translated_text: String,
+    },
+    TranslationFailed {
+        request_id: u64,
+        target: TranslationTarget,
+        message: String,
+    },
     UpdateAvailable {
         latest_version: String,
     },
@@ -960,6 +970,8 @@ define_app_event_kinds! {
     AttachmentDownloadProgress: AppEvent::AttachmentDownloadProgress { .. },
     AttachmentDownloadCompleted: AppEvent::AttachmentDownloadCompleted { .. },
     AttachmentDownloadFailed: AppEvent::AttachmentDownloadFailed { .. },
+    TranslationCompleted: AppEvent::TranslationCompleted { .. },
+    TranslationFailed: AppEvent::TranslationFailed { .. },
     UpdateAvailable: AppEvent::UpdateAvailable { .. },
     AttachmentPreviewLoaded: AppEvent::AttachmentPreviewLoaded { .. },
     AttachmentPreviewLoadFailed: AppEvent::AttachmentPreviewLoadFailed { .. },
@@ -1965,6 +1977,8 @@ impl AppEventKind {
             | AppEventKind::AttachmentDownloadProgress
             | AppEventKind::AttachmentDownloadCompleted
             | AppEventKind::AttachmentDownloadFailed
+            | AppEventKind::TranslationCompleted
+            | AppEventKind::TranslationFailed
             | AppEventKind::UpdateAvailable
             | AppEventKind::ReactionUsersLoaded
             | AppEventKind::ReactionUsersLoadFailed

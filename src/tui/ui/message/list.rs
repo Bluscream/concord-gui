@@ -325,11 +325,20 @@ fn message_viewport_lines_from_plan(
             lines.push(line);
         }
 
-        let (content, reactions) = format_message_content_sections_with_loaded_custom_emoji_urls(
-            row.message,
-            state,
-            plan.layout.content_width.max(8),
-            loaded_custom_emoji_urls,
+        let (mut content, reactions) =
+            format_message_content_sections_with_loaded_custom_emoji_urls(
+                row.message,
+                state,
+                plan.layout.content_width.max(8),
+                loaded_custom_emoji_urls,
+            );
+        content.extend(
+            format_message_translation_lines_with_loaded_custom_emoji_urls(
+                row.message,
+                state,
+                plan.layout.content_width.max(8),
+                loaded_custom_emoji_urls,
+            ),
         );
         body_emoji_slots.push(
             content
