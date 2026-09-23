@@ -179,7 +179,7 @@ pub fn apply(workspace: &mut Workspace, action: UiAction, cx: &mut Context<Works
         UiAction::OpenNotificationInbox => workspace.open_inbox(),
         UiAction::OpenStickerPicker => workspace.open_sticker_picker(),
         UiAction::OpenCurrentUserProfile => workspace.open_own_profile(),
-        UiAction::OpenDebugLog => workspace.toggle_debug_log(),
+        UiAction::OpenDebugPanel => workspace.toggle_debug_log(),
         UiAction::ClosePopup => {
             workspace.close_popup();
         }

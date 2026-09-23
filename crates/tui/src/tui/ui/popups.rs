@@ -11,7 +11,7 @@ mod action_menu;
 mod attachment_viewer;
 mod channel_switcher;
 mod confirmation;
-mod debug_log;
+mod debug_panel;
 mod downloads;
 mod folder_settings;
 mod forum_post;
@@ -218,7 +218,6 @@ pub(super) use action_menu::{
     channel_action_menu_lines_for_test, message_action_menu_lines,
     message_action_menu_lines_with_keymap_options,
 };
-#[cfg(test)]
 pub(super) use attachment_viewer::centered_viewer_preview_area;
 pub(super) use attachment_viewer::render_attachment_viewer;
 #[cfg(test)]
@@ -242,9 +241,7 @@ pub(super) use confirmation::{
     message_pin_confirmation_lines, message_remove_embeds_confirmation_lines,
     quit_confirmation_lines,
 };
-#[cfg(test)]
-pub(super) use debug_log::debug_log_popup_lines;
-pub(super) use debug_log::{debug_log_popup_area_for_state, render_debug_log_popup};
+pub(super) use debug_panel::{debug_panel_area, render_debug_panel, sync_debug_panel};
 #[cfg(test)]
 pub(super) use downloads::downloads_popup_lines;
 pub(super) use downloads::{
@@ -550,7 +547,7 @@ fn active_modal_popup_area(frame_area: Rect, state: &DashboardState) -> Option<R
         ActiveModalPopupKind::ReactionUsers => {
             reaction_users_popup_area_for_state(frame_area, state)
         }
-        ActiveModalPopupKind::DebugLog => Some(debug_log_popup_area_for_state(frame_area, state)),
+        ActiveModalPopupKind::DebugLog => Some(debug_panel_area(frame_area)),
         ActiveModalPopupKind::KeymapHelp => Some(keymap_popup_area(frame_area)),
         ActiveModalPopupKind::ChannelSwitcher => Some(channel_switcher_popup_area(frame_area)),
         ActiveModalPopupKind::NotificationInbox => Some(notification_inbox_popup_area(frame_area)),

@@ -201,6 +201,15 @@ marker gone so nothing warns you. `split-crate-imports.py` did exactly that to
 three files on v2.5.16. `git checkout -m -- <file>` recreates the conflict from
 the index and is the way back.
 
+**`set -o pipefail` plus `set -e` is a trap in every pass that greps.** grep
+exits non-zero when it matches nothing, pipefail carries that to the pipeline,
+and a failing assignment under `set -e` ends the function without a word. It
+has now killed `widen_for_workspace` twice: once on the cargo check that feeds
+it, and once on the first name in its loop that turned out not to be an item.
+Both times the pass looked like a no-op rather than a failure. Every
+substitution in this script that can legitimately match nothing ends in
+`|| true`, and there is a reason it is not tidier than that.
+
 **`finish` tells you where you stand.** It ends by printing the remaining
 compile errors, because the alternative was running cargo yourself to find out
 whether the pass that was supposed to save you that had worked.

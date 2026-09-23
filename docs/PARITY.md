@@ -189,6 +189,7 @@ Arrived from upstream, in the TUI only:
 | Components V2 | Parsed and stored by the core (`MessageComponentInfo`), rendered by `crates/tui`. `crates/gui` shows such a message's fallback text and none of its component tree. Came in with upstream v2.5.14. |
 | Discord timestamp markup | `<t:1235790:R>` renders as a formatted, styled time in the TUI. `crates/gui` prints the raw markup. Came in with upstream v2.5.16 (#328). |
 | `animate_previews` option | Core config option, honoured by the TUI's media caches. `crates/gui` always animates. Came in with upstream v2.5.16 (#318). |
+| Debug panel | Upstream v2.5.17 replaced its debug log popup with a panel that tails the log file and shows media-cache state. `crates/gui` still has its own simpler debug log. Not a missing feature, but the two have diverged. |
 
 The rest are not wiring jobs. The core has no commands or REST routes for
 these, so each means building from the transport layer up, the way invites

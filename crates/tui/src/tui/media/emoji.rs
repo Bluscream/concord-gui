@@ -7,7 +7,7 @@ use concord::discord::{AppCommand, AppEvent};
 
 use super::{
     EmojiImageTarget,
-    cache::{MediaImageCacheCore, MediaImageCacheEntry, RenderProtocolCache},
+    cache::{MediaCacheStats, MediaImageCacheCore, MediaImageCacheEntry, RenderProtocolCache},
     decode::{DecodedMediaImage, MediaImageDecodeKey, MediaImageDecodeRequest},
     estimated_media_protocol_bytes, fixed_media_protocol_render_spec, picker_font_size,
     protocol_job::{MediaProtocolBuildJob, MediaProtocolBuildResult, MediaProtocolBuildTarget},
@@ -136,12 +136,8 @@ impl EmojiImageCache {
         }
     }
 
-    /// Returns decoded protocols for visible targets and refreshes their
-    /// LRU timestamps so they survive the next pruning pass.
-    pub(in crate::tui) fn render_state(
-        &mut self,
-        targets: &[EmojiImageTarget],
-    ) -> Vec<EmojiImage<'_>> {
+    pub(in crate::tui) fn prepare(&mut self, targets: &[EmojiImageTarget]) {
+        self.prune_to_limit(targets);
         for target in targets {
             let touch_tick = self.cache.next_tick();
             if let Some(entry) = self.cache.entries.get_mut(&target.url) {
@@ -180,6 +176,9 @@ impl EmojiImageCache {
                 }
             }
         }
+    }
+
+    pub(in crate::tui) fn render_state(&self, targets: &[EmojiImageTarget]) -> Vec<EmojiImage<'_>> {
         targets
             .iter()
             .filter_map(|target| {
@@ -260,7 +259,23 @@ impl EmojiImageCache {
         );
     }
 
-    fn store_loaded(&mut self, url: &str) -> Option<MediaImageDecodeRequest> {
+    pub(in crate::tui) fn accepts_decode_request(&self, url: &str, generation: u64) -> bool {
+        self.cache
+            .decoded_generation_matches(&url.to_owned(), generation)
+    }
+
+    pub(in crate::tui) fn defer_loading(&mut self, url: &str) {
+        if self
+            .cache
+            .entries
+            .get(url)
+            .is_some_and(MediaImageCacheEntry::is_loading)
+        {
+            self.cache.entries.remove(url);
+        }
+    }
+
+    pub(in crate::tui) fn store_loaded(&mut self, url: &str) -> Option<MediaImageDecodeRequest> {
         self.cache.start_decode_request(
             url.to_owned(),
             self.picker.is_some(),
@@ -305,9 +320,7 @@ impl EmojiImageCache {
                     },
                 );
             }
-            Err(MediaWorkError::Busy) => {
-                self.cache.entries.remove(&url);
-            }
+            Err(MediaWorkError::Busy) => {}
             Err(MediaWorkError::Failed(_)) => {
                 self.cache
                     .entries
@@ -351,8 +364,33 @@ impl EmojiImageCache {
         self.cache.retained_stats()
     }
 
+    pub(in crate::tui) fn diagnostics(&self) -> MediaCacheStats {
+        self.cache.diagnostics(
+            MAX_EMOJI_IMAGE_CACHE_ENTRIES,
+            EMOJI_IMAGE_CACHE_DECODED_BYTE_BUDGET,
+        )
+    }
+
+    pub(in crate::tui) fn next_retry_deadline(
+        &self,
+        targets: &[EmojiImageTarget],
+    ) -> Option<Instant> {
+        self.picker.as_ref()?;
+        targets
+            .iter()
+            .take(MAX_EMOJI_IMAGE_CACHE_ENTRIES)
+            .filter_map(|target| self.cache.retry_deadline(&target.url))
+            .min()
+    }
+
     pub(in crate::tui) fn forget_failures(&mut self) {
         self.cache.forget_failures();
+        for entry in self.cache.entries.values_mut() {
+            if let EmojiImageEntry::Ready { protocols, .. } = entry {
+                protocols.compact.forget_failures();
+                protocols.standalone.forget_failures();
+            }
+        }
     }
 
     pub(in crate::tui) fn pause_animations(&mut self) {
@@ -386,33 +424,50 @@ impl EmojiImageCache {
             fixed_media_protocol_render_spec(image_size.width(), image_size.height()),
             font_size,
         );
-        let failed = match self.cache.entries.get_mut(&url) {
-            Some(EmojiImageEntry::Ready {
-                generation,
-                protocols,
-                ..
-            }) if *generation == completed.generation => {
-                let result = match image_size {
-                    EmojiImageSize::Compact => protocols.compact.store_result(
-                        frame_index,
-                        completed.result,
-                        protocol_bytes,
-                    ),
-                    EmojiImageSize::Standalone => protocols.standalone.store_result(
-                        frame_index,
-                        completed.result,
-                        protocol_bytes,
-                    ),
-                };
-                image_size == EmojiImageSize::Compact && result.is_err()
-            }
-            _ => false,
-        };
-        if failed {
-            let last_used = self.cache.next_tick();
-            self.cache
-                .entries
-                .insert(url, EmojiImageEntry::Failed { last_used });
+        if let Some(EmojiImageEntry::Ready {
+            generation,
+            protocols,
+            ..
+        }) = self.cache.entries.get_mut(&url)
+            && *generation == completed.generation
+        {
+            // Compact and standalone renders fail independently. Neither can
+            // invalidate the decoded source or the other size's protocols.
+            match image_size {
+                EmojiImageSize::Compact => {
+                    protocols
+                        .compact
+                        .store_result(frame_index, completed.result, protocol_bytes)
+                }
+                EmojiImageSize::Standalone => {
+                    protocols
+                        .standalone
+                        .store_result(frame_index, completed.result, protocol_bytes)
+                }
+            };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn emoji_draw_does_not_change_cache_recency() {
+        let mut cache = EmojiImageCache::new(Some(Picker::halfblocks()));
+        let target = EmojiImageTarget {
+            url: "emoji".to_owned(),
+            image_size: EmojiImageSize::Compact,
+        };
+        cache.cache.entries.insert(
+            target.url.clone(),
+            EmojiImageEntry::Loading { last_used: 0 },
+        );
+
+        let _ = cache.render_state(std::slice::from_ref(&target));
+
+        assert_eq!(cache.cache.tick, 0);
+        assert!(cache.take_protocol_jobs().is_empty());
     }
 }

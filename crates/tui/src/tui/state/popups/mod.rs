@@ -27,10 +27,12 @@ mod bans;
 mod channel_actions;
 mod channel_edit;
 mod channel_switcher;
-mod diagnostics;
+mod debug_panel;
+pub(in crate::tui) use debug_panel::{DebugLogLine, DebugLogPopupState, DebugMediaSnapshot};
 mod forum_post;
 mod guild_actions;
 mod join_server;
+mod keymap;
 mod message_actions;
 mod notification_inbox;
 mod options;
@@ -82,6 +84,8 @@ pub(super) struct PopupUiState {
     key_sequence: Option<KeySequenceState>,
     /// Bumped per inbox open so a previous open's late responses are ignored.
     pub(super) inbox_request_generation: u64,
+    /// Lives beyond a forum composer so closed popups cannot deliver current previews.
+    forum_attachment_preview_generation: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -144,7 +148,7 @@ define_modal_popups! {
     EmojiReactionPicker(EmojiReactionPickerState),
     PollVotePicker(PollVotePickerState),
     ReactionUsers(ReactionUsersPopupState),
-    DebugLog,
+    DebugLog(DebugLogPopupState),
     KeymapHelp(KeymapPopupState),
     ChannelSwitcher(ChannelSwitcherState),
     NotificationInbox(NotificationInboxState),
@@ -296,6 +300,9 @@ impl PopupKeymapContext {
     pub(in crate::tui) const fn scope(self) -> PopupKeymapScope {
         match self {
             Self::Selectable(_) => PopupKeymapScope::Selectable,
+            Self::Scrollable(ScrollablePopupTarget::DebugLog) => {
+                PopupKeymapScope::FilterableScrollable
+            }
             Self::Scrollable(_) => PopupKeymapScope::Scrollable,
             Self::Confirmation => PopupKeymapScope::Confirmation,
         }
@@ -329,6 +336,7 @@ pub(in crate::tui) struct SelectablePopupSnapshot {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::tui) enum ScrollablePopupTarget {
+    DebugLog,
     KeymapHelp,
     ReactionUsers,
     UserProfile,
@@ -386,7 +394,6 @@ pub(super) struct ForumPostComposerState {
     /// body, mirroring the main message composer.
     pub(super) attachments: Vec<MessageAttachmentUpload>,
     pub(super) attachment_previews: Vec<super::local_upload_preview::LocalUploadPreviewState>,
-    pub(super) attachment_preview_generation: u64,
     pub(super) status: Option<PopupFormStatus<ForumPostComposerFieldState>>,
     /// Scroll for the whole form. The body owns a separate viewport so a long
     /// draft cannot push the other fields out of the form document.
@@ -409,7 +416,6 @@ impl ForumPostComposerState {
             selected_tag_ids: Vec::new(),
             attachments: Vec::new(),
             attachment_previews: Vec::new(),
-            attachment_preview_generation: 0,
             status: None,
             scroll: ScrollablePopupState::default(),
             pending_scroll_reveal: true,
@@ -1633,6 +1639,13 @@ impl PopupUiState {
         popup
     );
     modal_popup_accessors!(
+        debug_log_popup,
+        debug_log_popup_mut,
+        DebugLog,
+        DebugLogPopupState,
+        popup
+    );
+    modal_popup_accessors!(
         keymap_popup,
         keymap_popup_mut,
         KeymapHelp,
@@ -1958,6 +1971,10 @@ impl DashboardState {
         }
 
         match action {
+            PopupAction::OpenFilter => {
+                self.open_debug_log_filter();
+                None
+            }
             PopupAction::SelectNext | PopupAction::SelectPrevious => match context {
                 PopupKeymapContext::Selectable(target) => {
                     let action = if action == PopupAction::SelectNext {
@@ -1990,10 +2007,15 @@ impl DashboardState {
                 None
             }
             PopupAction::JumpTop | PopupAction::JumpBottom => {
-                let PopupKeymapContext::Selectable(target) = context else {
-                    return None;
-                };
-                self.jump_selectable_popup(target, action.ui_action());
+                match context {
+                    PopupKeymapContext::Selectable(target) => {
+                        self.jump_selectable_popup(target, action.ui_action());
+                    }
+                    PopupKeymapContext::Scrollable(ScrollablePopupTarget::DebugLog) => {
+                        self.jump_debug_log(action == PopupAction::JumpBottom);
+                    }
+                    PopupKeymapContext::Scrollable(_) | PopupKeymapContext::Confirmation => {}
+                }
                 None
             }
         }
@@ -2069,6 +2091,10 @@ impl DashboardState {
         action: SelectionAction,
     ) -> Option<AppCommand> {
         match target {
+            ScrollablePopupTarget::DebugLog => {
+                self.scroll_popup_document(target, action);
+                None
+            }
             ScrollablePopupTarget::KeymapHelp => {
                 self.scroll_keymap_popup(action);
                 None
@@ -2164,6 +2190,15 @@ impl DashboardState {
             ModalPopup::ReactionUsers(_) => {
                 ActivePopupPolicy::selectable(kind, SelectablePopupTarget::ReactionList)
             }
+            ModalPopup::DebugLog(_) if self.debug_log_filter_cursor().is_some() => {
+                ActivePopupPolicy::text_entry(
+                    kind,
+                    ActivePopupInteraction::ScrollableDocument(ScrollablePopupTarget::DebugLog),
+                )
+            }
+            ModalPopup::DebugLog(_) => {
+                ActivePopupPolicy::scrollable(kind, ScrollablePopupTarget::DebugLog)
+            }
             ModalPopup::KeymapHelp(_) => {
                 ActivePopupPolicy::scrollable(kind, ScrollablePopupTarget::KeymapHelp)
             }
@@ -2244,7 +2279,7 @@ impl DashboardState {
             | ModalPopup::GuildLeaveConfirmation(_)
             | ModalPopup::RiskWarning(_)
             | ModalPopup::ThreadDeleteConfirmation(_) => ActivePopupPolicy::confirmation(kind),
-            ModalPopup::AttachmentViewer(_) | ModalPopup::DebugLog => {
+            ModalPopup::AttachmentViewer(_) => {
                 ActivePopupPolicy::routed(kind, ActivePopupInteraction::NoNavigation)
             }
             ModalPopup::VoiceParticipantAudio(_) => {
@@ -2739,6 +2774,7 @@ impl DashboardState {
         if let Some(scroll) = self.scrollable_popup_state_mut(target) {
             scroll.page(action);
         }
+        self.update_debug_log_following();
     }
 
     fn scroll_popup_document(&mut self, target: ScrollablePopupTarget, action: SelectionAction) {
@@ -2748,6 +2784,7 @@ impl DashboardState {
                 SelectionAction::Previous => scroll.scroll_up(),
             }
         }
+        self.update_debug_log_following();
     }
 
     fn scrollable_popup_state_mut(
@@ -2755,6 +2792,10 @@ impl DashboardState {
         target: ScrollablePopupTarget,
     ) -> Option<&mut ScrollablePopupState> {
         match target {
+            ScrollablePopupTarget::DebugLog => self
+                .popups
+                .debug_log_popup_mut()
+                .map(|popup| &mut popup.scroll),
             ScrollablePopupTarget::KeymapHelp => self
                 .popups
                 .keymap_popup_mut()

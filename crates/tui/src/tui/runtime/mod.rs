@@ -45,6 +45,25 @@ type ClipboardPasteResult = std::result::Result<
     tokio::task::JoinError,
 >;
 
+type DebugLogReadResult = std::result::Result<Vec<logging::LogFileLine>, String>;
+
+fn request_debug_log_tail(tx: &mpsc::UnboundedSender<DebugLogReadResult>, pending: &mut bool) {
+    if *pending {
+        return;
+    }
+    *pending = true;
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        // File I/O must not block keyboard input or a terminal draw. A pending
+        // read keeps slow disks from creating an unbounded queue of workers.
+        let result = match tokio::task::spawn_blocking(logging::read_log_tail).await {
+            Ok(result) => result.map_err(|error| format!("Cannot read log file: {error}")),
+            Err(error) => Err(format!("Log reader failed: {error}")),
+        };
+        let _ = tx.send(result);
+    });
+}
+
 fn effect_context<'a>(
     media_runtime: &'a mut DashboardMediaRuntime,
     state: &'a mut DashboardState,
@@ -154,6 +173,8 @@ pub(super) async fn run_dashboard(
     let (clipboard_paste_tx, mut clipboard_paste_rx) = mpsc::unbounded_channel();
     let (clipboard_paste_indicator_tx, mut clipboard_paste_indicator_rx) =
         mpsc::unbounded_channel();
+    let (debug_log_tx, mut debug_log_rx) = mpsc::unbounded_channel();
+    let mut debug_log_read_pending = false;
     let mut command_scheduler = DashboardCommandScheduler::default();
     let mut deferred_effects = VecDeque::new();
     let mut clipboard = ClipboardService::default();
@@ -174,6 +195,8 @@ pub(super) async fn run_dashboard(
     let mut last_media_report = std::time::Instant::now();
     let mut pending_redraw_deadline: Option<tokio::time::Instant> = None;
     let mut animation_frame_deadline: Option<tokio::time::Instant> = None;
+    let mut debug_panel_deadline: Option<tokio::time::Instant> = None;
+    const DEBUG_PANEL_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
     let mut relative_timestamp_deadline =
         tokio::time::Instant::now() + RELATIVE_TIMESTAMP_REFRESH_INTERVAL;
     #[cfg(feature = "voice-playback")]
@@ -239,6 +262,7 @@ pub(super) async fn run_dashboard(
                 &commands,
                 &local_upload_preview_tx,
                 &media_protocol_tx,
+                &media_decode_tx,
             )
             .await;
         }
@@ -270,7 +294,30 @@ pub(super) async fn run_dashboard(
             animation_frame_deadline = None;
         }
 
+        // Read immediately on open, then poll only while inspecting diagnostics.
+        // Rendering uses snapshots and never accesses the file itself.
+        if state.is_active_modal_popup(super::state::ActiveModalPopupKind::DebugLog) {
+            debug_panel_deadline.get_or_insert_with(tokio::time::Instant::now);
+        } else {
+            debug_panel_deadline = None;
+        }
+
         tokio::select! {
+            _ = async {
+                match debug_panel_deadline {
+                    Some(deadline) => tokio::time::sleep_until(deadline).await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                dirty |= state.set_debug_media_snapshot(media_runtime.diagnostics());
+                request_debug_log_tail(&debug_log_tx, &mut debug_log_read_pending);
+                debug_panel_deadline = Some(tokio::time::Instant::now() + DEBUG_PANEL_REFRESH_INTERVAL);
+            }
+            Some(result) = debug_log_rx.recv() => {
+                debug_log_read_pending = false;
+                // A closed panel ignores the result. Other popups never inherit it.
+                dirty |= state.store_debug_log_tail(result);
+            }
             maybe_event = terminal_events.next() => {
                 match maybe_event {
                     Some(Ok(event)) => {
@@ -538,6 +585,11 @@ pub(super) async fn run_dashboard(
                 relative_timestamp_deadline =
                     tokio::time::Instant::now() + RELATIVE_TIMESTAMP_REFRESH_INTERVAL;
                 state.clear_message_row_content_metrics_cache();
+                dirty = true;
+            }
+            _ = media_runtime.wait_for_fetch_retry() => {
+                // Retry through the normal draw and source admission path,
+                // even when the user and Discord have produced no events.
                 dirty = true;
             }
             _ = async {

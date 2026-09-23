@@ -276,8 +276,6 @@ impl ChannelRecipientState {
 }
 
 /// Counts of viewable vs. permission-hidden channels for a single scope.
-/// Surfaced in the debug-log popup so the user can confirm whether a
-/// channel they expected to see is actually being filtered out.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ChannelVisibilityStats {
     pub visible: usize,
@@ -324,8 +322,7 @@ impl DiscordState {
 
     /// Visible/hidden channel counts for a guild scope. DM scope reports
     /// `(visible, 0)` since DMs are never hidden. Threads are excluded from
-    /// both sides. The debug-panel readout focuses on top-level channels
-    /// because those are what the user navigates by.
+    /// both sides so the count describes top-level channel access.
     pub fn channel_visibility_stats(
         &self,
         guild_id: Option<Id<GuildMarker>>,

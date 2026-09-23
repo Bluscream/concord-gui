@@ -599,6 +599,71 @@ fn forum_post_attachment_preview_waits_for_runtime_result() {
 }
 
 #[test]
+fn reopened_forum_composer_ignores_previous_preview_results() {
+    for new_result_arrives_first in [false, true] {
+        let mut state = state_with_forum_post_channel(false);
+        state.start_composer();
+        state.add_pending_forum_post_attachments(vec![MessageAttachmentUpload::from_bytes(
+            "screenshot.png".to_owned(),
+            b"old image".to_vec(),
+        )]);
+        let (old_index, old_generation, old_filename, _) = state
+            .take_pending_forum_post_attachment_preview()
+            .expect("old preview is pending");
+
+        state.close_forum_post_composer();
+        state.start_composer();
+        // The same filename and index must not make an old result current.
+        state.add_pending_forum_post_attachments(vec![MessageAttachmentUpload::from_bytes(
+            "screenshot.png".to_owned(),
+            b"new image".to_vec(),
+        )]);
+        let (index, generation, filename, _) = state
+            .take_pending_forum_post_attachment_preview()
+            .expect("new preview is pending");
+        if new_result_arrives_first {
+            state.store_forum_post_attachment_preview_result(
+                index,
+                generation,
+                filename.clone(),
+                Err("new result".to_owned()),
+            );
+        }
+
+        state.store_forum_post_attachment_preview_result(
+            old_index,
+            old_generation,
+            old_filename,
+            Err("old result".to_owned()),
+        );
+        if !new_result_arrives_first {
+            assert!(matches!(
+                state.forum_post_attachment_previews().first(),
+                Some(LocalUploadPreviewView::Loading { .. })
+            ));
+            state.store_forum_post_attachment_preview_result(
+                index,
+                generation,
+                filename,
+                Err("new result".to_owned()),
+            );
+        }
+        assert!(matches!(
+            state.forum_post_attachment_previews().first(),
+            Some(LocalUploadPreviewView::Failed { message, .. }) if message == "new result"
+        ));
+        assert_eq!(
+            state
+                .popups
+                .forum_post_composer()
+                .expect("new composer is open")
+                .attachments[0],
+            MessageAttachmentUpload::from_bytes("screenshot.png".to_owned(), b"new image".to_vec())
+        );
+    }
+}
+
+#[test]
 fn forum_post_field_selection_stops_at_the_ends() {
     let mut state = state_with_forum_post_channel(false);
     state.start_composer();
@@ -1256,21 +1321,6 @@ fn active_channel_is_cleared_when_view_permission_is_revoked() {
     assert_eq!(state.selected_channel_id(), None);
     assert!(!state.is_composing());
     assert!(state.channel_pane_entries().is_empty());
-}
-
-#[test]
-fn debug_channel_visibility_reports_active_guild_counts() {
-    // The fixture's channel denies VIEW_CHANNEL on @everyone, so it
-    // shows up in the hidden bucket.
-    let state = state_with_view_denied_channel();
-    let stats = state.debug_channel_visibility();
-    assert_eq!(
-        stats,
-        ChannelVisibilityStats {
-            visible: 0,
-            hidden: 1,
-        }
-    );
 }
 
 #[test]

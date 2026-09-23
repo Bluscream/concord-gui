@@ -27,6 +27,9 @@ import sys
 FOREIGN = {"discord", "config", "logging", "support", "risk", "translation"}
 
 START = re.compile(r"^use crate::\{\s*$")
+# The same statement written on one line. Upstream's rustfmt settings keep a
+# short group inline, so this form arrives too and used to be skipped.
+ONE_LINE = re.compile(r"^use crate::\{(.*)\};\s*$")
 
 
 def split_entries(body):
@@ -48,6 +51,32 @@ def split_entries(body):
     return [entry for entry in entries if entry]
 
 
+def emit(entries):
+    """The replacement statements, or None when the group needs no splitting."""
+    heads = {entry.split("::", 1)[0].split("{", 1)[0].strip() for entry in entries}
+    # Nothing to split: one side of the boundary or the other, and the flat
+    # substitution in upstream.sh already handles those.
+    if not (heads & FOREIGN) or heads <= FOREIGN:
+        return None
+    out = []
+    for crate in ("concord", "crate"):
+        picked = [
+            entry
+            for entry in entries
+            if (entry.split("::", 1)[0].split("{", 1)[0].strip() in FOREIGN)
+            == (crate == "concord")
+        ]
+        if not picked:
+            continue
+        if len(picked) == 1:
+            out.append(f"use {crate}::{picked[0]};\n")
+        else:
+            out.append(f"use {crate}::{{\n")
+            out.extend(f"    {entry},\n" for entry in picked)
+            out.append("};\n")
+    return out
+
+
 def rewrite(path):
     text = path.read_text()
     # A conflict marker sits inside the very brace group this rewrites, so it
@@ -58,6 +87,16 @@ def rewrite(path):
     lines = text.splitlines(keepends=True)
     out, i, changed = [], 0, 0
     while i < len(lines):
+        inline = ONE_LINE.match(lines[i])
+        if inline:
+            emitted = emit(split_entries(inline.group(1)))
+            if emitted is None:
+                out.append(lines[i])
+            else:
+                out.extend(emitted)
+                changed += 1
+            i += 1
+            continue
         if not START.match(lines[i]):
             out.append(lines[i])
             i += 1
@@ -70,29 +109,12 @@ def rewrite(path):
             out.append(lines[i])
             i += 1
             continue
-        entries = split_entries("".join(lines[i + 1 : j - 1]))
-        heads = {entry.split("::", 1)[0].split("{", 1)[0].strip() for entry in entries}
-        # Nothing to split: one side of the boundary or the other, and the
-        # flat substitution in upstream.sh already handles those.
-        if not (heads & FOREIGN) or heads <= FOREIGN:
+        emitted = emit(split_entries("".join(lines[i + 1 : j - 1])))
+        if emitted is None:
             out.append(lines[i])
             i += 1
             continue
-        for crate in ("concord", "crate"):
-            picked = [
-                entry
-                for entry in entries
-                if (entry.split("::", 1)[0].split("{", 1)[0].strip() in FOREIGN)
-                == (crate == "concord")
-            ]
-            if not picked:
-                continue
-            if len(picked) == 1:
-                out.append(f"use {crate}::{picked[0]};\n")
-            else:
-                out.append(f"use {crate}::{{\n")
-                out.extend(f"    {entry},\n" for entry in picked)
-                out.append("};\n")
+        out.extend(emitted)
         changed += 1
         i = j
     if changed:

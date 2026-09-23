@@ -77,9 +77,9 @@ pub(crate) use model::ActionAvailability;
 pub use model::*;
 pub use options::{DisplayOptionGauge, DisplayOptionItem};
 pub(in crate::tui) use popups::{
-    ActiveModalPopupKind, ConfirmationButton, JoinServerState, MessageConfirmationKind,
-    PopupInputMode, PopupKeymapContext, SelectablePopupSnapshot, SelectablePopupTarget,
-    VoiceParticipantAudioField,
+    ActiveModalPopupKind, ConfirmationButton, DebugLogLine, DebugMediaSnapshot, JoinServerState,
+    MessageConfirmationKind, PopupInputMode, PopupKeymapContext, SelectablePopupSnapshot,
+    SelectablePopupTarget, VoiceParticipantAudioField,
 };
 // ChannelField is named only by this crate's own tests, which is why clippy
 // reads the re-export as unused - removing it breaks them.

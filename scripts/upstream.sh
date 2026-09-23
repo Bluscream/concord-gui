@@ -547,14 +547,41 @@ widen_for_workspace() {
     # failing assignment then killed `finish` under `set -e` - silently, and
     # only ever when there was work to do. It looked like a no-op pass.
     names="$(in_box "cargo check --workspace --all-targets --features fixtures -j 4 --message-format short" 2>&1 |
-        grep -oE "(method|struct|function|enum|associated function) ${bt}[A-Za-z_][A-Za-z0-9_]*${bt} is private" |
+        grep -oE "(method|struct|function|enum|field|associated function) ${bt}[A-Za-z_][A-Za-z0-9_]*${bt}( of struct ${bt}[A-Za-z_][A-Za-z0-9_:]*${bt})? is private" |
+        sed -E "s/ of struct ${bt}[A-Za-z_][A-Za-z0-9_:]*${bt}//" |
         grep -oE "${bt}[A-Za-z_][A-Za-z0-9_]*${bt}" | tr -d "${bt}" | sort -u || true)"
     [[ -n "$names" ]] || return 0
 
+    # `pub(in crate::tui)` is upstream's idiom and is valid inside crates/tui,
+    # which has that module - and nowhere else in this workspace. Anywhere
+    # else the path does not resolve at all, so it is an error, not a warning.
+    local stray
+    stray="$(git grep -l 'pub(in crate::tui)' -- 'crates/*' ':!crates/tui/*' 2>/dev/null || true)"
+    if [[ -n "$stray" ]]; then
+        while IFS= read -r f; do
+            [[ -f "$f" ]] || continue
+            sed -i 's/pub(in crate::tui) /pub /g' "$f"
+            info "Widened pub(in crate::tui) in $f - that module exists only in crates/tui"
+        done <<<"$stray"
+    fi
+
     while IFS= read -r name; do
         [[ -n "$name" ]] || continue
-        hit="$(grep -rln "pub(crate) \(fn\|struct\|enum\) $name\b" src/ 2>/dev/null | head -n1)"
-        [[ -n "$hit" ]] || continue
+        # Items, then struct fields - `pub(crate) text: String` is as
+        # unreachable from a front-end crate as a `pub(crate) fn`, and rustc
+        # words it differently enough that it used to be missed.
+        # Every one of these needs `|| true`: grep exits non-zero when it
+        # matches nothing, `set -o pipefail` carries that to the pipeline, and
+        # a failing assignment under `set -e` kills the pass outright - so the
+        # first name that was not an item silently ended the widening.
+        hit="$(grep -rln "pub(crate) \(fn\|struct\|enum\) $name\b" src/ 2>/dev/null | head -n1 || true)"
+        if [[ -z "$hit" ]]; then
+            hit="$(grep -rln "pub(crate) $name *:" src/ 2>/dev/null | head -n1 || true)"
+            [[ -n "$hit" ]] || continue
+            sed -i "s/pub(crate) $name *:/pub $name:/" "$hit"
+            widened=$((widened + 1))
+            continue
+        fi
         sed -i "s/pub(crate) fn $name\b/pub fn $name/; s/pub(crate) struct $name\b/pub struct $name/; s/pub(crate) enum $name\b/pub enum $name/" "$hit"
         widened=$((widened + 1))
     done <<<"$names"
@@ -710,7 +737,7 @@ cmd_gate() {
     # so `crates/tui` - which holds the relocated half of upstream's test
     # suite, over a thousand tests - was never run. Four of them were failing
     # across v2.5.12 to v2.5.15 and this gate reported clean every time.
-    local step
+    local step failed=()
     for step in \
         "cargo fmt --all -- --check" \
         "cargo clippy --workspace --all-targets --features fixtures -j $jobs -- -D warnings" \
@@ -728,13 +755,23 @@ cmd_gate() {
         if ! in_box "nice -n 19 $step" >"$log" 2>&1; then
             warn "FAILED: $step"
             tail -40 "$log" | sed 's/^/  /'
+            failed+=("$step")
             fail=1
         else
             grep -E "^test result:" "$log" | sed 's/^/  /' || true
         fi
     done
 
-    [[ "$fail" -eq 0 ]] || die "Gate failed."
+    # The verdict goes to stdout, last, and names every step that failed. It
+    # used to be a `die` to stderr, which a reader tailing or grepping the log
+    # could miss entirely - and did: a failing gate was read as a passing one
+    # because the tail of the log was full of passing test counts.
+    echo
+    if [[ "$fail" -ne 0 ]]; then
+        warn "Gate failed. ${#failed[@]} step(s):"
+        printf '  %s\n' "${failed[@]}"
+        exit 1
+    fi
     info "Gate clean."
 }
 

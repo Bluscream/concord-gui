@@ -12,6 +12,7 @@ use image::{
     Delay, DynamicImage, Frame as ImageFrame, ImageBuffer, ImageFormat, Rgba,
     codecs::gif::{GifEncoder, Repeat},
 };
+use ratatui_image::picker::Picker;
 
 use crate::tui::{
     message::time::test_message_id_for_unix_millis,
@@ -33,6 +34,7 @@ use concord::{
 
 use super::*;
 use super::{
+    cache::MediaImageCacheEntry,
     decode::{MAX_LOTTIE_JSON_BYTES, decode_gif_animation_with_limits},
     work::MediaWorkError,
 };
@@ -1015,7 +1017,7 @@ fn avatar_protocol_key_tracks_render_clipping() {
 }
 
 #[test]
-fn avatar_popup_request_prunes_cache_to_limit() {
+fn avatar_preparation_prunes_cache_and_protects_popup_request() {
     let mut cache = AvatarImageCache::new(None);
     for id in 0..MAX_AVATAR_IMAGE_CACHE_ENTRIES {
         cache.cache.entries.insert(
@@ -1026,7 +1028,9 @@ fn avatar_popup_request_prunes_cache_to_limit() {
         );
     }
 
-    let request = cache.next_request_for_url("https://cdn.discordapp.com/avatars/new.png");
+    let popup_url = "https://cdn.discordapp.com/avatars/new.png";
+    let request = cache.next_request_for_url(popup_url);
+    cache.prepare(&[], Some(popup_url), None, false);
 
     assert_eq!(
         request,
@@ -1058,6 +1062,20 @@ fn avatar_popup_upload_request_uses_local_preview_command() {
         })
     );
     assert!(cache.cache.entries.contains_key("pending-avatar"));
+
+    assert!(
+        cache
+            .next_request_for_profile_upload("pending-avatar", || {
+                panic!("loading previews must not clone the upload again")
+            })
+            .is_none()
+    );
+    assert!(
+        cache
+            .next_request_for_profile_upload("missing-avatar", || None)
+            .is_none()
+    );
+    assert!(!cache.cache.entries.contains_key("missing-avatar"));
 }
 
 #[test]
@@ -1369,7 +1387,6 @@ fn image_preview_render_state_preserves_target_order() {
         second.key(),
         ImagePreviewEntry::Loading {
             filename: second.filename.clone(),
-            protocol_spec: second.protocol_render_spec(),
             last_used: 1,
         },
     );
@@ -1377,7 +1394,6 @@ fn image_preview_render_state_preserves_target_order() {
         first.key(),
         ImagePreviewEntry::Loading {
             filename: first.filename.clone(),
-            protocol_spec: first.protocol_render_spec(),
             last_used: 2,
         },
     );
@@ -1413,6 +1429,253 @@ fn image_preview_protocol_spec_ignores_screen_placement() {
         ..target
     };
     assert_ne!(original_spec, resized.protocol_render_spec());
+}
+
+#[test]
+fn image_preview_key_ignores_clip_and_screen_placement() {
+    let target = image_preview_target(1);
+    let moved_and_clipped = ImagePreviewTarget {
+        message_index: 4,
+        preview_x_offset_columns: 9,
+        preview_y_offset_rows: 7,
+        visible_preview_height: 1,
+        top_clip_rows: 2,
+        ..target.clone()
+    };
+
+    assert_eq!(target.key(), moved_and_clipped.key());
+    assert_ne!(target.fragment_key(), moved_and_clipped.fragment_key());
+}
+
+#[test]
+fn image_preview_keeps_protocols_per_crop_without_wrong_crop_fallback() {
+    let target = image_preview_target(1);
+    let clipped = ImagePreviewTarget {
+        preview_y_offset_rows: 1,
+        visible_preview_height: 2,
+        top_clip_rows: 1,
+        ..target.clone()
+    };
+    let key = target.key();
+    let mut cache = ImagePreviewCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
+    cache.cache.entries.insert(
+        key.clone(),
+        ImagePreviewEntry::Decoding {
+            filename: target.filename.clone(),
+            generation: 1,
+            last_used: 1,
+        },
+    );
+    cache.store_decoded(
+        key,
+        1,
+        decode_media_image_bytes(&encoded_png(8, 8)).map_err(MediaWorkError::Failed),
+    );
+
+    cache.prepare(std::slice::from_ref(&target));
+    for job in cache.take_protocol_jobs() {
+        cache.store_protocol(build_media_protocol(job));
+    }
+    assert!(matches!(
+        cache.render_state(std::slice::from_ref(&target))[0].state,
+        super::super::ui::ImagePreviewState::Ready { .. }
+    ));
+
+    cache.prepare(std::slice::from_ref(&clipped));
+    assert!(matches!(
+        cache.render_state(std::slice::from_ref(&clipped))[0].state,
+        super::super::ui::ImagePreviewState::Loading { .. }
+    ));
+    assert!(matches!(
+        cache.render_state(std::slice::from_ref(&target))[0].state,
+        super::super::ui::ImagePreviewState::Ready { .. }
+    ));
+    for job in cache.take_protocol_jobs() {
+        cache.store_protocol(build_media_protocol(job));
+    }
+    assert!(matches!(
+        cache.render_state(std::slice::from_ref(&clipped))[0].state,
+        super::super::ui::ImagePreviewState::Ready { .. }
+    ));
+}
+
+#[test]
+fn failed_new_crop_does_not_hide_ready_old_crop_or_load_forever() {
+    let target = image_preview_target(1);
+    let clipped = ImagePreviewTarget {
+        preview_y_offset_rows: 1,
+        visible_preview_height: 2,
+        top_clip_rows: 1,
+        ..target.clone()
+    };
+    let key = target.key();
+    let mut cache = ImagePreviewCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
+    cache.cache.entries.insert(
+        key.clone(),
+        ImagePreviewEntry::Decoding {
+            filename: target.filename.clone(),
+            generation: 1,
+            last_used: 1,
+        },
+    );
+    cache.store_decoded(
+        key,
+        1,
+        decode_media_image_bytes(&encoded_png(8, 8)).map_err(MediaWorkError::Failed),
+    );
+    cache.prepare(std::slice::from_ref(&target));
+    for job in cache.take_protocol_jobs() {
+        cache.store_protocol(build_media_protocol(job));
+    }
+
+    for _ in 0..2 {
+        cache.prepare(std::slice::from_ref(&clipped));
+        let job = cache
+            .take_protocol_jobs()
+            .into_iter()
+            .next()
+            .expect("failed crop should build or retry");
+        let mut result = build_media_protocol(job);
+        result.result = Err(MediaWorkError::Failed("unsupported crop".to_owned()));
+        cache.store_protocol(result);
+    }
+
+    assert!(matches!(
+        cache.render_state(std::slice::from_ref(&clipped))[0].state,
+        super::super::ui::ImagePreviewState::Failed { .. }
+    ));
+    assert!(matches!(
+        cache.render_state(std::slice::from_ref(&target))[0].state,
+        super::super::ui::ImagePreviewState::Ready { .. }
+    ));
+    cache.prepare(std::slice::from_ref(&clipped));
+    assert!(cache.take_protocol_jobs().is_empty());
+}
+
+#[test]
+fn split_animation_builds_each_visible_crop_before_prefetching() {
+    let top = ImagePreviewTarget {
+        visible_preview_height: 1,
+        ..image_preview_target(1)
+    };
+    let bottom = ImagePreviewTarget {
+        preview_y_offset_rows: 2,
+        visible_preview_height: 1,
+        top_clip_rows: 2,
+        ..image_preview_target(1)
+    };
+    let key = top.key();
+    let mut cache = ImagePreviewCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
+    cache.cache.entries.insert(
+        key.clone(),
+        ImagePreviewEntry::Decoding {
+            filename: top.filename.clone(),
+            generation: 1,
+            last_used: 1,
+        },
+    );
+    cache.store_decoded(
+        key,
+        1,
+        decode_media_image_bytes(&encoded_animated_gif()).map_err(MediaWorkError::Failed),
+    );
+
+    let targets = [top, bottom];
+    for _ in 0..2 {
+        cache.prepare(&targets);
+        let jobs = cache.take_protocol_jobs();
+        assert_eq!(jobs.len(), 1);
+        let result = build_media_protocol(jobs.into_iter().next().expect("crop job should exist"));
+        assert!(matches!(
+            result.target,
+            MediaProtocolBuildTarget::Preview { frame_index: 0, .. }
+        ));
+        cache.store_protocol(result);
+    }
+    assert!(cache.render_state(&targets).iter().all(|preview| matches!(
+        preview.state,
+        super::super::ui::ImagePreviewState::Ready { .. }
+    )));
+    for _ in 0..2 {
+        cache.prepare(&targets);
+        let jobs = cache.take_protocol_jobs();
+        assert_eq!(jobs.len(), 1);
+        let result =
+            build_media_protocol(jobs.into_iter().next().expect("prefetch job should exist"));
+        assert!(matches!(
+            result.target,
+            MediaProtocolBuildTarget::Preview { frame_index: 1, .. }
+        ));
+        cache.store_protocol(result);
+    }
+    cache.sync_animation_visibility(&targets, Instant::now(), AnimatePreviews::Always);
+    assert!(cache.next_animation_deadline().is_some());
+}
+
+#[test]
+fn oversized_split_animation_keeps_current_crops_and_resumes_when_unsplit() {
+    let top = ImagePreviewTarget {
+        preview_width: 100,
+        preview_height: 30,
+        visible_preview_height: 15,
+        ..image_preview_target(1)
+    };
+    let bottom = ImagePreviewTarget {
+        preview_width: 100,
+        preview_height: 30,
+        preview_y_offset_rows: 15,
+        visible_preview_height: 15,
+        top_clip_rows: 15,
+        ..image_preview_target(1)
+    };
+    let key = top.key();
+    let mut cache = ImagePreviewCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
+    cache.cache.entries.insert(
+        key.clone(),
+        ImagePreviewEntry::Decoding {
+            filename: top.filename.clone(),
+            generation: 1,
+            last_used: 1,
+        },
+    );
+    cache.store_decoded(
+        key,
+        1,
+        decode_media_image_bytes(&encoded_animated_gif()).map_err(MediaWorkError::Failed),
+    );
+    let split = [top.clone(), bottom];
+    for _ in 0..2 {
+        cache.prepare(&split);
+        for job in cache.take_protocol_jobs() {
+            cache.store_protocol(build_media_protocol(job));
+        }
+    }
+
+    cache.prepare(&split);
+    assert!(cache.take_protocol_jobs().is_empty());
+    assert!(cache.render_state(&split).iter().all(|preview| matches!(
+        preview.state,
+        super::super::ui::ImagePreviewState::Ready { .. }
+    )));
+    cache.sync_animation_visibility(&split, Instant::now(), AnimatePreviews::Always);
+    assert_eq!(cache.next_animation_deadline(), None);
+
+    for _ in 0..4 {
+        cache.prepare(std::slice::from_ref(&top));
+        let jobs = cache.take_protocol_jobs();
+        if jobs.is_empty() {
+            break;
+        }
+        for job in jobs {
+            cache.store_protocol(build_media_protocol(job));
+        }
+    }
+    cache.sync_animation_visibility(
+        std::slice::from_ref(&top),
+        Instant::now(),
+        AnimatePreviews::Always,
+    );
+    assert!(cache.next_animation_deadline().is_some());
 }
 
 #[test]
@@ -1489,10 +1752,11 @@ fn image_preview_cache_evicts_least_recently_used_entries() {
         .map(image_preview_target)
         .collect::<Vec<_>>();
     cache.next_requests(&existing_targets);
-    cache.render_state(std::slice::from_ref(&existing_targets[0]));
+    cache.prepare(std::slice::from_ref(&existing_targets[0]));
 
     let new_target = image_preview_target(999);
     cache.next_requests(std::slice::from_ref(&new_target));
+    cache.prepare(std::slice::from_ref(&new_target));
 
     assert_eq!(cache.cache.entries.len(), MAX_IMAGE_PREVIEW_CACHE_ENTRIES);
     assert!(cache.cache.entries.contains_key(&existing_targets[0].key()));
@@ -1511,7 +1775,6 @@ fn image_preview_cache_evicts_least_recently_used_entries() {
                 generation: 1,
                 image: decode_media_image_bytes(&encoded_png(2, 2))
                     .expect("small preview should decode"),
-                protocol_spec: target.protocol_render_spec(),
                 protocols: Box::new(super::cache::RenderProtocolCache::new()),
                 last_used: last_used as u64,
             },
@@ -1523,6 +1786,88 @@ fn image_preview_cache_evicts_least_recently_used_entries() {
     assert_eq!(decoded_cache.cache.retained_decoded_bytes(), 16);
     assert!(!decoded_cache.cache.entries.contains_key(&first.key()));
     assert!(decoded_cache.cache.entries.contains_key(&second.key()));
+
+    let diagnostics = decoded_cache.diagnostics();
+    assert_eq!(diagnostics.entries, 1);
+    assert_eq!(diagnostics.entry_limit, MAX_IMAGE_PREVIEW_CACHE_ENTRIES);
+    assert_eq!(diagnostics.ready, 1);
+    assert_eq!(diagnostics.decoded_bytes, 16);
+    assert_eq!(diagnostics.decoded_byte_budget, 64 * 1024 * 1024);
+    assert_eq!(diagnostics.render_protocol_bytes, 0);
+    assert_eq!(decoded_cache.diagnostics(), diagnostics);
+}
+
+#[test]
+fn image_preview_render_state_does_not_prune_ready_data_during_clear_pass() {
+    let mut cache = ImagePreviewCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
+    let targets = [image_preview_target(1), image_preview_target(2)];
+    for (last_used, target) in targets.iter().enumerate() {
+        cache.cache.entries.insert(
+            target.key(),
+            ImagePreviewEntry::Ready {
+                filename: target.filename.clone(),
+                generation: 1,
+                image: decode_media_image_bytes(&encoded_png(3000, 3000))
+                    .expect("large preview should decode"),
+                protocols: Box::new(super::cache::RenderProtocolCache::new()),
+                last_used: last_used as u64,
+            },
+        );
+    }
+
+    let previews = cache.render_state(&[]);
+
+    assert!(previews.is_empty());
+    assert!(
+        targets
+            .iter()
+            .all(|target| cache.cache.entries.contains_key(&target.key()))
+    );
+}
+
+#[test]
+fn image_preview_reuses_retained_source_before_over_budget_pruning() {
+    let mut cache = ImagePreviewCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
+    let source = image_preview_target(1);
+    let unrelated = image_preview_target(2);
+    for (last_used, target) in [source.clone(), unrelated].iter().enumerate() {
+        cache.cache.entries.insert(
+            target.key(),
+            ImagePreviewEntry::Ready {
+                filename: target.filename.clone(),
+                generation: 1,
+                image: decode_media_image_bytes(&encoded_png(3000, 3000))
+                    .expect("large preview should decode"),
+                protocols: Box::new(super::cache::RenderProtocolCache::new()),
+                last_used: last_used as u64,
+            },
+        );
+    }
+    let moved = ImagePreviewTarget {
+        message_id: Id::new(99),
+        ..source.clone()
+    };
+    let mut shared = MediaImageDecodeCache::new();
+    let original_image = cache
+        .cache
+        .entries
+        .get(&source.key())
+        .and_then(ImagePreviewEntry::decoded_image)
+        .expect("source preview should be ready")
+        .clone();
+
+    assert!(cache.reuse_cached_sources(std::slice::from_ref(&moved), &mut shared));
+    cache.prepare(std::slice::from_ref(&moved));
+
+    let moved_image = cache
+        .cache
+        .entries
+        .get(&moved.key())
+        .and_then(ImagePreviewEntry::decoded_image)
+        .expect("moved preview should retain a decoded source");
+    assert!(original_image.shares_frames_with(moved_image));
+    assert!(cache.cache.entries.contains_key(&moved.key()));
+    assert!(cache.next_requests(std::slice::from_ref(&moved)).is_empty());
 }
 
 #[test]
@@ -1546,6 +1891,47 @@ fn image_preview_cache_limits_visible_requests() {
 }
 
 #[test]
+fn image_preview_request_limit_counts_distinct_previews_not_fragments() {
+    let first = image_preview_target(1);
+    let split_fragment = ImagePreviewTarget {
+        preview_y_offset_rows: 2,
+        visible_preview_height: 1,
+        top_clip_rows: 2,
+        ..first.clone()
+    };
+    let mut targets = vec![first, split_fragment];
+    targets.extend((2..=MAX_IMAGE_PREVIEW_CACHE_ENTRIES as u64).map(image_preview_target));
+    let last = targets
+        .last()
+        .expect("last unique preview should exist")
+        .key();
+    let mut cache = ImagePreviewCache::new(None);
+
+    let requests = cache.next_requests(&targets);
+
+    assert_eq!(requests.len(), MAX_IMAGE_PREVIEW_CACHE_ENTRIES);
+    assert_eq!(cache.cache.entries.len(), MAX_IMAGE_PREVIEW_CACHE_ENTRIES);
+    assert!(cache.cache.entries.contains_key(&last));
+}
+
+#[test]
+fn preview_retry_deadlines_follow_visible_request_admission() {
+    let targets = (1..=MAX_IMAGE_PREVIEW_CACHE_ENTRIES as u64 + 1)
+        .map(image_preview_target)
+        .collect::<Vec<_>>();
+    let deferred = targets.last().expect("one target exceeds admission");
+    let mut cache = ImagePreviewCache::new(Some(Picker::halfblocks()));
+    assert_eq!(cache.next_requests(std::slice::from_ref(deferred)).len(), 1);
+    cache.store_failed(&deferred.url, "download failed".to_owned());
+
+    assert!(cache.next_retry_deadline(&[]).is_none());
+    assert!(cache.next_retry_deadline(&targets).is_none());
+    assert!(cache.next_retry_deadline(&targets[1..]).is_some());
+    cache.picker = None;
+    assert!(cache.next_retry_deadline(&targets[1..]).is_none());
+}
+
+#[test]
 fn a_failed_media_fetch_retries_with_backoff_then_waits_for_a_refresh() {
     let mut cache = ImagePreviewCache::new(None);
     let target = image_preview_target(1);
@@ -1559,12 +1945,28 @@ fn a_failed_media_fetch_retries_with_backoff_then_waits_for_a_refresh() {
     // Three tries, each gated by its backoff, then the retries are spent.
     for attempt in 1..=4 {
         cache.store_failed(&target.url, "download failed".to_owned());
+        let retry_at = cache.cache.retry_deadline(&key);
+        let diagnostics = cache.diagnostics();
+        assert_eq!(diagnostics.failed, 1);
+        assert_eq!(diagnostics.loading, 0);
+        assert_eq!(diagnostics.retryable, usize::from(attempt < 4));
+        if let Some(seconds) = [3, 15, 60].get(attempt - 1) {
+            let backoff = Duration::from_secs(*seconds);
+            assert!(retry_at.is_some_and(|deadline| deadline >= now + backoff));
+            assert!(retry_at.is_some_and(|deadline| deadline <= Instant::now() + backoff));
+        } else {
+            assert!(
+                retry_at.is_none(),
+                "spent retries must not wake the dashboard"
+            );
+        }
         assert!(
             !cache.cache.take_due_retry(&key, now),
             "attempt {attempt} must wait out its backoff"
         );
         let due = cache.cache.take_due_retry(&key, past_every_backoff);
         assert_eq!(due, attempt < 4, "attempt {attempt} retry availability");
+        assert!(cache.cache.retry_deadline(&key).is_none());
         if !due {
             break;
         }
@@ -1572,7 +1974,6 @@ fn a_failed_media_fetch_retries_with_backoff_then_waits_for_a_refresh() {
             key.clone(),
             ImagePreviewEntry::Loading {
                 filename: target.filename.clone(),
-                protocol_spec: target.protocol_render_spec(),
                 last_used: 0,
             },
         );
@@ -1605,7 +2006,6 @@ fn image_preview_store_loaded_preserves_existing_non_loading_entries() {
         loading.clone(),
         ImagePreviewEntry::Loading {
             filename: "loading.png".to_owned(),
-            protocol_spec: image_preview_target(1).protocol_render_spec(),
             last_used: 2,
         },
     );
@@ -1649,10 +2049,11 @@ fn media_decode_cache_shares_one_url_decode_across_preview_requests() {
         outcome.job.as_ref().map(|job| job.bytes.as_ref()),
         Some(encoded.as_slice())
     );
-    let deliveries = decoded_images.complete(MediaImageDecodeResult {
+    let outcome = decoded_images.complete(MediaImageDecodeResult {
         url: first.url.clone(),
         result: decode_media_image_bytes(&encoded).map_err(MediaWorkError::Failed),
     });
+    let deliveries = outcome.deliveries;
     assert_eq!(deliveries.len(), 2);
     assert_eq!(
         deliveries
@@ -1706,13 +2107,11 @@ fn image_preview_store_decoded_records_decode_failure() {
     let mut cache = ImagePreviewCache::new(None);
     let target = image_preview_target(1);
     let key = target.key();
-    let protocol_spec = target.protocol_render_spec();
     cache.cache.entries.insert(
         key.clone(),
         ImagePreviewEntry::Decoding {
             filename: "loading.png".to_owned(),
             generation: 1,
-            protocol_spec,
             last_used: 1,
         },
     );
@@ -1733,76 +2132,58 @@ fn image_preview_store_decoded_records_decode_failure() {
 }
 
 #[test]
-fn media_decode_queue_pressure_retries_all_consumers() {
+fn media_decode_busy_retains_bytes_and_all_consumers_for_retry() {
     let preview_target = image_preview_target(1);
     let preview_key = preview_target.key();
-    let mut previews = ImagePreviewCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
-    previews.cache.entries.insert(
-        preview_key.clone(),
-        ImagePreviewEntry::Decoding {
-            filename: preview_target.filename.clone(),
+    let requests = vec![
+        super::decode::MediaImageDecodeRequest {
+            key: MediaImageDecodeKey::Preview(preview_key),
             generation: 1,
-            protocol_spec: preview_target.protocol_render_spec(),
-            last_used: 1,
         },
-    );
-    previews.store_decoded(preview_key.clone(), 1, Err(MediaWorkError::Busy));
-    assert!(!previews.cache.entries.contains_key(&preview_key));
+        super::decode::MediaImageDecodeRequest {
+            key: MediaImageDecodeKey::Avatar("avatar".to_owned()),
+            generation: 2,
+        },
+    ];
+    let encoded = encoded_png(2, 2);
+    let mut decoded = MediaImageDecodeCache::new();
+    let initial = decoded.request(&preview_target.url, &encoded, requests);
     assert_eq!(
-        previews.next_requests(std::slice::from_ref(&preview_target)),
-        vec![AppCommand::LoadAttachmentPreview {
-            url: preview_target.url.clone(),
-        }]
+        initial.job.as_ref().map(|job| job.bytes.as_ref()),
+        Some(encoded.as_slice())
     );
+    let diagnostics = decoded.diagnostics();
+    assert_eq!(diagnostics.decoding, 1);
+    assert_eq!(diagnostics.pending_requests, 2);
+    assert_eq!(diagnostics.retry_pending, 0);
+    assert_eq!(diagnostics.retained_source_bytes, encoded.len() as u64);
+    assert_eq!(diagnostics.ready_limit, 32);
+    assert_eq!(diagnostics.decoded_byte_budget, 128 * 1024 * 1024);
+    assert_eq!(decoded.diagnostics(), diagnostics);
 
-    let avatar_target = AvatarTarget {
-        row: 0,
-        visible_height: 1,
-        top_clip_rows: 0,
-        url: "https://cdn.discordapp.com/avatars/1/hash.png".to_owned(),
-    };
-    let avatar_cache_url = avatar_preview_url(
-        &avatar_target.url,
-        AVATAR_PREVIEW_WIDTH,
-        AVATAR_PREVIEW_HEIGHT,
-    );
-    let mut avatars = AvatarImageCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
-    avatars.cache.entries.insert(
-        avatar_cache_url.clone(),
-        AvatarImageEntry::Decoding {
-            generation: 1,
-            last_used: 1,
-        },
-    );
-    avatars.store_decoded(avatar_cache_url.clone(), 1, Err(MediaWorkError::Busy));
-    assert!(!avatars.cache.entries.contains_key(&avatar_cache_url));
-    assert_eq!(
-        avatars.next_requests(std::slice::from_ref(&avatar_target)),
-        vec![AppCommand::LoadAttachmentPreview {
-            url: avatar_cache_url,
-        }]
-    );
+    let busy = decoded.complete(MediaImageDecodeResult {
+        url: preview_target.url.clone(),
+        result: Err(MediaWorkError::Busy),
+    });
+    assert!(busy.deliveries.is_empty());
+    assert!(decoded.is_decoding(&preview_target.url));
+    assert_eq!(decoded.diagnostics().retry_pending, 1);
+    let retries = decoded.take_retry_jobs(std::slice::from_ref(&preview_target.url), 1);
+    assert_eq!(retries.len(), 1);
+    assert_eq!(retries[0].bytes.as_ref(), encoded.as_slice());
+    assert_eq!(decoded.diagnostics().retry_pending, 0);
 
-    let emoji_target = EmojiImageTarget {
-        url: "https://cdn.discordapp.com/emojis/1.gif".to_owned(),
-        image_size: EmojiImageSize::Compact,
-    };
-    let mut emojis = EmojiImageCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
-    emojis.cache.entries.insert(
-        emoji_target.url.clone(),
-        EmojiImageEntry::Decoding {
-            generation: 1,
-            last_used: 1,
-        },
-    );
-    emojis.store_decoded(emoji_target.url.clone(), 1, Err(MediaWorkError::Busy));
-    assert!(!emojis.cache.entries.contains_key(&emoji_target.url));
-    assert_eq!(
-        emojis.next_requests(std::slice::from_ref(&emoji_target)),
-        vec![AppCommand::LoadAttachmentPreview {
-            url: emoji_target.url,
-        }]
-    );
+    let completed = decoded.complete(MediaImageDecodeResult {
+        url: preview_target.url,
+        result: decode_media_image_bytes(&encoded).map_err(MediaWorkError::Failed),
+    });
+    assert_eq!(completed.deliveries.len(), 2);
+    let diagnostics = decoded.diagnostics();
+    assert_eq!(diagnostics.ready, 1);
+    assert_eq!(diagnostics.ready_decoded_bytes, 16);
+    assert_eq!(diagnostics.decoding, 0);
+    assert_eq!(diagnostics.pending_requests, 0);
+    assert_eq!(diagnostics.retained_source_bytes, 0);
 }
 
 #[test]
@@ -1823,7 +2204,6 @@ fn animate_previews_policy_decides_which_previews_keep_moving() {
             ImagePreviewEntry::Decoding {
                 filename: target.filename.clone(),
                 generation: 1,
-                protocol_spec: target.protocol_render_spec(),
                 last_used: 1,
             },
         );
@@ -1835,6 +2215,7 @@ fn animate_previews_policy_decides_which_previews_keep_moving() {
     }
     // Build every protocol so animation is only gated by the policy.
     for _ in 0..8 {
+        cache.prepare(&targets);
         let _ = cache.render_state(&targets);
         for job in cache.take_protocol_jobs() {
             cache.store_protocol(build_media_protocol(job));
@@ -1883,9 +2264,7 @@ fn render_protocols_keep_the_two_frame_animation_window() {
     let protocol_bytes = super::cache::RENDER_PROTOCOL_BYTE_BUDGET_PER_MEDIA_ENTRY * 2 / 3;
     for frame in 0..3 {
         assert!(protocols.request_build(&frame));
-        protocols
-            .store_result(frame, Ok(build()), protocol_bytes)
-            .expect("test protocol should store");
+        protocols.store_result(frame, Ok(build()), protocol_bytes);
     }
 
     assert_eq!(protocols.len(), 2);
@@ -1898,14 +2277,12 @@ fn render_protocols_keep_the_two_frame_animation_window() {
 fn attachment_preview_waits_when_protocol_encoding_falls_behind() {
     let target = image_preview_target(42);
     let key = target.key();
-    let protocol_spec = target.protocol_render_spec();
     let mut cache = ImagePreviewCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
     cache.cache.entries.insert(
         key.clone(),
         ImagePreviewEntry::Decoding {
             filename: target.filename.clone(),
             generation: 1,
-            protocol_spec,
             last_used: 1,
         },
     );
@@ -1916,6 +2293,7 @@ fn attachment_preview_waits_when_protocol_encoding_falls_behind() {
     );
 
     for _ in 0..2 {
+        cache.prepare(std::slice::from_ref(&target));
         let _ = cache.render_state(std::slice::from_ref(&target));
         for job in cache.take_protocol_jobs() {
             cache.store_protocol(build_media_protocol(job));
@@ -1935,6 +2313,7 @@ fn attachment_preview_waits_when_protocol_encoding_falls_behind() {
 
     // Rendering frame 1 queues frame 2, but leave that job unfinished to
     // model a large terminal protocol that takes longer than one frame delay.
+    cache.prepare(std::slice::from_ref(&target));
     assert_eq!(cache.render_state(std::slice::from_ref(&target)).len(), 1);
     let mut delayed_jobs = cache.take_protocol_jobs();
     assert_eq!(delayed_jobs.len(), 1);
@@ -1952,6 +2331,7 @@ fn attachment_preview_waits_when_protocol_encoding_falls_behind() {
     ));
 
     cache.store_protocol(build_media_protocol(delayed_job));
+    cache.prepare(std::slice::from_ref(&target));
     assert_eq!(cache.render_state(std::slice::from_ref(&target)).len(), 1);
     cache.sync_animation_visibility(
         std::slice::from_ref(&target),
@@ -1975,38 +2355,25 @@ fn protocol_queue_pressure_does_not_consume_failure_attempts() {
 
     for _ in 0..3 {
         assert!(protocols.request_build(&0));
-        assert_eq!(
-            protocols.store_result(0, Err(MediaWorkError::Busy), 0),
-            Ok(())
-        );
+        protocols.store_result(0, Err(MediaWorkError::Busy), 0);
         assert!(!protocols.is_terminally_failed(&0));
     }
 
-    assert!(protocols.request_build(&0));
-    assert_eq!(
+    for attempt in 1..=2 {
+        assert!(protocols.request_build(&0));
+        // A result for another key must not consume the pending job or a retry.
+        protocols.store_result(1, Err(MediaWorkError::Failed("stale".to_owned())), 0);
+        assert!(!protocols.request_build(&1));
+        assert!(!protocols.is_terminally_failed(&1));
         protocols.store_result(
             0,
-            Err(MediaWorkError::Failed(
-                "temporary protocol failure".to_owned(),
-            )),
+            Err(MediaWorkError::Failed("protocol failure".to_owned())),
             0,
-        ),
-        Ok(())
-    );
-    assert!(!protocols.is_terminally_failed(&0));
-
-    assert!(protocols.request_build(&0));
-    assert_eq!(
-        protocols.store_result(
-            0,
-            Err(MediaWorkError::Failed(
-                "terminal protocol failure".to_owned(),
-            )),
-            0,
-        ),
-        Err("terminal protocol failure".to_owned())
-    );
-    assert!(protocols.is_terminally_failed(&0));
+        );
+        assert_eq!(protocols.is_terminally_failed(&0), attempt == 2);
+    }
+    assert!(!protocols.request_build(&0));
+    assert!(protocols.request_build(&1));
 }
 
 #[test]
@@ -2014,13 +2381,11 @@ fn image_preview_store_decoded_ignores_replaced_decoding_generation() {
     let mut cache = ImagePreviewCache::new(None);
     let target = image_preview_target(1);
     let key = target.key();
-    let protocol_spec = target.protocol_render_spec();
     cache.cache.entries.insert(
         key.clone(),
         ImagePreviewEntry::Decoding {
             filename: "newer.png".to_owned(),
             generation: 2,
-            protocol_spec,
             last_used: 2,
         },
     );
@@ -2226,6 +2591,7 @@ fn emoji_animation_clock_runs_only_while_the_image_is_visible() {
         1,
         decode_media_image_bytes(&encoded_animated_gif()).map_err(MediaWorkError::Failed),
     );
+    cache.prepare(std::slice::from_ref(&target));
     let _ = cache.render_state(std::slice::from_ref(&target));
     let jobs = cache.take_protocol_jobs();
     assert_eq!(jobs.len(), 1);
@@ -2238,6 +2604,7 @@ fn emoji_animation_clock_runs_only_while_the_image_is_visible() {
         "temporary protocol worker failure".to_owned(),
     ));
     cache.store_protocol(failed);
+    cache.prepare(std::slice::from_ref(&target));
     let _ = cache.render_state(std::slice::from_ref(&target));
     let retry_jobs = cache.take_protocol_jobs();
     assert_eq!(retry_jobs.len(), 1);
@@ -2253,6 +2620,7 @@ fn emoji_animation_clock_runs_only_while_the_image_is_visible() {
         .expect("visible emoji should schedule an animation frame");
     assert!(cache.advance_animations(deadline));
     {
+        cache.prepare(std::slice::from_ref(&target));
         let rendered = cache.render_state(std::slice::from_ref(&target));
         assert_eq!(rendered.len(), 1);
     }
@@ -2275,6 +2643,7 @@ fn emoji_animation_clock_runs_only_while_the_image_is_visible() {
         .next_animation_deadline()
         .expect("animated emoji should schedule its loop frame");
     assert!(cache.advance_animations(loop_deadline));
+    cache.prepare(std::slice::from_ref(&target));
     assert_eq!(cache.render_state(std::slice::from_ref(&target)).len(), 1);
     assert!(matches!(
         cache.cache.entries.get(&url),
@@ -2294,14 +2663,12 @@ fn emoji_animation_clock_runs_only_while_the_image_is_visible() {
 fn attachment_preview_waits_for_a_ready_or_failed_next_animation_frame() {
     let target = image_preview_target(42);
     let key = target.key();
-    let protocol_spec = target.protocol_render_spec();
     let mut cache = ImagePreviewCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
     cache.cache.entries.insert(
         key.clone(),
         ImagePreviewEntry::Decoding {
             filename: target.filename.clone(),
             generation: 1,
-            protocol_spec,
             last_used: 1,
         },
     );
@@ -2310,6 +2677,7 @@ fn attachment_preview_waits_for_a_ready_or_failed_next_animation_frame() {
         1,
         decode_media_image_bytes(&encoded_animated_gif()).map_err(MediaWorkError::Failed),
     );
+    cache.prepare(std::slice::from_ref(&target));
     let _ = cache.render_state(std::slice::from_ref(&target));
     let jobs = cache.take_protocol_jobs();
     assert_eq!(jobs.len(), 1);
@@ -2325,6 +2693,7 @@ fn attachment_preview_waits_for_a_ready_or_failed_next_animation_frame() {
     for job in jobs {
         cache.store_protocol(build_media_protocol(job));
     }
+    cache.prepare(std::slice::from_ref(&target));
     assert_eq!(cache.render_state(std::slice::from_ref(&target)).len(), 1);
     let jobs = cache.take_protocol_jobs();
     assert_eq!(jobs.len(), 1);
@@ -2343,6 +2712,7 @@ fn attachment_preview_waits_for_a_ready_or_failed_next_animation_frame() {
         "unsupported frame protocol".to_owned(),
     ));
     cache.store_protocol(failed);
+    cache.prepare(std::slice::from_ref(&target));
     let _ = cache.render_state(std::slice::from_ref(&target));
     let mut failed = build_media_protocol(
         cache
@@ -2355,6 +2725,7 @@ fn attachment_preview_waits_for_a_ready_or_failed_next_animation_frame() {
         "unsupported frame protocol".to_owned(),
     ));
     cache.store_protocol(failed);
+    cache.prepare(std::slice::from_ref(&target));
     assert_eq!(cache.render_state(std::slice::from_ref(&target)).len(), 1);
     assert!(cache.take_protocol_jobs().is_empty());
 
@@ -2368,6 +2739,7 @@ fn attachment_preview_waits_for_a_ready_or_failed_next_animation_frame() {
         .expect("visible attachment should schedule an animation frame");
     assert!(cache.advance_animations(deadline));
     {
+        cache.prepare(std::slice::from_ref(&target));
         let rendered = cache.render_state(std::slice::from_ref(&target));
         assert_eq!(rendered.len(), 1);
     }
@@ -2385,6 +2757,7 @@ fn attachment_preview_waits_for_a_ready_or_failed_next_animation_frame() {
         .next_animation_deadline()
         .expect("animated attachment should schedule its loop frame");
     assert!(cache.advance_animations(loop_deadline));
+    cache.prepare(std::slice::from_ref(&target));
     assert_eq!(cache.render_state(std::slice::from_ref(&target)).len(), 1);
     assert!(matches!(
         cache.cache.entries.get(&key),
@@ -2549,6 +2922,7 @@ fn standalone_emoji_cache_builds_compact_and_large_protocols() {
         decode_media_image_bytes(&encoded_png(32, 32)).map_err(MediaWorkError::Failed),
     );
 
+    cache.prepare(std::slice::from_ref(&target));
     assert!(cache.render_state(std::slice::from_ref(&target)).is_empty());
     let results = cache
         .take_protocol_jobs()
