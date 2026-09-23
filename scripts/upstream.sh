@@ -567,10 +567,18 @@ resolve_lockfile() {
 
     # Cargo can only reconcile the lockfile once every Cargo.toml in the
     # workspace parses, so this is a no-op until the conflicts are gone.
-    if git diff --name-only --diff-filter=U | grep -q '^Cargo\.toml$\|/Cargo\.toml$'; then
-        warn "Cargo.toml is still conflicted - relock after you resolve it"
-        return 0
-    fi
+    #
+    # Tested by looking in the files, not by asking the index: a manifest you
+    # resolved but have not staged yet is resolved, and reporting it as
+    # conflicted sent you away to relock something that was already fine.
+    local manifest
+    while IFS= read -r manifest; do
+        [[ -f "$manifest" ]] || continue
+        if grep -q '^<<<<<<<' "$manifest"; then
+            warn "$manifest is still conflicted - relock after you resolve it"
+            return 0
+        fi
+    done < <(git ls-files -- 'Cargo.toml' '*/Cargo.toml')
 
     info "Reconciling Cargo.lock against the merged manifests"
     if in_box "cargo metadata --format-version 1 --quiet >/dev/null"; then
