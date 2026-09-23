@@ -1,0 +1,429 @@
+#!/usr/bin/env bash
+#
+# Track chojs23/concord from this fork.
+#
+#   ./scripts/upstream.sh status      what upstream has that we do not
+#   ./scripts/upstream.sh sync-main   fast-forward the main mirror and push it
+#   ./scripts/upstream.sh preview     trial-merge in a throwaway worktree
+#   ./scripts/upstream.sh merge       start the real merge on its own branch
+#   ./scripts/upstream.sh finish      after you resolve: fix imports, relock
+#   ./scripts/upstream.sh gate        fmt, clippy and tests, both feature sets
+#
+# Why this exists
+# ---------------
+# `gui` had not taken a single upstream commit between 14 August and the day
+# this was written: 87 commits of drift, and a trial merge with 111 conflicted
+# files. Almost none of that was interesting. It was the same three mechanical
+# problems repeated, because this fork rearranged the tree upstream keeps
+# editing:
+#
+#   src/tui/**              ->  crates/tui/src/tui/**
+#   src/tui/theme.rs        ->  crates/ui/src/theme.rs
+#   src/tui/keybindings/**  ->  crates/ui/src/keybindings/**
+#   src/discord/<big>.rs    ->  src/discord/<big>/ (split into submodules)
+#
+# and because a moved file that is also edited stops looking like a rename,
+# which turns an ordinary content conflict into a delete/modify one. Raising
+# git's rename threshold recovers most of them: on that trial merge it took
+# the delete/modify count from 16 down to 9 without losing anything.
+#
+# On top of the move, every relocated file needs the same edit: upstream
+# writes `crate::discord`, and over here the core is a dependency, so it has
+# to read `concord::discord`. That is 370 occurrences in src/tui alone, and it
+# is the single most common thing a human would otherwise fix by hand.
+#
+# So: this script does the mechanical part and gets out of the way. It does
+# not resolve a real conflict and does not pretend to. What it buys is that
+# the conflicts left over are the ones worth a person's attention.
+#
+# The one thing that helps more than any of this is merging often. 87 commits
+# gave 111 conflicted files; one upstream release at a time would give a
+# handful, and `git rerere` (which `merge` turns on) replays the resolutions
+# you have already made when the same conflict comes round again.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO"
+
+UPSTREAM_REMOTE="upstream"
+ORIGIN_REMOTE="origin"
+WORK_BRANCH="gui"
+MIRROR_BRANCH="main"
+BOX="build-box"
+
+# Measured on the 14 Aug -> 23 Sep drift: at git's default 50% a heavily
+# rewritten relocation stops being a rename and becomes delete/modify, which
+# is the conflict shape with the least information in it. 25% recovered seven
+# of those files and misattributed none.
+RENAME_THRESHOLD="25%"
+
+# Upstream is a single crate, so it says `crate::` for what is, over here, a
+# dependency.
+#
+# Two names are deliberately absent. `crate::tui` is correct on both sides:
+# crates/tui still has its own `tui` module. `crate::app` is worse - it is
+# correct on both sides but means different things, because crates/tui has its
+# own `mod app` beside the core's `concord::app`. Rewriting that one silently
+# repoints working code at a different module, so it stays a decision for
+# whoever is doing the merge.
+REWRITE_RE='crate::(discord|config|logging|support|risk|translation)\b'
+
+info() { printf '\033[1;34m::\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m!!\033[0m %s\n' "$*"; }
+die()  { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
+
+require_remote() {
+    git remote get-url "$1" >/dev/null 2>&1 ||
+        die "no '$1' remote. Add it with: git remote add $1 https://github.com/chojs23/concord.git"
+}
+
+require_clean() {
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        die "working tree is dirty. Commit or stash first."
+    fi
+}
+
+base_rev() { git merge-base "$WORK_BRANCH" "$UPSTREAM_REMOTE/$MIRROR_BRANCH"; }
+
+# ---------------------------------------------------------------------------
+# status
+# ---------------------------------------------------------------------------
+cmd_status() {
+    require_remote "$UPSTREAM_REMOTE"
+    info "Fetching $UPSTREAM_REMOTE"
+    git fetch --quiet "$UPSTREAM_REMOTE" --tags
+
+    local base ahead behind
+    base="$(base_rev)"
+    behind="$(git rev-list --count "$base..$UPSTREAM_REMOTE/$MIRROR_BRANCH")"
+    ahead="$(git rev-list --count "$UPSTREAM_REMOTE/$MIRROR_BRANCH..$WORK_BRANCH")"
+
+    echo
+    echo "Fork point   $(git show -s --format='%h %ad  %s' --date=short "$base")"
+    echo "Upstream     $behind commits we do not have"
+    echo "This fork    $ahead commits upstream does not have"
+
+    if [[ "$behind" -eq 0 ]]; then
+        echo
+        info "Up to date."
+        return 0
+    fi
+
+    local last_tag
+    last_tag="$(git tag --list --sort=-v:refname --merged "$UPSTREAM_REMOTE/$MIRROR_BRANCH" 'v*' | head -n1)"
+    [[ -n "$last_tag" ]] && echo "Latest release $last_tag"
+
+    echo
+    echo "Where those $behind commits land:"
+    local area n
+    for area in src/discord src/tui src/app src/config src/translation .github docs; do
+        n="$(git log --oneline "$base..$UPSTREAM_REMOTE/$MIRROR_BRANCH" -- "$area" | wc -l)"
+        [[ "$n" -gt 0 ]] && printf '  %-18s %4s commits%s\n' "$area" "$n" \
+            "$(relocation_note "$area")"
+    done
+
+    echo
+    echo "Files both sides have touched since the fork point:"
+    comm -12 \
+        <(git diff --name-only "$base..$UPSTREAM_REMOTE/$MIRROR_BRANCH" | sort) \
+        <(git diff --name-only "$base..$WORK_BRANCH" | sort) |
+        sed 's/^/  /' | head -40
+    local overlap
+    overlap="$(comm -12 \
+        <(git diff --name-only "$base..$UPSTREAM_REMOTE/$MIRROR_BRANCH" | sort) \
+        <(git diff --name-only "$base..$WORK_BRANCH" | sort) | wc -l)"
+    [[ "$overlap" -gt 40 ]] && echo "  ... and $((overlap - 40)) more"
+
+    echo
+    echo "Run './scripts/upstream.sh preview' for what the merge would actually cost."
+}
+
+# Upstream paths this fork has moved. Said out loud in the status report
+# because "48 commits in src/tui" reads as harmless until you know src/tui is
+# not where this fork keeps the TUI any more.
+relocation_note() {
+    case "$1" in
+        src/tui) printf '  -> crates/tui, crates/ui here' ;;
+        src/discord) printf '  (split into submodules here)' ;;
+        src/translation) printf '  (absent from this fork)' ;;
+        *) printf '' ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# sync-main
+# ---------------------------------------------------------------------------
+#
+# `main` is a mirror and nothing else, so this is the one part of tracking
+# upstream that is safe to do without reading anything. It refuses any push
+# that is not a fast-forward, which is the whole guarantee the mirror rests on.
+cmd_sync_main() {
+    require_remote "$UPSTREAM_REMOTE"
+    require_remote "$ORIGIN_REMOTE"
+    require_clean
+
+    info "Fetching both remotes"
+    git fetch --quiet "$UPSTREAM_REMOTE" --tags
+    git fetch --quiet "$ORIGIN_REMOTE" --no-tags
+
+    if ! git merge-base --is-ancestor "$ORIGIN_REMOTE/$MIRROR_BRANCH" "$UPSTREAM_REMOTE/$MIRROR_BRANCH"; then
+        die "$ORIGIN_REMOTE/$MIRROR_BRANCH is not an ancestor of $UPSTREAM_REMOTE/$MIRROR_BRANCH.
+     Something has been committed to the mirror. Sort that out by hand:
+     the mirror is worth nothing the moment our work is mixed into it."
+    fi
+
+    if [[ "$(git rev-parse "$ORIGIN_REMOTE/$MIRROR_BRANCH")" == "$(git rev-parse "$UPSTREAM_REMOTE/$MIRROR_BRANCH")" ]]; then
+        info "Mirror is already current."
+        return 0
+    fi
+
+    info "Fast-forwarding $ORIGIN_REMOTE/$MIRROR_BRANCH to $UPSTREAM_REMOTE/$MIRROR_BRANCH"
+    # Pushed straight from the remote-tracking ref: nothing needs checking out,
+    # so this works from any branch and cannot pick up local state by accident.
+    git push "$ORIGIN_REMOTE" "$UPSTREAM_REMOTE/$MIRROR_BRANCH:refs/heads/$MIRROR_BRANCH"
+    git push "$ORIGIN_REMOTE" --tags
+    git branch --force "$MIRROR_BRANCH" "$UPSTREAM_REMOTE/$MIRROR_BRANCH"
+    info "Mirror and tags are current. The gui branch is untouched."
+}
+
+# ---------------------------------------------------------------------------
+# preview
+# ---------------------------------------------------------------------------
+#
+# The point of doing this in a worktree is that it costs nothing to abandon.
+# Knowing a merge is 111 files before starting it is the difference between
+# scheduling the work and discovering it.
+preview_cleanup() {
+    [[ -n "${PREVIEW_WORKTREE:-}" ]] || return 0
+    git worktree remove --force "$PREVIEW_WORKTREE" >/dev/null 2>&1 || true
+    rm -rf "$PREVIEW_WORKTREE"
+}
+
+cmd_preview() {
+    require_remote "$UPSTREAM_REMOTE"
+    git fetch --quiet "$UPSTREAM_REMOTE" --tags
+
+    # Deliberately not `local`: the EXIT trap runs after this function has
+    # returned, and a local would be out of scope by then - which under `set
+    # -u` kills the trap and leaves the worktree behind.
+    PREVIEW_WORKTREE="$(mktemp -d)"
+    trap preview_cleanup EXIT
+
+    info "Trial-merging in a throwaway worktree"
+    git worktree add --quiet --detach "$PREVIEW_WORKTREE" "$WORK_BRANCH"
+
+    local conflicts=0
+    if git -C "$PREVIEW_WORKTREE" merge --no-commit --no-ff \
+        -X "find-renames=$RENAME_THRESHOLD" "$UPSTREAM_REMOTE/$MIRROR_BRANCH" >/dev/null 2>&1; then
+        info "Clean merge. Nothing to think about."
+        return 0
+    fi
+
+    conflicts="$(git -C "$PREVIEW_WORKTREE" diff --name-only --diff-filter=U | wc -l)"
+    echo
+    echo "$conflicts conflicted files."
+    echo
+    echo "By kind:"
+    git -C "$PREVIEW_WORKTREE" status --short | awk '$1 ~ /^(UU|AA|UA|AU|DU|UD|DD)$/ {print $1}' |
+        sort | uniq -c | sort -rn |
+        sed -e 's/UU/both modified/' -e 's/DU/we deleted, they changed/' \
+            -e 's/UD/we changed, they deleted/' -e 's/UA/they added/' \
+            -e 's/AU/we added/' -e 's/DD/both deleted/' -e 's/AA/both added/' |
+        sed 's/^/  /'
+
+    echo
+    echo "By area:"
+    git -C "$PREVIEW_WORKTREE" diff --name-only --diff-filter=U |
+        sed -E 's#^(crates/[^/]+|src/[^/]+|[^/]+)(/.*)?$#\1#' |
+        sort | uniq -c | sort -rn | sed 's/^/  /'
+
+    echo
+    echo "Mechanical, and 'merge' will do these for you:"
+    printf '  %-28s %s\n' "Cargo.lock" \
+        "$(grep -c '^<<<<<<<' "$PREVIEW_WORKTREE/Cargo.lock" 2>/dev/null || echo 0) hunks - regenerated, not merged"
+    printf '  %-28s %s\n' "crate:: -> concord::" \
+        "$(git -C "$PREVIEW_WORKTREE" grep -lE "$REWRITE_RE" -- 'crates/*' 2>/dev/null | wc -l) relocated files carry it"
+
+    echo
+    echo "Nothing has been changed. Run 'merge' when you want the real thing."
+}
+
+# ---------------------------------------------------------------------------
+# merge
+# ---------------------------------------------------------------------------
+cmd_merge() {
+    require_remote "$UPSTREAM_REMOTE"
+    require_clean
+    git fetch --quiet "$UPSTREAM_REMOTE" --tags
+
+    # rerere remembers how a conflict was resolved and replays it the next
+    # time the same one appears. Every recurring conflict here is structural -
+    # the same relocated file, the same import line - so this pays from the
+    # second merge onwards. It is set locally rather than asked for in a doc
+    # nobody reads.
+    git config rerere.enabled true
+    git config rerere.autoupdate true
+
+    local branch
+    branch="merge-upstream-$(date +%Y-%m-%d)"
+    git rev-parse --verify --quiet "$branch" >/dev/null &&
+        die "branch $branch already exists. Finish or delete it first."
+
+    info "Branching $branch off $WORK_BRANCH"
+    git checkout --quiet -b "$branch" "$WORK_BRANCH"
+
+    info "Merging $UPSTREAM_REMOTE/$MIRROR_BRANCH (rename threshold $RENAME_THRESHOLD)"
+    git merge --no-commit --no-ff \
+        -X "find-renames=$RENAME_THRESHOLD" "$UPSTREAM_REMOTE/$MIRROR_BRANCH" || true
+
+    cmd_finish
+
+    local left
+    left="$(git diff --name-only --diff-filter=U | wc -l)"
+    echo
+    if [[ "$left" -eq 0 ]]; then
+        info "Nothing left conflicted. Run gate, then commit."
+    else
+        warn "$left files need reading. Resolve them, then:"
+        echo "     ./scripts/upstream.sh finish   (re-runs the mechanical passes)"
+        echo "     ./scripts/upstream.sh gate"
+        echo "     git commit"
+    fi
+    echo
+    echo "Remember rule 1 in AGENTS.md: an upstream feature that landed in the TUI"
+    echo "is not merged until it exists in crates/gui too. The merge cannot tell you"
+    echo "that; read the upstream log for what arrived:"
+    echo "     git log --oneline $(base_rev)..$UPSTREAM_REMOTE/$MIRROR_BRANCH"
+}
+
+# ---------------------------------------------------------------------------
+# finish
+# ---------------------------------------------------------------------------
+#
+# The mechanical passes, run again once the conflicts are gone. Both of them
+# need a tree that parses, so neither can do its job in the middle of a merge:
+# cargo cannot read a Cargo.toml with conflict markers in it, and rewriting an
+# import inside a conflict hunk produces a file that looks resolved and is
+# not. `merge` calls this too, which catches the files that merged cleanly and
+# still came in with upstream's prefixes - those are the dangerous ones,
+# because they do not conflict, they just fail to compile later.
+cmd_finish() {
+    rewrite_imports
+    resolve_lockfile
+}
+
+# A lockfile is generated, so merging it line by line is meaningless - that
+# trial merge had 58 conflict hunks in Cargo.lock alone. Take our side and let
+# cargo reconcile it against whatever Cargo.toml the merge produced: it adds
+# and drops entries as needed and leaves every other pin alone.
+resolve_lockfile() {
+    if git ls-files -u --error-unmatch Cargo.lock >/dev/null 2>&1; then
+        info "Taking our Cargo.lock; it is generated, not written"
+        git checkout --ours -- Cargo.lock
+        git add Cargo.lock
+    fi
+
+    # Cargo can only reconcile the lockfile once every Cargo.toml in the
+    # workspace parses, so this is a no-op until the conflicts are gone.
+    if git diff --name-only --diff-filter=U | grep -q '^Cargo\.toml$\|/Cargo\.toml$'; then
+        warn "Cargo.toml is still conflicted - relock after you resolve it"
+        return 0
+    fi
+
+    info "Reconciling Cargo.lock against the merged manifests"
+    if in_box "cargo metadata --format-version 1 --quiet >/dev/null"; then
+        git add Cargo.lock
+    else
+        warn "cargo could not read the workspace; Cargo.lock left as ours"
+    fi
+}
+
+# Upstream's own code says `crate::discord`. Here the core is a dependency, so
+# every file that moved out of the root crate says `concord::discord`. An
+# incoming hunk therefore arrives with the wrong prefix even when it merges
+# cleanly, and it fails to compile rather than conflicting - which is the
+# worse failure, because nothing points at it.
+#
+# Only files under crates/ are touched: in the root crate `crate::discord` is
+# still correct and rewriting it would break the build.
+rewrite_imports() {
+    local files
+    # Against HEAD, not the index. A file that merged cleanly is already
+    # staged and identical to the working tree, so a bare `git diff` does not
+    # list it - which silently skipped exactly the files this pass is for.
+    files="$(git diff --name-only --diff-filter=ACMU HEAD -- 'crates/*.rs' | sort -u)"
+    [[ -n "$files" ]] || return 0
+
+    local touched=0 f
+    while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
+        grep -qE "$REWRITE_RE" "$f" || continue
+        # Conflict markers are left alone: rewriting inside one produces a
+        # file that looks resolved and is not.
+        if grep -q '^<<<<<<<' "$f"; then
+            warn "  $f still has conflict markers - imports left for you"
+            continue
+        fi
+        sed -i -E "s/\b$REWRITE_RE/concord::\1/g" "$f"
+        # Staged, not just written. A merge refuses to `--abort` while a file
+        # it needs to restore differs from the index, so leaving these
+        # unstaged took away the one escape hatch from a merge gone wrong.
+        git add -- "$f"
+        touched=$((touched + 1))
+    done <<<"$files"
+
+    [[ "$touched" -gt 0 ]] && info "Rewrote crate:: -> concord:: in $touched file(s)"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# gate
+# ---------------------------------------------------------------------------
+#
+# Both feature sets, because they are different compilations: the core failed
+# to build without `fixtures` for a month while every documented command
+# passed --features fixtures and never noticed.
+cmd_gate() {
+    local jobs fail=0
+    jobs=$(( $(nproc) / 5 ))
+    [[ "$jobs" -lt 1 ]] && jobs=1
+
+    local step
+    for step in \
+        "cargo fmt --all -- --check" \
+        "cargo clippy --features fixtures --all-targets -j $jobs" \
+        "cargo clippy -p concord --all-targets -j $jobs" \
+        "cargo test --features fixtures -j $jobs" \
+        "cargo test -p concord-gui --features fixtures -j $jobs" \
+        "cargo test -p concord -j $jobs"
+    do
+        info "$step"
+        in_box "nice -n 19 $step" || { warn "FAILED: $step"; fail=1; }
+    done
+
+    [[ "$fail" -eq 0 ]] || die "Gate failed."
+    info "Gate clean."
+}
+
+# The host is immutable and has no cmake, which opusic-sys needs, so every
+# cargo invocation goes through the container. See scripts/appimage.sh.
+in_box() {
+    command -v distrobox >/dev/null 2>&1 || die "distrobox not found"
+    local list
+    list="$(distrobox list 2>/dev/null || true)"
+    grep -q "| *$BOX *|" <<<"$list" ||
+        die "distrobox '$BOX' not found. Create it with: setup-build-box.sh --create"
+    distrobox enter "$BOX" -- bash -lc "cd $(printf '%q' "$REPO") && $1"
+}
+
+# ---------------------------------------------------------------------------
+case "${1:-}" in
+    status)    cmd_status ;;
+    sync-main) cmd_sync_main ;;
+    preview)   cmd_preview ;;
+    merge)     cmd_merge ;;
+    finish)    cmd_finish ;;
+    gate)      cmd_gate ;;
+    -h|--help|"") sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \?//' ;;
+    *)         die "unknown command: $1 (try --help)" ;;
+esac
