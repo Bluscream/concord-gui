@@ -837,8 +837,12 @@ fn workspace_manifests() -> Vec<(String, String)> {
             let name = entry.file_name();
             if path.is_dir() {
                 // `target` holds vendored manifests for every dependency, and
-                // their features are not ours to have an opinion about.
-                if name != "target" && name != ".git" {
+                // `.references` holds 114 cloned third-party clients. Neither
+                // is ours, and their features are not ours to have an opinion
+                // about. `.references` is checked out per machine, so leaving
+                // it in makes this test pass on CI and fail on any workstation
+                // that has done the reading AGENTS.md asks for.
+                if name != "target" && name != ".git" && name != ".references" {
                     walk(&path, out);
                 }
             } else if name == "Cargo.toml" {
