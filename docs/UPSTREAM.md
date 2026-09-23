@@ -45,6 +45,55 @@ this fork, and they will produce the same conflicts every time:
 4. **`Cargo.lock` is generated and merges like text.** 58 conflict hunks in
    one file, none of them meaningful.
 
+## What one release actually costs
+
+Measured by merging v2.5.10 - eleven upstream commits, the smallest unit
+available:
+
+| | |
+|---|---|
+| Conflicted files | 38 |
+| Conflict hunks | 54 |
+| Resolved mechanically by this script | 1 file, plus imports in 12 |
+| **Compile errors after every conflict was resolved** | **63** |
+
+That last row is the whole lesson. The conflicts are the easy part. The
+expensive part arrives afterwards, in files the merge never touched, because
+of the files this fork split out of an upstream monolith.
+
+Upstream keeps `voice.rs`, `events.rs` and `gateway.rs` as single files. We
+split each into a directory. When upstream adds a field to a struct in
+`voice.rs`, git offers us the whole monolith as "theirs" against our
+three-line module root as "ours" - and "ours" is obviously right, so the field
+addition goes in the bin with it. Nothing reports this. It surfaces later as
+`no field 'audio_codec'` somewhere else entirely.
+
+On v2.5.10 that accounted for every one of the 63 errors: `VoiceSessionDescription`
+grew three fields, `ChannelInfo` lost four, `GatewayCommand` gained one,
+`ActivityKind::Unknown` became a tuple variant, `RelationshipInfo` gained
+`ignored`, and six new `AppEventKind` variants needed classifying. None of it
+is a disagreement with upstream. All of it is our own code following an API
+change that the merge silently dropped.
+
+`merge` now names those files and prints the diff that shows what upstream did
+to them. Port that diff by hand; do not expect the merge to carry it.
+
+### The bigger lever
+
+The cheapest merge is the one against a tree shaped like upstream's. Two
+choices this fork has already made are what the work above costs:
+
+- **Moving `src/tui` into `crates/tui`** is unavoidable - it is the whole
+  point of the workspace split - and it is cheap, because the conflicts it
+  causes are import lines and a script can rewrite those.
+- **Splitting upstream's files into directories** is not unavoidable, and it
+  is expensive, because it hides upstream's changes rather than conflicting
+  with them. `AGENTS.md` asks for modules under 1,000 lines; upstream does not
+  agree. Every file split in `src/` is a bill paid at every future merge.
+
+Splitting `crates/gui` costs nothing - upstream has no opinion about it.
+Splitting `src/discord` costs on every release, forever.
+
 ## The routine
 
 **Merge one upstream release at a time, and do it when it ships.** This is
@@ -69,7 +118,12 @@ before promising anyone a timeline.
 `merge` turns on `git rerere`, which records how you resolved a conflict and
 replays it when the same one comes round again. Since every recurring conflict
 here is structural - the same relocated file, the same import line - this pays
-from the second merge onwards. Do not turn it off.
+from the second merge onwards. Do not turn it off. The v2.5.10 merge recorded
+31 resolutions; those replay for free next time.
+
+`scripts/conflict-hunks.py` takes a file a hunk at a time - `show` to read both
+sides, `take ours theirs both` to pick. Most files want a different side in
+different places, which is why `git checkout --ours` is usually the wrong tool.
 
 ## What is automated, and what is not
 
@@ -77,6 +131,11 @@ from the second merge onwards. Do not turn it off.
 The `crate:: -> concord::` rewrite on everything under `crates/`. Rename
 detection tuned to 25%, which on the trial merge turned seven delete/modify
 conflicts back into ordinary content conflicts without misattributing any.
+
+**Measured and rejected.** `-X diff-algorithm`. On the same merge, myers,
+minimal, patience and histogram gave 38 files and 52-54 hunks - a difference of
+two hunks across all four. The conflicts look like reordering but are not, so
+the knob is not worth its explanation.
 
 **Not done for you, and deliberately.** `crate::app` is left alone: it is
 valid on both sides and means different things, because `crates/tui` has its
@@ -166,6 +225,29 @@ Read this whole file before starting, then:
   did not port it to `crates/gui`, say so explicitly and add it to
   `docs/PARITY.md`. A silent gap is how invites and forwarding ended up being
   retrofitted.
+
+## Where the backlog stands
+
+At the time of writing `gui` is 87 commits behind across 14 upstream releases,
+and none of them have landed. `merge-upstream-v2.5.10` holds the first one:
+every conflict resolved, the core library compiling, the test and fixture
+targets not. It is committed unfinished on purpose, so the resolution work and
+the rerere cache survive. `scripts/upstream.sh status` prints the rest.
+
+What is left on that branch is all ours rather than the merge's:
+
+- `crates/fixtures/src/backend.rs` still answers `LoadForumPosts` with
+  `ForumPostsLoaded`. Upstream replaced both with `LoadForumPostData` /
+  `ForumPostDataLoaded` and `LoadArchivedThreads` / `ArchivedThreadsLoaded`, so
+  demo mode has to synthesise `ForumPostDataInfo` and `ArchivedThreadsPage`.
+- `src/discord/fixtures.rs::forum_posts` takes a bool where it took the deleted
+  `ForumPostArchiveState`; its callers have not followed.
+- A handful of initialisers have not caught up with the struct changes above.
+
+That shape will repeat: the merge itself is a morning, and then `crates/fixtures`
+has to be taught whatever upstream changed. Demo mode is the fork's best
+feature and its largest standing maintenance cost, because it mirrors an API
+that is not ours.
 
 ## Branch model
 
