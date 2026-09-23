@@ -19,14 +19,16 @@
 # login screen's Demo option into a login that fails with a bare 4004. Once a
 # real release ships, --no-test becomes the default and --test the opt-in.
 #
-# The build runs inside the Arch distrobox because the host (Bazzite) is an
-# immutable OS without cmake, which opusic-sys requires. The resulting binary
-# runs fine on the host, so the shortcuts launch it directly.
+# The build runs inside the build-box distrobox because the host (Bazzite) is
+# an immutable OS without cmake, which opusic-sys requires. The resulting
+# binary runs fine on the host, so the shortcuts launch it directly - but only
+# on this host: build-box is Debian 13, so the binary's glibc floor is the
+# container's. Use scripts/appimage.sh for something portable.
 
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BOX="arch"
+BOX="build-box"
 APP_ID="concord-gui"
 APP_NAME="Concord"
 
@@ -97,7 +99,7 @@ if [[ $BUILD -eq 1 ]]; then
     # false "not found".
     BOX_LIST="$(distrobox list 2>/dev/null || true)"
     grep -q "| *$BOX *|" <<<"$BOX_LIST" ||
-        die "distrobox '$BOX' not found. Create it with: distrobox create --name $BOX --image archlinux:latest"
+        die "distrobox '$BOX' not found. Create it with: setup-build-box.sh --create"
 
     # A duplicate [build] table here breaks every cargo invocation, and this
     # file has been rewritten by other tooling before. Fail loudly rather than
@@ -112,7 +114,7 @@ if [[ $BUILD -eq 1 ]]; then
     if [[ -z "${NO_MEDIA:-}" ]]; then
         if ! distrobox enter "$BOX" -- pkg-config --exists libpipewire-0.3 2>/dev/null; then
             die "--media needs PipeWire headers in '$BOX'. Install them with:
-       distrobox enter $BOX -- sudo pacman -S --needed pipewire clang"
+       distrobox enter $BOX -- sudo apt-get install -y libpipewire-0.3-dev clang"
         fi
     fi
 

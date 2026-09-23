@@ -135,7 +135,7 @@ Run with the token `test` to exercise every rendering path with no account,
 no token and no network:
 
 ```bash
-distrobox enter arch -- cargo run -p concord-gui --features fixtures
+distrobox enter build-box -- cargo run -p concord-gui --features fixtures
 ```
 
 36 headless tests run against it, covering the core -> projection -> view-model
@@ -173,10 +173,10 @@ to start here rather than from either of them.
 ## Build
 
 Bazzite (immutable) lacks `cmake`, which `opusic-sys` requires. Build in the
-Arch distrobox:
+build-box distrobox:
 
 ```bash
-distrobox enter arch -- cargo check -p concord-gui
+distrobox enter build-box -- cargo check -p concord-gui
 ```
 
 ## Known limitation: the `media` feature

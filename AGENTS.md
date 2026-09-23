@@ -369,7 +369,7 @@ Every icon needs a tooltip, and every tooltip goes through the catalogue. Use
 - **Allowed Glyphs**: Always use **Basic Multilingual Plane (BMP)** symbols below `U+FFFF`. Geometric and technical Unicode symbols (e.g. `U+25xx`, `U+26xx`, `U+27xx`) work reliably (`\u{2606}` star, `\u{2573}` cross, `\u{25B2}` pin, `\u{270F}` pencil, `\u{25A3}` lock, `\u{2715}` delete, `\u{25A6}` archive, `\u{260E}` phone).
 - **Automated Validation**: Run `cargo test --workspace --features fixtures -- no_icon_glyph_needs_a_font_we_do_not_ship` to validate glyph codepoint ranges.
   - Always check if an existing `concord-gui` window/process exists (`find_window` or `list_windows`) before launching a new instance, and kill lingering processes to prevent duplicate windows.
-  - Launch using `run_app` with `executable: "distrobox"`, `args: ["enter", "arch", "--", "/path/to/concord-gui"]`, and explicit Wayland/KDE environment variables (`DISPLAY=:0`, `WAYLAND_DISPLAY=wayland-0`, `XDG_RUNTIME_DIR=/run/user/1000`, `RUST_LOG=debug`). Do not pass an auto-connect token argument if testing the login picker screen.
+  - Launch using `run_app` with `executable: "distrobox"`, `args: ["enter", "build-box", "--", "/path/to/concord-gui"]`, and explicit Wayland/KDE environment variables (`DISPLAY=:0`, `WAYLAND_DISPLAY=wayland-0`, `XDG_RUNTIME_DIR=/run/user/1000`, `RUST_LOG=debug`). Do not pass an auto-connect token argument if testing the login picker screen.
 - **Verify in release too.** A dead-code warning that only the release profile
   reports has already caught a feature whose button was never actually added.
   `cargo build --release` before claiming a UI change landed.
