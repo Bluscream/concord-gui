@@ -69,8 +69,19 @@ if [[ $BUILD -eq 1 ]]; then
     info "Building release in '$BOX'${FEATURES:+ (features: $FEATURES)} on $JOBS cores"
     BUILD_ARGS=(build -p "$APP_ID" --release -j "$JOBS")
     [[ -n "$FEATURES" ]] && BUILD_ARGS+=(--features "$FEATURES")
-    distrobox enter "$BOX" -- bash -lc \
-        "cd '$REPO' && exec nice -n 19 cargo ${BUILD_ARGS[*]}" || die "build failed"
+
+    # distrobox wants one command string, so the array has to be flattened -
+    # but NOT with ${BUILD_ARGS[*]}, which joins on the first character of IFS.
+    # IFS is $'\n\t' here, so that produces a newline-separated list; `exec`
+    # takes the first line and never returns, and what actually runs is a bare
+    # `cargo build` - no package, no --release, no --features - while the line
+    # above it prints "Building release (features: fixtures)". Quote each
+    # argument and join on a real space.
+    CMD="cd $(printf '%q' "$REPO") && exec nice -n 19 cargo"
+    for arg in "${BUILD_ARGS[@]}"; do
+        CMD="$CMD $(printf '%q' "$arg")"
+    done
+    distrobox enter "$BOX" -- bash -lc "$CMD" || die "build failed"
 fi
 
 BINARY="$REPO/target/release/$APP_ID"
