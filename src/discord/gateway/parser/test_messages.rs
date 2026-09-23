@@ -2,12 +2,13 @@ use crate::discord::ids::Id;
 use serde_json::json;
 
 use super::{
-    parse_guild_create, parse_guild_emojis_update, parse_guild_update, parse_message_update,
-    parse_user_account_event,
+    parse_guild_create, parse_guild_emojis_update, parse_guild_update, parse_message_create,
+    parse_message_update, parse_user_account_event,
     test_misc::{mention_info, thread_payload},
 };
 use crate::discord::{
-    AppEvent, AttachmentUpdate, ChannelVisibilityStats, DiscordState, PresenceStatus, ReactionEmoji,
+    AppEvent, AttachmentUpdate, ChannelVisibilityStats, DiscordState,
+    MESSAGE_FLAG_IS_COMPONENTS_V2, MessageComponentInfo, PresenceStatus, ReactionEmoji,
 };
 
 #[test]
@@ -781,4 +782,142 @@ fn message_reaction_add_dispatch_parses_reaction_event() {
     assert_eq!(*message_id, Id::new(20));
     assert_eq!(*user_id, Id::new(30));
     assert_eq!(emoji, &ReactionEmoji::Unicode("👍".to_owned()));
+}
+
+#[test]
+fn message_update_parser_distinguishes_absent_and_empty_components() {
+    let cases = [
+        (
+            json!({
+                "id": "20",
+                "channel_id": "10",
+                "content": "edited"
+            }),
+            None,
+        ),
+        (
+            json!({
+                "id": "20",
+                "channel_id": "10",
+                "content": "edited",
+                "components": []
+            }),
+            Some(0),
+        ),
+    ];
+
+    for (payload, expected_len) in cases {
+        let event = parse_message_update(&payload).expect("message update should parse");
+        let AppEvent::MessageUpdateDispatch { update } = event else {
+            panic!("expected message update event");
+        };
+        assert_eq!(
+            update.fields.components.as_ref().map(Vec::len),
+            expected_len
+        );
+    }
+}
+
+#[test]
+fn message_create_parser_keeps_components_v2_display_tree() {
+    let event = parse_message_create(&json!({
+        "id": "20",
+        "channel_id": "10",
+        "author": { "id": "30", "username": "fmbot", "bot": true },
+        "content": "",
+        "flags": MESSAGE_FLAG_IS_COMPONENTS_V2,
+        "attachments": [{
+            "id": "40",
+            "filename": "cover.png",
+            "url": "https://cdn.discordapp.com/cover.png",
+            "proxy_url": "https://media.discordapp.net/cover.png",
+            "content_type": "image/png",
+            "size": 2048,
+            "width": 640,
+            "height": 640
+        }],
+        "components": [{
+            "type": 17,
+            "accent_color": 0x3366cc,
+            "components": [{
+                "type": 10,
+                "content": "# Last.fm\n**neo** listened to a track"
+            }, {
+                "type": 9,
+                "components": [{
+                    "type": 10,
+                    "content": "Artist · Album"
+                }],
+                "accessory": {
+                    "type": 11,
+                    "media": { "url": "attachment://cover.png" },
+                    "description": "Album cover"
+                }
+            }, {
+                "type": 14,
+                "divider": true,
+                "spacing": 2
+            }, {
+                "type": 1,
+                "components": [{
+                    "type": 2,
+                    "style": 5,
+                    "label": "Open Last.fm",
+                    "url": "https://www.last.fm/user/neo"
+                }]
+            }]
+        }]
+    }))
+    .expect("Components V2 message should parse");
+
+    let AppEvent::MessageCreate { message } = event else {
+        panic!("expected message create event");
+    };
+    assert_eq!(message.flags, MESSAGE_FLAG_IS_COMPONENTS_V2);
+    assert_eq!(message.components.len(), 1);
+
+    let MessageComponentInfo::Container {
+        components,
+        accent_color,
+        spoiler,
+    } = &message.components[0]
+    else {
+        panic!("expected container component");
+    };
+    assert_eq!(*accent_color, Some(0x3366cc));
+    assert!(!spoiler);
+    assert!(matches!(
+        &components[0],
+        MessageComponentInfo::TextDisplay { content }
+            if content == "# Last.fm\n**neo** listened to a track"
+    ));
+    assert!(matches!(
+        &components[1],
+        MessageComponentInfo::Section { accessory: Some(accessory), .. }
+            if matches!(
+                accessory.as_ref(),
+                MessageComponentInfo::Thumbnail { media, description, spoiler }
+                    if media.url == "attachment://cover.png"
+                        && description.as_deref() == Some("Album cover")
+                        && !spoiler
+            )
+    ));
+    assert!(matches!(
+        &components[2],
+        MessageComponentInfo::Separator {
+            divider: true,
+            spacing: 2
+        }
+    ));
+    assert!(matches!(
+        &components[3],
+        MessageComponentInfo::ActionRow { components }
+            if matches!(
+                &components[0],
+                MessageComponentInfo::Button { label, url, disabled, .. }
+                    if label.as_deref() == Some("Open Last.fm")
+                        && url.as_deref() == Some("https://www.last.fm/user/neo")
+                        && !disabled
+            )
+    ));
 }

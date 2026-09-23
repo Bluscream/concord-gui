@@ -88,14 +88,13 @@ separate crates. Four consequences, all mechanical, all recurring:
 | `crate::discord`, `crate::config`, … | `concord::…` | `finish` |
 | `pub(crate) fn` the TUI uses | `pub fn` | `finish` |
 | `#[cfg(test)]` on a test constructor | `#[cfg(any(test, feature = "fixtures"))]` | you |
-| `use crate::{discord::…, tui::…}` | two `use` statements | you |
+| `use crate::{discord::…, tui::…}` | two `use` statements | `finish` |
 | A change to a file we split away entirely | ported by hand | `orphans` finds it, you port it |
 
-The last two are not automated because neither is safe to do blind: not every
-`#[cfg(test)]` item is wanted by a front end, and splitting an import group
-wrongly silently repoints code at a different module. `crate::app` is left
-alone for the same reason - it is valid on both sides and means different
-things, because `crates/tui` has its own `mod app`.
+`#[cfg(test)]` is not automated because it is not safe to do blind: not every
+test-only item is wanted by a front end. `crate::app` is left alone for the
+same reason - it is valid on both sides and means different things, because
+`crates/tui` has its own `mod app`.
 
 ### The bigger lever
 
@@ -184,9 +183,24 @@ different places, which is why `git checkout --ours` is usually the wrong tool.
 ## What is automated, and what is not
 
 **Done for you.** The mirror fast-forward. The `Cargo.lock` regeneration.
-The `crate:: -> concord::` rewrite on everything under `crates/`. Rename
-detection tuned to 25%, which on the trial merge turned seven delete/modify
-conflicts back into ordinary content conflicts without misattributing any.
+The `crate:: -> concord::` rewrite on everything under `crates/`, including
+the grouped form `use crate::{discord::…, tui::…}`, which has to become two
+statements and so is a rewrite rather than a substitution
+(`scripts/split-crate-imports.py`). Dropping `use` statements a resolution
+duplicated. Widening `pub(crate)` items the front-end crates cannot reach.
+Rename detection tuned to 25%, which on the trial merge turned seven
+delete/modify conflicts back into ordinary content conflicts without
+misattributing any.
+
+**`finish` tells you where you stand.** It ends by printing the remaining
+compile errors, because the alternative was running cargo yourself to find out
+whether the pass that was supposed to save you that had worked.
+
+**The gate prints why it failed.** Each step's output is captured and the tail
+shown when it fails, and test counts are echoed when it passes. It used to
+report only the name of the failing step, which meant re-running the step by
+hand to find out whether clippy had found two unused imports or the build had
+collapsed.
 
 **The gate runs `-D warnings`, as CI does.** A merge produces exactly the
 warnings that matter - an import left behind by a resolution, a variable

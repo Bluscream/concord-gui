@@ -467,6 +467,7 @@ split_report() {
 # still came in with upstream's prefixes - those are the dangerous ones,
 # because they do not conflict, they just fail to compile later.
 cmd_finish() {
+    split_crate_imports
     rewrite_imports
     dedupe_imports
     resolve_lockfile
@@ -475,6 +476,21 @@ cmd_finish() {
     # rustfmt sorts them, and doing it here keeps the diff about the merge
     # rather than about whitespace.
     in_box "cargo fmt --all" >/dev/null 2>&1 || warn "cargo fmt did not run"
+
+    # Say where the merge actually stands. Without this the pass was silent on
+    # success and silent on failure, so the only way to find out was to run
+    # cargo yourself - which is the step this is supposed to save.
+    local errors
+    errors="$(in_box "cargo check --workspace --all-targets --features fixtures -j 4 --message-format short" 2>&1 |
+        grep -cE "^[^ ]+: error(\[|:)" || true)"
+    if [[ "${errors:-0}" -eq 0 ]]; then
+        info "Workspace compiles. Run 'gate' before committing."
+    else
+        warn "$errors compile error(s) left. These are yours:"
+        in_box "cargo check --workspace --all-targets --features fixtures -j 4 --message-format short" 2>&1 |
+            grep -E "^[^ ]+: error(\[|:)" | head -20 | sed 's/^/  /'
+    fi
+    return 0
 }
 
 # Drop `use` lines a resolution duplicated.
@@ -482,12 +498,26 @@ cmd_finish() {
 # Taking upstream's side of an import hunk re-adds names the fork imports a few
 # lines down, because our copy was rewritten and no longer looks like the same
 # line to git. E0252 across a dozen files, every release, entirely mechanical.
+# `use crate::{discord::…, tui::…}` has to become two statements here. The
+# flat form is a substitution rewrite_imports can do; this one is not, and it
+# arrived as a compile error at every merge until it was automated.
+split_crate_imports() {
+    local files
+    files="$(git diff --name-only --diff-filter=ACMU HEAD -- 'crates/*.rs' | sort -u)"
+    [[ -n "$files" ]] || return 0
+    # shellcheck disable=SC2086  # deliberate word splitting: one path per arg
+    python3 "$REPO/scripts/split-crate-imports.py" $files >/dev/null 2>&1 || true
+    return 0
+}
+
 dedupe_imports() {
     local files
     files="$(git diff --name-only --diff-filter=ACMU HEAD -- 'crates/*.rs' 'src/*.rs' | sort -u)"
     [[ -n "$files" ]] || return 0
+    local dropped
     # shellcheck disable=SC2086  # deliberate word splitting: one path per arg
-    python3 "$REPO/scripts/dedupe-imports.py" $files >/dev/null 2>&1 || true
+    dropped="$(python3 "$REPO/scripts/dedupe-imports.py" $files 2>&1 | tail -n1 || true)"
+    [[ "$dropped" == "0 removed" ]] || info "Imports: ${dropped:-nothing removed}"
     return 0
 }
 
@@ -503,9 +533,13 @@ widen_for_workspace() {
     # rustc quotes the item in backticks; kept in a variable so neither bash
     # nor shellcheck reads them as a command substitution.
     bt=$'\x60'
+    # `|| true`, and it matters: cargo exits non-zero whenever the tree does
+    # not compile, `set -o pipefail` promotes that to the pipeline, and the
+    # failing assignment then killed `finish` under `set -e` - silently, and
+    # only ever when there was work to do. It looked like a no-op pass.
     names="$(in_box "cargo check --workspace --all-targets --features fixtures -j 4 --message-format short" 2>&1 |
         grep -oE "(method|struct|function|enum|associated function) ${bt}[A-Za-z_][A-Za-z0-9_]*${bt} is private" |
-        grep -oE "${bt}[A-Za-z_][A-Za-z0-9_]*${bt}" | tr -d "${bt}" | sort -u)"
+        grep -oE "${bt}[A-Za-z_][A-Za-z0-9_]*${bt}" | tr -d "${bt}" | sort -u || true)"
     [[ -n "$names" ]] || return 0
 
     while IFS= read -r name; do
@@ -663,7 +697,17 @@ cmd_gate() {
         "cargo test -p concord -j $jobs"
     do
         info "$step"
-        in_box "nice -n 19 $step" || { warn "FAILED: $step"; fail=1; }
+        # Captured per step, and the tail printed on failure. The gate used to
+        # report only which step failed: a log with six lines in it and no way
+        # to tell whether clippy found two unused imports or the build died.
+        local log="$REPO/target/.upstream-gate-step.log"
+        if ! in_box "nice -n 19 $step" >"$log" 2>&1; then
+            warn "FAILED: $step"
+            tail -40 "$log" | sed 's/^/  /'
+            fail=1
+        else
+            grep -E "^test result:" "$log" | sed 's/^/  /' || true
+        fi
     done
 
     [[ "$fail" -eq 0 ]] || die "Gate failed."

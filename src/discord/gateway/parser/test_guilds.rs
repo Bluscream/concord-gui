@@ -682,3 +682,19 @@ fn raw_thread_delete_removes_thread_channel() {
             if *guild_id == Some(Id::new(1)) && *channel_id == Id::new(10)
     ));
 }
+
+#[test]
+fn channel_parser_reads_voice_user_limit() {
+    let channel = parse_channel_info(
+        &json!({
+            "id": "10",
+            "type": 2,
+            "name": "Lobby",
+            "user_limit": 5
+        }),
+        Some(Id::new(1)),
+    )
+    .expect("voice channel should parse");
+
+    assert_eq!(channel.user_limit, Some(5));
+}

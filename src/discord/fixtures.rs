@@ -892,10 +892,12 @@ pub fn demo_state() -> DiscordState {
             crate::discord::EmbedFieldInfo {
                 name: "Duration".to_string(),
                 value: "3m 12s".to_string(),
+                inline: false,
             },
             crate::discord::EmbedFieldInfo {
                 name: "Commit".to_string(),
                 value: "48c857c5".to_string(),
+                inline: false,
             },
         ],
         footer_text: Some("finished a moment ago".to_string()),
@@ -964,6 +966,7 @@ pub fn demo_state() -> DiscordState {
         fields: vec![crate::discord::EmbedFieldInfo {
             name: "Language".to_string(),
             value: "Rust".to_string(),
+            inline: false,
         }],
         footer_text: Some("github.com".to_string()),
         ..Default::default()

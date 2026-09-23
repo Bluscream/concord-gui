@@ -50,13 +50,22 @@ def bound_names(body):
         return set()
     if " as " in path:
         return {path.rsplit(" as ", 1)[1].strip()}
-    inner = path[path.index("{") + 1 : path.rindex("}")] if "{" in path else path
+    if "{" in path:
+        if "}" not in path:
+            # A `use` whose braces the merge left unbalanced. Nothing here can
+            # be said about what it binds, so say nothing.
+            return set()
+        inner = path[path.index("{") + 1 : path.rindex("}")]
+    else:
+        inner = path
     names = set()
     for piece in re.split(r",(?![^{]*})", inner):
         piece = piece.strip()
         if not piece or piece.endswith("*"):
             continue
         if "{" in piece:
+            if "}" not in piece:
+                continue
             head = piece[: piece.index("{")].rstrip(": ")
             for nested in piece[piece.index("{") + 1 : piece.rindex("}")].split(","):
                 nested = nested.strip()
@@ -94,7 +103,14 @@ def main():
     total = 0
     for name in sys.argv[1:]:
         path = pathlib.Path(name)
-        dropped = dedupe(path)
+        # Per file, deliberately: one unparseable file used to raise and take
+        # the whole run with it, so a single oddity silently disabled the pass
+        # for every other file on the command line.
+        try:
+            dropped = dedupe(path)
+        except (OSError, ValueError) as error:
+            print(f"{path}: skipped ({error})", file=sys.stderr)
+            continue
         if dropped:
             print(f"{path}: dropped {dropped} duplicate use statement(s)")
         total += dropped

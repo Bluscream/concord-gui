@@ -9,7 +9,7 @@ use crate::discord::ids::{
 
 use crate::discord::{
     ActivityInfo, AttachmentUpdate, EmbedInfo, GuildNotificationSettingsInfo, MemberInfo,
-    MentionInfo, PollInfo, PresenceStatus,
+    MentionInfo, MessageComponentInfo, PollInfo, PresenceStatus,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -38,6 +38,7 @@ pub struct MessageUpdateEventFields {
     pub pinned: Option<bool>,
     pub attachments: AttachmentUpdate,
     pub embeds: Option<Vec<EmbedInfo>>,
+    pub components: Option<Vec<MessageComponentInfo>>,
     pub edited_timestamp: Option<String>,
 }
 
@@ -64,6 +65,7 @@ impl Default for MessageUpdateEventFields {
             flags: None,
             attachments: AttachmentUpdate::Unchanged,
             embeds: None,
+            components: None,
             edited_timestamp: None,
         }
     }

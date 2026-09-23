@@ -12,8 +12,11 @@ use crate::tui::text::{truncate_display_width, truncate_text};
 use crate::tui::theme;
 use crate::tui::ui::thread_card::{thread_card_lines, thread_card_width_in_message};
 use concord::discord::ids::{Id, marker::MessageMarker};
-use concord::discord::{MessageKind, MessageSnapshotInfo, MessageState};
+use concord::discord::{
+    MESSAGE_FLAG_IS_COMPONENTS_V2, MessageKind, MessageSnapshotInfo, MessageState,
+};
 
+use super::components::{ComponentFormatContext, format_component_lines};
 use super::polls::format_poll_result_lines;
 use super::{
     MessageContentLine, display_text_with_stickers, format_attachment_summary_lines,
@@ -261,15 +264,18 @@ pub(super) fn format_forwarded_snapshot(
     state: &DashboardState,
     width: usize,
     loaded_custom_emoji_urls: &[String],
+    next_section_thumbnail_index: &mut usize,
 ) -> Vec<MessageContentLine> {
-    let attachment_summary_lines = if snapshot.attachments.is_empty() {
+    let is_components_v2 = snapshot.flags & MESSAGE_FLAG_IS_COMPONENTS_V2 != 0;
+    let attachment_summary_lines = if is_components_v2 || snapshot.attachments.is_empty() {
         Vec::new()
     } else {
         format_attachment_summary_lines(&snapshot.attachments)
     };
     let mut lines = vec![MessageContentLine::plain("↱ Forwarded".to_owned())];
-    if let Some(content) =
-        display_text_with_stickers(snapshot.content.as_deref(), &snapshot.stickers)
+    if !is_components_v2
+        && let Some(content) =
+            display_text_with_stickers(snapshot.content.as_deref(), &snapshot.stickers)
     {
         let content_width = width.saturating_sub(2).max(1);
         let content = state.render_user_mentions_with_highlights(
@@ -297,14 +303,34 @@ pub(super) fn format_forwarded_snapshot(
             Vec::new(),
         ));
     }
+    if !is_components_v2 {
+        lines.extend(
+            format_embed_lines(
+                &snapshot.embeds,
+                snapshot.content.as_deref(),
+                state.show_custom_emoji(),
+                state.hour_format_24(),
+                width.saturating_sub(2).max(1),
+                loaded_custom_emoji_urls,
+            )
+            .into_iter()
+            .map(|line| prefix_message_content_line_without_underline("│ ", line)),
+        );
+    }
     lines.extend(
-        format_embed_lines(
-            &snapshot.embeds,
-            snapshot.content.as_deref(),
-            state.show_custom_emoji(),
-            state.hour_format_24(),
+        format_component_lines(
+            &snapshot.components,
+            &ComponentFormatContext {
+                guild_id: state.forwarded_snapshot_mention_guild_id(snapshot),
+                mentions: &snapshot.mentions,
+                mention_everyone: false,
+                mention_roles: &[],
+                attachments: &snapshot.attachments,
+            },
+            state,
             width.saturating_sub(2).max(1),
             loaded_custom_emoji_urls,
+            next_section_thumbnail_index,
         )
         .into_iter()
         .map(|line| prefix_message_content_line_without_underline("│ ", line)),

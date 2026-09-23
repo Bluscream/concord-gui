@@ -12,8 +12,11 @@ between two blocks is the slowest possible way to do that, and `git checkout
 --ours` is the wrong tool because it takes the whole file.
 
 `both` concatenates ours then theirs, which is what an import block that gained
-a line on each side wants. `none` drops the hunk entirely - upstream deleting
-something we also changed usually ends there.
+a line on each side wants. It is the dangerous choice: if the conflict boundary
+fell inside a block, our last item and their first get glued into one and rustc
+reports it far away as an unclosed delimiter. `take` warns when our side of a
+`both` leaves its braces open, which is the usual sign. `none` drops the hunk
+entirely - upstream deleting something we also changed usually ends there.
 """
 
 import pathlib
@@ -58,6 +61,17 @@ def show(conflicts):
         print()
 
 
+def brace_delta(lines):
+    """Non-zero when a block of lines opens or closes more braces than it shuts.
+
+    Crude on purpose: braces inside strings or comments are rare in the import
+    and item blocks this is used on, and a false warning costs a glance while
+    a missed one costs an hour.
+    """
+    text = "".join(lines)
+    return text.count("{") - text.count("}")
+
+
 def take(path, parts, conflicts, choices):
     if len(choices) != len(conflicts):
         print(
@@ -66,19 +80,28 @@ def take(path, parts, conflicts, choices):
         )
         return 1
 
-    out, k = [], 0
+    out, k, warnings = [], 0, []
     for kind, *rest in parts:
         if kind == "text":
             out.extend(rest[0])
             continue
         ours, theirs = rest
         choice = choices[k]
+        n_hunk = k + 1
         k += 1
         if choice == "ours":
             out.extend(ours)
         elif choice == "theirs":
             out.extend(theirs)
         elif choice == "both":
+            # A conflict boundary falls wherever the two sides stopped
+            # agreeing, which is very often in the middle of a block. Gluing
+            # our side straight onto theirs then produces a file whose braces
+            # balance overall but whose items have been spliced together, and
+            # rustc reports it hundreds of lines away as an unclosed
+            # delimiter. Warn where the seam is, so it gets looked at.
+            if brace_delta(ours):
+                warnings.append(n_hunk)
             out.extend(ours)
             out.extend(theirs)
         elif choice == "none":
@@ -88,6 +111,12 @@ def take(path, parts, conflicts, choices):
             return 1
     path.write_text("".join(out))
     print(f'{path}: {len(conflicts)} hunk(s) -> {" ".join(choices)}')
+    for n_hunk in warnings:
+        print(
+            f"{path}: hunk {n_hunk} took both sides, but our side does not "
+            f"close its braces - check the seam",
+            file=sys.stderr,
+        )
     return 0
 
 

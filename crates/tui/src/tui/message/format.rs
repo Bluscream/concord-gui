@@ -3,6 +3,7 @@
 //! per-feature renderers to the submodules below.
 
 mod attachments;
+mod components;
 mod embed;
 mod markdown;
 mod polls;
@@ -12,6 +13,7 @@ mod wrap;
 
 pub(in crate::tui) use attachments::format_attachment_summary;
 use attachments::format_attachment_summary_lines;
+use components::{ComponentFormatContext, format_component_lines};
 pub(in crate::tui) use embed::embed_color;
 use embed::format_embed_lines;
 use markdown::wrap_markdown_message_lines_with_loaded_custom_emoji_urls;
@@ -50,7 +52,9 @@ use crate::tui::{
     },
     theme,
 };
-use concord::discord::{MessageState, ReplyInfo, StickerInfo, unicode_emoji_image_url};
+use concord::discord::{
+    MESSAGE_FLAG_IS_COMPONENTS_V2, MessageState, ReplyInfo, StickerInfo, unicode_emoji_image_url,
+};
 
 const EDITED_MARKER: &str = " (edited)";
 
@@ -68,6 +72,7 @@ pub(in crate::tui) struct MessageContentLine {
     mention_highlights: Vec<TextHighlight>,
     styled_prefixes: Vec<StyledPrefix>,
     pub(in crate::tui) image_slots: Vec<MessageContentImageSlot>,
+    pub(in crate::tui) preview_slots: Vec<MessageContentPreviewSlot>,
 }
 
 #[derive(Clone, Copy)]
@@ -90,6 +95,14 @@ pub(in crate::tui) struct MessageContentImageSlot {
     pub(in crate::tui) url: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::tui) struct MessageContentPreviewSlot {
+    pub(in crate::tui) section_thumbnail_index: usize,
+    pub(in crate::tui) col: u16,
+    pub(in crate::tui) width: u16,
+    pub(in crate::tui) height: u16,
+}
+
 impl MessageContentLine {
     pub(in crate::tui) fn plain(text: String) -> Self {
         Self::styled_text(text, Style::default(), Vec::new())
@@ -102,6 +115,7 @@ impl MessageContentLine {
             mention_highlights,
             styled_prefixes: Vec::new(),
             image_slots: Vec::new(),
+            preview_slots: Vec::new(),
         }
     }
 
@@ -313,7 +327,8 @@ pub(in crate::tui) fn format_message_content_sections_with_loaded_custom_emoji_u
     width: usize,
     loaded_custom_emoji_urls: &[String],
 ) -> (Vec<MessageContentLine>, Vec<MessageContentLine>) {
-    let attachment_summary_lines = if message.attachments.is_empty() {
+    let is_components_v2 = message.flags & MESSAGE_FLAG_IS_COMPONENTS_V2 != 0;
+    let attachment_summary_lines = if is_components_v2 || message.attachments.is_empty() {
         Vec::new()
     } else {
         format_attachment_summary_lines(&message.attachments)
@@ -360,7 +375,7 @@ pub(in crate::tui) fn format_message_content_sections_with_loaded_custom_emoji_u
     }
 
     let mut last_standalone_emoji_row = None;
-    let standalone_content = (!renders_poll_card)
+    let standalone_content = (!renders_poll_card && !is_components_v2)
         .then(|| display_text_with_stickers(message.content.as_deref(), &message.stickers))
         .flatten();
     if let Some(value) = standalone_content {
@@ -395,13 +410,30 @@ pub(in crate::tui) fn format_message_content_sections_with_loaded_custom_emoji_u
             ));
         }
     }
-    lines.extend(format_embed_lines(
-        &message.embeds,
-        message.content.as_deref(),
-        state.show_custom_emoji(),
-        state.hour_format_24(),
+    if !is_components_v2 {
+        lines.extend(format_embed_lines(
+            &message.embeds,
+            message.content.as_deref(),
+            state.show_custom_emoji(),
+            state.hour_format_24(),
+            width,
+            loaded_custom_emoji_urls,
+        ));
+    }
+    let mut next_section_thumbnail_index = 0;
+    lines.extend(format_component_lines(
+        &message.components,
+        &ComponentFormatContext {
+            guild_id: message.guild_id,
+            mentions: &message.mentions,
+            mention_everyone: message.mention_everyone,
+            mention_roles: &message.mention_roles,
+            attachments: &message.attachments,
+        },
+        state,
         width,
         loaded_custom_emoji_urls,
+        &mut next_section_thumbnail_index,
     ));
     for attachment in attachment_summary_lines {
         lines.push(MessageContentLine::attachment(truncate_text(
@@ -415,6 +447,7 @@ pub(in crate::tui) fn format_message_content_sections_with_loaded_custom_emoji_u
             state,
             width,
             loaded_custom_emoji_urls,
+            &mut next_section_thumbnail_index,
         ));
     }
     if lines.is_empty() {
@@ -446,8 +479,8 @@ pub(in crate::tui) fn format_message_content_sections_with_loaded_custom_emoji_u
 }
 
 /// Discord treats emoji-only messages as media rather than inline text. Keep
-/// that decision in the formatter so scroll metrics reserve every second image
-/// row before the image protocols finish loading.
+/// that decision in the formatter so scroll metrics reserve the full image
+/// height before the image protocols finish loading.
 struct StandaloneEmoji {
     fallback: String,
     url: String,
@@ -530,11 +563,13 @@ fn format_standalone_emoji_lines(
         lines.push(
             MessageContentLine::styled_text(text, style, Vec::new()).with_image_slots(image_slots),
         );
-        lines.push(MessageContentLine::styled_text(
-            String::new(),
-            style,
-            Vec::new(),
-        ));
+        for _ in 1..EmojiImageSize::Standalone.height() {
+            lines.push(MessageContentLine::styled_text(
+                String::new(),
+                style,
+                Vec::new(),
+            ));
+        }
     }
 
     lines
@@ -570,8 +605,8 @@ fn append_standalone_emoji_edited_marker(
         return;
     }
 
-    // The row immediately after the emoji is occupied by the image. Insert a
-    // separate marker below it instead of letting the image cover the text.
+    // The rows below the anchor are occupied by the image. Insert a separate
+    // marker below them instead of letting the image cover the text.
     let marker_index = line_index
         .saturating_add(usize::from(EmojiImageSize::Standalone.height()))
         .min(lines.len());
@@ -838,6 +873,9 @@ fn prefix_message_content_line(prefix: &str, mut line: MessageContentLine) -> Me
         slot.col = slot.col.saturating_add(col_shift);
         slot.byte_start = slot.byte_start.saturating_add(byte_shift);
     }
+    for slot in &mut line.preview_slots {
+        slot.col = slot.col.saturating_add(col_shift);
+    }
     line.text.insert_str(0, prefix);
     line
 }
@@ -975,6 +1013,7 @@ mod tests {
                 patch_base: false,
             }],
             image_slots: Vec::new(),
+            preview_slots: Vec::new(),
         };
 
         let spans = line.spans();

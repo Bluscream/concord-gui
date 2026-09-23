@@ -182,8 +182,15 @@ what rendering needed, but there is no send path or picker.
 
 ### Still to do
 
-None are wiring jobs. The core has no commands or REST routes for these, so
-each means building from the transport layer up, the way invites were:
+Arrived from upstream, in the TUI only:
+
+| Feature | State here |
+|---|---|
+| Components V2 | Parsed and stored by the core (`MessageComponentInfo`), rendered by `crates/tui`. `crates/gui` shows such a message's fallback text and none of its component tree. Came in with upstream v2.5.14. |
+
+The rest are not wiring jobs. The core has no commands or REST routes for
+these, so each means building from the transport layer up, the way invites
+were:
 
 | Feature | What it needs |
 |---|---|
