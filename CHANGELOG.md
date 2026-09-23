@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.13] - 2026-08-24
+
+### Bug Fixes
+
+- Message member hydration by @chojs23
+
+### Documentation
+
+- Update readme by @chojs23
+
+### Features
+
+- Apply negotiated keyframe intervals to Go Live encoders by @chojs23
+
 ## [2.5.12] - 2026-08-21
 
 ### Bug Fixes

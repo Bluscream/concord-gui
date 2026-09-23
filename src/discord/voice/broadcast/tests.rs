@@ -422,3 +422,23 @@ pub mod shared {
         );
     }
 }
+
+#[test]
+fn broadcast_session_update_publishes_the_new_keyframe_interval() {
+    let mut description = shared::voice_description();
+    let (keyframe_interval_tx, keyframe_interval_rx) =
+        tokio::sync::watch::channel(description.keyframe_interval);
+    let update = serde_json::json!({
+        "op": 14,
+        "d": {
+            "video_codec": "H264",
+            "keyframe_interval": 2_500,
+        },
+    });
+
+    pipeline::apply_broadcast_session_update(&update, &mut description, &keyframe_interval_tx)
+        .expect("broadcast session update should apply");
+
+    assert_eq!(description.keyframe_interval, Some(2_500));
+    assert_eq!(*keyframe_interval_rx.borrow(), Some(2_500));
+}

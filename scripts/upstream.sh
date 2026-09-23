@@ -285,6 +285,9 @@ cmd_preview() {
         "$(git -C "$PREVIEW_WORKTREE" grep -lE "$REWRITE_RE" -- 'crates/*' 2>/dev/null | wc -l) relocated files carry it"
 
     echo
+    cmd_orphans "$target" || true
+
+    echo
     echo "Nothing has been changed. Run 'merge' when you want the real thing."
 }
 
@@ -434,6 +437,12 @@ split_report() {
         printf '  %-52s %s lines changed upstream\n' "$f" "$n"
         printf '      git diff %s:%s %s:%s\n' "${base:0:8}" "$up" "$target" "$up"
     done < <(git diff --name-only --diff-filter=U | sort -u)
+
+    # The warning above only reaches files that conflicted. A split file
+    # upstream changed and we no longer have does not conflict at all, so it
+    # needs its own pass.
+    echo
+    cmd_orphans "$target" || true
 
     return 0
 }
@@ -665,11 +674,69 @@ in_box() {
 }
 
 # ---------------------------------------------------------------------------
+# orphans
+#
+# The expensive failure mode of this fork is not a conflict - it is the
+# absence of one. When upstream changes a file the fork has split, renamed
+# beyond the rename threshold, or deleted, git has nothing on our side to
+# conflict with, so the change merges "cleanly" by disappearing. Nothing in
+# the merge output says so, and the loss surfaces later as a failing test, or
+# not at all.
+#
+# This lists exactly those files: changed upstream in the range, absent from
+# our tree. Every one needs a human or an agent to decide where the change
+# belongs, or to record that it does not apply.
+# ---------------------------------------------------------------------------
+cmd_orphans() {
+    require_remote "$UPSTREAM_REMOTE"
+    git fetch --quiet "$UPSTREAM_REMOTE" --tags
+    local target base
+    target="$(target_rev "${1:-}")"
+    base="$(git merge-base "$WORK_BRANCH" "$target")"
+
+    local found=0 path stat candidates
+    while IFS= read -r path; do
+        [[ -n "$path" ]] || continue
+        git cat-file -e "$WORK_BRANCH:$path" 2>/dev/null && continue
+        if (( found == 0 )); then
+            echo "Upstream changed these files; our tree has no such path."
+            echo "Each one merged without a conflict and without an effect."
+            echo
+            printf '  %-46s %7s  %s\n' "UPSTREAM PATH" "CHANGE" "LIKELY HOME HERE"
+            found=1
+        fi
+        stat="$(git diff --numstat "$base" "$target" -- "$path" |
+            awk '{printf "+%s-%s", $1, $2}')"
+        # A split file usually became a directory of the same stem, and a
+        # relocated one keeps its basename. Check the first, fall back to the
+        # second; both are hints, not answers.
+        local stem="${path%.rs}"
+        candidates="$(git ls-tree -r --name-only "$WORK_BRANCH" |
+            grep -E "^$stem/" | head -4 | tr '\n' ' ')"
+        [[ -n "$candidates" ]] || candidates="$(git ls-tree -r --name-only "$WORK_BRANCH" |
+            grep -E "/$(basename "$path")$" | head -3 | tr '\n' ' ')"
+        printf '  %-46s %7s  %s\n' "$path" "$stat" "${candidates:-<gone - confirm it should be>}"
+    done < <(git diff --name-only "$base" "$target")
+
+    if (( found == 0 )); then
+        info "No orphaned upstream changes in this range."
+        return 0
+    fi
+    echo
+    echo "Read each upstream diff before you finish the merge:"
+    echo "  git show $target -- <upstream path>"
+    echo
+    echo "Exit 1 is deliberate: an unreviewed orphan is a failed check."
+    return 1
+}
+
+# ---------------------------------------------------------------------------
 case "${1:-}" in
     status)    cmd_status ;;
     sync-main) cmd_sync_main ;;
     preview)   cmd_preview "${2:-}" ;;
     merge)     cmd_merge "${2:-}" ;;
+    orphans)   cmd_orphans "${2:-}" ;;
     finish)    cmd_finish ;;
     gate)      cmd_gate ;;
     -h|--help|"") sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \?//' ;;

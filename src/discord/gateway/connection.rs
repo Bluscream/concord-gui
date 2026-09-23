@@ -352,8 +352,9 @@ pub(super) async fn connect_and_run(
         }
     });
 
-    // Main loop: race incoming frames against outgoing user commands. The
-    // heartbeat task is already running on its own cadence in the background.
+    // Main loop: race incoming frames against outgoing work. Keep branch
+    // polling fair because a busy command or dispatch stream must not starve a
+    // due member request or its writer completion.
     let mut member_request_send: Option<InFlightGuildMemberRequest> = None;
     let outcome = loop {
         let member_request_delay = member_request_send
@@ -361,8 +362,6 @@ pub(super) async fn connect_and_run(
             .then(|| resources.guild_member_requests.next_delay(Instant::now()))
             .flatten();
         tokio::select! {
-            biased;
-
             maybe_command = commands.recv() => {
                 match maybe_command {
                     Some(command) => {

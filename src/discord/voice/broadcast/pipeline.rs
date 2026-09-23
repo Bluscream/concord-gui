@@ -12,7 +12,7 @@ use rand::random;
 use serde_json::{Value, json};
 use tokio::{
     net::UdpSocket,
-    sync::{Mutex, mpsc, oneshot},
+    sync::{Mutex, mpsc, oneshot, watch},
     time::timeout,
 };
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
@@ -22,9 +22,9 @@ use super::super::media::GatewayChildTasks;
 use super::super::{
     DISCORD_STREAM_VIDEO_PAYLOAD_TYPE, DISCORD_STREAM_VIDEO_RTX_PAYLOAD_TYPE,
     DISCORD_VOICE_PAYLOAD_TYPE, DiscoveredVoiceAddress, VOICE_OP_READY,
-    VOICE_OP_SESSION_DESCRIPTION, VOICE_OP_SPEAKING, VOICE_WEBSOCKET_CONNECT_TIMEOUT,
-    VoiceConnectionEnd, VoiceRuntimeEvent, VoiceSessionDescription, VoiceStatusPublisher, capture,
-    gateway,
+    VOICE_OP_SESSION_DESCRIPTION, VOICE_OP_SESSION_UPDATE, VOICE_OP_SPEAKING,
+    VOICE_WEBSOCKET_CONNECT_TIMEOUT, VoiceConnectionEnd, VoiceRuntimeEvent,
+    VoiceSessionDescription, VoiceStatusPublisher, capture, gateway,
     preview::StreamPreviewUploader,
     rtp::{VoiceRtpEncryptor, parse_rtp_header},
 };
@@ -72,6 +72,7 @@ pub async fn connect_stream_broadcast(
     let mut ready_audio_ssrc: Option<u32> = None;
     let mut ready_video: Option<BroadcastVideoSsrcs> = None;
     let mut current_description: Option<VoiceSessionDescription> = None;
+    let mut keyframe_interval_tx: Option<watch::Sender<Option<u64>>> = None;
 
     gateway::send_voice_text(&writer, stream_broadcast_identify_payload(session)).await?;
     logging::debug("stream", "broadcast identify sent");
@@ -153,16 +154,7 @@ pub async fn connect_stream_broadcast(
                     }
                     VOICE_OP_SESSION_DESCRIPTION => {
                         let description = gateway::parse_voice_session_description(&value)?;
-                        if description
-                            .video_codec
-                            .as_deref()
-                            .is_some_and(|codec| !codec.eq_ignore_ascii_case("H264"))
-                        {
-                            break Err(BroadcastConnectionFailure::stop(format!(
-                                "stream selected unsupported video codec: {}",
-                                description.video_codec.as_deref().unwrap_or("none")
-                            )));
-                        }
+                        validate_broadcast_video_codec(&description)?;
                         dave_state
                             .lock()
                             .await
@@ -192,6 +184,8 @@ pub async fn connect_stream_broadcast(
                         let media_status_publisher = status_publisher.clone();
                         let preview_uploader = stream_preview_uploader.clone();
                         let captures = broadcast_captures.clone();
+                        let (next_keyframe_interval_tx, keyframe_interval_rx) =
+                            watch::channel(description.keyframe_interval);
                         media_generation = media_generation.wrapping_add(1).max(1);
                         let generation = media_generation;
                         // The previous media task owns the prepared capture until
@@ -202,6 +196,7 @@ pub async fn connect_stream_broadcast(
                             let result = run_stream_broadcast_media(
                                 socket,
                                 media_description,
+                                keyframe_interval_rx,
                                 dave_for_media,
                                 target,
                                 audio_ssrc,
@@ -218,6 +213,7 @@ pub async fn connect_stream_broadcast(
                             let _ = finished.send((generation, result));
                         });
                         child_tasks.install_media_gracefully(media_task, media_stop_tx);
+                        keyframe_interval_tx = Some(next_keyframe_interval_tx);
                         child_tasks
                             .replace_udp_ping(tokio::spawn(gateway::run_voice_udp_ping(
                                 Arc::clone(
@@ -228,6 +224,23 @@ pub async fn connect_stream_broadcast(
                             )))
                             .await;
                         current_description = Some(description);
+                    }
+                    VOICE_OP_SESSION_UPDATE => {
+                        let Some(description) = current_description.as_mut() else {
+                            break Err(BroadcastConnectionFailure::reconnect(
+                                "broadcast session update arrived before session description",
+                            ));
+                        };
+                        let Some(keyframe_interval_tx) = keyframe_interval_tx.as_ref() else {
+                            break Err(BroadcastConnectionFailure::reconnect(
+                                "broadcast session update arrived before media startup",
+                            ));
+                        };
+                        apply_broadcast_session_update(&value, description, keyframe_interval_tx)?;
+                        logging::debug(
+                            "stream",
+                            format!("broadcast session updated: {description:?}"),
+                        );
                     }
                     other => {
                         if !gateway_control
@@ -253,6 +266,33 @@ pub async fn connect_stream_broadcast(
 
     child_tasks.shutdown().await;
     result
+}
+
+fn validate_broadcast_video_codec(
+    description: &VoiceSessionDescription,
+) -> Result<(), BroadcastConnectionFailure> {
+    if description
+        .video_codec
+        .as_deref()
+        .is_some_and(|codec| !codec.eq_ignore_ascii_case("H264"))
+    {
+        return Err(BroadcastConnectionFailure::stop(format!(
+            "stream selected unsupported video codec: {}",
+            description.video_codec.as_deref().unwrap_or("none")
+        )));
+    }
+    Ok(())
+}
+
+pub(super) fn apply_broadcast_session_update(
+    value: &Value,
+    description: &mut VoiceSessionDescription,
+    keyframe_interval_tx: &watch::Sender<Option<u64>>,
+) -> Result<(), BroadcastConnectionFailure> {
+    gateway::apply_voice_session_update(value, description)?;
+    validate_broadcast_video_codec(description)?;
+    keyframe_interval_tx.send_replace(description.keyframe_interval);
+    Ok(())
 }
 
 pub fn broadcast_media_result_for_generation(

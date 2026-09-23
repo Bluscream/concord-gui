@@ -7,7 +7,7 @@ use std::{
 use rand::random;
 use tokio::{
     net::UdpSocket,
-    sync::{Mutex, mpsc, oneshot},
+    sync::{Mutex, mpsc, oneshot, watch},
     task::JoinHandle,
     time::{Instant as TokioInstant, sleep_until},
 };
@@ -504,6 +504,7 @@ pub async fn run_stream_broadcast_audio(
 pub async fn run_stream_broadcast_media(
     socket: Arc<UdpSocket>,
     description: VoiceSessionDescription,
+    mut keyframe_interval_rx: watch::Receiver<Option<u64>>,
     dave_state: Arc<Mutex<VoiceDaveState>>,
     target: StreamCaptureTarget,
     audio_ssrc: u32,
@@ -519,6 +520,10 @@ pub async fn run_stream_broadcast_media(
     let mut prepared_capture = broadcast_captures.take(&stream_key).ok_or_else(|| {
         BroadcastConnectionFailure::stop("prepared stream capture is unavailable")
     })?;
+    prepared_capture
+        .capture
+        .handle
+        .set_keyframe_interval(*keyframe_interval_rx.borrow_and_update());
     let preview_task = match prepared_capture.preview_task.take() {
         Some(preview_task) => preview_task,
         None => {
@@ -569,11 +574,21 @@ pub async fn run_stream_broadcast_media(
     });
     let mut stable_deadline: Option<TokioInstant> = None;
     let mut stable = false;
+    let mut keyframe_interval_updates_open = true;
 
     let result = async {
         loop {
             tokio::select! {
                 _ = &mut stop_rx => return Ok(()),
+                update = keyframe_interval_rx.changed(), if keyframe_interval_updates_open => {
+                    if update.is_err() {
+                        keyframe_interval_updates_open = false;
+                        continue;
+                    }
+                    prepared_capture.capture.handle.set_keyframe_interval(
+                        *keyframe_interval_rx.borrow_and_update(),
+                    );
+                }
                 audio_result = audio_task.completion() => {
                     if let Err(error) = audio_result {
                         report_system_audio_fallback(&status_publisher, error).await;

@@ -171,7 +171,6 @@ const GATEWAY_SEND_LIMIT: usize = 120;
 const GATEWAY_SEND_WINDOW: Duration = Duration::from_secs(60);
 const GATEWAY_SHUTDOWN_LEAVE_TIMEOUT: Duration = Duration::from_millis(1_500);
 /// How long a guild waits before another member request may go out for it.
-const GUILD_MEMBER_REQUEST_INTERVAL: Duration = Duration::from_secs(30);
 const GUILD_MEMBER_REQUEST_RESPONSE_TTL: Duration = Duration::from_secs(2 * 60);
 const MAX_PENDING_GUILD_MEMBER_REQUESTS: usize = 512;
 const MAX_SENT_GUILD_MEMBER_REQUESTS: usize = 512;
@@ -343,7 +342,7 @@ struct GuildMemberRequestScheduler {
     awaiting_response: VecDeque<SentGuildMemberRequest>,
     /// Earliest a guild may be asked again, kept outside `pending` so it
     /// survives a request being dropped and re-queued across a resume.
-    next_guild_request_at: HashMap<Id<GuildMarker>, Instant>,
+    guild_rate_limit_until: HashMap<Id<GuildMarker>, Instant>,
     next_nonce: u64,
 }
 

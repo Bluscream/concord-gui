@@ -89,6 +89,7 @@ separate crates. Four consequences, all mechanical, all recurring:
 | `pub(crate) fn` the TUI uses | `pub fn` | `finish` |
 | `#[cfg(test)]` on a test constructor | `#[cfg(any(test, feature = "fixtures"))]` | you |
 | `use crate::{discord::…, tui::…}` | two `use` statements | you |
+| A change to a file we split away entirely | ported by hand | `orphans` finds it, you port it |
 
 The last two are not automated because neither is safe to do blind: not every
 `#[cfg(test)]` item is wanted by a front end, and splitting an import group
@@ -112,6 +113,42 @@ choices this fork has already made are what the work above costs:
 Splitting `crates/gui` costs nothing - upstream has no opinion about it.
 Splitting `src/discord` costs on every release, forever.
 
+### The silent half of that bill: `upstream.sh orphans`
+
+A split file does not only make conflicts harder. Once the split is far enough
+along that upstream's path no longer exists here at all, upstream's change to
+it stops conflicting. Git has nothing on our side to disagree with, so the
+commit merges clean, the change lands nowhere, and no output anywhere says so.
+
+v2.5.13 is the worked example. Two files:
+
+- `src/discord/gateway.rs` - upstream replaced a fixed 30s per-guild interval
+  with a rate-limit-only delay. The merge took upstream's *tests* for that
+  change (they live in a file we do have) and left `scheduler.rs` on the old
+  behaviour. Four tests failed, which is the good case: something noticed.
+- `src/discord/voice/broadcast.rs` - upstream plumbed the negotiated keyframe
+  interval from the session description through to the Go Live encoders. The
+  receiving half landed here, because `capture.rs` and `encoder.rs` still
+  match upstream's paths. The sending half did not, because `broadcast.rs` is
+  a directory here. `set_keyframe_interval` existed, compiled, and was called
+  by nothing but a test. Nothing failed. The feature was simply absent.
+
+The second case is the one to fear: a clean merge, a green gate, and a feature
+that is not there. Run this before finishing any merge:
+
+    ./scripts/upstream.sh orphans [ref]
+
+It lists every file the range changed upstream that has no such path here,
+with the size of the change and the fork paths that most likely absorbed it.
+It exits 1 while anything is unreviewed, so it can gate a merge rather than
+just advise one. `preview` and `merge` both call it.
+
+The fork also carries losses from *past* splits that no longer show up as
+orphans at all, because upstream has not touched those files since. The
+broadcast gateway's `VOICE_OP_SESSION_UPDATE` arm was one: dropped when
+`broadcast.rs` became `broadcast/`, restored in v2.5.13 only because this
+commit happened to rewrite it. There is no tool for that class - only reading.
+
 ## The routine
 
 **Merge one upstream release at a time, and do it when it ships.** This is
@@ -125,6 +162,7 @@ keeps editing around the other's changes. A single release is a morning.
 ./scripts/upstream.sh preview     # trial-merge in a throwaway worktree
 ./scripts/upstream.sh merge       # the real thing, on merge-upstream-<date>
 #   ... resolve what is left ...
+./scripts/upstream.sh orphans     # upstream changes with nowhere here to land
 ./scripts/upstream.sh finish      # re-run the mechanical passes
 ./scripts/upstream.sh gate        # fmt, clippy, tests, both feature sets
 git commit
@@ -252,6 +290,12 @@ Read this whole file before starting, then:
 - **The gate runs both feature configurations.** `--features fixtures` and
   plain. The core failed to build without `fixtures` for a month because every
   documented command passed that flag. Do not drop one to save time.
+- **A clean merge is not evidence.** Run `orphans` and read every upstream
+  diff it lists before you finish. The absence of a conflict where a file was
+  split means the change was dropped, not that it was not needed - and a green
+  gate will not tell you, because the code that would have exercised it was
+  never written here. This is the only failure mode in this document that
+  leaves no trace at all.
 - **Report what you did not merge.** If upstream added a TUI feature and you
   did not port it to `crates/gui`, say so explicitly and add it to
   `docs/PARITY.md`. A silent gap is how invites and forwarding ended up being
