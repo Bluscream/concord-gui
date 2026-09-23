@@ -452,6 +452,40 @@ split_report() {
 cmd_finish() {
     rewrite_imports
     resolve_lockfile
+    widen_for_workspace
+    # Picking hunks leaves import blocks in whatever order the two sides had.
+    # rustfmt sorts them, and doing it here keeps the diff about the merge
+    # rather than about whitespace.
+    in_box "cargo fmt --all" >/dev/null 2>&1 || warn "cargo fmt did not run"
+}
+
+# Upstream is one crate; we are a workspace.
+#
+# `pub(crate)` reaches upstream's own TUI and does not reach ours, so every
+# item the front ends touch has to widen. The compiler names them, so ask it
+# rather than guessing: eleven items and two structs' worth of fields needed
+# this on v2.5.10, and each one is an error that only appears after everything
+# else compiles.
+widen_for_workspace() {
+    local names name hit widened=0 bt
+    # rustc quotes the item in backticks; kept in a variable so neither bash
+    # nor shellcheck reads them as a command substitution.
+    bt=$'\x60'
+    names="$(in_box "cargo check --workspace --all-targets --features fixtures -j 4 --message-format short" 2>&1 |
+        grep -oE "(method|struct|function|enum|associated function) ${bt}[A-Za-z_][A-Za-z0-9_]*${bt} is private" |
+        grep -oE "${bt}[A-Za-z_][A-Za-z0-9_]*${bt}" | tr -d "${bt}" | sort -u)"
+    [[ -n "$names" ]] || return 0
+
+    while IFS= read -r name; do
+        [[ -n "$name" ]] || continue
+        hit="$(grep -rln "pub(crate) \(fn\|struct\|enum\) $name\b" src/ 2>/dev/null | head -n1)"
+        [[ -n "$hit" ]] || continue
+        sed -i "s/pub(crate) fn $name\b/pub fn $name/; s/pub(crate) struct $name\b/pub struct $name/; s/pub(crate) enum $name\b/pub enum $name/" "$hit"
+        widened=$((widened + 1))
+    done <<<"$names"
+
+    [[ "$widened" -gt 0 ]] && info "Widened $widened item(s) the front-end crates could not reach"
+    return 0
 }
 
 # A lockfile is generated, so merging it line by line is meaningless - that
@@ -575,11 +609,15 @@ cmd_gate() {
     jobs=$(( $(nproc) / 5 ))
     [[ "$jobs" -lt 1 ]] && jobs=1
 
+    # `-D warnings` because CI does, and because a merge produces exactly the
+    # warnings that matter: imports left behind by a resolution, variables
+    # orphaned by a field upstream deleted. A lenient gate passed twelve of
+    # those on v2.5.10 that CI would have rejected.
     local step
     for step in \
         "cargo fmt --all -- --check" \
-        "cargo clippy --features fixtures --all-targets -j $jobs" \
-        "cargo clippy -p concord --all-targets -j $jobs" \
+        "cargo clippy --workspace --all-targets --features fixtures -j $jobs -- -D warnings" \
+        "cargo clippy -p concord --all-targets -j $jobs -- -D warnings" \
         "cargo test --features fixtures -j $jobs" \
         "cargo test -p concord-gui --features fixtures -j $jobs" \
         "cargo test -p concord -j $jobs"

@@ -78,6 +78,24 @@ change that the merge silently dropped.
 `merge` now names those files and prints the diff that shows what upstream did
 to them. Port that diff by hand; do not expect the merge to carry it.
 
+### Four things the split costs at every merge
+
+Upstream is a single crate. This fork is a workspace, and the front ends are
+separate crates. Four consequences, all mechanical, all recurring:
+
+| Upstream writes | Here it must be | Who fixes it |
+|---|---|---|
+| `crate::discord`, `crate::config`, … | `concord::…` | `finish` |
+| `pub(crate) fn` the TUI uses | `pub fn` | `finish` |
+| `#[cfg(test)]` on a test constructor | `#[cfg(any(test, feature = "fixtures"))]` | you |
+| `use crate::{discord::…, tui::…}` | two `use` statements | you |
+
+The last two are not automated because neither is safe to do blind: not every
+`#[cfg(test)]` item is wanted by a front end, and splitting an import group
+wrongly silently repoints code at a different module. `crate::app` is left
+alone for the same reason - it is valid on both sides and means different
+things, because `crates/tui` has its own `mod app`.
+
 ### The bigger lever
 
 The cheapest merge is the one against a tree shaped like upstream's. Two
@@ -131,6 +149,11 @@ different places, which is why `git checkout --ours` is usually the wrong tool.
 The `crate:: -> concord::` rewrite on everything under `crates/`. Rename
 detection tuned to 25%, which on the trial merge turned seven delete/modify
 conflicts back into ordinary content conflicts without misattributing any.
+
+**The gate runs `-D warnings`, as CI does.** A merge produces exactly the
+warnings that matter - an import left behind by a resolution, a variable
+orphaned by a field upstream deleted - and a lenient gate passed twelve of them
+on v2.5.10 that CI would have rejected.
 
 **Measured and rejected.** `-X diff-algorithm`. On the same merge, myers,
 minimal, patience and histogram gave 38 files and 52-54 hunks - a difference of
