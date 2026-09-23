@@ -275,8 +275,12 @@ cmd_preview() {
 
     echo
     echo "Mechanical, and 'merge' will do these for you:"
+    # grep -c prints 0 *and* exits 1 when nothing matches, so `|| echo 0`
+    # printed the count twice. Let the empty case be the default instead.
+    local lock_hunks
+    lock_hunks="$(grep -c '^<<<<<<<' "$PREVIEW_WORKTREE/Cargo.lock" 2>/dev/null || true)"
     printf '  %-28s %s\n' "Cargo.lock" \
-        "$(grep -c '^<<<<<<<' "$PREVIEW_WORKTREE/Cargo.lock" 2>/dev/null || echo 0) hunks - regenerated, not merged"
+        "${lock_hunks:-0} hunks - regenerated, not merged"
     printf '  %-28s %s\n' "crate:: -> concord::" \
         "$(git -C "$PREVIEW_WORKTREE" grep -lE "$REWRITE_RE" -- 'crates/*' 2>/dev/null | wc -l) relocated files carry it"
 
