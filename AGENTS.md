@@ -27,6 +27,12 @@ Never commit to `main`. It exists so upstream changes can be fetched and
 merged deliberately, and it is worth nothing the moment our work is mixed into
 it. `origin` is the fork (`Bluscream/concord-gui`); `upstream` is the original.
 
+Taking upstream's changes is `docs/UPSTREAM.md` and `scripts/upstream.sh`.
+Read the first before running the second. The short version: this fork moved
+the tree upstream keeps editing, so the merge is mostly mechanical and mostly
+automated - and it gets exponentially worse the longer it is left, so merge
+one upstream release at a time rather than saving them up.
+
 ## The crates
 
 The workspace is split by what each part talks to, because the awkwardness is
