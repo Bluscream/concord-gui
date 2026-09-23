@@ -95,6 +95,9 @@ pub fn relationship(
         nickname: None,
         display_name: member.map(|member| member.display_name.clone()),
         username: member.and_then(|member| member.username.clone()),
+        // Nobody in the demo is ignored; the pane is more interesting with
+        // everyone visible.
+        ignored: false,
     }
 }
 

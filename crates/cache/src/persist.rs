@@ -377,6 +377,10 @@ mod tests {
             guild_id: concord::discord::ids::Id::new(1),
             name: "server".to_owned(),
             member_count: None,
+            // Nothing stored carries a thread snapshot, so replay says so
+            // rather than claiming an empty one is complete.
+            thread_snapshot_complete: false,
+            current_user_thread_members: Vec::new(),
             owner_id: None,
             boost_tier: concord::discord::GuildBoostTier::default(),
             boost_count: 0,

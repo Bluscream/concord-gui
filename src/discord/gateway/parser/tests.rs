@@ -6,7 +6,8 @@ use super::{
     parse_user_account_event,
 };
 use crate::discord::{
-    AppEvent, FriendStatus, GuildMemberListItem, GuildMemberListOperation, GuildOnboardingMode,
+    ActivityKind, AppEvent, FriendStatus, GuildMemberListItem, GuildMemberListOperation,
+    GuildOnboardingMode,
     GuildVerificationLevel, PresenceStatus,
 };
 

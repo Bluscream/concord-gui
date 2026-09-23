@@ -38,16 +38,8 @@ fn raw_thread_list_sync_upserts_all_threads() {
             assert_eq!(sync.threads.len(), 2);
             assert_eq!(sync.threads[0].channel_id, Id::new(10));
             assert_eq!(sync.threads[0].name, "release notes");
-            assert_eq!(
-                sync.threads[0].current_user_thread_notification_flags,
-                Some(3)
-            );
             assert_eq!(sync.threads[1].channel_id, Id::new(11));
             assert_eq!(sync.threads[1].name, "bug reports");
-            assert_eq!(
-                sync.threads[1].current_user_thread_notification_flags,
-                Some(8)
-            );
         }
         other => panic!("expected one ThreadListSync, got {other:?}"),
     }

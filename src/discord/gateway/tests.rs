@@ -1,5 +1,6 @@
 use super::{
-    ConnectionOutcome, GATEWAY_SEND_LIMIT, GATEWAY_SEND_WINDOW,     GatewayCommand, GatewayHandshake, GatewayPresence,
+    ConnectionOutcome, GATEWAY_SEND_LIMIT, GATEWAY_SEND_WINDOW, GUILD_MEMBER_REQUEST_INTERVAL,
+    GatewayCommand, GatewayHandshake, GatewayPresence,
     GatewaySendWindow, GatewaySender, GatewaySessionResources, GatewayZlibDecoder,
     GuildMemberRequestKind, GuildMemberRequestScheduler, HeartbeatAckState,
     MAX_PENDING_GUILD_MEMBER_REQUESTS, SessionState, SubscriptionDeduper,

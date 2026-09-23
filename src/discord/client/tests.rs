@@ -1601,6 +1601,8 @@ async fn publish_permission_authorization_fixture(
             presences: Vec::new(),
             roles,
             emojis: Vec::new(),
+            // Ours: upstream's GuildCreate has no stickers field.
+            stickers: Vec::new(),
         })
         .await;
 }

@@ -245,8 +245,9 @@ impl GuildMemberRequestScheduler {
             .in_flight
             .take()
             .expect("sent guild member request exists");
+        let guild_id = completed.request.guild_id;
+        self.delay_guild_until(guild_id, sent_at + GUILD_MEMBER_REQUEST_INTERVAL);
         if let Some(retry_at) = completed.retry_at {
-            let guild_id = completed.request.guild_id;
             self.pending.push_front(PendingGuildMemberRequest {
                 request: completed.request,
                 send_at: retry_at,

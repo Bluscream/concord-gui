@@ -381,7 +381,7 @@ mod activity_display_tests {
     #[test]
     fn an_unknown_kind_shows_the_name_without_inventing_a_verb() {
         let activity = ActivityInfo {
-            kind: ActivityKind::Unknown,
+            kind: ActivityKind::Unknown(99),
             ..ActivityInfo::playing("Something")
         };
         assert_eq!(activity.display_line().as_deref(), Some("Something"));
