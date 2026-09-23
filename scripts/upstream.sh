@@ -451,12 +451,27 @@ split_report() {
 # because they do not conflict, they just fail to compile later.
 cmd_finish() {
     rewrite_imports
+    dedupe_imports
     resolve_lockfile
     widen_for_workspace
     # Picking hunks leaves import blocks in whatever order the two sides had.
     # rustfmt sorts them, and doing it here keeps the diff about the merge
     # rather than about whitespace.
     in_box "cargo fmt --all" >/dev/null 2>&1 || warn "cargo fmt did not run"
+}
+
+# Drop `use` lines a resolution duplicated.
+#
+# Taking upstream's side of an import hunk re-adds names the fork imports a few
+# lines down, because our copy was rewritten and no longer looks like the same
+# line to git. E0252 across a dozen files, every release, entirely mechanical.
+dedupe_imports() {
+    local files
+    files="$(git diff --name-only --diff-filter=ACMU HEAD -- 'crates/*.rs' 'src/*.rs' | sort -u)"
+    [[ -n "$files" ]] || return 0
+    # shellcheck disable=SC2086  # deliberate word splitting: one path per arg
+    python3 "$REPO/scripts/dedupe-imports.py" $files >/dev/null 2>&1 || true
+    return 0
 }
 
 # Upstream is one crate; we are a workspace.
@@ -605,6 +620,14 @@ rewrite_imports() {
 # to build without `fixtures` for a month while every documented command
 # passed --features fixtures and never noticed.
 cmd_gate() {
+    # cargo serialises on the build directory, and two gates started by
+    # accident do not queue politely - they sit on each other's locks until
+    # one is killed. One at a time.
+    exec 9>"$REPO/target/.upstream-gate.lock" 2>/dev/null || true
+    if ! flock -n 9 2>/dev/null; then
+        die "another gate is already running in this checkout"
+    fi
+
     local jobs fail=0
     jobs=$(( $(nproc) / 5 ))
     [[ "$jobs" -lt 1 ]] && jobs=1
