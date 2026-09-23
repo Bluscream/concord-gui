@@ -15,6 +15,7 @@ use super::super::{
         ActiveModalPopupKind, ChannelThreadItem, DashboardState, MAX_MENTION_PICKER_VISIBLE,
         SelectablePopupTarget,
     },
+    text::EmojiImageSize,
     ui::{ImagePreviewLayout, avatar_gutter_width, thread_card},
 };
 
@@ -99,6 +100,7 @@ impl AvatarTarget {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::tui) struct EmojiImageTarget {
     pub(super) url: String,
+    pub(super) image_size: EmojiImageSize,
 }
 
 const MAX_ALBUM_PREVIEW_TILES: usize = 4;
@@ -720,11 +722,12 @@ pub(in crate::tui) fn visible_emoji_image_targets(state: &DashboardState) -> Vec
 
     if state.is_composing() {
         for completion in state.composer_emoji_image_completions() {
-            if seen.insert(completion.url.clone()) {
-                targets.push(EmojiImageTarget {
-                    url: completion.url,
-                });
-            }
+            push_emoji_image_target(
+                completion.url,
+                EmojiImageSize::Compact,
+                &mut seen,
+                &mut targets,
+            );
         }
     }
 
@@ -735,10 +738,8 @@ pub(in crate::tui) fn visible_emoji_image_targets(state: &DashboardState) -> Vec
             let window_start = state.composer_emoji_window_start(visible_items, candidates.len());
             let window_end = (window_start + visible_items).min(candidates.len());
             for candidate in &candidates[window_start..window_end] {
-                if let Some(url) = candidate.custom_image_url.clone()
-                    && seen.insert(url.clone())
-                {
-                    targets.push(EmojiImageTarget { url });
+                if let Some(url) = candidate.custom_image_url.clone() {
+                    push_emoji_image_target(url, EmojiImageSize::Compact, &mut seen, &mut targets);
                 }
             }
         }
@@ -765,10 +766,8 @@ pub(in crate::tui) fn visible_emoji_image_targets(state: &DashboardState) -> Vec
                 .min(reactions.len().saturating_sub(visible_items));
             let end = (start + visible_items).min(reactions.len());
             for reaction in &reactions[start..end] {
-                if let Some(url) = reaction.custom_image_url()
-                    && seen.insert(url.clone())
-                {
-                    targets.push(EmojiImageTarget { url });
+                if let Some(url) = reaction.custom_image_url() {
+                    push_emoji_image_target(url, EmojiImageSize::Compact, &mut seen, &mut targets);
                 }
             }
         }
@@ -778,10 +777,8 @@ pub(in crate::tui) fn visible_emoji_image_targets(state: &DashboardState) -> Vec
     // view, so its reactions feed the shared cache too.
     if let Some(popup) = state.reaction_users_popup() {
         for entry in popup.entries() {
-            if let Some(url) = entry.emoji().custom_image_url()
-                && seen.insert(url.clone())
-            {
-                targets.push(EmojiImageTarget { url });
+            if let Some(url) = entry.emoji().custom_image_url() {
+                push_emoji_image_target(url, EmojiImageSize::Compact, &mut seen, &mut targets);
             }
         }
     }
@@ -793,19 +790,13 @@ pub(in crate::tui) fn visible_emoji_image_targets(state: &DashboardState) -> Vec
             if reaction.count == 0 {
                 continue;
             }
-            if let Some(url) = reaction.emoji.custom_image_url()
-                && seen.insert(url.clone())
-            {
-                targets.push(EmojiImageTarget { url });
+            if let Some(url) = reaction.emoji.custom_image_url() {
+                push_emoji_image_target(url, EmojiImageSize::Compact, &mut seen, &mut targets);
             }
         }
         for line in format_message_content_lines(message, state, EMOJI_PREFETCH_FORMAT_WIDTH) {
             for slot in &line.image_slots {
-                if seen.insert(slot.url.clone()) {
-                    targets.push(EmojiImageTarget {
-                        url: slot.url.clone(),
-                    });
-                }
+                push_emoji_image_target(slot.url.clone(), slot.image_size, &mut seen, &mut targets);
             }
         }
     }
@@ -814,19 +805,15 @@ pub(in crate::tui) fn visible_emoji_image_targets(state: &DashboardState) -> Vec
     // collect their URLs here for the shared emoji image cache.
     for post in state.visible_thread_card_items() {
         for reaction in thread_card::thread_card_visible_reactions(&post) {
-            if let Some(url) = reaction.emoji.custom_image_url()
-                && seen.insert(url.clone())
-            {
-                targets.push(EmojiImageTarget { url });
+            if let Some(url) = reaction.emoji.custom_image_url() {
+                push_emoji_image_target(url, EmojiImageSize::Compact, &mut seen, &mut targets);
             }
         }
         // Custom forum-tag emoji are overlaid as images on the card's tags row,
         // so their CDN urls also have to be fetched into the shared cache.
         for tag in &post.applied_tags {
-            if let Some(url) = tag.custom_emoji_url.clone()
-                && seen.insert(url.clone())
-            {
-                targets.push(EmojiImageTarget { url });
+            if let Some(url) = tag.custom_emoji_url.clone() {
+                push_emoji_image_target(url, EmojiImageSize::Compact, &mut seen, &mut targets);
             }
         }
     }
@@ -847,16 +834,34 @@ pub(in crate::tui) fn visible_emoji_image_targets(state: &DashboardState) -> Vec
     targets
 }
 
+fn push_emoji_image_target(
+    url: String,
+    image_size: EmojiImageSize,
+    seen: &mut HashSet<String>,
+    targets: &mut Vec<EmojiImageTarget>,
+) {
+    if seen.insert(url.clone()) {
+        targets.push(EmojiImageTarget { url, image_size });
+        return;
+    }
+
+    if image_size == EmojiImageSize::Standalone {
+        let target = targets
+            .iter_mut()
+            .find(|target| target.url == url)
+            .expect("seen emoji URL has a render target");
+        target.image_size = EmojiImageSize::Standalone;
+    }
+}
+
 fn push_activity_emoji_targets<'a>(
     activities: impl IntoIterator<Item = &'a ActivityInfo>,
     seen: &mut HashSet<String>,
     targets: &mut Vec<EmojiImageTarget>,
 ) {
     for activity in activities {
-        if let Some(url) = activity.emoji.as_ref().and_then(|emoji| emoji.image_url())
-            && seen.insert(url.clone())
-        {
-            targets.push(EmojiImageTarget { url });
+        if let Some(url) = activity.emoji.as_ref().and_then(|emoji| emoji.image_url()) {
+            push_emoji_image_target(url, EmojiImageSize::Compact, seen, targets);
         }
     }
 }

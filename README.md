@@ -285,7 +285,7 @@ These shortcuts act on the selected message when the Messages pane is focused.
 | Key | Action                     |
 | --- | -------------------------- |
 | `y` | Copy message text          |
-| `r` | Add or remove a reaction   |
+| `r` | Open the reaction picker   |
 | `R` | Reply                      |
 | `d` | Delete                     |
 | `e` | Edit                       |
@@ -367,6 +367,11 @@ hour_format_24 = true
 [composer]
 # Send custom emoji your account cannot use directly as image links.
 emojis_as_links = false
+
+[reactions]
+# Up to 10 unicode emoji pinned at the top of the reaction picker.
+# When unset or empty, Concord uses the built-in quick reactions.
+# favorite_emojis = ["🔥", "👍", "❤️", "😂", "🎉", "😮", "😢", "🙏", "👀", "💯"]
 
 [presence]
 # Relay Rich Presence from local apps as your activity.
@@ -574,8 +579,8 @@ ToggleReplyPing = "<A-p>"
 
 ### Theme
 
-See [Theme options](./docs/theme-options.md) for available groups, values, and
-border shapes.
+See [Theme options](./docs/theme-options.md) for available groups, values,
+border shapes, and selection marker settings.
 
 <details>
 <summary>Default theme config</summary>
@@ -600,6 +605,11 @@ default = "plain"
 composer = "rounded"
 message = "rounded"
 forum = "rounded"
+
+# Selection markers are UI glyphs. This value is shared by list panes and
+# pickers, while `highlight.SelectionMarker` controls its style.
+[ui.indicator]
+selection = "▸ "
 
 [highlight.Normal]
 foreground = "terminal_default"
@@ -1038,6 +1048,12 @@ That said, Concord is not an official Discord client. Using unofficial clients, 
 ## Contributing
 
 Any issues, pull requests, and feedback are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
+
+## Third-party assets
+
+Unicode emoji images are provided by [Twemoji](https://github.com/jdecked/twemoji),
+Copyright 2020 Twitter, Inc. and other contributors, under the
+[CC-BY 4.0 license](https://creativecommons.org/licenses/by/4.0/).
 
 ## License
 

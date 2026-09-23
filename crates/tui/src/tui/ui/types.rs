@@ -35,6 +35,7 @@ pub struct AvatarImage<'a> {
 pub struct EmojiImage<'a> {
     pub url: String,
     pub protocol: &'a Protocol,
+    pub standalone_protocol: Option<&'a Protocol>,
 }
 
 #[derive(Clone, Copy)]
@@ -106,5 +107,6 @@ pub(super) struct UserProfilePopupText {
     pub(super) lines: Vec<Line<'static>>,
     pub(super) emoji_overlays: Vec<(usize, String)>,
     pub(super) cursor: Option<(usize, usize)>,
+    pub(super) reveal_rows: Option<std::ops::Range<usize>>,
     pub(super) picker_rows: Option<std::ops::Range<usize>>,
 }

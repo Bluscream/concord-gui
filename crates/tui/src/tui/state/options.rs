@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use crate::tui::keybindings::KeyBindings;
 use concord::config::{
     AppOptions, ComposerOptions, CredentialOptions, DisplayOptions, ImagePreviewQualityPreset,
-    KeymapOptions, NotificationOptions, PresenceOptions, UiStateOptions, VoiceOptions,
-    VoiceParticipantPlaybackOption,
+    KeymapOptions, NotificationOptions, PresenceOptions, ReactionOptions, UiStateOptions,
+    VoiceOptions, VoiceParticipantPlaybackOption,
 };
 use concord::discord::ids::{Id, marker::UserMarker};
 use concord::discord::{AppCommand, VoiceAudioSourceOptions, VoiceParticipantPlaybackSettings};
@@ -78,6 +78,8 @@ pub(super) struct SettingsState {
     pub(super) ui_state_open_tabs:
         Vec<concord::discord::Id<concord::discord::marker::ChannelMarker>>,
     pub(super) ui_state_active_tab: usize,
+    // Not editable in the TUI: favorite reaction emojis live in config.toml.
+    pub(super) reaction_options: ReactionOptions,
     pub(super) key_bindings: KeyBindings,
     pub(super) voice_participant_playback:
         BTreeMap<Id<UserMarker>, VoiceParticipantPlaybackSettings>,
@@ -114,6 +116,10 @@ impl DashboardState {
 
     pub(in crate::tui) fn apply_presence_options(&mut self, presence_options: PresenceOptions) {
         self.options.presence_options = presence_options;
+    }
+
+    pub(in crate::tui) fn apply_reaction_options(&mut self, reaction_options: ReactionOptions) {
+        self.options.reaction_options = reaction_options;
     }
 
     #[cfg(test)]
@@ -377,6 +383,7 @@ impl DashboardState {
         Some(AppOptions {
             display: self.options.display_options,
             composer: self.options.composer_options,
+            reactions: self.options.reaction_options.clone(),
             credentials: self.options.credential_options,
             notifications: self.options.notification_options.clone(),
             voice: self.options.voice_options.clone(),

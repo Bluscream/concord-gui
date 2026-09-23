@@ -12,6 +12,12 @@ name = "concord"
 path = "src/main.rs"
 
 [dependencies]
+# Lottie stickers. Upstream carries this in the root manifest because it
+# is one crate; over here the decoder lives in this one.
+thorvg = { version = "0.5.1", default-features = false, features = [
+  "vendored",
+  "lottie",
+] }
 concord = { path = "../.." }
 # The offline cache. A front end rather than the core is what decides to keep
 # anything, which is why this is a dependency here and not there.

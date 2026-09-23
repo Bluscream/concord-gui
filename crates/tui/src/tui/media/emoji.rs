@@ -2,7 +2,7 @@ use std::{collections::HashSet, time::Instant};
 
 use ratatui_image::picker::Picker;
 
-use crate::tui::ui::EmojiImage;
+use crate::tui::{text::EmojiImageSize, ui::EmojiImage};
 use concord::discord::{AppCommand, AppEvent};
 
 use super::{
@@ -36,12 +36,26 @@ pub(super) enum EmojiImageEntry {
     Ready {
         generation: u64,
         image: DecodedMediaImage,
-        protocols: Box<RenderProtocolCache<usize>>,
+        protocols: Box<EmojiProtocolCaches>,
         last_used: u64,
     },
     Failed {
         last_used: u64,
     },
+}
+
+pub(super) struct EmojiProtocolCaches {
+    pub(super) compact: RenderProtocolCache<usize>,
+    pub(super) standalone: RenderProtocolCache<usize>,
+}
+
+impl EmojiProtocolCaches {
+    fn new() -> Self {
+        Self {
+            compact: RenderProtocolCache::new(),
+            standalone: RenderProtocolCache::new(),
+        }
+    }
 }
 
 impl MediaImageCacheEntry for EmojiImageEntry {
@@ -121,15 +135,30 @@ impl EmojiImageCache {
                     ..
                 } = entry
                     && let Some(picker) = self.picker.as_ref()
-                    && protocols.request_build(&image.current_frame_index())
                 {
-                    self.protocol_jobs.push(MediaProtocolBuildJob::emoji(
-                        target.url.clone(),
-                        *generation,
-                        image.current_frame_index(),
-                        picker.clone(),
-                        image.current_frame_shared(),
-                    ));
+                    let frame_index = image.current_frame_index();
+                    if protocols.compact.request_build(&frame_index) {
+                        self.protocol_jobs.push(MediaProtocolBuildJob::emoji(
+                            target.url.clone(),
+                            *generation,
+                            frame_index,
+                            EmojiImageSize::Compact,
+                            picker.clone(),
+                            image.current_frame_shared(),
+                        ));
+                    }
+                    if target.image_size == EmojiImageSize::Standalone
+                        && protocols.standalone.request_build(&frame_index)
+                    {
+                        self.protocol_jobs.push(MediaProtocolBuildJob::emoji(
+                            target.url.clone(),
+                            *generation,
+                            frame_index,
+                            EmojiImageSize::Standalone,
+                            picker.clone(),
+                            image.current_frame_shared(),
+                        ));
+                    }
                 }
             }
         }
@@ -142,9 +171,18 @@ impl EmojiImageCache {
                 else {
                     return None;
                 };
+                let frame_index = image.current_frame_index();
+                let protocol = protocols.compact.get_or_last(&frame_index)?;
+                let standalone_protocol = match target.image_size {
+                    EmojiImageSize::Compact => None,
+                    EmojiImageSize::Standalone => {
+                        Some(protocols.standalone.get_or_last(&frame_index)?)
+                    }
+                };
                 Some(EmojiImage {
                     url: target.url.clone(),
-                    protocol: protocols.get_or_last(&image.current_frame_index())?,
+                    protocol,
+                    standalone_protocol,
                 })
             })
             .collect()
@@ -244,7 +282,7 @@ impl EmojiImageCache {
                     EmojiImageEntry::Ready {
                         generation: result_generation,
                         image,
-                        protocols: Box::new(RenderProtocolCache::new()),
+                        protocols: Box::new(EmojiProtocolCaches::new()),
                         last_used,
                     },
                 );
@@ -283,7 +321,7 @@ impl EmojiImageCache {
             else {
                 continue;
             };
-            if visible.contains(url.as_str()) && !protocols.is_empty() {
+            if visible.contains(url.as_str()) && !protocols.compact.is_empty() {
                 image.start_animation(now);
             } else {
                 image.pause_animation();
@@ -308,7 +346,12 @@ impl EmojiImageCache {
     }
 
     pub(in crate::tui) fn store_protocol(&mut self, completed: MediaProtocolBuildResult) {
-        let MediaProtocolBuildTarget::Emoji { url, frame_index } = completed.target else {
+        let MediaProtocolBuildTarget::Emoji {
+            url,
+            frame_index,
+            image_size,
+        } = completed.target
+        else {
             return;
         };
         let failed = match self.cache.entries.get_mut(&url) {
@@ -316,9 +359,17 @@ impl EmojiImageCache {
                 generation,
                 protocols,
                 ..
-            }) if *generation == completed.generation => protocols
-                .store_result(frame_index, completed.result)
-                .is_err(),
+            }) if *generation == completed.generation => {
+                let result = match image_size {
+                    EmojiImageSize::Compact => protocols
+                        .compact
+                        .store_result(frame_index, completed.result),
+                    EmojiImageSize::Standalone => protocols
+                        .standalone
+                        .store_result(frame_index, completed.result),
+                };
+                image_size == EmojiImageSize::Compact && result.is_err()
+            }
             _ => false,
         };
         if failed {

@@ -94,7 +94,7 @@ pub use commands::{
     MAX_PROFILE_AVATAR_BYTES, MAX_UPLOAD_ATTACHMENT_COUNT, MAX_UPLOAD_PREVIEW_BYTES,
     MessageAttachmentUpload, ReactionEmoji,
 };
-pub use emoji::custom_emoji_image_url;
+pub use emoji::{custom_emoji_image_url, unicode_emoji_image_url};
 pub use events::{
     AppEvent, GatewayDispatchInfo, GuildMemberListItem, GuildMemberListOperation,
     GuildMemberListUpdateInfo, GuildMembersChunkInfo, MessageHistoryLoadTarget,
@@ -127,7 +127,8 @@ pub use presence::{
     ActivitySecrets, ActivityTimestamps, PresenceStatus,
 };
 pub use profile::{
-    FriendStatus, MutualGuildInfo, RelationshipInfo, RelationshipUpdateInfo, UserProfileInfo,
+    FriendStatus, MutualFriendInfo, MutualGuildInfo, RelationshipInfo, RelationshipUpdateInfo,
+    UserProfileInfo,
 };
 pub use read::ReadStateInfo;
 pub use remote_config::RemoteConfig;

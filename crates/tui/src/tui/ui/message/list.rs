@@ -304,6 +304,7 @@ pub(in crate::tui::ui) fn render_messages(
 struct BodyEmojiSlot {
     line_index: usize,
     col: u16,
+    image_size: EmojiImageSize,
     url: String,
 }
 
@@ -344,6 +345,7 @@ fn message_viewport_lines_from_plan(
                     line.image_slots.iter().map(move |slot| BodyEmojiSlot {
                         line_index,
                         col: slot.col,
+                        image_size: slot.image_size,
                         url: slot.url.clone(),
                     })
                 })
@@ -535,6 +537,7 @@ fn render_inline_reaction_emojis(
                 row_in_list: reaction_top + slot.line as isize,
                 col: base_col + slot.col as isize,
                 max_width: u16::MAX,
+                image_size: EmojiImageSize::Compact,
                 url: slot.url,
             })
         });
@@ -569,6 +572,7 @@ fn render_inline_message_body_emojis(
                 row_in_list: body_top + slot.line_index as isize,
                 col: base_col + slot.col as isize,
                 max_width: u16::MAX,
+                image_size: slot.image_size,
                 url: slot.url,
             })
         });

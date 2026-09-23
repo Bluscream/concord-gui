@@ -9,7 +9,7 @@ use concord::discord::ids::{
     Id,
     marker::{ChannelMarker, MessageMarker, RoleMarker},
 };
-use concord::discord::{ChannelState, MessageHistoryAfterMode, MessageState};
+use concord::discord::{ChannelState, MessageHistoryAfterMode, MessageState, StickerInfo};
 
 use super::scroll::{
     SCROLL_OFF, clamp_list_scroll, move_index_down, move_index_down_by, move_index_up,
@@ -1368,9 +1368,7 @@ impl DashboardState {
     }
 
     pub(super) fn thread_message_preview_text(&self, message: &MessageState) -> String {
-        if let Some(content) =
-            message_preview_text(message.content.as_deref(), &message.sticker_names)
-        {
+        if let Some(content) = message_preview_text(message.content.as_deref(), &message.stickers) {
             return self
                 .render_user_mentions(message.guild_id, &message.mentions, &content)
                 .split_whitespace()
@@ -1833,13 +1831,13 @@ impl DashboardState {
     }
 }
 
-fn message_preview_text(content: Option<&str>, sticker_names: &[String]) -> Option<String> {
+fn message_preview_text(content: Option<&str>, stickers: &[StickerInfo]) -> Option<String> {
     content
         .filter(|value| !value.trim().is_empty())
         .map(str::to_owned)
         .or_else(|| {
-            sticker_names
+            stickers
                 .first()
-                .map(|name| format!("[Sticker: {name}]"))
+                .map(|sticker| format!("[Sticker: {}]", sticker.name))
         })
 }

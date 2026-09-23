@@ -31,10 +31,13 @@ use concord::config::{
 };
 pub use concord::config::{BorderSurface, HighlightGroup};
 
+const DEFAULT_SELECTION_MARKER: &str = "▸ ";
+
 #[derive(Debug, Eq, PartialEq)]
 pub struct Theme {
     highlights: [ResolvedHighlight; HighlightGroup::COUNT],
     borders: [BorderType; BorderSurface::COUNT],
+    selection_marker: String,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -80,6 +83,10 @@ impl Theme {
         Self {
             highlights: resolve_definitions(&definitions, warnings),
             borders: resolve_border_types(options.border_shapes()),
+            selection_marker: options
+                .selection_marker()
+                .unwrap_or(DEFAULT_SELECTION_MARKER)
+                .to_owned(),
         }
     }
 
@@ -107,6 +114,12 @@ impl Theme {
 
     pub fn border_type(&self, surface: BorderSurface) -> ThemeBorderType {
         self.borders[surface as usize].into()
+    }
+
+    // `pub` and reachable from the fixtures feature, not `pub(super)` under
+    // cfg(test): over here the terminal client is a separate crate.
+    pub fn selection_marker(&self) -> &str {
+        &self.selection_marker
     }
 
     #[cfg(any(test, feature = "fixtures"))]
@@ -165,6 +178,10 @@ impl ThemeAccessor {
     #[cfg(feature = "terminal")]
     pub fn border_set(self, surface: BorderSurface) -> border::Set<'static> {
         self.border_type(surface).to_border_set()
+    }
+
+    pub fn selection_marker(self) -> String {
+        read_current_theme(|theme| theme.selection_marker().to_owned())
     }
 }
 

@@ -1219,6 +1219,7 @@ pub fn add_profile(
                 guild_id: guild_id(10),
                 nick: None,
             }],
+            mutual_friends: Vec::new(),
             mutual_friends_count: 3,
             friend_status: crate::discord::FriendStatus::Friend,
             note: None,

@@ -1368,7 +1368,7 @@ checksum = "cc14f565cf027a105f7a44ccf9e5b424348421a1d8952a8fc9d499d313107789"
 
 [[package]]
 name = "concord"
-version = "2.5.11"
+version = "2.5.12"
 dependencies = [
  "aes-gcm",
  "alsa",
@@ -1423,6 +1423,7 @@ dependencies = [
  "sys-locale",
  "tempfile",
  "thiserror 2.0.18",
+ "thorvg",
  "tokio",
  "tokio-tungstenite",
  "toml 1.1.2+spec-1.1.0",
@@ -1510,6 +1511,7 @@ dependencies = [
  "serde_json",
  "syntect",
  "tempfile",
+ "thorvg",
  "tokio",
  "unicode-segmentation",
  "unicode-width",
@@ -9121,6 +9123,27 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "thorvg"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f215040262696e1d9c33b786b09b74b6935d0d30bd90ffd6439d592d22aabfbf"
+dependencies = [
+ "libm",
+ "thorvg-sys",
+]
+
+[[package]]
+name = "thorvg-sys"
+version = "0.3.2+thorvg-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30e30743c441c8a31f2d983940944e9f0b8c749706cc89a7b1e7e1222e7a2f0b"
+dependencies = [
+ "bindgen 0.71.1",
+ "cc",
+ "pkg-config",
 ]
 
 [[package]]

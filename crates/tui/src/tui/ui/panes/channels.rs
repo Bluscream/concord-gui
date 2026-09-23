@@ -360,6 +360,7 @@ pub(in crate::tui::ui) fn render_channels(
                     row_in_list: *line_index as isize - channel_scroll as isize,
                     col: list_area.x as isize + *column as isize,
                     max_width: u16::MAX,
+                    image_size: crate::tui::text::EmojiImageSize::Compact,
                     url: url.clone(),
                 }),
         );

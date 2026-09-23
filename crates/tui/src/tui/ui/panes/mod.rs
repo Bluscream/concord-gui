@@ -16,7 +16,7 @@ use concord::discord::{
 };
 
 use super::super::{
-    message::format::{EMOJI_REACTION_IMAGE_WIDTH, format_attachment_summary, wrap_text_lines},
+    message::format::{format_attachment_summary, wrap_text_lines},
     state::{
         ChannelPaneEntry, ChannelPaneRow, CommandPickerEntry, ComposerLock, DashboardState,
         EmojiPickerEntry, FocusPane, GuildPaneEntry, LocalUploadPreviewView,
@@ -25,7 +25,7 @@ use super::super::{
         presence_marker, primary_compact_activity,
     },
     text::{
-        format_byte_size, sanitize_for_display_width, truncate_display_width,
+        EmojiImageSize, format_byte_size, sanitize_for_display_width, truncate_display_width,
         truncate_display_width_from,
     },
 };
@@ -40,7 +40,7 @@ use super::{
     },
     panel_block, panel_block_line, render_vertical_scrollbar, selected_discord_text_style,
     selected_presence_style, selected_row_line, selected_text_span, selected_text_style,
-    selection_marker, selection_marker_with, styled_list_item, theme,
+    selection_marker, selection_marker_width, styled_list_item, theme,
     types::{EmojiImage, MessageAreas},
 };
 

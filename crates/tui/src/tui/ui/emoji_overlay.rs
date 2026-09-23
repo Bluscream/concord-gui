@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui_image::Image as RatatuiImage;
 
-use crate::tui::message::format::EMOJI_REACTION_IMAGE_WIDTH;
+use crate::tui::text::EmojiImageSize;
 
 use super::types::EmojiImage;
 
@@ -19,7 +19,9 @@ pub(in crate::tui::ui) fn overlay_emoji_column<S: AsRef<str>>(
     if area.width <= x_offset || area.height == 0 {
         return;
     }
-    let width = EMOJI_REACTION_IMAGE_WIDTH.min(area.width.saturating_sub(x_offset));
+    let width = EmojiImageSize::Compact
+        .width()
+        .min(area.width.saturating_sub(x_offset));
     if width == 0 {
         return;
     }
@@ -60,6 +62,7 @@ pub(in crate::tui::ui) struct EmojiSlot {
     /// Upper bound on the width before the list-edge clamp. `u16::MAX` for no
     /// extra bound, or the remaining card width where content is narrower.
     pub(in crate::tui::ui) max_width: u16,
+    pub(in crate::tui::ui) image_size: EmojiImageSize,
     pub(in crate::tui::ui) url: String,
 }
 
@@ -87,23 +90,34 @@ pub(in crate::tui::ui) fn overlay_emoji_slots(
         let Some(image) = emoji_images.iter().find(|image| image.url == slot.url) else {
             continue;
         };
+        let protocol = match slot.image_size {
+            EmojiImageSize::Compact => image.protocol,
+            EmojiImageSize::Standalone => {
+                let Some(protocol) = image.standalone_protocol else {
+                    continue;
+                };
+                protocol
+            }
+        };
         let remaining = (list_right - slot.col).max(0) as u16;
-        let width = EMOJI_REACTION_IMAGE_WIDTH
-            .min(slot.max_width)
-            .min(remaining);
-        if width == 0 {
+        let width = slot.image_size.width().min(slot.max_width).min(remaining);
+        let remaining_height = list
+            .bottom()
+            .saturating_sub((list.y as isize + slot.row_in_list) as u16);
+        let height = slot.image_size.height().min(remaining_height);
+        if width == 0 || height == 0 {
             continue;
         }
         let image_area = Rect {
             x: slot.col as u16,
             y: (list.y as isize + slot.row_in_list) as u16,
             width,
-            height: 1,
+            height,
         };
         if intersects_any(image_area, occlusion_areas) {
             continue;
         }
-        frame.render_widget(RatatuiImage::new(image.protocol), image_area);
+        frame.render_widget(RatatuiImage::new(protocol), image_area);
     }
 }
 
