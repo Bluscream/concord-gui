@@ -4,10 +4,9 @@ use std::{
 };
 
 use concord::discord::ids::{Id, marker::MessageMarker};
-use concord_fixtures::events::{
-    ForumPostsLoadedFixture, GuildCreateFixture, MessageCreateFixture,
-    empty_latest_message_history_loaded_event, forum_posts_loaded_event, guild_create_event,
-    guild_message_create_fixture, message_create_event,
+use concord::discord::test_builders::{
+    GuildCreateFixture, MessageCreateFixture, empty_latest_message_history_loaded_event,
+    guild_create_event, guild_message_create_fixture, message_create_event,
 };
 use image::{
     Delay, DynamicImage, Frame as ImageFrame, ImageBuffer, ImageFormat, Rgba,
@@ -23,8 +22,8 @@ use concord::{
     config::{DisplayOptions, ImagePreviewQualityPreset},
     discord::{
         ActivityEmoji, ActivityInfo, ActivityKind, AppCommand, AppEvent, AttachmentInfo,
-        ChannelInfo, ChannelRecipientInfo, CustomEmojiInfo, EmbedInfo, MessageInfo,
-        MessageSnapshotInfo, PresenceEventFields, PresenceStatus, ProfileAvatarUpload,
+        ChannelInfo, ChannelRecipientInfo, CustomEmojiInfo, EmbedInfo, ForumPostDataInfo,
+        MessageInfo, MessageSnapshotInfo, PresenceEventFields, PresenceStatus, ProfileAvatarUpload,
         ReactionEmoji, ReactionInfo,
     },
 };
@@ -35,6 +34,7 @@ use super::*;
 fn layout(list_height: usize) -> ImagePreviewLayout {
     ImagePreviewLayout {
         list_height,
+        list_width: 200,
         content_width: 200,
         preview_width: 16,
         max_preview_height: 3,
@@ -2016,60 +2016,55 @@ fn emoji_image_targets_include_visible_forum_preview_custom_reactions() {
     let guild_id = Id::new(1);
     let forum_id = Id::new(20);
     let thread_id = Id::new(30);
+    let thread = ChannelInfo {
+        guild_id: Some(guild_id),
+        parent_id: Some(forum_id),
+        last_message_id: Some(Id::new(300)),
+        name: "welcome".to_owned(),
+        message_count: Some(1),
+        total_message_sent: Some(1),
+        thread_metadata: Some(concord::discord::ThreadMetadataInfo::test(false, false)),
+        flags: Some(0),
+        ..ChannelInfo::test(thread_id, "GuildPublicThread")
+    };
     let mut state = DashboardState::new();
 
     state.push_event(guild_create_event(GuildCreateFixture {
-        channels: vec![ChannelInfo {
-            guild_id: Some(guild_id),
-            name: "forum".to_owned(),
-            ..ChannelInfo::test(forum_id, "GuildForum")
-        }],
+        channels: vec![
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                name: "forum".to_owned(),
+                ..ChannelInfo::test(forum_id, "GuildForum")
+            },
+            thread,
+        ],
         ..GuildCreateFixture::new(guild_id)
     }));
     state.confirm_selected_guild();
     state.confirm_selected_channel();
-    state.push_event(forum_posts_loaded_event(ForumPostsLoadedFixture {
+    state.push_event(AppEvent::ForumPostDataLoaded {
         channel_id: forum_id,
-        archive_state: concord::discord::ForumPostArchiveState::Active,
-        next_offset: 1,
-        threads: vec![ChannelInfo {
-            guild_id: Some(guild_id),
-            parent_id: Some(forum_id),
-            last_message_id: Some(Id::new(300)),
-            name: "welcome".to_owned(),
-            message_count: Some(1),
-            total_message_sent: Some(1),
-            thread_metadata: Some(concord::discord::ThreadMetadataInfo::test(false, false)),
-            flags: Some(0),
-            ..ChannelInfo::test(thread_id, "GuildPublicThread")
+        requested_thread_ids: vec![thread_id],
+        posts: vec![ForumPostDataInfo {
+            thread_id,
+            owner: None,
+            first_message: Some(MessageInfo {
+                guild_id: Some(guild_id),
+                channel_id: thread_id,
+                message_id: Id::new(thread_id.get()),
+                author_id: Id::new(99),
+                author: "neo".to_owned(),
+                reactions: vec![ReactionInfo::test(ReactionEmoji::Custom {
+                    id: Id::new(50),
+                    name: Some("party".to_owned()),
+                    animated: false,
+                })],
+                content: Some("first post".to_owned()),
+                ..MessageInfo::default()
+            }),
+            extra_fields: std::collections::BTreeMap::new(),
         }],
-        first_messages: vec![MessageInfo {
-            guild_id: Some(guild_id),
-            channel_id: thread_id,
-            message_id: Id::new(thread_id.get()),
-            author_id: Id::new(99),
-            author: "neo".to_owned(),
-            author_avatar_url: None,
-            author_role_ids: Vec::new(),
-            message_kind: concord::discord::MessageKind::regular(),
-            reference: None,
-            reply: None,
-            poll: None,
-            pinned: false,
-            reactions: vec![ReactionInfo::test(ReactionEmoji::Custom {
-                id: Id::new(50),
-                name: Some("party".to_owned()),
-                animated: false,
-            })],
-            content: Some("first post".to_owned()),
-            mentions: Vec::new(),
-            attachments: Vec::new(),
-            embeds: Vec::new(),
-            forwarded_snapshots: Vec::new(),
-            ..MessageInfo::default()
-        }],
-        ..ForumPostsLoadedFixture::new()
-    }));
+    });
 
     let targets = visible_emoji_image_targets(&state);
 
@@ -2079,6 +2074,188 @@ fn emoji_image_targets_include_visible_forum_preview_custom_reactions() {
             url: "https://cdn.discordapp.com/emojis/50.png".to_owned(),
         }]
     );
+}
+
+#[test]
+fn image_preview_targets_place_thread_attachments_in_the_card_right_column() {
+    let guild_id = Id::new(1);
+    let forum_id = Id::new(20);
+    let thread_id = Id::new(30);
+    let mut state = DashboardState::new();
+    state.push_event(guild_create_event(GuildCreateFixture {
+        channels: vec![
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                name: "forum".to_owned(),
+                ..ChannelInfo::test(forum_id, "GuildForum")
+            },
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                parent_id: Some(forum_id),
+                last_message_id: Some(Id::new(300)),
+                name: "welcome".to_owned(),
+                message_count: Some(1),
+                total_message_sent: Some(1),
+                thread_metadata: Some(concord::discord::ThreadMetadataInfo::test(false, false)),
+                flags: Some(0),
+                ..ChannelInfo::test(thread_id, "GuildPublicThread")
+            },
+        ],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+    state.confirm_selected_guild();
+    state.confirm_selected_channel();
+    state.push_event(AppEvent::ForumPostDataLoaded {
+        channel_id: forum_id,
+        requested_thread_ids: vec![thread_id],
+        posts: vec![ForumPostDataInfo {
+            thread_id,
+            owner: None,
+            first_message: Some(MessageInfo {
+                guild_id: Some(guild_id),
+                channel_id: thread_id,
+                message_id: Id::new(thread_id.get()),
+                author_id: Id::new(99),
+                author: "neo".to_owned(),
+                content: Some("first post".to_owned()),
+                attachments: vec![image_attachment(7)],
+                ..MessageInfo::default()
+            }),
+            extra_fields: std::collections::BTreeMap::new(),
+        }],
+    });
+    let mut preview_layout = layout(30);
+    preview_layout.list_width = 100;
+
+    let targets = visible_image_preview_targets(&state, preview_layout);
+
+    assert_eq!(targets.len(), 1);
+    let target = &targets[0];
+    assert!(target.thread_card);
+    assert_eq!(target.message_id, Id::new(thread_id.get()));
+    assert_eq!(target.preview_y_offset_rows, 2);
+    assert!(target.preview_x_offset_columns >= 80);
+    assert!(target.preview_width <= 20);
+    assert!(target.preview_height <= 4);
+    assert_eq!(target.filename, "image-7.png");
+
+    let text_channel_id = Id::new(40);
+    let text_thread_id = Id::new(50);
+    let mut state = DashboardState::new();
+    state.push_event(guild_create_event(GuildCreateFixture {
+        channels: vec![
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                name: "general".to_owned(),
+                ..ChannelInfo::test(text_channel_id, "GuildText")
+            },
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                parent_id: Some(text_channel_id),
+                last_message_id: Some(Id::new(500)),
+                name: "design discussion".to_owned(),
+                message_count: Some(1),
+                total_message_sent: Some(1),
+                thread_metadata: Some(concord::discord::ThreadMetadataInfo::test(false, false)),
+                ..ChannelInfo::test(text_thread_id, "GuildPublicThread")
+            },
+        ],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+    state.confirm_selected_guild();
+    state.confirm_selected_channel();
+    state.enter_channel_thread_list_view(text_channel_id);
+    state.push_event(message_create_event(MessageInfo {
+        guild_id: Some(guild_id),
+        channel_id: text_thread_id,
+        message_id: Id::new(500),
+        author_id: Id::new(99),
+        author: "neo".to_owned(),
+        content: Some("thread reply".to_owned()),
+        attachments: vec![image_attachment(8)],
+        ..MessageInfo::default()
+    }));
+
+    let targets = visible_image_preview_targets(&state, preview_layout);
+
+    assert_eq!(targets.len(), 1);
+    let target = &targets[0];
+    assert!(target.thread_card);
+    assert_eq!(target.message_id, Id::new(500));
+    assert_eq!(target.preview_y_offset_rows, 2);
+    assert!(target.preview_x_offset_columns >= 80);
+    assert!(target.preview_width <= 20);
+    assert!(target.preview_height <= 4);
+    assert_eq!(target.filename, "image-8.png");
+
+    let parent_channel_id = Id::new(60);
+    let embedded_thread_id = Id::new(70);
+    let mut state = DashboardState::new();
+    state.push_event(guild_create_event(GuildCreateFixture {
+        channels: vec![
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                name: "general".to_owned(),
+                ..ChannelInfo::test(parent_channel_id, "GuildText")
+            },
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                parent_id: Some(parent_channel_id),
+                last_message_id: Some(Id::new(700)),
+                name: "image thread".to_owned(),
+                message_count: Some(1),
+                total_message_sent: Some(1),
+                thread_metadata: Some(concord::discord::ThreadMetadataInfo::test(false, false)),
+                ..ChannelInfo::test(embedded_thread_id, "GuildPublicThread")
+            },
+        ],
+        ..GuildCreateFixture::new(guild_id)
+    }));
+    state.confirm_selected_guild();
+    state.confirm_selected_channel();
+    state.push_event(message_create_event(MessageCreateFixture {
+        guild_id: Some(guild_id),
+        channel_id: parent_channel_id,
+        message_id: Id::new(600),
+        content: Some("image thread".to_owned()),
+        message_kind: concord::discord::MessageKind::new(18),
+        ..guild_message_create_fixture()
+    }));
+    state.push_event(message_create_event(MessageCreateFixture {
+        guild_id: Some(guild_id),
+        channel_id: embedded_thread_id,
+        message_id: Id::new(700),
+        content: Some(String::new()),
+        attachments: vec![image_attachment(9)],
+        ..guild_message_create_fixture()
+    }));
+    let mut embedded_layout = layout(30);
+    embedded_layout.list_width = 100;
+    embedded_layout.content_width = 88;
+
+    let targets = visible_image_preview_targets(&state, embedded_layout);
+
+    assert_eq!(targets.len(), 1);
+    let target = &targets[0];
+    assert!(target.thread_card);
+    assert_eq!(target.message_id, Id::new(700));
+    assert!(target.preview_y_offset_rows >= 2);
+    let card_left = crate::tui::ui::avatar_gutter_width(state.show_avatars());
+    let card_right = card_left.saturating_add(
+        u16::try_from(crate::tui::ui::thread_card::thread_card_width_in_message(
+            embedded_layout.content_width,
+        ))
+        .expect("embedded card width fits u16"),
+    );
+    assert!(target.preview_x_offset_columns >= card_right.saturating_sub(20));
+    assert!(
+        target
+            .preview_x_offset_columns
+            .saturating_add(target.preview_width)
+            <= card_right
+    );
+    assert!(target.preview_height <= 4);
+    assert_eq!(target.filename, "image-9.png");
 }
 
 #[test]
@@ -2093,56 +2270,50 @@ fn emoji_image_targets_include_visible_forum_post_custom_tag_emoji() {
             animated: true,
             ..CustomEmojiInfo::test(Id::new(77), "bug")
         }],
-        channels: vec![ChannelInfo {
-            guild_id: Some(guild_id),
-            name: "forum".to_owned(),
-            // A custom-emoji tag carries `emoji_id` (its `emoji_name` is null);
-            // a unicode tag carries the character in `emoji_name`.
-            available_tags: vec![
-                concord::discord::ForumTagInfo {
-                    id: Id::new(101),
-                    name: "bug".to_owned(),
-                    moderated: false,
-                    emoji_id: Some(Id::new(77)),
-                    emoji_name: None,
-                },
-                concord::discord::ForumTagInfo {
-                    id: Id::new(102),
-                    name: "fire".to_owned(),
-                    moderated: false,
-                    emoji_id: None,
-                    emoji_name: Some("🔥".to_owned()),
-                },
-            ],
-            ..ChannelInfo::test(forum_id, "GuildForum")
-        }],
+        channels: vec![
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                name: "forum".to_owned(),
+                // A custom-emoji tag carries `emoji_id` while a Unicode tag
+                // renders directly from `emoji_name`.
+                available_tags: vec![
+                    concord::discord::ForumTagInfo {
+                        id: Id::new(101),
+                        name: "bug".to_owned(),
+                        moderated: false,
+                        emoji_id: Some(Id::new(77)),
+                        emoji_name: None,
+                    },
+                    concord::discord::ForumTagInfo {
+                        id: Id::new(102),
+                        name: "fire".to_owned(),
+                        moderated: false,
+                        emoji_id: None,
+                        emoji_name: Some("🔥".to_owned()),
+                    },
+                ],
+                ..ChannelInfo::test(forum_id, "GuildForum")
+            },
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                parent_id: Some(forum_id),
+                last_message_id: Some(Id::new(300)),
+                name: "welcome".to_owned(),
+                message_count: Some(1),
+                total_message_sent: Some(1),
+                thread_metadata: Some(concord::discord::ThreadMetadataInfo::test(false, false)),
+                flags: Some(0),
+                applied_tags: vec![Id::new(101), Id::new(102)],
+                ..ChannelInfo::test(thread_id, "GuildPublicThread")
+            },
+        ],
         ..GuildCreateFixture::new(guild_id)
     }));
     state.confirm_selected_guild();
     state.confirm_selected_channel();
-    state.push_event(forum_posts_loaded_event(ForumPostsLoadedFixture {
-        channel_id: forum_id,
-        archive_state: concord::discord::ForumPostArchiveState::Active,
-        next_offset: 1,
-        threads: vec![ChannelInfo {
-            guild_id: Some(guild_id),
-            parent_id: Some(forum_id),
-            last_message_id: Some(Id::new(300)),
-            name: "welcome".to_owned(),
-            message_count: Some(1),
-            total_message_sent: Some(1),
-            thread_metadata: Some(concord::discord::ThreadMetadataInfo::test(false, false)),
-            flags: Some(0),
-            applied_tags: vec![Id::new(101), Id::new(102)],
-            ..ChannelInfo::test(thread_id, "GuildPublicThread")
-        }],
-        ..ForumPostsLoadedFixture::new()
-    }));
 
     let targets = visible_emoji_image_targets(&state);
 
-    // Only the custom-emoji tag contributes a CDN url; the unicode tag renders
-    // inline and needs no image fetch.
     assert_eq!(
         targets,
         vec![EmojiImageTarget {
@@ -2337,6 +2508,7 @@ fn push_attachment_message(state: &mut DashboardState, attachment: AttachmentInf
 fn image_preview_target(id: u64) -> ImagePreviewTarget {
     ImagePreviewTarget {
         viewer: false,
+        thread_card: false,
         message_index: 0,
         preview_index: 0,
         preview_x_offset_columns: 0,

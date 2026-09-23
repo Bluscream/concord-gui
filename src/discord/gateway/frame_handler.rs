@@ -391,11 +391,12 @@ pub(super) fn dispatch_command(
                     channel_id.get()
                 ),
             );
-            guild_channel_subscribe_payload(guild_id, channel_id, &[(0, 99)])
+            guild_channel_subscribe_payload(guild_id, channel_id, &[(0, 99)], None)
         }
         GatewayCommand::UpdateMemberListSubscription {
             guild_id,
             channel_id,
+            thread_id,
             ranges,
         } => {
             logging::debug(
@@ -407,7 +408,13 @@ pub(super) fn dispatch_command(
                     ranges
                 ),
             );
-            guild_channel_subscribe_payload(guild_id, channel_id, &ranges)
+            let thread_member_lists = thread_id.into_iter().collect::<Vec<_>>();
+            guild_channel_subscribe_payload(
+                guild_id,
+                channel_id,
+                &ranges,
+                Some(&thread_member_lists),
+            )
         }
         GatewayCommand::UpdateVoiceState {
             guild_id,

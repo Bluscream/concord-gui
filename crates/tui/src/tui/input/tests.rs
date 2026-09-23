@@ -9,15 +9,15 @@ use concord::discord::ids::{
     Id,
     marker::{ChannelMarker, GuildMarker, UserMarker},
 };
-use concord_fixtures::events::{
-    CurrentUserReactionAddFixture, ForumPostsLoadedFixture, GuildCreateFixture,
-    MessageCreateFixture, MessageHistoryAfterLoadedFixture, MessageHistoryAroundLoadedFixture,
+use concord::discord::test_builders::{
+    CurrentUserReactionAddFixture, GuildCreateFixture, MessageCreateFixture,
+    MessageHistoryAfterLoadedFixture, MessageHistoryAroundLoadedFixture,
     MessageHistoryLoadedFixture, MessagePinnedUpdateFixture, ReactionUsersLoadedFixture,
     VoiceConnectionStatusChangedFixture, current_user_reaction_add_event,
-    empty_latest_message_history_loaded_event, forum_posts_loaded_event, guild_create_event,
-    guild_message_create_fixture, message_create_event, message_history_after_loaded_event,
-    message_history_around_loaded_event, message_history_loaded_event, message_pinned_update_event,
-    reaction_users_loaded_event, voice_connection_status_changed_event,
+    empty_latest_message_history_loaded_event, guild_create_event, guild_message_create_fixture,
+    message_create_event, message_history_after_loaded_event, message_history_around_loaded_event,
+    message_history_loaded_event, message_pinned_update_event, reaction_users_loaded_event,
+    voice_connection_status_changed_event,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
@@ -36,9 +36,9 @@ use concord::{
         CustomEmojiInfo, DownloadAttachmentSource, EmbedInfo, GuildFolder, GuildMemberListItem,
         GuildMemberListOperation, GuildMemberListUpdateInfo, GuildNotificationSettingsInfo,
         MemberInfo, MessageInfo, MessageReferenceInfo, MessageSnapshotInfo,
-        MicrophoneSensitivityDb, NotificationLevel, PollAnswerInfo, PollInfo, PresenceStatus,
-        ReactionEmoji, ReactionUserInfo, ReadStateInfo, RoleInfo, UserGuildSettingsInfo,
-        UserSettingsInfo, VoiceConnectionStatus, VoiceVolumePercent,
+        MicrophoneSensitivityDb, NotificationLevel, PollAnswerInfo, PollInfo, PresenceEventFields,
+        PresenceStatus, ReactionEmoji, ReactionUserInfo, ReadStateInfo, RoleInfo,
+        UserGuildSettingsInfo, UserSettingsInfo, VoiceConnectionStatus, VoiceVolumePercent,
     },
 };
 
@@ -181,10 +181,6 @@ fn channel_row_point(row: u16) -> (u16, u16) {
 
 fn composer_point() -> (u16, u16) {
     (50, 16)
-}
-
-fn message_row_point(row: u16) -> (u16, u16) {
-    (50, 2 + row)
 }
 
 fn message_action_row_point(item_count: u16, row: u16) -> (u16, u16) {
@@ -432,7 +428,11 @@ fn state_with_members(count: u64) -> DashboardState {
         .map(|id| MemberInfo::test(Id::new(id), format!("member {id}")))
         .collect();
     let presences = (1..=count)
-        .map(|id| (Id::new(id), PresenceStatus::Online))
+        .map(|id| PresenceEventFields {
+            user_id: Id::new(id),
+            status: PresenceStatus::Online,
+            activities: Vec::new(),
+        })
         .collect();
 
     state.push_event(guild_create_event(GuildCreateFixture {
@@ -571,37 +571,27 @@ fn state_with_forum_channel_posts() -> DashboardState {
     state.push_event(guild_create_event(message_test_guild_fixture(
         guild_id,
         current_user_id,
-        vec![ChannelInfo {
-            guild_id: Some(guild_id),
-            position: Some(0),
-            name: "announcements".to_owned(),
-            available_tags: (1..=12)
-                .map(|index| concord::discord::ForumTagInfo {
-                    id: Id::new(100 + index),
-                    name: format!("tag-{index}"),
-                    moderated: false,
-                    emoji_id: None,
-                    emoji_name: None,
-                })
-                .collect(),
-            ..ChannelInfo::test(forum_id, "forum")
-        }],
-        MESSAGE_TEST_PERMISSIONS,
-    )));
-    select_test_guild(&mut state, guild_id);
-    select_test_channel(&mut state, forum_id);
-
-    // Discord's `/threads/search` returns threads newest-first. Emit them in
-    // descending channel-id order so the test sees the same layout.
-    state.push_event(forum_posts_loaded_event(ForumPostsLoadedFixture {
-        channel_id: forum_id,
-        archive_state: concord::discord::ForumPostArchiveState::Active,
-        next_offset: 2,
-        threads: vec![
+        vec![
+            ChannelInfo {
+                guild_id: Some(guild_id),
+                position: Some(0),
+                name: "announcements".to_owned(),
+                available_tags: (1..=12)
+                    .map(|index| concord::discord::ForumTagInfo {
+                        id: Id::new(100 + index),
+                        name: format!("tag-{index}"),
+                        moderated: false,
+                        emoji_id: None,
+                        emoji_name: None,
+                    })
+                    .collect(),
+                ..ChannelInfo::test(forum_id, "forum")
+            },
             ChannelInfo {
                 guild_id: Some(guild_id),
                 parent_id: Some(forum_id),
                 position: Some(1),
+                last_message_id: Some(Id::new(31)),
                 name: "release notes".to_owned(),
                 message_count: Some(2),
                 total_message_sent: Some(2),
@@ -612,6 +602,7 @@ fn state_with_forum_channel_posts() -> DashboardState {
                 guild_id: Some(guild_id),
                 parent_id: Some(forum_id),
                 position: Some(0),
+                last_message_id: Some(Id::new(30)),
                 name: "welcome".to_owned(),
                 message_count: Some(1),
                 total_message_sent: Some(1),
@@ -619,8 +610,10 @@ fn state_with_forum_channel_posts() -> DashboardState {
                 ..ChannelInfo::test(Id::new(30), "GuildPublicThread")
             },
         ],
-        ..ForumPostsLoadedFixture::new()
-    }));
+        MESSAGE_TEST_PERMISSIONS,
+    )));
+    select_test_guild(&mut state, guild_id);
+    select_test_channel(&mut state, forum_id);
     state
 }
 

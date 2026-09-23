@@ -199,7 +199,7 @@ impl BroadcastVideoTransport {
         socket: &UdpSocket,
         packet: &[u8],
     ) -> Result<bool, String> {
-        if gateway::parse_udp_keepalive_response(packet).is_some() {
+        if gateway::parse_udp_ping_response(packet).is_some() {
             return Ok(false);
         }
         if !looks_like_rtcp_packet(packet) {

@@ -51,7 +51,9 @@ use sender::gateway_guild_member_rate_limit;
 
 pub(in crate::discord) use parser::parse_activity;
 use parser::parse_user_account_dispatch;
-pub(crate) use parser::{parse_channel_info, parse_message_info};
+pub(crate) use parser::{
+    parse_channel_info, parse_member_info, parse_message_info, parse_thread_member_info,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GatewayCommand {
@@ -77,6 +79,7 @@ pub enum GatewayCommand {
     UpdateMemberListSubscription {
         guild_id: Id<GuildMarker>,
         channel_id: Id<ChannelMarker>,
+        thread_id: Option<Id<ChannelMarker>>,
         ranges: Vec<(u32, u32)>,
     },
     UpdateVoiceState {

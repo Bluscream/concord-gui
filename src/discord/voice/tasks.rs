@@ -27,7 +27,7 @@ impl ManagedTask {
 
 pub(super) struct VoiceChildTasks {
     pub(super) heartbeat: ManagedTask,
-    pub(super) udp_keepalive: ManagedTask,
+    pub(super) udp_ping: ManagedTask,
     pub(super) udp_receive: ManagedTask,
     #[cfg(feature = "voice-playback")]
     pub(super) udp_transmit: Option<JoinHandle<()>>,
@@ -85,7 +85,7 @@ impl Default for VoiceChildTasks {
     fn default() -> Self {
         Self {
             heartbeat: ManagedTask::new("voice heartbeat task"),
-            udp_keepalive: ManagedTask::new("voice UDP keepalive task"),
+            udp_ping: ManagedTask::new("voice UDP ping task"),
             udp_receive: ManagedTask::new("voice UDP receive task"),
             #[cfg(feature = "voice-playback")]
             udp_transmit: None,
@@ -255,8 +255,8 @@ impl VoiceChildTasks {
         self.udp_receive.replace(task);
     }
 
-    pub(super) fn replace_udp_keepalive(&mut self, task: JoinHandle<()>) {
-        self.udp_keepalive.replace(task);
+    pub(super) fn replace_udp_ping(&mut self, task: JoinHandle<()>) {
+        self.udp_ping.replace(task);
     }
 
     #[cfg(feature = "voice-playback")]
@@ -327,7 +327,7 @@ impl VoiceChildTasks {
 
     pub(super) fn abort_all(&mut self) {
         self.heartbeat.abort();
-        self.udp_keepalive.abort();
+        self.udp_ping.abort();
         self.udp_receive.abort();
         #[cfg(feature = "voice-playback")]
         if let Some(task) = self.udp_transmit.take() {

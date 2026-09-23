@@ -1,5 +1,10 @@
 mod events;
 
+use concord::discord::ids::{
+    Id,
+    marker::{ChannelMarker, MessageMarker, RoleMarker},
+};
+use concord::discord::{ChannelState, MessageHistoryAfterMode, MessageState};
 use crate::tui::text;
 use crate::tui::text::{
     MentionTarget, RenderedText, TextHighlightKind, render_user_mentions,
@@ -134,6 +139,7 @@ pub(super) struct MessageViewportState {
     /// is not pinned to the original anchor position.
     pub(super) pending_unread_anchor_scroll: bool,
     pub(super) message_view_height: usize,
+    pub(super) message_view_width: usize,
     pub(super) message_content_width: usize,
     pub(super) message_preview_width: u16,
     pub(super) message_max_preview_height: u16,
@@ -156,6 +162,7 @@ impl Default for MessageViewportState {
             unread_divider_last_acked_id: None,
             pending_unread_anchor_scroll: false,
             message_view_height: 1,
+            message_view_width: usize::MAX,
             message_content_width: usize::MAX,
             message_preview_width: 0,
             message_max_preview_height: 0,
@@ -336,6 +343,11 @@ impl DashboardState {
         self.clamp_message_viewport();
     }
 
+    pub fn set_message_view_width(&mut self, width: usize) {
+        self.messages.message_view_width = width;
+        self.clamp_message_viewport();
+    }
+
     pub fn clamp_message_viewport_for_image_previews(
         &mut self,
         content_width: usize,
@@ -501,7 +513,7 @@ impl DashboardState {
         }
 
         if self.message_pane_uses_thread_cards() {
-            let len = self.selected_thread_card_items().len();
+            let len = self.selected_thread_card_count();
             move_index_down(&mut self.messages.message_scroll, len);
             self.messages.message_auto_follow = false;
             self.messages.message_keep_selection_visible = false;
@@ -1222,7 +1234,7 @@ impl DashboardState {
         match self.message_pane_source() {
             Some(
                 MessagePaneSource::ForumPosts { .. } | MessagePaneSource::ChannelThreads { .. },
-            ) => self.selected_thread_card_items().len(),
+            ) => self.selected_thread_card_count(),
             Some(
                 MessagePaneSource::ChannelMessages { .. }
                 | MessagePaneSource::PinnedMessages { .. },
@@ -1275,7 +1287,7 @@ impl DashboardState {
         }
         if let Some(channel) = self.started_thread_channel(message) {
             let archived = channel.thread_archived().unwrap_or(false);
-            return Some(self.forum_thread_item(channel, None, archived));
+            return Some(self.thread_card_item(channel, None, archived));
         }
 
         let summary = self.thread_summary_for_message(message);
@@ -1313,6 +1325,8 @@ impl DashboardState {
             preview_author: preview.map(|preview| preview.author.clone()),
             preview_author_color: None,
             preview_content: preview.map(|preview| preview.content.clone()),
+            preview_loading: false,
+            preview_image: None,
             applied_tags: Vec::new(),
             preview_reactions: Vec::new(),
             comment_count: summary
@@ -1524,98 +1538,6 @@ impl DashboardState {
             .source_channel_id
             .and_then(|channel_id| self.discord.cache.channel(channel_id))
             .and_then(|channel| channel.guild_id)
-    }
-
-    pub(super) fn record_thread_channel_upserted(
-        &mut self,
-        channel: &concord::discord::ChannelInfo,
-    ) {
-        if !is_thread_kind(&channel.kind) {
-            return;
-        }
-        let Some(parent_id) = channel.parent_id else {
-            return;
-        };
-        let Some(list) = self.requests.forum_post_lists.get_mut(&parent_id) else {
-            return;
-        };
-        let id = channel.channel_id;
-        // Re-section the post when its archive state changes (our Archive action
-        // or someone else's THREAD_UPDATE), so an existing post moves between the
-        // active and archived sections instead of staying put. A payload without
-        // `thread_metadata` carries no archive info, so we only insert-if-new.
-        match channel.thread_archived() {
-            Some(true) => {
-                if list.archived_post_ids.contains(&id) {
-                    return;
-                }
-                list.active_post_ids.retain(|existing| *existing != id);
-                list.archived_post_ids.insert(0, id);
-            }
-            Some(false) => {
-                if list.active_post_ids.contains(&id) {
-                    return;
-                }
-                list.archived_post_ids.retain(|existing| *existing != id);
-                list.active_post_ids.insert(0, id);
-            }
-            None => {
-                if !list.active_post_ids.contains(&id) && !list.archived_post_ids.contains(&id) {
-                    list.active_post_ids.insert(0, id);
-                }
-            }
-        }
-    }
-
-    pub(super) fn record_forum_posts_loaded(
-        &mut self,
-        channel_id: Id<ChannelMarker>,
-        archive_state: ForumPostArchiveState,
-        offset: usize,
-        threads: &[concord::discord::ChannelInfo],
-        has_more: bool,
-    ) {
-        let list = self
-            .requests
-            .forum_post_lists
-            .entry(channel_id)
-            .or_default();
-        if archive_state == ForumPostArchiveState::Active && offset == 0 {
-            list.active_post_ids.clear();
-            if self.navigation.channels.active_channel_id == Some(channel_id) {
-                self.messages.selected_message = 0;
-                self.messages.message_scroll = 0;
-                self.messages.message_line_scroll = 0;
-                self.messages.message_auto_follow = false;
-            }
-        } else if archive_state == ForumPostArchiveState::Archived && offset == 0 {
-            list.archived_post_ids.clear();
-        }
-        for thread in threads {
-            let thread_id = thread.channel_id;
-            match archive_state {
-                ForumPostArchiveState::Active => {
-                    list.archived_post_ids.retain(|id| *id != thread_id);
-                    if !list.active_post_ids.contains(&thread_id) {
-                        list.active_post_ids.push(thread_id);
-                    }
-                }
-                ForumPostArchiveState::Archived => {
-                    if !list.active_post_ids.contains(&thread_id)
-                        && !list.archived_post_ids.contains(&thread_id)
-                    {
-                        list.archived_post_ids.push(thread_id);
-                    }
-                }
-            }
-        }
-        list.has_more = match archive_state {
-            // Once active search is exhausted, the archived search stream may
-            // still have old forum posts. Keep the UI asking for more until an
-            // archived page says it is exhausted.
-            ForumPostArchiveState::Active => true,
-            ForumPostArchiveState::Archived => has_more,
-        };
     }
 
     pub fn messages(&self) -> Vec<&MessageState> {

@@ -535,7 +535,10 @@ fn dm_activity_uses_the_full_channel_row_width() {
         presence: concord::discord::PresenceEventFields {
             user_id,
             status: PresenceStatus::Online,
-            activities: vec![ActivityInfo::test(ActivityKind::Unknown, "abcdefghijklmn")],
+            activities: vec![ActivityInfo::test(
+                ActivityKind::Unknown(99),
+                "abcdefghijklmn",
+            )],
         },
     });
     state.confirm_selected_guild();
@@ -884,7 +887,11 @@ fn member_pane_keeps_normal_style_for_speaking_voice_members() {
             ..MemberInfo::test(alice, "Alice")
         }],
         member_count: Some(1),
-        presences: vec![(alice, PresenceStatus::Online)],
+        presences: vec![PresenceEventFields {
+            user_id: alice,
+            status: PresenceStatus::Online,
+            activities: Vec::new(),
+        }],
         ..GuildCreateFixture::new(guild_id)
     }));
     state.confirm_selected_guild();
@@ -1136,6 +1143,7 @@ fn forum_post_lines_render_title_author_and_preview() {
     let post = ChannelThreadItem {
         section_label: Some("Active posts".to_owned()),
         label: "A useful Rust crate".to_owned(),
+        archived: true,
         locked: true,
         pinned: true,
         preview_author_id: Some(Id::new(99)),
@@ -1160,42 +1168,53 @@ fn forum_post_lines_render_title_author_and_preview() {
     let custom =
         theme::Theme::default().with_border_type(theme::BorderSurface::Forum, BorderType::Thick);
     let lines = theme::with_test_theme(custom, || {
-        forum_post_viewport_lines(&[post], Some(0), 80, false)
+        thread_card_viewport_lines(&[post], Some(0), 80, false)
     });
     let texts = line_texts_from_ratatui(&lines);
 
-    assert_eq!(texts.len(), 7);
+    assert_eq!(texts.len(), 8);
     assert_eq!(texts[0].trim_end(), "Active posts");
     assert!(texts[1].starts_with("› ┏"));
     assert!(texts[2].starts_with("  ┃ "));
     assert!(texts.iter().all(|text| text.width() == 80));
     assert!(texts[2].contains("A useful Rust crate"));
     assert!(texts[2].contains("PINNED"));
-    assert!(texts[3].contains("neo: This crate solves"));
-    assert!(texts[4].contains("# question"));
-    assert!(texts[4].contains("# rust"));
-    assert!(texts[5].contains("4 comments"));
-    assert!(texts[5].contains("3 new messages"));
-    assert!(texts[5].contains("[👍 2]"));
-    assert!(texts[5].contains("locked"));
-    assert!(texts[6].starts_with("  ┗"));
+    assert!(texts[2].contains("(archived)"));
+    assert!(texts[2].contains("(locked)"));
+    assert_eq!(lines[3].spans.len(), 4);
+    assert!(texts[4].contains("neo: This crate solves"));
+    assert!(texts[5].contains("# question"));
+    assert!(texts[5].contains("# rust"));
+    assert!(texts[6].contains("4 comments"));
+    assert!(texts[6].contains("3 new messages"));
+    assert!(texts[6].contains("[👍 2]"));
+    assert!(texts[7].starts_with("  ┗"));
     assert_eq!(lines[2].spans[2].style.fg, None);
     assert_eq!(lines[2].spans[3].style.fg, Some(Color::Yellow));
     assert_eq!(
-        lines[3].spans[2].style.fg,
+        lines[4].spans[2].style.fg,
         Some(Color::Rgb(0x33, 0x66, 0xCC))
     );
-    assert_eq!(lines[3].spans[4].style.fg, None);
-    assert_eq!(lines[5].spans[2].style.fg, None);
+    assert_eq!(lines[4].spans[4].style.fg, None);
+    assert_eq!(lines[6].spans[2].style.fg, None);
     assert_eq!(
-        lines[5].spans[4].style.fg,
+        lines[6].spans[4].style.fg,
         theme::current()
             .style(theme::HighlightGroup::UnreadNotice)
             .fg
     );
-    assert_eq!(lines[5].spans[6].style.fg, Some(Color::Yellow));
-    assert_eq!(lines[5].spans[8].style.fg, None);
-    assert!(lines[5].spans[8].style.add_modifier.contains(Modifier::DIM));
+    assert_eq!(lines[6].spans[6].style.fg, Some(Color::Yellow));
+    let state_spans = lines[2]
+        .spans
+        .iter()
+        .filter(|span| span.content.contains("archived") || span.content.contains("locked"))
+        .collect::<Vec<_>>();
+    assert_eq!(state_spans.len(), 2);
+    assert!(
+        state_spans
+            .iter()
+            .all(|span| span.style.add_modifier.contains(Modifier::DIM))
+    );
     assert_eq!(
         lines[1].spans[0].style.fg,
         theme::current()
@@ -1222,6 +1241,141 @@ fn forum_post_lines_render_title_author_and_preview() {
 }
 
 #[test]
+fn forum_post_lines_show_loading_until_starter_data_arrives() {
+    let post = ChannelThreadItem {
+        label: "Loading post".to_owned(),
+        preview_author: Some("neo".to_owned()),
+        preview_loading: true,
+        ..ChannelThreadItem::test(Id::new(30))
+    };
+
+    let texts = line_texts_from_ratatui(&thread_card_viewport_lines(&[post], None, 80, false));
+
+    assert!(texts[3].contains("neo: Loading preview..."));
+    assert!(
+        texts
+            .iter()
+            .all(|line| !line.contains("original message deleted"))
+    );
+}
+
+#[test]
+fn forum_post_lines_reserve_a_right_column_for_image_attachments() {
+    let post = ChannelThreadItem {
+        label: "x".repeat(100),
+        preview_author: Some("neo".to_owned()),
+        preview_content: Some("y".repeat(100)),
+        preview_image: Some(ThreadCardImagePreview {
+            message_id: Id::new(30),
+            attachment: AttachmentInfo {
+                content_type: Some("image/png".to_owned()),
+                width: Some(640),
+                height: Some(480),
+                ..AttachmentInfo::test(Id::new(1), "image.png")
+            },
+        }),
+        ..ChannelThreadItem::test(Id::new(30))
+    };
+    let slot = crate::tui::ui::thread_card::thread_card_image_slot(&post, 80, true)
+        .expect("wide forum card should reserve an image slot");
+
+    let lines = thread_card_viewport_lines(&[post], None, 80, false);
+
+    let text_width = usize::from(slot.column).saturating_sub(6);
+    assert_eq!(lines[1].spans[2].content.width(), text_width);
+    let preview_line = lines
+        .iter()
+        .find(|line| line.spans.iter().any(|span| span.content.contains("neo")))
+        .expect("preview author should be rendered");
+    assert_eq!(
+        preview_line.spans[4].content.width(),
+        text_width - "neo: ".width()
+    );
+    let metadata_row = lines
+        .iter()
+        .position(|line| {
+            line.spans
+                .iter()
+                .any(|span| span.content.contains("No activity yet"))
+        })
+        .expect("metadata should be rendered");
+    assert!(metadata_row > usize::from(slot.height));
+}
+
+#[test]
+fn forum_post_title_wraps_with_dim_thread_state() {
+    let title = "Season update game issues and client performance discussion";
+    let post = ChannelThreadItem {
+        label: title.to_owned(),
+        archived: true,
+        locked: true,
+        ..ChannelThreadItem::test(Id::new(30))
+    };
+
+    let lines = thread_card_viewport_lines(&[post], None, 36, false);
+    let heading_style = theme::current().style(theme::HighlightGroup::Heading);
+    let title_parts = lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .filter(|span| span.style == heading_style)
+        .map(|span| span.content.as_ref())
+        .collect::<Vec<_>>();
+    let state_spans = lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .filter(|span| span.content.contains("archived") || span.content.contains("locked"))
+        .collect::<Vec<_>>();
+
+    assert!(title_parts.len() > 1);
+    assert_eq!(
+        title_parts
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" "),
+        title
+    );
+    assert_eq!(
+        state_spans
+            .iter()
+            .map(|span| span.content.trim())
+            .collect::<Vec<_>>(),
+        vec!["(archived)", "(locked)"]
+    );
+    assert!(
+        state_spans
+            .iter()
+            .all(|span| span.style.add_modifier.contains(Modifier::DIM))
+    );
+}
+
+#[test]
+fn forum_post_metadata_shows_three_leading_reactions() {
+    let post = ChannelThreadItem {
+        label: "Reaction summary".to_owned(),
+        preview_reactions: ["🍎", "🍐", "🍊", "🍋"]
+            .into_iter()
+            .map(|emoji| ReactionInfo {
+                count: 1,
+                ..ReactionInfo::test(ReactionEmoji::Unicode(emoji.to_owned()))
+            })
+            .collect(),
+        ..ChannelThreadItem::test(Id::new(30))
+    };
+
+    let texts = line_texts_from_ratatui(&thread_card_viewport_lines(&[post], None, 80, false));
+    let metadata = texts
+        .iter()
+        .find(|line| line.contains("🍎"))
+        .expect("reaction metadata should be rendered");
+
+    assert_eq!(metadata.matches('[').count(), 3);
+    assert!(metadata.contains("[🍎 1]"));
+    assert!(metadata.contains("[🍐 1]"));
+    assert!(metadata.contains("[🍊 1]"));
+}
+
+#[test]
 fn forum_post_tag_line_renders_unicode_emoji_and_reserves_custom_image_slot() {
     let unicode_tag = AppliedForumTag {
         name: "fire".to_owned(),
@@ -1243,17 +1397,17 @@ fn forum_post_tag_line_renders_unicode_emoji_and_reserves_custom_image_slot() {
         ..ChannelThreadItem::test(Id::new(30))
     };
 
-    let lines = forum_post_viewport_lines(std::slice::from_ref(&post), Some(0), 80, false);
+    let lines = thread_card_viewport_lines(std::slice::from_ref(&post), Some(0), 80, false);
     let texts = line_texts_from_ratatui(&lines);
 
-    let tag_text = &texts[3];
+    let tag_text = &texts[4];
     assert!(tag_text.contains("🔥 fire"));
     assert!(tag_text.contains("bug"));
 
-    let rows = forum_post_tag_rows_for_test(&[post], 80, 20);
+    let rows = thread_card_tag_rows_for_test(&[post], 80, 20);
     assert_eq!(rows.len(), 1);
     let (row, cols) = &rows[0];
-    assert_eq!(*row, 3);
+    assert_eq!(*row, 4);
     assert_eq!(cols.len(), 1);
     // `# 🔥 fire`(9) + ` · `(3) + `# `(2) = column 14 within the card content.
     assert_eq!(cols[0], 14);
@@ -1271,7 +1425,7 @@ fn forum_post_lines_can_reserve_scrollbar_column() {
         ..ChannelThreadItem::test(Id::new(30))
     };
 
-    let lines = forum_post_viewport_lines(
+    let lines = thread_card_viewport_lines(
         &[post],
         Some(0),
         selected_message_card_width(80, true),
@@ -1282,8 +1436,8 @@ fn forum_post_lines_can_reserve_scrollbar_column() {
     assert!(texts[0].starts_with("› ╭"));
     assert!(texts[0].ends_with("╮"));
     assert!(texts[1].ends_with("│"));
-    // The untagged post has no tags row, so the card is five rows.
-    assert!(texts[4].ends_with("╯"));
+    // The untagged post has no tags row, so the card is six rows.
+    assert!(texts[5].ends_with("╯"));
     assert!(texts.iter().all(|text| text.width() == 79));
 }
 

@@ -141,20 +141,32 @@ pub(super) fn guild_channel_subscribe_payload(
     guild_id: Id<GuildMarker>,
     channel_id: Id<ChannelMarker>,
     ranges: &[(u32, u32)],
+    thread_member_lists: Option<&[Id<ChannelMarker>]>,
 ) -> String {
     let ranges_json: Vec<[u32; 2]> = ranges.iter().map(|(start, end)| [*start, *end]).collect();
+    let mut subscription = json!({
+        "typing": true,
+        "activities": true,
+        "threads": true,
+        "member_updates": true,
+        "members": [],
+        "channels": {
+            channel_id.to_string(): ranges_json,
+        },
+    });
+    if let Some(thread_member_lists) = thread_member_lists {
+        subscription["thread_member_lists"] = Value::from(
+            thread_member_lists
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+        );
+    }
     json!({
         "op": 37,
         "d": {
             "subscriptions": {
-                guild_id.to_string(): {
-                    "typing": true,
-                    "activities": true,
-                    "threads": true,
-                    "channels": {
-                        channel_id.to_string(): ranges_json,
-                    },
-                },
+                guild_id.to_string(): subscription,
             },
         },
     })

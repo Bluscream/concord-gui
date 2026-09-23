@@ -36,7 +36,7 @@ pub mod shared {
         let (media, media_started, media_dropped) = cancellable_test_task();
         let mut child_tasks = GatewayChildTasks::default();
         child_tasks.replace_heartbeat(heartbeat).await;
-        child_tasks.replace_keepalive(keepalive).await;
+        child_tasks.replace_udp_ping(keepalive).await;
         child_tasks.replace_media(media).await;
 
         heartbeat_started.await.expect("heartbeat test task starts");

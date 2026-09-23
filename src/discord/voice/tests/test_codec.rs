@@ -641,6 +641,7 @@ fn voice_identify_payload_matches_expected_shape() {
     let heartbeat: Value = serde_json::from_str(&voice_heartbeat_payload(42))
         .expect("voice heartbeat payload is valid JSON");
     assert_eq!(heartbeat["op"].as_u64(), Some(3));
+    assert!(heartbeat["d"]["t"].as_i64().is_some());
     assert_eq!(heartbeat["d"]["seq_ack"].as_i64(), Some(42));
 
     let resume: Value = serde_json::from_str(&voice_resume_payload(&session, 43))
@@ -753,16 +754,16 @@ fn udp_discovery_and_select_protocol_match_expected_shapes() {
 }
 
 #[test]
-fn udp_keepalive_packet_round_trips_little_endian_counter() {
-    let packet = udp_keepalive_packet(0x01020304);
+fn udp_ping_uses_documented_magic_and_echoed_sequence() {
+    let request = udp_ping_request(0x0102_0304);
+    let response = [0x13, 0x37, 0xf0, 0x0d, 0x01, 0x02, 0x03, 0x04];
 
-    assert_eq!(packet, [0x04, 0x03, 0x02, 0x01, 0, 0, 0, 0]);
-    assert_eq!(parse_udp_keepalive_response(&packet), Some(0x01020304));
-    assert_eq!(parse_udp_keepalive_response(&packet[..7]), None);
+    assert_eq!(request, [0x13, 0x37, 0xca, 0xfe, 0x01, 0x02, 0x03, 0x04]);
+    assert_eq!(parse_udp_ping_response(&response), Some(0x0102_0304));
 }
 
 #[tokio::test]
-async fn voice_udp_keepalive_sends_initial_counter() {
+async fn voice_udp_ping_sends_initial_sequence() {
     let receiver = UdpSocket::bind("127.0.0.1:0")
         .await
         .expect("receiver should bind");
@@ -779,17 +780,17 @@ async fn voice_udp_keepalive_sends_initial_counter() {
         )
         .await
         .expect("sender should connect");
-    let keepalive = tokio::spawn(run_voice_udp_keepalive(sender));
-    let mut packet = [0u8; UDP_KEEPALIVE_PACKET_LEN];
+    let udp_ping = tokio::spawn(run_voice_udp_ping(sender));
+    let mut packet = [0u8; UDP_PING_PACKET_LEN];
 
     let received = timeout(Duration::from_secs(1), receiver.recv(&mut packet))
         .await
-        .expect("keepalive should arrive")
-        .expect("receiver should read the keepalive");
+        .expect("UDP ping should arrive")
+        .expect("receiver should read the UDP ping");
 
-    keepalive.abort();
-    assert_eq!(received, UDP_KEEPALIVE_PACKET_LEN);
-    assert_eq!(parse_udp_keepalive_response(&packet), Some(0));
+    udp_ping.abort();
+    assert_eq!(received, UDP_PING_PACKET_LEN);
+    assert_eq!(packet, udp_ping_request(0));
 }
 
 #[test]
@@ -797,9 +798,13 @@ fn voice_session_description_parses_mode_and_redacts_secret() {
     let payload = json!({
         "op": 4,
         "d": {
+            "audio_codec": "opus",
             "mode": AEAD_XCHACHA20_POLY1305_RTPSIZE,
             "secret_key": (0u8..32).collect::<Vec<_>>(),
             "dave_protocol_version": 1,
+            "video_codec": "H264",
+            "media_session_id": "media-session-1",
+            "keyframe_interval": 1_000,
         },
     });
 
@@ -807,9 +812,13 @@ fn voice_session_description_parses_mode_and_redacts_secret() {
         parse_voice_session_description(&payload).expect("session description should parse");
     let debug = format!("{description:?}");
 
+    assert_eq!(description.audio_codec, "opus");
     assert_eq!(description.mode, AEAD_XCHACHA20_POLY1305_RTPSIZE);
     assert_eq!(description.secret_key.len(), 32);
     assert_eq!(description.dave_protocol_version, Some(1));
+    assert_eq!(description.video_codec.as_deref(), Some("H264"));
+    assert_eq!(description.media_session_id, "media-session-1");
+    assert_eq!(description.keyframe_interval, Some(1_000));
     assert!(debug.contains("<redacted>"));
     assert!(!debug.contains("31"));
 }

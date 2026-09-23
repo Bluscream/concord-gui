@@ -1,6 +1,6 @@
 use super::{
-    ConnectionOutcome, GATEWAY_SEND_LIMIT, GATEWAY_SEND_WINDOW, GatewayCommand, GatewayHandshake,
-    GatewayPresence, GatewaySendWindow, GatewaySender, GatewaySessionResources, GatewayZlibDecoder,
+    ConnectionOutcome, GATEWAY_SEND_LIMIT, GATEWAY_SEND_WINDOW,     GatewayCommand, GatewayHandshake, GatewayPresence,
+    GatewaySendWindow, GatewaySender, GatewaySessionResources, GatewayZlibDecoder,
     GuildMemberRequestKind, GuildMemberRequestScheduler, HeartbeatAckState,
     MAX_PENDING_GUILD_MEMBER_REQUESTS, SessionState, SubscriptionDeduper,
     USER_ACCOUNT_CAPABILITIES, build_identify_payload, build_resume_payload, close_code_outcome,
@@ -168,14 +168,15 @@ fn guild_member_rate_limit_delays_targeted_requests_until_retry_after() {
         .expect("the correlated request should retry when Discord allows it");
     scheduler.complete_send(retry_at);
     scheduler
-        .start_due(retry_at)
-        .expect("other targeted requests should not gain an extra 30-second delay");
+        .start_due(retry_at + GUILD_MEMBER_REQUEST_INTERVAL)
+        .expect("the next guild request should follow the per-guild interval");
 }
 
 #[test]
-fn targeted_member_requests_are_due_immediately_without_a_fixed_guild_cooldown() {
+fn guild_member_requests_are_paced_per_guild_within_a_session() {
     let now = Instant::now();
     let guild_id = Id::new(99);
+    let other_guild_id = Id::new(100);
     let mut scheduler = GuildMemberRequestScheduler::default();
     assert!(scheduler.enqueue_search(
         guild_id,
@@ -186,20 +187,29 @@ fn targeted_member_requests_are_due_immediately_without_a_fixed_guild_cooldown()
         now,
     ));
     scheduler.enqueue_by_ids(guild_id, (1..=101).map(Id::new).collect(), false, now);
+    scheduler.enqueue_by_ids(other_guild_id, vec![Id::new(200)], false, now);
 
-    assert_eq!(scheduler.pending.len(), 3);
-    assert!(
-        scheduler
-            .pending
-            .iter()
-            .all(|pending| pending.send_at == now)
-    );
-    for _ in 0..3 {
-        scheduler
-            .start_due(now)
-            .expect("each targeted request should be ready without a guild cooldown");
-        scheduler.complete_send(now);
-    }
+    scheduler
+        .start_due(now)
+        .expect("the first guild request should be ready immediately");
+    scheduler.complete_send(now);
+    let second = scheduler
+        .start_due(now)
+        .expect("a different guild can use its own request window");
+    let second: serde_json::Value =
+        serde_json::from_str(&second).expect("member request should be JSON");
+    assert_eq!(second["d"]["guild_id"], json!(["100"]));
+    scheduler.complete_send(now);
+
+    let next_guild_request_at = now + GUILD_MEMBER_REQUEST_INTERVAL;
+    scheduler
+        .start_due(next_guild_request_at)
+        .expect("the next request for the first guild should follow the interval");
+    scheduler.complete_send(next_guild_request_at);
+    scheduler
+        .start_due(next_guild_request_at + GUILD_MEMBER_REQUEST_INTERVAL)
+        .expect("each remaining request should keep the same spacing");
+    scheduler.complete_send(next_guild_request_at + GUILD_MEMBER_REQUEST_INTERVAL);
     assert!(scheduler.pending.is_empty());
 }
 
@@ -244,7 +254,10 @@ fn guild_member_requests_survive_resume_and_reidentify() {
         .front()
         .expect("a written request without a response should retry after reconnect");
     assert_eq!(written_retry.request.nonce, "member-request");
-    assert_eq!(written_retry.send_at, written_disconnect_at);
+    assert_eq!(
+        written_retry.send_at,
+        resumed_at + GUILD_MEMBER_REQUEST_INTERVAL
+    );
 
     scheduler.acknowledge("member-request");
     assert!(
@@ -717,24 +730,64 @@ fn presence_update_payload_includes_manual_activity() {
 #[test]
 fn presence_update_payload_serializes_rich_activity_fields() {
     let activity = ActivityInfo {
+        id: Some("receive-only-id".to_owned()),
+        kind: ActivityKind::Hang,
+        name: "Hang Status".to_owned(),
+        created_at: Some(1_700_000_000_000),
+        session_id: Some("receive-only-session".to_owned()),
+        platform: Some("xbox".to_owned()),
+        supported_platforms: vec!["xbox".to_owned(), "desktop".to_owned()],
+        details: Some("Building Concord".to_owned()),
+        details_url: Some("https://example.com/details".to_owned()),
+        state: Some("custom".to_owned()),
+        state_url: Some("https://example.com/state".to_owned()),
+        application_id: Some("12345".to_owned()),
+        parent_application_id: Some("54321".to_owned()),
+        status_display_type: Some(2),
+        sync_id: Some("sync-1".to_owned()),
+        flags: Some(16),
         timestamps: Some(crate::discord::ActivityTimestamps {
             start: Some(1_700_000_000_000),
-            end: None,
+            end: Some(1_700_000_100_000),
         }),
         assets: Some(crate::discord::ActivityAssets {
             large_image: Some("cover".to_owned()),
             large_text: Some("On the main menu".to_owned()),
-            small_image: None,
-            small_text: None,
+            large_url: Some("https://example.com/large".to_owned()),
+            small_image: Some("small".to_owned()),
+            small_text: Some("Small".to_owned()),
+            small_url: Some("https://example.com/small".to_owned()),
+            invite_cover_image: Some("invite".to_owned()),
+            extra_fields: [("future_asset".to_owned(), json!(true))]
+                .into_iter()
+                .collect(),
         }),
         party: Some(crate::discord::ActivityParty {
             id: Some("party-1".to_owned()),
             size: Some((2, 5)),
+            privacy: Some(1),
+            extra_fields: [("future_party".to_owned(), json!("kept"))]
+                .into_iter()
+                .collect(),
+        }),
+        secrets: Some(crate::discord::ActivitySecrets {
+            join: Some("join-secret".to_owned()),
+            spectate: Some("spectate-secret".to_owned()),
+            extra_fields: [("future_secret".to_owned(), json!(7))]
+                .into_iter()
+                .collect(),
         }),
         buttons: vec![crate::discord::ActivityButton {
             label: "Join".to_owned(),
             url: "https://example.com/join".to_owned(),
         }],
+        instance: Some(true),
+        metadata: [("artist_ids".to_owned(), json!(["artist-1"]))]
+            .into_iter()
+            .collect(),
+        extra_fields: [("future_activity".to_owned(), json!({ "value": 1 }))]
+            .into_iter()
+            .collect(),
         ..ActivityInfo::playing("Concord")
     };
     let payload: serde_json::Value = serde_json::from_str(&presence_update_payload(
@@ -744,31 +797,90 @@ fn presence_update_payload_serializes_rich_activity_fields() {
     .expect("presence payload should be valid json");
     let entry = &payload["d"]["activities"][0];
 
+    assert_eq!(entry["type"].as_u64(), Some(6));
+    assert_eq!(entry["name"].as_str(), Some("Hang Status"));
+    assert!(entry.get("id").is_none());
+    assert!(entry.get("created_at").is_none());
+    assert!(entry.get("session_id").is_none());
+    assert_eq!(entry["platform"].as_str(), Some("xbox"));
+    assert_eq!(entry["supported_platforms"], json!(["xbox", "desktop"]));
+    assert_eq!(entry["details"].as_str(), Some("Building Concord"));
+    assert_eq!(
+        entry["details_url"].as_str(),
+        Some("https://example.com/details")
+    );
+    assert_eq!(entry["state"].as_str(), Some("custom"));
+    assert_eq!(
+        entry["state_url"].as_str(),
+        Some("https://example.com/state")
+    );
+    assert_eq!(entry["application_id"].as_str(), Some("12345"));
+    assert_eq!(entry["parent_application_id"].as_str(), Some("54321"));
+    assert_eq!(entry["status_display_type"].as_u64(), Some(2));
+    assert_eq!(entry["sync_id"].as_str(), Some("sync-1"));
+    assert_eq!(entry["flags"].as_u64(), Some(17));
     assert_eq!(
         entry["timestamps"]["start"].as_i64(),
         Some(1_700_000_000_000)
     );
-    assert!(entry["timestamps"].get("end").is_none());
+    assert_eq!(entry["timestamps"]["end"].as_i64(), Some(1_700_000_100_000));
     assert_eq!(entry["assets"]["large_image"].as_str(), Some("cover"));
     assert_eq!(
         entry["assets"]["large_text"].as_str(),
         Some("On the main menu")
     );
-    assert!(entry["assets"].get("small_image").is_none());
+    assert_eq!(
+        entry["assets"]["large_url"].as_str(),
+        Some("https://example.com/large")
+    );
+    assert_eq!(entry["assets"]["small_image"].as_str(), Some("small"));
+    assert_eq!(entry["assets"]["small_text"].as_str(), Some("Small"));
+    assert_eq!(
+        entry["assets"]["small_url"].as_str(),
+        Some("https://example.com/small")
+    );
+    assert_eq!(
+        entry["assets"]["invite_cover_image"].as_str(),
+        Some("invite")
+    );
+    assert_eq!(entry["assets"]["future_asset"], json!(true));
     assert_eq!(entry["party"]["id"].as_str(), Some("party-1"));
     assert_eq!(entry["party"]["size"], json!([2, 5]));
+    assert_eq!(entry["party"]["privacy"].as_u64(), Some(1));
+    assert_eq!(entry["party"]["future_party"], json!("kept"));
+    assert_eq!(entry["secrets"]["join"].as_str(), Some("join-secret"));
+    assert_eq!(
+        entry["secrets"]["spectate"].as_str(),
+        Some("spectate-secret")
+    );
+    assert_eq!(entry["secrets"]["future_secret"], json!(7));
     assert_eq!(entry["buttons"], json!(["Join"]));
     assert_eq!(
         entry["metadata"]["button_urls"],
         json!(["https://example.com/join"])
     );
+    assert_eq!(entry["metadata"]["artist_ids"], json!(["artist-1"]));
+    assert_eq!(entry["future_activity"], json!({ "value": 1 }));
 }
 
 #[test]
-fn fatal_gateway_close_codes_do_not_retry_identify() {
-    for code in [4004, 4010, 4011, 4012, 4013, 4014] {
+fn presence_update_payload_preserves_unknown_activity_type() {
+    let activity = ActivityInfo::test(ActivityKind::Unknown(99), "Future activity");
+    let payload: serde_json::Value = serde_json::from_str(&presence_update_payload(
+        PresenceStatus::Online,
+        &[activity],
+    ))
+    .expect("presence payload should be valid json");
+
+    assert_eq!(payload["d"]["activities"][0]["type"].as_u64(), Some(99));
+}
+
+#[test]
+fn gateway_close_codes_choose_the_documented_recovery() {
+    for code in [4004, 4010, 4011, 4012, 4013, 4014, 4015, 4016] {
         assert_eq!(close_code_outcome(code), ConnectionOutcome::Fatal, "{code}");
     }
+    assert_eq!(close_code_outcome(4003), ConnectionOutcome::Reidentify);
     assert_eq!(close_code_outcome(4007), ConnectionOutcome::Reidentify);
     assert_eq!(close_code_outcome(4009), ConnectionOutcome::Reidentify);
     assert_eq!(close_code_outcome(4000), ConnectionOutcome::Resume);
@@ -876,6 +988,7 @@ fn guild_channel_subscribe_payload_matches_shape_and_member_ranges() {
             Id::<GuildMarker>::new(10),
             Id::<ChannelMarker>::new(20),
             ranges,
+            None,
         ))
         .expect("payload should be valid json");
 
@@ -886,6 +999,16 @@ fn guild_channel_subscribe_payload_matches_shape_and_member_ranges() {
             json!(true)
         );
         assert_eq!(payload["d"]["subscriptions"]["10"]["threads"], json!(true));
+        assert_eq!(
+            payload["d"]["subscriptions"]["10"]["member_updates"],
+            json!(true)
+        );
+        assert_eq!(payload["d"]["subscriptions"]["10"]["members"], json!([]));
+        assert!(
+            payload["d"]["subscriptions"]["10"]
+                .get("thread_member_lists")
+                .is_none()
+        );
         assert_eq!(
             payload["d"]["subscriptions"]["10"]["channels"]["20"],
             expected_ranges
@@ -901,6 +1024,8 @@ fn guild_channel_subscribe_payload_matches_shape_and_member_ranges() {
                                 "typing": true,
                                 "activities": true,
                                 "threads": true,
+                                "member_updates": true,
+                                "members": [],
                                 "channels": {
                                     "20": [[0, 99]]
                                 }
@@ -911,6 +1036,104 @@ fn guild_channel_subscribe_payload_matches_shape_and_member_ranges() {
             );
         }
     }
+}
+
+#[test]
+fn guild_channel_subscribe_payload_requests_the_selected_thread_member_list() {
+    let thread_ids = [Id::<ChannelMarker>::new(30)];
+    let payload: serde_json::Value = serde_json::from_str(&guild_channel_subscribe_payload(
+        Id::<GuildMarker>::new(10),
+        Id::<ChannelMarker>::new(20),
+        &[(0, 99)],
+        Some(&thread_ids),
+    ))
+    .expect("payload should be valid json");
+
+    assert_eq!(
+        payload["d"]["subscriptions"]["10"]["thread_member_lists"],
+        json!(["30"])
+    );
+
+    let cleared: serde_json::Value = serde_json::from_str(&guild_channel_subscribe_payload(
+        Id::<GuildMarker>::new(10),
+        Id::<ChannelMarker>::new(20),
+        &[(0, 99)],
+        Some(&[]),
+    ))
+    .expect("payload should be valid json");
+    assert_eq!(
+        cleared["d"]["subscriptions"]["10"]["thread_member_lists"],
+        json!([]),
+        "an explicit empty list unsubscribes the previously selected thread"
+    );
+}
+
+#[test]
+fn guild_subscription_sends_only_the_requested_thread_enabled_payload() {
+    let (urgent_tx, _urgent_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (normal_tx, mut normal_rx) = tokio::sync::mpsc::unbounded_channel();
+    let sender = GatewaySender {
+        urgent_tx,
+        normal_tx,
+    };
+    let mut deduper = SubscriptionDeduper::default();
+    let mut resources = GatewaySessionResources::default();
+    let guild_id = Id::new(10);
+    let channel_id = Id::new(20);
+
+    dispatch_command(
+        &sender,
+        GatewayCommand::SubscribeGuildChannel {
+            guild_id,
+            channel_id,
+        },
+        &mut deduper,
+        &mut resources,
+    )
+    .expect("initial guild subscription should enter the gateway queue");
+
+    let subscription: serde_json::Value = serde_json::from_str(
+        &normal_rx
+            .try_recv()
+            .expect("initial subscription should then enable thread sync")
+            .payload,
+    )
+    .expect("guild subscription payload should be valid json");
+
+    assert_eq!(
+        subscription["d"]["subscriptions"]["10"]["threads"],
+        json!(true)
+    );
+    assert!(
+        normal_rx.try_recv().is_err(),
+        "a guild subscription must not inject a synthetic unsubscribe"
+    );
+
+    dispatch_command(
+        &sender,
+        GatewayCommand::UpdateMemberListSubscription {
+            guild_id,
+            channel_id,
+            thread_id: None,
+            ranges: vec![(0, 99)],
+        },
+        &mut deduper,
+        &mut resources,
+    )
+    .expect("later range subscription should enter the gateway queue");
+
+    let refresh: serde_json::Value = serde_json::from_str(
+        &normal_rx
+            .try_recv()
+            .expect("later range subscription should send one payload")
+            .payload,
+    )
+    .expect("range subscription payload should be valid json");
+    assert_eq!(refresh["d"]["subscriptions"]["10"]["threads"], json!(true));
+    assert!(
+        normal_rx.try_recv().is_err(),
+        "the range update should emit exactly one subscription payload"
+    );
 }
 
 #[test]
@@ -941,6 +1164,7 @@ fn subscription_deduper_allows_guild_range_refreshes() {
         deduper.should_send(&GatewayCommand::UpdateMemberListSubscription {
             guild_id,
             channel_id,
+            thread_id: None,
             ranges: vec![(0, 99), (100, 199)],
         })
     );
@@ -948,6 +1172,7 @@ fn subscription_deduper_allows_guild_range_refreshes() {
         deduper.should_send(&GatewayCommand::UpdateMemberListSubscription {
             guild_id,
             channel_id,
+            thread_id: None,
             ranges: vec![(0, 99), (100, 199)],
         })
     );
@@ -955,6 +1180,7 @@ fn subscription_deduper_allows_guild_range_refreshes() {
         deduper.should_send(&GatewayCommand::UpdateMemberListSubscription {
             guild_id,
             channel_id,
+            thread_id: None,
             ranges: vec![(0, 99)],
         })
     );
@@ -962,6 +1188,7 @@ fn subscription_deduper_allows_guild_range_refreshes() {
         deduper.should_send(&GatewayCommand::UpdateMemberListSubscription {
             guild_id,
             channel_id,
+            thread_id: None,
             ranges: vec![(0, 99)],
         })
     );

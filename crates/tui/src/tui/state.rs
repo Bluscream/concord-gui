@@ -40,6 +40,7 @@ mod toast;
 mod user;
 mod voice_actions;
 
+use channels::ThreadCardListCacheState;
 use composer::ComposerUiState;
 use discord_ui::DiscordUiState;
 use layout_cache::{LayoutCacheState, MessageRowContentMetrics, MessageRowContentMetricsCacheKey};
@@ -177,10 +178,6 @@ impl DashboardState {
     }
 
     pub fn push_effect(&mut self, event: AppEvent) {
-        if let AppEvent::ChannelUpsert(channel) = &event {
-            self.record_thread_channel_upserted(channel);
-            return;
-        }
         self.push_event_inner(event);
     }
 }

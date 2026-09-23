@@ -288,7 +288,7 @@ pub(super) fn parse_member_remove(data: &Value) -> Option<AppEvent> {
     Some(AppEvent::GuildMemberRemove { guild_id, user_id })
 }
 
-pub(super) fn parse_member_info(
+pub(crate) fn parse_member_info(
     value: &Value,
     guild_id: Option<Id<GuildMarker>>,
 ) -> Option<MemberInfo> {

@@ -58,6 +58,7 @@ pub(super) fn parse_relationship_update(data: &Value) -> Option<AppEvent> {
             nickname,
             display_name,
             username,
+            ignored: data.get("user_ignored").and_then(Value::as_bool),
         },
     })
 }
@@ -71,7 +72,11 @@ pub(super) fn parse_relationship_remove(data: &Value) -> Option<AppEvent> {
                 .and_then(|user| user.get("id"))
                 .and_then(parse_id::<UserMarker>)
         })?;
-    Some(AppEvent::RelationshipRemove { user_id })
+    let status = data
+        .get("type")
+        .and_then(Value::as_u64)
+        .and_then(parse_relationship_status);
+    Some(AppEvent::RelationshipRemove { user_id, status })
 }
 
 pub(super) fn parse_relationship_entry(value: &Value) -> Option<RelationshipInfo> {
@@ -108,15 +113,21 @@ pub(super) fn parse_relationship_entry(value: &Value) -> Option<RelationshipInfo
         nickname,
         display_name,
         username: username.map(str::to_owned),
+        ignored: value
+            .get("user_ignored")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     })
 }
 
 fn parse_relationship_status(kind: u64) -> Option<FriendStatus> {
     match kind {
+        0 => Some(FriendStatus::None),
         1 => Some(FriendStatus::Friend),
         2 => Some(FriendStatus::Blocked),
         3 => Some(FriendStatus::IncomingRequest),
         4 => Some(FriendStatus::OutgoingRequest),
+        5 => Some(FriendStatus::Implicit),
         _ => None,
     }
 }

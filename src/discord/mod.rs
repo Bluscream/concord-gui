@@ -39,6 +39,7 @@ mod rest;
 mod rpc;
 mod secret;
 pub(in crate::discord) mod state;
+mod thread;
 mod totp;
 pub(crate) mod upload;
 mod user_settings;
@@ -83,11 +84,11 @@ pub use client::DiscordClient;
 pub use client::validate_token_header;
 pub use commands::next_message_nonce;
 pub use commands::{
-    AppCommand, AttachmentDownloadId, DownloadAttachmentSource, ForumPostArchiveState,
-    ForumPostCreate, GlobalUserProfileUpdate, GuildUserProfileUpdate, MediaPlaybackRequestId,
-    MediaPlaybackSource, MediaPlaybackTarget, MessageHistoryAfterMode, MessageSearchAuthorType,
-    MessageSearchHas, MessageSearchPage, MessageSearchQuery, MuteDuration, ProfileAvatarUpload,
-    ReplyReference, StreamCaptureTargetsRequestId, UserProfileUpdate,
+    AppCommand, AttachmentDownloadId, DownloadAttachmentSource, ForumPostCreate,
+    GlobalUserProfileUpdate, GuildUserProfileUpdate, MediaPlaybackRequestId, MediaPlaybackSource,
+    MediaPlaybackTarget, MessageHistoryAfterMode, MessageSearchAuthorType, MessageSearchHas,
+    MessageSearchPage, MessageSearchQuery, MuteDuration, ProfileAvatarUpload, ReplyReference,
+    StreamCaptureTargetsRequestId, UserProfileUpdate,
 };
 pub use commands::{
     MAX_PROFILE_AVATAR_BYTES, MAX_UPLOAD_ATTACHMENT_COUNT, MAX_UPLOAD_PREVIEW_BYTES,
@@ -98,8 +99,7 @@ pub use events::{
     AppEvent, GatewayDispatchInfo, GuildMemberListItem, GuildMemberListOperation,
     GuildMemberListUpdateInfo, GuildMembersChunkInfo, MessageHistoryLoadTarget,
     MessageUpdateDispatchInfo, MessageUpdateEventFields, PresenceEventFields, ReadySnapshotInfo,
-    SequencedAppEvent, ThreadListSyncInfo, ThreadMemberUpdateInfo, ThreadMembersUpdateInfo,
-    UserGuildSettingsInfo,
+    SequencedAppEvent, UserGuildSettingsInfo,
 };
 pub use fingerprint::load_client_fingerprint_and_http;
 pub use guild::{
@@ -124,20 +124,21 @@ pub(crate) use permission::PermissionDecision;
 pub use permission::{DiscordPermission, PermissionDataGap};
 pub use presence::{
     ActivityAssets, ActivityButton, ActivityEmoji, ActivityInfo, ActivityKind, ActivityParty,
-    ActivityTimestamps, PresenceStatus,
+    ActivitySecrets, ActivityTimestamps, PresenceStatus,
 };
 pub use profile::{
     FriendStatus, MutualGuildInfo, RelationshipInfo, RelationshipUpdateInfo, UserProfileInfo,
 };
 pub use read::ReadStateInfo;
 pub use remote_config::RemoteConfig;
+pub(crate) use request_lifecycle::{ArchivedThreadRequestTarget, ForumPostDataRequestTarget};
 pub use request_lifecycle::GuildMemberSearchSurface;
 pub use rest::{
     AFK_TIMEOUTS, AccountEdit, AuditLogAction, AuditLogEntryInfo, AuthSession, AuthorisedApp,
     AutoModAction, AutoModRule, AutoModTrigger, BackupCode, ChannelEdit, Connection,
     ConnectionVisibility, DefaultNotifications, DiscoverableGuild, DiscoveryCategory,
     DiscoveryMetadata, DiscoveryMetadataProblem, DmScanLevel, EventLocation, EventStatus,
-    ExplicitContentFilter, ForumPostPage, FriendDiscovery, FriendSources, GuildBanInfo, GuildEdit,
+    ExplicitContentFilter, FriendDiscovery, FriendSources, GuildBanInfo, GuildEdit,
     GuildEmojiInfo, GuildInviteInfo, GuildSticker, GuildTemplate, GuildWidget, InvitePreview,
     MAX_BAN_DELETE_MESSAGE_SECONDS, MAX_CHANNEL_NAME_CHARS, MAX_CHANNEL_TOPIC_CHARS,
     MAX_EMOJI_BYTES, MAX_GUILD_NAME_CHARS, MAX_INVITE_MAX_AGE_SECONDS, MAX_INVITE_MAX_USES,
@@ -163,6 +164,11 @@ pub use state::{
     SnapshotRevision, TypingUserState, VoiceParticipantState,
 };
 pub use totp::TotpSecret;
+pub(crate) use thread::ArchivedThreadPageCursor;
+pub use thread::{
+    ArchivedThreadsPage, ForumPostDataInfo, ThreadCreatorState, ThreadGatewayInfo,
+    ThreadListSyncInfo, ThreadMemberInfo, ThreadMemberListUpdateInfo, ThreadMembersUpdateInfo,
+};
 pub(crate) use upload::read_profile_avatar_image;
 pub use user_settings::{UserCustomStatusInfo, UserFriendSourceFlagsInfo, UserSettingsInfo};
 pub(crate) use verification::GuildParticipationDecision;

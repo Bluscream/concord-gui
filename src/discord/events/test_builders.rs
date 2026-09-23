@@ -25,7 +25,7 @@ use crate::discord::*;
 use super::app_event::AppEvent;
 use super::types::MessageHistoryLoadTarget;
 use crate::discord::commands::{
-    AttachmentDownloadId, DownloadAttachmentSource, ForumPostArchiveState, MessageHistoryAfterMode,
+    AttachmentDownloadId, DownloadAttachmentSource, MessageHistoryAfterMode,
     ReactionEmoji,
 };
 
@@ -125,7 +125,9 @@ pub struct GuildCreateFixture {
     pub onboarding: Option<GuildOnboardingInfo>,
     pub channels: Vec<ChannelInfo>,
     pub members: Vec<MemberInfo>,
-    pub presences: Vec<(Id<UserMarker>, PresenceStatus)>,
+    pub thread_snapshot_complete: bool,
+    pub current_user_thread_members: Vec<ThreadMemberInfo>,
+    pub presences: Vec<PresenceEventFields>,
     pub roles: Vec<RoleInfo>,
     pub emojis: Vec<CustomEmojiInfo>,
 }
@@ -145,6 +147,8 @@ impl GuildCreateFixture {
             onboarding: None,
             channels: Vec::new(),
             members: Vec::new(),
+            thread_snapshot_complete: true,
+            current_user_thread_members: Vec::new(),
             presences: Vec::new(),
             roles: Vec::new(),
             emojis: Vec::new(),
@@ -167,45 +171,11 @@ pub fn guild_create_event(event: GuildCreateFixture) -> AppEvent {
         onboarding: event.onboarding,
         channels: event.channels,
         members: event.members,
+        thread_snapshot_complete: event.thread_snapshot_complete,
+        current_user_thread_members: event.current_user_thread_members,
         presences: event.presences,
         roles: Some(event.roles),
         emojis: event.emojis,
-    }
-}
-
-pub struct ForumPostsLoadedFixture {
-    pub channel_id: Id<ChannelMarker>,
-    pub archive_state: ForumPostArchiveState,
-    pub offset: usize,
-    pub next_offset: usize,
-    pub threads: Vec<ChannelInfo>,
-    pub first_messages: Vec<MessageInfo>,
-    pub has_more: bool,
-}
-
-impl ForumPostsLoadedFixture {
-    pub fn new() -> Self {
-        Self {
-            channel_id: Id::new(1),
-            archive_state: ForumPostArchiveState::default(),
-            offset: 0,
-            next_offset: 0,
-            threads: Vec::new(),
-            first_messages: Vec::new(),
-            has_more: false,
-        }
-    }
-}
-
-pub fn forum_posts_loaded_event(f: ForumPostsLoadedFixture) -> AppEvent {
-    AppEvent::ForumPostsLoaded {
-        channel_id: f.channel_id,
-        archive_state: f.archive_state,
-        offset: f.offset,
-        next_offset: f.next_offset,
-        threads: f.threads,
-        first_messages: f.first_messages,
-        has_more: f.has_more,
     }
 }
 
@@ -772,33 +742,6 @@ pub fn message_reaction_remove_emoji_event(f: MessageReactionRemoveEmojiFixture)
         channel_id: f.channel_id,
         message_id: f.message_id,
         emoji: f.emoji,
-    }
-}
-
-pub struct ForumPostsLoadFailedFixture {
-    pub channel_id: Id<ChannelMarker>,
-    pub archive_state: ForumPostArchiveState,
-    pub offset: usize,
-    pub message: String,
-}
-
-impl ForumPostsLoadFailedFixture {
-    pub fn new() -> Self {
-        Self {
-            channel_id: Id::new(1),
-            archive_state: ForumPostArchiveState::default(),
-            offset: 0,
-            message: String::new(),
-        }
-    }
-}
-
-pub fn forum_posts_load_failed_event(f: ForumPostsLoadFailedFixture) -> AppEvent {
-    AppEvent::ForumPostsLoadFailed {
-        channel_id: f.channel_id,
-        archive_state: f.archive_state,
-        offset: f.offset,
-        message: f.message,
     }
 }
 

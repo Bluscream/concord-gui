@@ -760,6 +760,7 @@ pub(super) fn parse_message_update(data: &Value) -> Option<AppEvent> {
         .get("mention_roles")
         .map(|value| parse_mention_roles(Some(value)));
     let flags = data.get("flags").and_then(Value::as_u64);
+    let pinned = data.get("pinned").and_then(Value::as_bool);
     let edited_timestamp = data
         .get("edited_timestamp")
         .and_then(Value::as_str)
@@ -778,6 +779,7 @@ pub(super) fn parse_message_update(data: &Value) -> Option<AppEvent> {
                 mention_everyone,
                 mention_roles,
                 flags,
+                pinned,
                 attachments,
                 embeds,
                 edited_timestamp,
@@ -795,6 +797,7 @@ pub(super) fn parse_message_update(data: &Value) -> Option<AppEvent> {
                     "mention_everyone",
                     "mention_roles",
                     "flags",
+                    "pinned",
                     "attachments",
                     "embeds",
                     "edited_timestamp",

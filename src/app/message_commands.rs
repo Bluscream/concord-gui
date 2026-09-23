@@ -7,6 +7,7 @@ use crate::{
         AttachmentUpdate, ForumPostCreate, MessageAttachmentUpload, MessageInfo,
         MessageUpdateDispatchInfo, MessageUpdateEventFields, ReactionEmoji, ReplyReference,
         friend_request_target,
+        ThreadGatewayInfo, ThreadMemberInfo,
         ids::{
             Id,
             marker::{
@@ -82,8 +83,28 @@ pub(super) async fn create_forum_post(client: DiscordClient, post: ForumPostCrea
     match client.create_forum_post(&post).await {
         Ok(created) => {
             let slow_mode = client.message_slow_mode(post.channel_id);
+            let thread_id = created.thread.channel_id;
+            let current_user_member =
+                Some(created.current_user_member.unwrap_or(ThreadMemberInfo {
+                    thread_id: Some(thread_id),
+                    user_id: None,
+                    join_timestamp: None,
+                    flags: None,
+                    muted: None,
+                    mute_end_time: None,
+                    selected_time_window: None,
+                    member: None,
+                    presence: None,
+                    extra_fields: BTreeMap::new(),
+                }));
             client
-                .publish_event(AppEvent::ChannelUpsert(created.thread))
+                .publish_event(AppEvent::ThreadUpsert {
+                    thread: ThreadGatewayInfo {
+                        channel: created.thread,
+                        current_user_member,
+                    },
+                    created: true,
+                })
                 .await;
             if let Some(message) = created.first_message {
                 client.publish_event(message_create_event(message)).await;
@@ -1794,6 +1815,7 @@ fn message_update_event(message: MessageInfo) -> AppEvent {
                 mention_everyone: Some(message.mention_everyone),
                 mention_roles: Some(message.mention_roles),
                 flags: Some(message.flags),
+                pinned: Some(message.pinned),
                 attachments: AttachmentUpdate::Replace(message.attachments),
                 embeds: Some(message.embeds),
                 edited_timestamp: message.edited_timestamp,
