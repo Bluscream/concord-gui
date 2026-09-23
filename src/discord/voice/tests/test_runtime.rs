@@ -121,6 +121,7 @@ fn voice_runtime_capture_gate_requires_allowed_active_unmuted_voice() {
     assert_eq!(
         state.capture_gate(),
         Some(VoiceCaptureGate {
+            transmit_epoch: 0,
             capture_enabled: true,
             transmit_enabled: true,
             use_voice_activity: true,
@@ -143,6 +144,7 @@ fn voice_runtime_capture_gate_requires_allowed_active_unmuted_voice() {
     assert_eq!(
         state.capture_gate(),
         Some(VoiceCaptureGate {
+            transmit_epoch: 0,
             capture_enabled: false,
             transmit_enabled: false,
             use_voice_activity: true,
@@ -165,6 +167,7 @@ fn voice_runtime_capture_gate_requires_allowed_active_unmuted_voice() {
     assert_eq!(
         state.capture_gate(),
         Some(VoiceCaptureGate {
+            transmit_epoch: 0,
             capture_enabled: false,
             transmit_enabled: false,
             use_voice_activity: true,
@@ -189,6 +192,7 @@ fn voice_runtime_capture_gate_requires_allowed_active_unmuted_voice() {
     assert_eq!(
         state.capture_gate(),
         Some(VoiceCaptureGate {
+            transmit_epoch: 0,
             capture_enabled: false,
             transmit_enabled: false,
             use_voice_activity: true,
@@ -236,6 +240,7 @@ fn voice_runtime_push_to_talk_transmits_only_while_pressed() {
     assert_eq!(
         state.capture_gate(),
         Some(VoiceCaptureGate {
+            transmit_epoch: 0,
             capture_enabled: true,
             transmit_enabled: false,
             use_voice_activity: false,
@@ -250,6 +255,7 @@ fn voice_runtime_push_to_talk_transmits_only_while_pressed() {
     assert_eq!(
         state.capture_gate(),
         Some(VoiceCaptureGate {
+            transmit_epoch: 0,
             capture_enabled: true,
             transmit_enabled: true,
             use_voice_activity: false,

@@ -128,6 +128,7 @@ fn local_speaking_follows_microphone_activity_and_emits_only_edges() {
     let quiet = vec![100i16; DISCORD_OPUS_20MS_STEREO_SAMPLES];
     let normal = vec![1500i16; DISCORD_OPUS_20MS_STEREO_SAMPLES];
     let voice_activity_gate = VoiceCaptureGate {
+        transmit_epoch: 0,
         capture_enabled: true,
         transmit_enabled: true,
         use_voice_activity: true,
@@ -148,6 +149,7 @@ fn local_speaking_follows_microphone_activity_and_emits_only_edges() {
     ));
     assert!(voice_microphone_frame_is_active(
         VoiceCaptureGate {
+            transmit_epoch: 0,
             use_voice_activity: false,
             ..voice_activity_gate
         },
@@ -156,6 +158,7 @@ fn local_speaking_follows_microphone_activity_and_emits_only_edges() {
     ));
     assert!(!voice_microphone_frame_is_active(
         VoiceCaptureGate {
+            transmit_epoch: 0,
             transmit_enabled: false,
             ..voice_activity_gate
         },

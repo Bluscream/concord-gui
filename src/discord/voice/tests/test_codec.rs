@@ -336,6 +336,7 @@ fn voice_microphone_conditioning_combines_gain_before_soft_limiting() {
     condition_voice_microphone_frame(
         &mut frame,
         VoiceCaptureGate {
+            transmit_epoch: 0,
             capture_enabled: true,
             transmit_enabled: true,
             use_voice_activity: true,

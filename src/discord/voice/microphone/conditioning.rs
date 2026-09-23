@@ -1,26 +1,11 @@
+//! Per-frame microphone conditioning: the voice gate, overload handling,
+//! gain and the limiter. Pure functions over one frame, ported from
+//! upstream's `voice/microphone.rs`.
+
 use super::*;
 
 #[cfg(feature = "voice-playback")]
-pub fn select_fresh_voice_microphone_frame(
-    mut frame: VoiceMicrophoneFrame,
-    pcm_rx: &mut mpsc::Receiver<VoiceMicrophoneFrame>,
-    now: Instant,
-) -> (Option<VoiceMicrophoneFrame>, u64) {
-    let mut dropped = 0u64;
-    while now.saturating_duration_since(frame.captured_at) > VOICE_MIC_MAX_FRAME_AGE
-        || pcm_rx.len().saturating_add(1) > VOICE_MIC_MAX_LIVE_FRAMES
-    {
-        dropped = dropped.saturating_add(1);
-        let Ok(next) = pcm_rx.try_recv() else {
-            return (None, dropped);
-        };
-        frame = next;
-    }
-    (Some(frame), dropped)
-}
-
-#[cfg(feature = "voice-playback")]
-pub fn voice_microphone_frame_is_active(
+pub(crate) fn voice_microphone_frame_is_active(
     gate: VoiceCaptureGate,
     microphone_gate: &mut VoiceMicrophoneGateState,
     frame: &[i16],
@@ -30,8 +15,10 @@ pub fn voice_microphone_frame_is_active(
             || microphone_gate.allows_frame(frame, gate.microphone_sensitivity))
 }
 
+/// Applies overload smoothing, user volume, transmit boost, and the limiter
+/// to a captured microphone frame in place.
 #[cfg(feature = "voice-playback")]
-pub fn condition_voice_microphone_frame(
+pub(crate) fn condition_voice_microphone_frame(
     frame: &mut [i16],
     gate: VoiceCaptureGate,
     microphone_gate: &mut VoiceMicrophoneGateState,
@@ -58,8 +45,116 @@ pub fn condition_voice_microphone_frame(
     transmit_stats.limited_samples += apply_voice_microphone_gain_and_limit(frame, combined_gain);
 }
 
+/// Retires expired capture generations instead of trimming valid audio to a queue depth.
+/// Invalidating the shared token also resets retained resampler history on the next input.
+#[cfg(feature = "voice-playback")]
+pub(crate) fn select_fresh_voice_microphone_frame(
+    mut frame: VoiceMicrophoneFrame,
+    pcm_rx: &mut mpsc::Receiver<VoiceMicrophoneFrame>,
+    now: Instant,
+) -> (Option<VoiceMicrophoneFrame>, u64) {
+    let mut dropped = 0u64;
+    // Snapshot the queue length so a live producer cannot keep this loop running forever.
+    let available = pcm_rx.len();
+    for index in 0..=available {
+        if frame.generation.load(Ordering::Acquire)
+            && now.saturating_duration_since(frame.captured_at) <= VOICE_MIC_MAX_PROCESSING_DELAY
+        {
+            return (Some(frame), dropped);
+        }
+        frame.generation.store(false, Ordering::Release);
+        dropped = dropped.saturating_add(1);
+        if index == available {
+            break;
+        }
+        let Ok(next) = pcm_rx.try_recv() else {
+            break;
+        };
+        frame = next;
+    }
+    (None, dropped)
+}
+
+#[cfg(feature = "voice-playback")]
+impl VoiceMicrophoneGateState {
+    pub(crate) fn overload_decision(
+        &mut self,
+        frame: &[i16],
+    ) -> Option<VoiceMicrophoneOverloadDecision> {
+        if let Some(decision) = voice_microphone_overload_decision(frame) {
+            if decision.kind == VoiceMicrophoneOverloadKind::HandlingNoise {
+                self.handling_noise_suppression_frames =
+                    VOICE_MIC_HANDLING_NOISE_SUPPRESSION_FRAMES;
+                self.overload_recovery_frames = 0;
+                return Some(decision);
+            }
+            if self.handling_noise_suppression_frames > 0 {
+                self.handling_noise_suppression_frames -= 1;
+                return Some(VoiceMicrophoneOverloadDecision {
+                    kind: VoiceMicrophoneOverloadKind::Recovery,
+                    gain: VOICE_MIC_HANDLING_NOISE_GAIN,
+                });
+            }
+            self.overload_recovery_frames = if decision.gain <= VOICE_MIC_OVERLOAD_TRANSIENT_GAIN {
+                VOICE_MIC_OVERLOAD_RECOVERY_FRAMES
+            } else {
+                0
+            };
+            return Some(decision);
+        }
+        if self.handling_noise_suppression_frames > 0 {
+            self.handling_noise_suppression_frames -= 1;
+            return Some(VoiceMicrophoneOverloadDecision {
+                kind: VoiceMicrophoneOverloadKind::Recovery,
+                gain: VOICE_MIC_HANDLING_NOISE_GAIN,
+            });
+        }
+        if self.overload_recovery_frames > 0 {
+            let recovery_gain =
+                voice_microphone_overload_recovery_gain(self.overload_recovery_frames);
+            self.overload_recovery_frames -= 1;
+            return Some(VoiceMicrophoneOverloadDecision {
+                kind: VoiceMicrophoneOverloadKind::Recovery,
+                gain: recovery_gain,
+            });
+        }
+        None
+    }
+
+    pub(crate) fn allows_frame(
+        &mut self,
+        frame: &[i16],
+        sensitivity: MicrophoneSensitivityDb,
+    ) -> bool {
+        if voice_pcm_frame_reaches_sensitivity(frame, sensitivity) {
+            self.hangover_frames = VOICE_MIC_GATE_HANGOVER_FRAMES;
+            return true;
+        }
+        if self.hangover_frames > 0 {
+            self.hangover_frames -= 1;
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn reset(&mut self) {
+        self.hangover_frames = 0;
+        self.overload_recovery_frames = 0;
+        self.handling_noise_suppression_frames = 0;
+    }
+}
+
 #[cfg(any(test, feature = "voice-playback"))]
-pub fn apply_voice_microphone_gain_and_limit(frame: &mut [i16], gain: f32) -> u64 {
+pub(crate) fn voice_pcm_frame_reaches_sensitivity(
+    frame: &[i16],
+    sensitivity: MicrophoneSensitivityDb,
+) -> bool {
+    let threshold = sensitivity.peak_threshold();
+    threshold == 0 || voice_pcm_peak(frame) >= threshold
+}
+
+#[cfg(any(test, feature = "voice-playback"))]
+pub(crate) fn apply_voice_microphone_gain_and_limit(frame: &mut [i16], gain: f32) -> u64 {
     let mut limited = 0u64;
     for sample in frame {
         let amplified = f32::from(*sample) * gain;
@@ -75,28 +170,19 @@ pub fn apply_voice_microphone_gain_and_limit(frame: &mut [i16], gain: f32) -> u6
 }
 
 #[cfg(any(test, feature = "voice-playback"))]
-pub fn voice_pcm_frame_reaches_sensitivity(
-    frame: &[i16],
-    sensitivity: MicrophoneSensitivityDb,
-) -> bool {
-    let threshold = sensitivity.peak_threshold();
-    threshold == 0 || voice_pcm_peak(frame) >= threshold
-}
-
-#[cfg(any(test, feature = "voice-playback"))]
 #[allow(dead_code)]
-pub fn voice_microphone_frame_is_overloaded(frame: &[i16]) -> bool {
+pub(crate) fn voice_microphone_frame_is_overloaded(frame: &[i16]) -> bool {
     voice_microphone_clipped_sample_count(frame) >= VOICE_MIC_OVERLOAD_MIN_CLIPPED_SAMPLES
 }
 
 #[cfg(any(test, feature = "voice-playback"))]
 #[allow(dead_code)]
-pub fn voice_microphone_overload_gain(frame: &[i16]) -> Option<f32> {
+pub(crate) fn voice_microphone_overload_gain(frame: &[i16]) -> Option<f32> {
     voice_microphone_overload_decision(frame).map(|decision| decision.gain)
 }
 
 #[cfg(any(test, feature = "voice-playback"))]
-pub fn voice_microphone_clipped_frame_needs_blank(
+pub(crate) fn voice_microphone_clipped_frame_needs_blank(
     frame: &[i16],
     raw_decision: Option<VoiceMicrophoneOverloadDecision>,
 ) -> bool {
@@ -108,7 +194,7 @@ pub fn voice_microphone_clipped_frame_needs_blank(
 }
 
 #[cfg(any(test, feature = "voice-playback"))]
-pub fn voice_microphone_overload_decision(
+pub(crate) fn voice_microphone_overload_decision(
     frame: &[i16],
 ) -> Option<VoiceMicrophoneOverloadDecision> {
     let max_adjacent_delta = voice_microphone_max_adjacent_delta(frame);
@@ -162,7 +248,7 @@ pub fn voice_microphone_overload_decision(
 }
 
 #[cfg(feature = "voice-playback")]
-pub fn voice_microphone_overload_recovery_gain(frames_remaining: u8) -> f32 {
+pub(crate) fn voice_microphone_overload_recovery_gain(frames_remaining: u8) -> f32 {
     let recovery_frames = f32::from(VOICE_MIC_OVERLOAD_RECOVERY_FRAMES.max(1));
     let elapsed_frames = f32::from(VOICE_MIC_OVERLOAD_RECOVERY_FRAMES - frames_remaining);
     VOICE_MIC_OVERLOAD_RECOVERY_START_GAIN
@@ -170,7 +256,7 @@ pub fn voice_microphone_overload_recovery_gain(frames_remaining: u8) -> f32 {
 }
 
 #[cfg(any(test, feature = "voice-playback"))]
-pub fn voice_microphone_clipped_sample_count(frame: &[i16]) -> usize {
+pub(crate) fn voice_microphone_clipped_sample_count(frame: &[i16]) -> usize {
     frame
         .iter()
         .filter(|sample| i32::from(**sample).abs() >= i32::from(i16::MAX) - 1)
@@ -178,7 +264,7 @@ pub fn voice_microphone_clipped_sample_count(frame: &[i16]) -> usize {
 }
 
 #[cfg(any(test, feature = "voice-playback"))]
-pub fn voice_microphone_max_adjacent_delta(frame: &[i16]) -> i32 {
+pub(crate) fn voice_microphone_max_adjacent_delta(frame: &[i16]) -> i32 {
     frame
         .windows(2)
         .map(|samples| (i32::from(samples[1]) - i32::from(samples[0])).abs())
@@ -187,72 +273,10 @@ pub fn voice_microphone_max_adjacent_delta(frame: &[i16]) -> i32 {
 }
 
 #[cfg(any(test, feature = "voice-playback"))]
-pub fn voice_pcm_peak(frame: &[i16]) -> i32 {
+pub(crate) fn voice_pcm_peak(frame: &[i16]) -> i32 {
     frame
         .iter()
         .map(|sample| i32::from(*sample).abs())
         .max()
         .unwrap_or(0)
-}
-
-#[cfg(feature = "voice-playback")]
-impl VoiceMicrophoneGateState {
-    pub fn overload_decision(&mut self, frame: &[i16]) -> Option<VoiceMicrophoneOverloadDecision> {
-        if let Some(decision) = voice_microphone_overload_decision(frame) {
-            if decision.kind == VoiceMicrophoneOverloadKind::HandlingNoise {
-                self.handling_noise_suppression_frames =
-                    VOICE_MIC_HANDLING_NOISE_SUPPRESSION_FRAMES;
-                self.overload_recovery_frames = 0;
-                return Some(decision);
-            }
-            if self.handling_noise_suppression_frames > 0 {
-                self.handling_noise_suppression_frames -= 1;
-                return Some(VoiceMicrophoneOverloadDecision {
-                    kind: VoiceMicrophoneOverloadKind::Recovery,
-                    gain: VOICE_MIC_HANDLING_NOISE_GAIN,
-                });
-            }
-            self.overload_recovery_frames = if decision.gain <= VOICE_MIC_OVERLOAD_TRANSIENT_GAIN {
-                VOICE_MIC_OVERLOAD_RECOVERY_FRAMES
-            } else {
-                0
-            };
-            return Some(decision);
-        }
-        if self.handling_noise_suppression_frames > 0 {
-            self.handling_noise_suppression_frames -= 1;
-            return Some(VoiceMicrophoneOverloadDecision {
-                kind: VoiceMicrophoneOverloadKind::Recovery,
-                gain: VOICE_MIC_HANDLING_NOISE_GAIN,
-            });
-        }
-        if self.overload_recovery_frames > 0 {
-            let recovery_gain =
-                voice_microphone_overload_recovery_gain(self.overload_recovery_frames);
-            self.overload_recovery_frames -= 1;
-            return Some(VoiceMicrophoneOverloadDecision {
-                kind: VoiceMicrophoneOverloadKind::Recovery,
-                gain: recovery_gain,
-            });
-        }
-        None
-    }
-
-    pub fn allows_frame(&mut self, frame: &[i16], sensitivity: MicrophoneSensitivityDb) -> bool {
-        if voice_pcm_frame_reaches_sensitivity(frame, sensitivity) {
-            self.hangover_frames = VOICE_MIC_GATE_HANGOVER_FRAMES;
-            return true;
-        }
-        if self.hangover_frames > 0 {
-            self.hangover_frames -= 1;
-            return true;
-        }
-        false
-    }
-
-    pub fn reset(&mut self) {
-        self.hangover_frames = 0;
-        self.overload_recovery_frames = 0;
-        self.handling_noise_suppression_frames = 0;
-    }
 }

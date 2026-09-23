@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.21] - 2026-09-15
+
+### Bug Fixes
+
+- _(voice)_ Tolerate capture latency to prevent microphone dropouts (#369) in [#369](https://github.com/chojs23/concord/pull/369) by @chojs23
+- _(tui)_ Preserve reply composer drafts (#345) in [#345](https://github.com/chojs23/concord/pull/345) by @flooryyyy
+
+### Features
+
+- _(tui)_ Search servers in the channel switcher with a `*` prefix (#368) in [#368](https://github.com/chojs23/concord/pull/368) by @sunglasseslol
+
+### New Contributors
+
+- @sunglasseslol made their first contribution in [#368](https://github.com/chojs23/concord/pull/368)
+- @flooryyyy made their first contribution in [#345](https://github.com/chojs23/concord/pull/345)
+
 ## [2.5.20] - 2026-09-12
 
 ### Bug Fixes

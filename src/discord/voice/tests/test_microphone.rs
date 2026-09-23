@@ -203,60 +203,53 @@ fn microphone_capture_time_advances_rtp_clock_across_missing_frames() {
     assert_eq!(state.nonce_suffix, 10);
 }
 
-#[cfg(feature = "voice-playback")]
 #[test]
-fn microphone_freshness_policy_bounds_queue_depth_and_frame_age() {
+fn microphone_expiry_retires_backlog_and_recovers_without_partial_audio() {
     let now = Instant::now();
-
-    // A full stored queue catches up to the newest three live frames instead
-    // of preserving hundreds of milliseconds of old speech.
-    let (tx, mut rx) = tokio::sync::mpsc::channel(VOICE_MIC_PCM_FRAME_QUEUE);
-    let initial = VoiceMicrophoneFrame {
-        samples: vec![0],
-        captured_at: now - Duration::from_millis(320),
-    };
-    for index in 1u8..=15 {
-        tx.try_send(VoiceMicrophoneFrame {
-            samples: vec![i16::from(index)],
-            captured_at: now - Duration::from_millis(u64::from(15 - index) * 20),
-        })
-        .expect("backlog frame should queue");
-    }
-
-    let (selected, dropped) = select_fresh_voice_microphone_frame(initial, &mut rx, now);
-    let selected = selected.expect("a fresh frame should remain");
-
-    assert_eq!(selected.samples, vec![13]);
-    assert_eq!(dropped, 13);
-    assert_eq!(rx.len().saturating_add(1), VOICE_MIC_MAX_LIVE_FRAMES);
-    assert!(now.saturating_duration_since(selected.captured_at) <= VOICE_MIC_MAX_FRAME_AGE);
-
-    // A frame exactly on the age boundary remains live when it is the only
-    // available audio.
-    let (_tx, mut rx) = tokio::sync::mpsc::channel(1);
-    let boundary = VoiceMicrophoneFrame {
-        samples: vec![50],
-        captured_at: now - VOICE_MIC_MAX_FRAME_AGE,
-    };
-    let (selected, dropped) = select_fresh_voice_microphone_frame(boundary, &mut rx, now);
-
-    assert_eq!(
-        selected.expect("boundary frame should remain live").samples,
-        vec![50]
+    let (tx, mut rx) = mpsc::channel(VOICE_MIC_PCM_FRAME_QUEUE);
+    let stats = Arc::new(VoiceMicrophoneCaptureStats::default());
+    let mut frames = VoiceMicrophonePcmFrames::new(tx, stats, 48_000);
+    // Two completed frames and a half-frame must all retire together.
+    frames.push_stereo_samples(
+        &vec![1; DISCORD_OPUS_20MS_STEREO_SAMPLES * 5 / 2],
+        now - Duration::from_millis(501),
     );
-    assert_eq!(dropped, 0);
-
-    // Once the age budget is exceeded, transmitting silence or waiting for a
-    // new live frame is better than sending stale speech.
-    let (_tx, mut rx) = tokio::sync::mpsc::channel(1);
-    let stale = VoiceMicrophoneFrame {
-        samples: vec![99],
-        captured_at: now - VOICE_MIC_MAX_FRAME_AGE - Duration::from_millis(1),
-    };
-    let (selected, dropped) = select_fresh_voice_microphone_frame(stale, &mut rx, now);
-
+    let first = rx.try_recv().expect("old batch should queue");
+    let generation = Arc::clone(&first.generation);
+    let (selected, dropped) = select_fresh_voice_microphone_frame(first, &mut rx, now);
     assert!(selected.is_none());
-    assert_eq!(dropped, 1);
+    assert_eq!(dropped, 2);
+    assert!(!generation.load(Ordering::Acquire));
+
+    frames.push_stereo_samples(&vec![2; DISCORD_OPUS_20MS_STEREO_SAMPLES], now);
+    let fresh = rx.try_recv().expect("new audio should resume");
+    assert_eq!(fresh.captured_at, now);
+    assert!(fresh.samples.iter().all(|sample| *sample == 2));
+    assert!(fresh.generation.load(Ordering::Acquire));
+    assert!(!Arc::ptr_eq(&generation, &fresh.generation));
+}
+
+#[test]
+fn microphone_pcm_overflow_retires_queued_history_before_recovery() {
+    let now = Instant::now();
+    let (tx, mut rx) = mpsc::channel(2);
+    let stats = Arc::new(VoiceMicrophoneCaptureStats::default());
+    let mut frames = VoiceMicrophonePcmFrames::new(tx, Arc::clone(&stats), 48_000);
+    frames.push_stereo_samples(&vec![1; DISCORD_OPUS_20MS_STEREO_SAMPLES * 3], now);
+    let first = rx.try_recv().expect("first batch should fill queue");
+    let (selected, dropped) = select_fresh_voice_microphone_frame(first, &mut rx, now);
+    assert!(selected.is_none());
+    assert_eq!(dropped, 2);
+    assert_eq!(stats.dropped_frames.load(Ordering::Relaxed), 1);
+
+    let resumed_at = now + Duration::from_millis(60);
+    frames.push_stereo_samples(&vec![3; DISCORD_OPUS_20MS_STEREO_SAMPLES], resumed_at);
+    let frame = rx
+        .try_recv()
+        .expect("overflow should not close the capture queue");
+    assert_eq!(frame.captured_at, resumed_at);
+    assert!(frame.samples.iter().all(|sample| *sample == 3));
+    assert!(frame.generation.load(Ordering::Acquire));
 }
 
 #[cfg(feature = "voice-playback")]
@@ -282,11 +275,13 @@ fn microphone_pcm_drain_clears_backlog_before_reenable() {
     let now = Instant::now();
 
     tx.try_send(VoiceMicrophoneFrame {
+        generation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         samples: vec![10],
         captured_at: now,
     })
     .expect("first frame should queue");
     tx.try_send(VoiceMicrophoneFrame {
+        generation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         samples: vec![20],
         captured_at: now,
     })

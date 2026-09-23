@@ -1,27 +1,26 @@
-#[cfg(feature = "voice-playback")]
-use super::noise::VoiceNoiseSuppressor;
+//! The outbound transmit loop: pacing frames onto the wire, the speaking
+//! edge, trailing silence and transmit statistics. Ported from upstream's
+//! `voice/microphone.rs`.
+
+use super::super::noise::VoiceNoiseSuppressor;
 use super::*;
 
 #[cfg(feature = "voice-playback")]
-async fn stop_voice_transmission(
-    context: &VoiceUdpTransmitContext,
-    sender: &mut VoiceOutboundSendState,
-    transmit_stats: &mut VoiceUdpTransmitStats,
-) {
-    let outcome = sender.stop_speaking_with_dave(&mut *context.dave_state.lock().await);
-    if let Err(error) = flush_voice_outbound_events(
-        &context.udp_socket,
-        &context.writer,
-        outcome,
-        sender,
-        transmit_stats,
-    )
-    .await
-    {
-        logging::error("voice", error);
-    }
+fn reset_voice_microphone_processing(
+    encoder: &mut VoiceOpusEncode,
+    microphone_gate: &mut VoiceMicrophoneGateState,
+    noise_suppressor: &mut VoiceNoiseSuppressor,
+    trailing_silence: &mut VoiceTrailingSilence,
+) -> Result<(), String> {
+    *encoder = VoiceOpusEncode::new()?;
+    microphone_gate.reset();
+    noise_suppressor.reset();
+    trailing_silence.cancel();
+    Ok(())
 }
 
+/// [`stop_voice_transmission`] plus forcing the capture gate shut. The
+/// transmit loop publishes the local silent edge on every teardown path.
 #[cfg(feature = "voice-playback")]
 async fn silence_voice_transmission(
     context: &VoiceUdpTransmitContext,
@@ -30,6 +29,32 @@ async fn silence_voice_transmission(
 ) {
     stop_voice_transmission(context, sender, transmit_stats).await;
     sender.set_capture_gate(false, false);
+}
+
+/// Flushes a stop-speaking notice through the outbound sender, logging
+/// instead of propagating failures since the transmit loop keeps running.
+#[cfg(feature = "voice-playback")]
+async fn stop_voice_transmission(
+    context: &VoiceUdpTransmitContext,
+    sender: &mut VoiceOutboundSendState,
+    transmit_stats: &mut VoiceUdpTransmitStats,
+) {
+    let result = voice_send_with_timeout(async {
+        let outcome = sender.stop_speaking_with_dave(&mut *context.dave_state.lock().await);
+        flush_voice_outbound_events(
+            &context.udp_socket,
+            &context.writer,
+            outcome,
+            sender,
+            transmit_stats,
+            None,
+        )
+        .await
+    })
+    .await;
+    if let Err(error) = result {
+        logging::error("voice", error);
+    }
 }
 
 #[cfg(feature = "voice-playback")]
@@ -43,6 +68,33 @@ pub(crate) fn publish_local_speaking_edge(
     }
     *local_speaking = speaking;
     let _ = local_speaking_tx.send(speaking);
+}
+
+#[cfg(feature = "voice-playback")]
+async fn voice_send_with_timeout<T>(
+    send: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    timeout(VOICE_MIC_SEND_TIMEOUT, send)
+        .await
+        .map_err(|_| "voice microphone send timed out".to_owned())?
+}
+
+#[cfg(feature = "voice-playback")]
+async fn voice_microphone_send_before_deadline(
+    captured_at: Instant,
+    send: impl std::future::Future<Output = Result<bool, String>>,
+) -> Result<bool, String> {
+    let deadline = captured_at
+        .checked_add(VOICE_MIC_MAX_PROCESSING_DELAY)
+        .unwrap_or(captured_at);
+    if Instant::now() > deadline {
+        return Ok(false);
+    }
+    // Expiring media is recoverable. A stalled connection that exceeds the independent
+    // send timeout ends transmission instead of keeping the audio queue blocked.
+    tokio::time::timeout_at(deadline.into(), voice_send_with_timeout(send))
+        .await
+        .unwrap_or(Ok(false))
 }
 
 #[cfg(any(test, feature = "voice-playback"))]
@@ -74,21 +126,23 @@ async fn send_voice_trailing_silence_frame(
         return Ok(());
     };
 
-    let mut dave_state = context.dave_state.lock().await;
-    let outcome = sender.send_trailing_silence_frame_with_dave(&mut dave_state, finish_talkspurt);
-    drop(dave_state);
-    flush_voice_outbound_events(
-        &context.udp_socket,
-        &context.writer,
-        outcome,
-        sender,
-        transmit_stats,
-    )
+    voice_send_with_timeout(async {
+        let mut dave_state = context.dave_state.lock().await;
+        let outcome =
+            sender.send_trailing_silence_frame_with_dave(&mut dave_state, finish_talkspurt);
+        drop(dave_state);
+        flush_voice_outbound_events(
+            &context.udp_socket,
+            &context.writer,
+            outcome,
+            sender,
+            transmit_stats,
+            None,
+        )
+        .await
+    })
     .await?;
 
-    if !sender.speaking {
-        trailing_silence.cancel();
-    }
     Ok(())
 }
 
@@ -115,7 +169,8 @@ pub(crate) async fn run_voice_udp_transmit(
             return Err(format!("voice UDP transmit init failed: {error}"));
         }
     };
-    let initial_gate = *gate_rx.borrow();
+    let initial_gate = *gate_rx.borrow_and_update();
+    let mut applied_transmit_epoch = initial_gate.transmit_epoch;
     sender.set_capture_gate(initial_gate.transmit_enabled, false);
     let mut encoder = match VoiceOpusEncode::new() {
         Ok(encoder) => encoder,
@@ -129,14 +184,37 @@ pub(crate) async fn run_voice_udp_transmit(
     let mut microphone_gate = VoiceMicrophoneGateState::default();
     let mut trailing_silence = VoiceTrailingSilence::default();
     let mut noise_suppressor = VoiceNoiseSuppressor::new();
-    let mut noise_suppression_enabled = initial_gate.noise_suppression;
     let mut previous_microphone_frame_at = None;
+    let mut noise_suppression_enabled = initial_gate.noise_suppression;
     let mut next_stats_log_at = transmit_started_at + VOICE_TRANSMIT_STATS_LOG_INTERVAL;
     let mut local_speaking = false;
+    let mut processing_generation: Option<Arc<AtomicBool>> = None;
+    let mut capture_cutoff = Instant::now();
+    let mut last_frame_received_at = Instant::now();
     let mut transmit_interval = tokio::time::interval(DISCORD_OPUS_FRAME_DURATION);
     transmit_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     let result = loop {
+        if processing_generation.as_ref().is_some_and(|generation| {
+            !generation.load(Ordering::Acquire)
+                || last_frame_received_at.elapsed() > VOICE_MIC_MAX_PROCESSING_DELAY
+        }) {
+            if let Some(generation) = processing_generation.take() {
+                generation.store(false, Ordering::Release);
+            }
+            if let Err(error) = reset_voice_microphone_processing(
+                &mut encoder,
+                &mut microphone_gate,
+                &mut noise_suppressor,
+                &mut trailing_silence,
+            ) {
+                break Err(error);
+            }
+            publish_local_speaking_edge(&context.local_speaking_tx, &mut local_speaking, false);
+            if sender.speaking {
+                stop_voice_transmission(&context, &mut sender, &mut transmit_stats).await;
+            }
+        }
         tokio::select! {
             changed = gate_rx.changed() => {
                 if changed.is_err() {
@@ -144,17 +222,22 @@ pub(crate) async fn run_voice_udp_transmit(
                     silence_voice_transmission(&context, &mut sender, &mut transmit_stats).await;
                     break Ok(());
                 }
-                let gate = *gate_rx.borrow();
-                let was_enabled = sender.capture_gate_enabled();
-                if gate.transmit_enabled != was_enabled {
+                let gate = *gate_rx.borrow_and_update();
+                if gate.transmit_epoch != applied_transmit_epoch {
+                    // The raw worker may still hold pre-unmute audio after the PCM drain.
+                    capture_cutoff = Instant::now();
+                    if let Some(generation) = processing_generation.take() {
+                        generation.store(false, Ordering::Release);
+                    }
                     drain_voice_microphone_pcm_queue(&mut pcm_rx);
-                    microphone_gate.reset();
-                    noise_suppressor.reset();
+                    if let Err(error) = reset_voice_microphone_processing(
+                        &mut encoder, &mut microphone_gate, &mut noise_suppressor, &mut trailing_silence,
+                    ) {
+                        break Err(error);
+                    }
                 }
                 if gate.noise_suppression != noise_suppression_enabled {
-                    if gate.noise_suppression {
-                        noise_suppressor.reset();
-                    }
+                    noise_suppressor.reset();
                     noise_suppression_enabled = gate.noise_suppression;
                 }
                 if !gate.transmit_enabled {
@@ -174,6 +257,7 @@ pub(crate) async fn run_voice_udp_transmit(
                     trailing_silence.cancel();
                 }
                 sender.set_capture_gate(gate.transmit_enabled, false);
+                applied_transmit_epoch = gate.transmit_epoch;
             }
             _ = transmit_interval.tick() => {
                 let frame = match pcm_rx.try_recv() {
@@ -196,12 +280,23 @@ pub(crate) async fn run_voice_udp_transmit(
                 transmit_stats.stale_microphone_frames_dropped = transmit_stats
                     .stale_microphone_frames_dropped
                     .saturating_add(stale_frames_dropped);
-                if stale_frames_dropped > 0 {
-                    microphone_gate.reset();
-                }
                 let Some(mut frame) = frame else {
                     continue;
                 };
+                if frame.captured_at < capture_cutoff {
+                    // Do not invalidate later frames in this same callback: a callback may
+                    // span the unmute boundary and contain both old and new audio.
+                    continue;
+                }
+                if processing_generation.as_ref().is_some_and(|generation| {
+                    !Arc::ptr_eq(generation, &frame.generation)
+                }) && let Err(error) = reset_voice_microphone_processing(
+                    &mut encoder, &mut microphone_gate, &mut noise_suppressor, &mut trailing_silence,
+                ) {
+                    break Err(error);
+                }
+                processing_generation = Some(Arc::clone(&frame.generation));
+                last_frame_received_at = Instant::now();
                 advance_voice_media_clock(
                     &mut sender,
                     &mut previous_microphone_frame_at,
@@ -272,36 +367,36 @@ pub(crate) async fn run_voice_udp_transmit(
                             }
                         };
                         if let Some(opus) = opus {
-                            let now = Instant::now();
-                            let frame_age = now.saturating_duration_since(frame.captured_at);
                             transmit_stats.max_microphone_queue_depth = transmit_stats
                                 .max_microphone_queue_depth
                                 .max(pcm_rx.len().saturating_add(1));
-                            if frame_age > VOICE_MIC_MAX_FRAME_AGE {
-                                transmit_stats.stale_microphone_frames_dropped = transmit_stats
-                                    .stale_microphone_frames_dropped
-                                    .saturating_add(1);
-                                microphone_gate.reset();
-                            } else {
-                                transmit_stats.max_microphone_frame_age_ms = transmit_stats
-                                    .max_microphone_frame_age_ms
-                                    .max(frame_age.as_millis());
-                                record_voice_transmit_frame(&mut transmit_stats, now);
+                            let sent = voice_microphone_send_before_deadline(frame.captured_at, async {
                                 let mut dave_state = context.dave_state.lock().await;
-                                let outcome =
-                                    sender.send_opus_frame_with_dave(&opus, &mut dave_state);
+                                if !voice_microphone_frame_can_send(&frame, &gate_rx, applied_transmit_epoch, capture_cutoff, Instant::now()) {
+                                    return Ok(false);
+                                }
+                                let outcome = sender.send_opus_frame_with_dave(&opus, &mut dave_state);
                                 drop(dave_state);
-                                if let Err(error) = flush_voice_outbound_events(
+                                flush_voice_outbound_events(
                                     &context.udp_socket,
                                     &context.writer,
                                     outcome,
                                     &mut sender,
                                     &mut transmit_stats,
-                                )
-                                .await
-                                {
-                                    break Err(error);
+                                    Some((&frame, &gate_rx, applied_transmit_epoch, capture_cutoff)),
+                                ).await
+                            }).await;
+                            match sent {
+                                Ok(true) => {
+                                    transmit_stats.max_microphone_frame_age_ms = transmit_stats
+                                        .max_microphone_frame_age_ms.max(frame.captured_at.elapsed().as_millis());
+                                    record_voice_transmit_frame(&mut transmit_stats, Instant::now());
                                 }
+                                Ok(false) => {
+                                    frame.generation.store(false, Ordering::Release);
+                                    transmit_stats.stale_microphone_frames_dropped += 1;
+                                }
+                                Err(error) => break Err(error),
                             }
                         }
                     }
@@ -332,23 +427,72 @@ pub(crate) async fn run_voice_udp_transmit(
 
 #[cfg(feature = "voice-playback")]
 pub(crate) fn drain_voice_microphone_pcm_queue(pcm_rx: &mut mpsc::Receiver<VoiceMicrophoneFrame>) {
-    while pcm_rx.try_recv().is_ok() {}
+    for _ in 0..pcm_rx.len() {
+        let Ok(frame) = pcm_rx.try_recv() else { break };
+        frame.generation.store(false, Ordering::Release);
+    }
 }
 
 #[cfg(feature = "voice-playback")]
-pub(super) async fn flush_voice_outbound_events(
+fn voice_microphone_frame_can_send(
+    frame: &VoiceMicrophoneFrame,
+    gate_rx: &watch::Receiver<VoiceCaptureGate>,
+    applied_transmit_epoch: u64,
+    capture_cutoff: Instant,
+    now: Instant,
+) -> bool {
+    let gate = gate_rx.borrow();
+    frame.generation.load(Ordering::Acquire)
+        && frame.captured_at >= capture_cutoff
+        && now.saturating_duration_since(frame.captured_at) <= VOICE_MIC_MAX_PROCESSING_DELAY
+        && gate.transmit_epoch == applied_transmit_epoch
+        && gate.transmit_enabled
+        && gate_rx.has_changed().is_ok()
+}
+
+#[cfg(feature = "voice-playback")]
+pub(crate) async fn flush_voice_outbound_events(
     udp_socket: &UdpSocket,
     writer: &VoiceWriter,
     outcome: Result<VoiceOutboundSendOutcome, String>,
     sender: &mut VoiceOutboundSendState,
     transmit_stats: &mut VoiceUdpTransmitStats,
-) -> Result<(), String> {
+    microphone: Option<(
+        &VoiceMicrophoneFrame,
+        &watch::Receiver<VoiceCaptureGate>,
+        u64,
+        Instant,
+    )>,
+) -> Result<bool, String> {
     match outcome? {
         VoiceOutboundSendOutcome::Sent => {
-            for event in sender.take_events() {
+            let events = sender.take_events();
+            for event in events {
+                if microphone.is_some_and(|(frame, gate, epoch, cutoff)| {
+                    !voice_microphone_frame_can_send(frame, gate, epoch, cutoff, Instant::now())
+                }) {
+                    return Ok(false);
+                }
                 match event {
                     VoiceOutboundSendEvent::Speaking { speaking, ssrc } => {
-                        send_voice_text(writer, voice_speaking_payload(ssrc, speaking)).await?;
+                        let mut writer = writer.lock().await;
+                        if microphone.is_some_and(|(frame, gate, epoch, cutoff)| {
+                            !voice_microphone_frame_can_send(
+                                frame,
+                                gate,
+                                epoch,
+                                cutoff,
+                                Instant::now(),
+                            )
+                        }) {
+                            return Ok(false);
+                        }
+                        writer
+                            .send(WsMessage::Text(
+                                voice_speaking_payload(ssrc, speaking).into(),
+                            ))
+                            .await
+                            .map_err(|error| format!("voice websocket send failed: {error}"))?;
                     }
                     VoiceOutboundSendEvent::Packet { bytes } => {
                         udp_socket
@@ -375,11 +519,11 @@ pub(super) async fn flush_voice_outbound_events(
             }
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(feature = "voice-playback")]
-pub(super) fn record_voice_transmit_frame(stats: &mut VoiceUdpTransmitStats, now: Instant) {
+pub(crate) fn record_voice_transmit_frame(stats: &mut VoiceUdpTransmitStats, now: Instant) {
     if let Some(last_frame_at) = stats.last_frame_at {
         stats.max_frame_gap_ms = stats
             .max_frame_gap_ms
@@ -389,7 +533,7 @@ pub(super) fn record_voice_transmit_frame(stats: &mut VoiceUdpTransmitStats, now
 }
 
 #[cfg(feature = "voice-playback")]
-pub(super) fn log_voice_transmit_stats(
+pub(crate) fn log_voice_transmit_stats(
     label: &str,
     stats: &VoiceUdpTransmitStats,
     started_at: Instant,

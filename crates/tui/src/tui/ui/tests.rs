@@ -58,7 +58,8 @@ use crate::tui::{
         wrap_text_lines,
     },
     state::{
-        AppliedForumTag, AttachmentDownloadProgressView, AttachmentViewerZoom, ChannelSwitcherItem,
+        AppliedForumTag, AttachmentDownloadProgressView, AttachmentViewerZoom,
+        ChannelSwitcherDisplay, ChannelSwitcherItem, ChannelSwitcherMode, ChannelSwitcherView,
         ChannelThreadItem, ComposerLock, DashboardState, DisplayOptionItem, EmojiPickerEntry,
         EmojiReactionItem, FocusPane, MentionPickerEntry, MentionPickerTarget, MessageActionItem,
         MessageActionKind, PollVotePickerItem, SelectablePopupTarget, ThreadCardImagePreview,

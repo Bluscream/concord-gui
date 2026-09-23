@@ -18,41 +18,112 @@ use concord::discord::{
     ReactionInfo, VoiceParticipantState,
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChannelSwitcherMode {
+    Channels,
+    Guilds,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ChannelSwitcherItem {
-    pub channel_id: Id<ChannelMarker>,
-    pub guild_id: Option<Id<GuildMarker>>,
-    pub guild_name: Option<String>,
+pub struct ChannelSwitcherDisplay {
     pub group_label: String,
     pub parent_label: Option<String>,
-    pub channel_label: String,
+    pub label: String,
     pub unread: ChannelUnreadState,
-    pub unread_message_count: usize,
-    pub search_name: String,
+    /// Direct messages may show a numeric badge while keeping the same unread
+    /// name style as the channel pane.
+    pub badge_state: ChannelUnreadState,
+    pub search_text: String,
     pub depth: usize,
     pub group_order: usize,
     pub original_index: usize,
 }
 
+/// Keeps target-specific navigation data separate from the shared presentation
+/// data used to render and rank every switcher row.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ChannelSwitcherItem {
+    Channel {
+        channel_id: Id<ChannelMarker>,
+        guild_name: Option<String>,
+        display: ChannelSwitcherDisplay,
+    },
+    Guild {
+        guild_id: Id<GuildMarker>,
+        display: ChannelSwitcherDisplay,
+    },
+}
+
+impl ChannelSwitcherItem {
+    pub fn channel_id(&self) -> Option<Id<ChannelMarker>> {
+        match self {
+            Self::Channel { channel_id, .. } => Some(*channel_id),
+            Self::Guild { .. } => None,
+        }
+    }
+
+    pub fn display(&self) -> &ChannelSwitcherDisplay {
+        match self {
+            Self::Channel { display, .. } | Self::Guild { display, .. } => display,
+        }
+    }
+
+    pub fn display_mut(&mut self) -> &mut ChannelSwitcherDisplay {
+        match self {
+            Self::Channel { display, .. } | Self::Guild { display, .. } => display,
+        }
+    }
+}
+
+/// A consistent popup snapshot shared by rendering, cursor placement, and hit
+/// testing.
+#[derive(Clone, Copy, Debug)]
+pub struct ChannelSwitcherView<'a> {
+    pub query: &'a str,
+    pub query_cursor: usize,
+    pub mode: ChannelSwitcherMode,
+    pub items: &'a [ChannelSwitcherItem],
+    pub selected: usize,
+    pub scroll: usize,
+}
+
 #[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
-impl ChannelSwitcherItem {
-    pub fn test(channel_id: Id<ChannelMarker>) -> Self {
+impl ChannelSwitcherDisplay {
+    pub fn test() -> Self {
         Self {
-            channel_id,
-            guild_id: None,
-            guild_name: None,
             group_label: String::new(),
             parent_label: None,
-            channel_label: String::new(),
+            label: String::new(),
             unread: ChannelUnreadState::Seen,
-            unread_message_count: 0,
-            search_name: String::new(),
+            badge_state: ChannelUnreadState::Seen,
+            search_text: String::new(),
             depth: 0,
             group_order: 0,
             original_index: 0,
         }
     }
+}
+
+#[cfg(any(test, feature = "fixtures"))]
+#[cfg(any(test, feature = "fixtures"))]
+#[allow(dead_code)]
+impl ChannelSwitcherItem {
+    pub fn test(channel_id: Id<ChannelMarker>, display: ChannelSwitcherDisplay) -> Self {
+        Self::Channel {
+            channel_id,
+            guild_name: None,
+            display,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FocusPane {
+    Guilds,
+    Channels,
+    Messages,
+    Members,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -756,14 +827,6 @@ impl GuildPaneEntry<'_> {
             Self::Guild { state, .. } => state.name.as_str(),
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FocusPane {
-    Guilds,
-    Channels,
-    Messages,
-    Members,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

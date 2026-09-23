@@ -63,13 +63,23 @@ pub(super) const DISCORD_TRAILING_SILENCE_FRAMES: usize = 5;
 pub(super) const OPUS_MAX_ENCODED_FRAME_BYTES: usize = 4000;
 
 #[cfg(feature = "voice-playback")]
-pub(super) const VOICE_MIC_PCM_FRAME_QUEUE: usize = 32;
+pub(super) const VOICE_MIC_MAX_PROCESSING_DELAY: Duration = Duration::from_millis(500);
 #[cfg(feature = "voice-playback")]
-pub(super) const VOICE_MIC_MAX_LIVE_FRAMES: usize = 3;
+pub(super) const VOICE_MIC_SEND_TIMEOUT: Duration = Duration::from_millis(100);
 #[cfg(feature = "voice-playback")]
-pub(super) const VOICE_MIC_INPUT_CALLBACK_QUEUE: usize = 8;
+pub(super) const VOICE_MIC_SERVICE_INTERVAL: Duration = Duration::from_millis(5);
+/// Storage covers the processing deadline, one bounded send, and worker
+/// scheduling.
 #[cfg(feature = "voice-playback")]
-pub(super) const VOICE_MIC_MAX_FRAME_AGE: Duration = Duration::from_millis(80);
+pub(super) const VOICE_MIC_QUEUE_BUDGET: Duration = VOICE_MIC_MAX_PROCESSING_DELAY
+    .saturating_add(VOICE_MIC_SEND_TIMEOUT)
+    .saturating_add(VOICE_MIC_SERVICE_INTERVAL.saturating_mul(2));
+#[cfg(feature = "voice-playback")]
+pub(super) const VOICE_MIC_PCM_FRAME_QUEUE: usize = VOICE_MIC_QUEUE_BUDGET
+    .as_millis()
+    .div_ceil(DISCORD_OPUS_FRAME_DURATION.as_millis())
+    as usize
+    + 1;
 /// How many input callbacks a second the automatic buffer aims for. Linux
 /// audio servers settle better with fewer, larger callbacks than the rest.
 #[cfg(all(feature = "voice-playback", target_os = "linux"))]

@@ -117,6 +117,8 @@ impl Default for VoiceChildTasks {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct VoiceCaptureGate {
+    /// Preserve transmit transitions even when watch coalesces mute and unmute.
+    pub(super) transmit_epoch: u64,
     pub(super) capture_enabled: bool,
     pub(super) transmit_enabled: bool,
     pub(super) use_voice_activity: bool,
@@ -162,13 +164,6 @@ pub(super) struct VoiceMicrophoneInputProcessor {
     pub(super) worker: Option<std::thread::JoinHandle<()>>,
 }
 
-#[cfg(feature = "voice-playback")]
-pub(super) struct VoiceMicrophoneInputChunk<T> {
-    pub(super) samples: Vec<T>,
-    pub(super) captured_at: Instant,
-    pub(super) input_dropped: bool,
-}
-
 /// How the microphone stream's buffer size is chosen. A reported range does
 /// not mean the device and audio server can hold it, so the platform default
 /// is the starting point and the host default the fallback.
@@ -189,13 +184,19 @@ pub(super) struct VoiceMicrophonePcmFrames {
     pub(super) output_pending: Vec<i16>,
     pub(super) output_pending_at: Option<Instant>,
     pub(super) next_source_frame: f64,
+    pub(super) source_end: Option<Instant>,
+    pub(super) generation: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(feature = "voice-playback")]
 #[derive(Debug)]
 pub(super) struct VoiceMicrophoneFrame {
     pub(super) samples: Vec<i16>,
+    /// The oldest sample, including time spent in the audio backend.
     pub(super) captured_at: Instant,
+    /// Either stage can retire all queued and partial audio from this
+    /// generation.
+    pub(super) generation: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(feature = "voice-playback")]
@@ -211,7 +212,8 @@ pub(super) struct VoiceMicrophoneCaptureStats {
     pub(super) clipped_samples: AtomicU64,
     pub(super) last_callback_elapsed_us: AtomicU64,
     pub(super) max_callback_gap_ms: AtomicU64,
-    pub(super) callback_queue_drops: AtomicU64,
+    pub(super) input_queue_dropped_blocks: AtomicU64,
+    pub(super) stale_input_blocks: AtomicU64,
     pub(super) stream_errors: AtomicU64,
     pub(super) stream_xruns: AtomicU64,
     pub(super) max_capture_latency_us: AtomicU64,
@@ -322,6 +324,7 @@ impl VoiceChildTasks {
     pub(super) fn signal_udp_transmit_stop(&mut self) {
         if let Some(gate) = self.transmit_gate.as_ref() {
             let _ = gate.send(VoiceCaptureGate {
+                transmit_epoch: 0,
                 capture_enabled: false,
                 transmit_enabled: false,
                 use_voice_activity: true,

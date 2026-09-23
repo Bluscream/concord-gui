@@ -165,7 +165,10 @@ fn left_click_selects_channel_switcher_row() {
     ));
 
     assert!(state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::ChannelSwitcher));
-    assert_eq!(state.selected_channel_switcher_index(), Some(1));
+    assert_eq!(
+        state.channel_switcher_view().map(|view| view.selected),
+        Some(1)
+    );
     assert_eq!(state.selected_channel_id(), None);
 }
 
@@ -220,14 +223,20 @@ fn wheel_moves_channel_switcher_selection() {
         mouse(MouseEventKind::ScrollDown, 50, 7),
         dashboard_area(),
     ));
-    assert_eq!(state.selected_channel_switcher_index(), Some(1));
+    assert_eq!(
+        state.channel_switcher_view().map(|view| view.selected),
+        Some(1)
+    );
 
     assert!(handle_mouse(
         &mut state,
         mouse(MouseEventKind::ScrollUp, 50, 7),
         dashboard_area(),
     ));
-    assert_eq!(state.selected_channel_switcher_index(), Some(0));
+    assert_eq!(
+        state.channel_switcher_view().map(|view| view.selected),
+        Some(0)
+    );
 }
 
 #[test]
@@ -358,6 +367,25 @@ fn mouse_click_outside_composer_blurs_and_focuses_clicked_pane_without_clearing_
     assert_eq!(state.focus(), FocusPane::Members);
     assert!(!state.is_composing());
     assert_eq!(state.composer_input(), "d");
+}
+
+#[test]
+fn mouse_click_outside_reply_composer_preserves_draft_and_clears_reply_target() {
+    let mut state = state_with_messages(1);
+    state.focus_pane(FocusPane::Messages);
+    handle_key(&mut state, char_key('R'));
+    handle_key(&mut state, char_key('d'));
+
+    assert!(state.reply_target_message_state().is_some());
+    assert!(handle_mouse(
+        &mut state,
+        mouse(MouseEventKind::Down(MouseButton::Left), 100, 1),
+        dashboard_area(),
+    ));
+
+    assert!(!state.is_composing());
+    assert_eq!(state.composer_input(), "d");
+    assert!(state.reply_target_message_state().is_none());
 }
 
 #[test]
