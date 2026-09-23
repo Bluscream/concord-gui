@@ -72,6 +72,14 @@ RENAME_THRESHOLD="25%"
 # whoever is doing the merge.
 REWRITE_RE='crate::(discord|config|logging|support|risk|translation)\b'
 
+# Subtrees this fork moved wholesale, as "upstream prefix -> our prefix". A
+# file that merely moved is not lost: git's rename detection finds it and the
+# merge conflicts normally. Only `orphans` needs this, to tell a move apart
+# from a split.
+RELOCATIONS=(
+    "src/tui/=crates/tui/src/tui/"
+)
+
 info() { printf '\033[1;34m::\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
@@ -687,6 +695,18 @@ in_box() {
 # our tree. Every one needs a human or an agent to decide where the change
 # belongs, or to record that it does not apply.
 # ---------------------------------------------------------------------------
+# True when $1 lives here under one of the relocated prefixes.
+relocated_here() {
+    local entry from to
+    for entry in "${RELOCATIONS[@]}"; do
+        from="${entry%%=*}"
+        to="${entry#*=}"
+        [[ "$1" == "$from"* ]] || continue
+        git cat-file -e "$WORK_BRANCH:${to}${1#"$from"}" 2>/dev/null && return 0
+    done
+    return 1
+}
+
 cmd_orphans() {
     require_remote "$UPSTREAM_REMOTE"
     git fetch --quiet "$UPSTREAM_REMOTE" --tags
@@ -698,6 +718,11 @@ cmd_orphans() {
     while IFS= read -r path; do
         [[ -n "$path" ]] || continue
         git cat-file -e "$WORK_BRANCH:$path" 2>/dev/null && continue
+        # Moved, not lost: the merge will find it by rename detection.
+        relocated_here "$path" && continue
+        # Added upstream in this range. It has no home here because it has no
+        # history here; the merge adds it as a new file, visibly.
+        git cat-file -e "$base:$path" 2>/dev/null || continue
         if (( found == 0 )); then
             echo "Upstream changed these files; our tree has no such path."
             echo "Each one merged without a conflict and without an effect."
