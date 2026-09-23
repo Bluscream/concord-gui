@@ -324,6 +324,7 @@ cmd_merge() {
 
     remap_relocated "$base" "$target"
     cmd_finish
+    split_report "$base" "$target"
 
     local left
     left="$(git diff --name-only --diff-filter=U | wc -l)"
@@ -331,7 +332,9 @@ cmd_merge() {
     if [[ "$left" -eq 0 ]]; then
         info "Nothing left conflicted. Run gate, then commit."
     else
-        warn "$left files need reading. Resolve them, then:"
+        warn "$left files need reading. scripts/conflict-hunks.py takes them a"
+        warn "hunk at a time, which beats an editor when a file wants ours in one"
+        warn "place and theirs in the next. Then:"
         echo "     ./scripts/upstream.sh finish   (re-runs the mechanical passes)"
         echo "     ./scripts/upstream.sh gate"
         echo "     git commit"
@@ -341,6 +344,56 @@ cmd_merge() {
     echo "is not merged until it exists in crates/gui too. The merge cannot tell you"
     echo "that; read the upstream log for what arrived:"
     echo "     git log --oneline $(base_rev)..$UPSTREAM_REMOTE/$MIRROR_BRANCH"
+}
+
+# Say which conflicts are file splits, because those are the expensive ones.
+#
+# The relocated TUI is the loud problem and the cheap one: it conflicts in a lot
+# of files and every conflict is about imports. The quiet, expensive problem is
+# the files this fork split out of an upstream monolith - voice.rs, events.rs,
+# gateway.rs and the rest. Upstream still edits the single file, so its type and
+# API changes arrive on the side of the conflict our split makes us discard,
+# and nothing says so. They surface later as compile errors in files the merge
+# never touched.
+#
+# On v2.5.10 that was the whole tail of the work: 63 errors across fixtures and
+# tests, every one of them our own code following an upstream API change that
+# the merge had silently dropped on the floor.
+#
+# So: name them, and print the command that shows what upstream actually did.
+split_report() {
+    local base="$1" target="$2" f dir up n found=0
+
+    while IFS= read -r f; do
+        up=""
+        # a/b.rs conflicted and a/b/ exists here: we split b.rs
+        dir="${f%.rs}"
+        if [[ "$f" == *.rs && -d "$dir" ]]; then
+            up="$f"
+        else
+            # a/b/c.rs conflicted and upstream keeps a/b.rs whole
+            dir="$(dirname "$f")"
+            if git cat-file -e "$target:$dir.rs" 2>/dev/null; then
+                up="$dir.rs"
+            fi
+        fi
+        [[ -n "$up" ]] || continue
+        git cat-file -e "$base:$up" 2>/dev/null || continue
+
+        n="$(git diff --numstat "$base:$up" "$target:$up" 2>/dev/null | awk '{print $1 + $2}')"
+        [[ -n "$n" && "$n" -gt 0 ]] || continue
+
+        if [[ "$found" -eq 0 ]]; then
+            echo
+            warn "These conflicts are files we split. Upstream changed the whole"
+            warn "file; the part you did not take is not noise, it is the change:"
+            found=1
+        fi
+        printf '  %-52s %s lines changed upstream\n' "$f" "$n"
+        printf '      git diff %s:%s %s:%s\n' "${base:0:8}" "$up" "$target" "$up"
+    done < <(git diff --name-only --diff-filter=U | sort -u)
+
+    return 0
 }
 
 # ---------------------------------------------------------------------------
