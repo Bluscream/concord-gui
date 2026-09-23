@@ -118,6 +118,67 @@ fn composer_prompt_line_count_matches_prefixed_multiline_rendering() {
 }
 
 #[test]
+fn composer_translation_ui_tracks_loading_and_completed_states() {
+    let mut state = state_with_message();
+    state.apply_translation_options(TranslationOptions {
+        provider: Some(TranslationProviderKind::LibreTranslate),
+        composer_target_language: Some("en".to_owned()),
+        ..Default::default()
+    });
+    state.start_composer();
+    state.insert_composer_text_at_cursor("안녕하세요");
+    let request_id = match state
+        .translate_composer_input()
+        .expect("configured translation should emit a command")
+    {
+        concord::discord::AppCommand::Translate { request_id, .. } => request_id,
+        command => panic!("unexpected command: {command:?}"),
+    };
+
+    assert_eq!(state.composer_title(), " Translating... ");
+    assert_eq!(
+        line_texts_from_ratatui(&composer_lines(&state, 24)),
+        vec!["> 안녕하세요"]
+    );
+    assert_eq!(composer_content_line_count(&state, 24), 1);
+    assert_eq!(
+        composer_cursor_position(Rect::new(0, 0, 27, 5), &state),
+        Some(Position { x: 13, y: 1 })
+    );
+
+    state.push_event(AppEvent::TranslationCompleted {
+        request_id,
+        target: concord::discord::TranslationTarget::Composer,
+        translated_text: "hello".to_owned(),
+    });
+
+    assert_eq!(state.composer_title(), " Message Input ");
+    assert_eq!(
+        line_texts_from_ratatui(&composer_lines(&state, 24)),
+        vec!["> 안녕하세요", "────── translated ──────", "> hello",]
+    );
+    assert_eq!(composer_content_line_count(&state, 24), 3);
+    assert_eq!(
+        composer_cursor_position(Rect::new(0, 0, 27, 7), &state),
+        Some(Position { x: 8, y: 3 })
+    );
+
+    let mut long = state_with_message();
+    long.apply_translation_options(TranslationOptions {
+        provider: Some(TranslationProviderKind::LibreTranslate),
+        composer_target_language: Some("en".to_owned()),
+        ..Default::default()
+    });
+    long.start_composer();
+    long.insert_composer_text_at_cursor(&"long draft line\n".repeat(20));
+    long.translate_composer_input()
+        .expect("long draft translation should emit a command");
+
+    let rendered = render_dashboard_dump(40, 12, &mut long).join("\n");
+    assert!(rendered.contains("Translating..."), "{rendered}");
+}
+
+#[test]
 fn composer_lines_show_saved_draft_when_not_composing() {
     let mut state = state_with_message();
     state.start_composer();

@@ -109,26 +109,7 @@ pub(super) fn handle_dashboard_action(
             state.scroll_focused_pane_horizontal_right();
             None
         }
-        DashboardAction::ActivateFocused => match focus {
-            FocusPane::Guilds => {
-                if state.confirm_selected_guild() {
-                    state.focus_pane(FocusPane::Channels);
-                }
-                None
-            }
-            FocusPane::Channels => {
-                let command = state.confirm_selected_channel_command();
-                if command.is_some() {
-                    state.focus_pane(FocusPane::Messages);
-                }
-                command
-            }
-            FocusPane::Members => {
-                state.open_selected_member_actions();
-                None
-            }
-            FocusPane::Messages => state.activate_selected_message_pane_item(),
-        },
+        DashboardAction::ActivateFocused => super::super::actions::activate_focused_target(state),
     }
 }
 

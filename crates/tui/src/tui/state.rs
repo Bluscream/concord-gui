@@ -35,6 +35,7 @@ mod subscriptions;
 mod tabs;
 mod text_completion;
 mod toast;
+mod translation;
 mod user;
 mod voice_actions;
 
@@ -46,6 +47,9 @@ use message_history_refresh::MessageHistoryRefreshState;
 use message_render::{add_literal_mention_highlights, normalize_mention_highlights};
 use message_viewport::{MessageViewportState, ThreadReturnTarget};
 use model::ChannelPaneCursor;
+/// Re-exported: the interaction map resolves a click to one of these fields,
+/// and it lives beside the renderer rather than in this module.
+pub(in crate::tui) use navigation::FolderSettingsField;
 use navigation::{ActiveGuildScope, FolderKey, FolderSettingsState, NavigationState};
 use options::SettingsState;
 use pane_filter::PaneFilterState;
@@ -58,6 +62,8 @@ use runtime_state::{
 };
 pub(in crate::tui) use scroll::SCROLL_OFF;
 use scroll::clamp_selected_index;
+pub(in crate::tui) use translation::MessageTranslationDisplay;
+use translation::TranslationUiState;
 
 pub(in crate::tui) const MINIMUM_ESTABLISHED_DM_MESSAGES: usize = 5;
 

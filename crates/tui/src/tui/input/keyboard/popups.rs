@@ -557,6 +557,7 @@ fn handle_forum_post_composer_key(state: &mut DashboardState, key: KeyEvent) -> 
         ComposerAction::OpenInEditor
         | ComposerAction::PasteClipboard
         | ComposerAction::InsertNewline
+        | ComposerAction::Translate
         | ComposerAction::EditText(_)
         | ComposerAction::InsertChar(_)
         | ComposerAction::ToggleReplyPing
@@ -588,6 +589,7 @@ fn handle_forum_post_tag_picker_key(
         | ComposerAction::PasteClipboard
         | ComposerAction::InsertNewline
         | ComposerAction::RemoveLastAttachment
+        | ComposerAction::Translate
         | ComposerAction::EditText(_)
         | ComposerAction::InsertChar(_)
         | ComposerAction::ToggleReplyPing
@@ -612,7 +614,7 @@ fn handle_forum_post_composer_edit_key(
         ComposerAction::RemoveLastAttachment => state.pop_pending_forum_post_attachment(),
         ComposerAction::OpenInEditor => state.request_open_forum_post_body_in_editor(),
         ComposerAction::EditText(action) => state.edit_forum_post_active_text_input(action),
-        ComposerAction::ToggleReplyPing => {}
+        ComposerAction::Translate | ComposerAction::ToggleReplyPing => {}
         ComposerAction::Ignore => {}
     }
     None
@@ -701,6 +703,7 @@ fn handle_thread_edit_key(state: &mut DashboardState, key: KeyEvent) -> Option<A
         | ComposerAction::PasteClipboard
         | ComposerAction::InsertNewline
         | ComposerAction::RemoveLastAttachment
+        | ComposerAction::Translate
         | ComposerAction::EditText(_)
         | ComposerAction::InsertChar(_)
         | ComposerAction::ToggleReplyPing
@@ -732,6 +735,7 @@ fn handle_thread_edit_tag_picker_key(
         | ComposerAction::PasteClipboard
         | ComposerAction::InsertNewline
         | ComposerAction::RemoveLastAttachment
+        | ComposerAction::Translate
         | ComposerAction::EditText(_)
         | ComposerAction::InsertChar(_)
         | ComposerAction::ToggleReplyPing
@@ -755,6 +759,7 @@ fn handle_thread_edit_title_key(state: &mut DashboardState, key: KeyEvent) -> Op
         ComposerAction::InsertNewline
         | ComposerAction::RemoveLastAttachment
         | ComposerAction::OpenInEditor
+        | ComposerAction::Translate
         | ComposerAction::ToggleReplyPing
         | ComposerAction::Ignore => {}
     }
@@ -1223,6 +1228,7 @@ fn handle_join_server_key(state: &mut DashboardState, key: KeyEvent) -> Option<A
         | ComposerAction::OpenInEditor
         | ComposerAction::RemoveLastAttachment
         | ComposerAction::ToggleReplyPing
+        | ComposerAction::Translate
         | ComposerAction::Ignore => {}
     }
     None

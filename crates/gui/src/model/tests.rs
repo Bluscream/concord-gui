@@ -1207,7 +1207,9 @@ fn every_ui_action_is_handled_or_explicitly_declined() {
     // should be noticed here as well as by the compiler.
     assert_eq!(
         UiAction::ALL.len(),
-        68,
+        // v2.6.0 added TranslateMessage, which the GUI declines: message
+        // translation has no surface there yet (docs/PARITY.md).
+        69,
         "UiAction changed upstream; revisit the keymap dispatcher"
     );
 }

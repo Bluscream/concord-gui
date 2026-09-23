@@ -231,8 +231,14 @@ pub(in crate::tui::ui) fn render_notification_inbox_mark_all_confirmation(
     }
 
     let lines = notification_inbox_mark_all_confirmation_lines(state.active_confirmation_button());
-    let popup = message_confirmation_popup_area(area, lines.len());
+    let popup = notification_inbox_mark_all_confirmation_popup_area(area);
     render_modal_paragraph(frame, popup, "Mark read?", lines);
+}
+
+pub(in crate::tui::ui) fn notification_inbox_mark_all_confirmation_popup_area(area: Rect) -> Rect {
+    let line_count =
+        notification_inbox_mark_all_confirmation_lines(ConfirmationButton::default()).len();
+    message_confirmation_popup_area(area, line_count)
 }
 
 pub(in crate::tui::ui) fn message_confirmation_popup_area(area: Rect, line_count: usize) -> Rect {

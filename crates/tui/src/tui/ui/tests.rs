@@ -20,14 +20,14 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{
     DisplayOptionGauge, EmojiReactionPickerRenderOptions, ImagePreview, ImagePreviewState,
-    MESSAGE_AVATAR_OFFSET, MemberEntry, active_selectable_popup_layout,
-    attachment_viewer_image_area, attachment_viewer_popup, background_media_occlusion_areas,
-    centered_viewer_preview_area, channel_action_menu_lines_for_test, channel_prefix,
-    channel_switcher_cursor_position, channel_switcher_lines, channel_unread_decoration,
-    clear_area, composer_content_line_count, composer_cursor_position, composer_lines,
-    composer_lines_with_loaded_custom_emoji_urls, composer_prompt_line_count, dashboard_areas,
-    date_separator_line, dm_presence_dot_span, emoji_picker_lines,
-    emoji_reaction_picker_lines_with_custom_emoji_images, focus_pane_at,
+    InteractionMap, InteractionTarget, MESSAGE_AVATAR_OFFSET, MemberEntry,
+    active_selectable_popup_layout, attachment_viewer_image_area, attachment_viewer_popup,
+    background_media_occlusion_areas, centered_viewer_preview_area,
+    channel_action_menu_lines_for_test, channel_prefix, channel_switcher_cursor_position,
+    channel_switcher_lines, channel_unread_decoration, clear_area, composer_content_line_count,
+    composer_cursor_position, composer_lines, composer_lines_with_loaded_custom_emoji_urls,
+    composer_prompt_line_count, dashboard_areas, date_separator_line, dm_presence_dot_span,
+    emoji_picker_lines, emoji_reaction_picker_lines_with_custom_emoji_images,
     folder_settings_input_line_for_test, highlight_style, inline_image_preview_area,
     keymap_help_popup_lines, long_message_confirmation_lines, member_display_label,
     member_name_style, mention_picker_lines_for_test, message_action_menu_lines,
@@ -66,26 +66,39 @@ use crate::tui::{
         presence_style,
     },
     text::{EmojiImageSize, TextHighlightKind, truncate_display_width_from},
-    ui::{MouseTarget, mouse_target_at},
 };
-use concord::{
-    config::{DisplayOptions, KeymapBinding, KeymapOptions, UiStateOptions, VoiceOptions},
-    discord::{
-        ActivityEmoji, ActivityInfo, ActivityKind, AppEvent, ApplicationCommandInfo,
-        ApplicationCommandOptionInfo, AttachmentDownloadId, AttachmentInfo, ChannelInfo,
-        ChannelNotificationOverrideInfo, ChannelRecipientInfo, ChannelRecipientState, ChannelState,
-        ChannelUnreadState, ComponentMediaInfo, CustomEmojiInfo, EmbedInfo, ForumTagInfo,
-        GuildBoostTier, GuildFolder, GuildMemberListItem, GuildMemberListOperation,
-        GuildMemberListUpdateInfo, GuildMemberState, GuildNotificationSettingsInfo,
-        MESSAGE_FLAG_IS_COMPONENTS_V2, MemberInfo, MentionInfo, MessageAttachmentUpload,
-        MessageComponentInfo, MessageInfo, MessageInteractionInfo, MessageKind, MessageSearchPage,
-        MessageSearchQuery, MessageSnapshotInfo, MessageState, MutualFriendInfo, MutualGuildInfo,
-        NotificationLevel, PollAnswerInfo, PollInfo, PresenceEventFields, PresenceStatus,
-        ReactionEmoji, ReactionInfo, ReactionUserInfo, ReadStateInfo, ReplyInfo, RoleInfo,
-        ThreadMetadataInfo, UserGuildSettingsInfo, UserProfileInfo, UserSettingsInfo,
-        VoiceConnectionStatus, VoiceStateInfo,
-    },
+use concord::config::{
+    DisplayOptions, KeymapBinding, KeymapOptions, TranslationOptions, TranslationProviderKind,
+    UiStateOptions, VoiceOptions,
 };
+use concord::discord::{
+    ActivityEmoji, ActivityInfo, ActivityKind, AppEvent, ApplicationCommandInfo,
+    ApplicationCommandOptionInfo, AttachmentDownloadId, AttachmentInfo, ChannelInfo,
+    ChannelNotificationOverrideInfo, ChannelRecipientInfo, ChannelRecipientState, ChannelState,
+    ChannelUnreadState, ComponentMediaInfo, CustomEmojiInfo, EmbedInfo, ForumTagInfo,
+    GuildBoostTier, GuildFolder, GuildMemberListItem, GuildMemberListOperation,
+    GuildMemberListUpdateInfo, GuildMemberState, GuildNotificationSettingsInfo,
+    MESSAGE_FLAG_IS_COMPONENTS_V2, MemberInfo, MentionInfo, MessageAttachmentUpload,
+    MessageComponentInfo, MessageInfo, MessageInteractionInfo, MessageKind, MessageSearchPage,
+    MessageSearchQuery, MessageSnapshotInfo, MessageState, MutualFriendInfo, MutualGuildInfo,
+    NotificationLevel, PollAnswerInfo, PollInfo, PresenceEventFields, PresenceStatus,
+    ReactionEmoji, ReactionInfo, ReactionUserInfo, ReadStateInfo, ReplyInfo, RoleInfo,
+    ThreadMetadataInfo, UserGuildSettingsInfo, UserProfileInfo, UserSettingsInfo,
+    VoiceConnectionStatus, VoiceStateInfo,
+};
+
+fn interaction_at(
+    area: Rect,
+    state: &DashboardState,
+    column: u16,
+    row: u16,
+) -> Option<InteractionTarget> {
+    InteractionMap::new(area, state).target_at(column, row)
+}
+
+fn pane_at(area: Rect, state: &DashboardState, column: u16, row: u16) -> Option<FocusPane> {
+    InteractionMap::new(area, state).pane_at(column, row)
+}
 
 mod channel_switcher;
 mod composer;

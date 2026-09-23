@@ -39,6 +39,7 @@ MarkAllRead = "a"
 
 [keymap.composer]
 OpenEditor = "<C-o>"
+TranslateComposer = "<C-t>"
 DeletePreviousWord = "<A-backspace>"
 ```
 
@@ -178,6 +179,7 @@ Message actions:
 | Action name             | Default config | Action                                           |
 | ----------------------- | -------------- | ------------------------------------------------ |
 | `CopyMessage`           | `"y"`          | Copy selected message content.                   |
+| `TranslateMessage`      | `"T"`          | Translate and toggle the selected message.       |
 | `ReactMessage`          | `"r"`          | Open the reaction picker.                        |
 | `ReplyMessage`          | `"R"`          | Start a reply.                                   |
 | `DeleteMessage`         | `"d"`          | Open delete confirmation.                        |
@@ -253,6 +255,7 @@ move between title, body, attachments, and tags. `Enter` starts or finishes
 editing title/body, removes the selected attachment while choosing attachments,
 or toggles the selected tag. Paste files or images while editing the body to add
 attachments. Press `s` outside edit mode to create the post.
+`TranslateComposer` applies only to the main message composer.
 
 | Composer action        | Default config                                     | Action                                   |
 | ---------------------- | -------------------------------------------------- | ---------------------------------------- |
@@ -263,6 +266,7 @@ attachments. Press `s` outside edit mode to create the post.
 | `Close`                | `"esc"`                                            | Close the composer.                      |
 | `ClearInput`           | `"<C-c>"`                                          | Clear the composer input.                |
 | `RemoveLastAttachment` | `"delete"`                                         | Remove the last pending attachment.      |
+| `TranslateComposer`    | `"<C-t>"`                                          | Translate or switch composer drafts.     |
 | `DeletePreviousChar`   | `"backspace"`                                      | Delete the previous character.           |
 | `DeletePreviousWord`   | `["<A-backspace>", "<C-backspace>", "<C-w>"]`      | Delete the word before the cursor.       |
 | `DeleteToLineStart`    | `"<C-u>"`                                          | Delete to the start of the current line. |
@@ -344,6 +348,7 @@ Message pane actions:
 ```toml
 [keymap.message_actions]
 CopyMessage = "y"
+TranslateMessage = "T"
 ReactMessage = "r"
 ReplyMessage = "R"
 DeleteMessage = "d"
@@ -363,6 +368,7 @@ OpenPollVotePicker = "c"
 | Scoped action           | Default | Action                                           |
 | ----------------------- | ------- | ------------------------------------------------ |
 | `CopyMessage`           | `y`     | Copy selected message content.                   |
+| `TranslateMessage`      | `T`     | Translate and toggle the selected message.       |
 | `ReactMessage`          | `r`     | Open the reaction picker.                        |
 | `ReplyMessage`          | `R`     | Start a reply.                                   |
 | `DeleteMessage`         | `d`     | Open delete confirmation.                        |

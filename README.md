@@ -182,6 +182,7 @@ storage is unavailable. See the Security section below for details.
 - Send custom emoji your account cannot use directly as image links when enabled
 - Rich content display (embeds, attachments, stickers, and mentions)
 - Detect URLs in message bodies and markdown links, then open them in your default browser
+- Translate messages and composer drafts
 
 #### Markdown Rendering & Code syntax highlighting
 
@@ -266,6 +267,14 @@ With default vim-style navigation:
 `Ctrl+n` and `Ctrl+p` are fixed row movement keys. The default `j` and `k`
 row movement keys are `SelectNext` and `SelectPrevious` and can be changed in
 `keymap.toml`.
+
+### Mouse controls
+
+| Gesture           | Action                                               |
+| ----------------- | ---------------------------------------------------- |
+| Left click        | Focus a pane, select an item, or use a popup control |
+| Double left click | Activate the selected item like `Enter`              |
+| Right click       | Open the clicked entry actions                       |
 
 #### Leader key
 
@@ -390,6 +399,24 @@ emojis_as_links = false
 # like the native client).
 share_rich_presence = true
 
+[translation]
+# Translate selected messages and composer drafts when their target is set.
+# Supported providers: deepl or libretranslate.
+# provider = "deepl"
+# message_target_language = "KO"
+# composer_target_language = "EN"
+
+# Optional full API endpoint override. DeepL defaults to its Free API endpoint.
+# LibreTranslate defaults to http://127.0.0.1:5000/translate.
+# endpoint = "https://api.deepl.com/v2/translate"
+
+# Optional API key stored directly in this private config file.
+# api_key = "your-api-key"
+
+# Optional environment variable containing the API key. When set, its value
+# overrides api_key. DeepL checks DEEPL_API_KEY by default.
+# api_key_env = "DEEPL_API_KEY"
+
 [credentials]
 # Credential storage: auto, keychain, or plain.
 # auto tries the system keychain first and falls back to the state file.
@@ -459,6 +486,43 @@ application.
 
 </details><br>
 
+### Message translation
+
+Press uppercase `T` in the Messages pane to translate the selected message.
+
+While editing the message composer, press `Ctrl-T` to translate the current
+draft. The composer shows the original above a `translated` divider and makes
+the translated draft editable. Press `Ctrl-T` again to return to the editable
+original.
+
+```toml
+[translation]
+provider = "deepl"
+message_target_language = "KO"
+composer_target_language = "EN"
+api_key = "your-deepl-api-key"
+```
+
+Both providers detect the source language automatically.
+
+The default DeepL endpoint is the Free API. DeepL Pro users can set
+`endpoint = "https://api.deepl.com/v2/translate"`.
+The `DEEPL_API_KEY` environment variable overrides `api_key` when present.
+
+LibreTranslate defaults to a local server and does not require an API key:
+
+```toml
+[translation]
+provider = "libretranslate"
+message_target_language = "KO"
+composer_target_language = "EN"
+```
+
+Set `endpoint` and `api_key` when using a hosted LibreTranslate instance.
+
+You can use `api_key_env` instead when an environment-based secret is more
+convenient.
+
 ### Key bindings
 
 See [Keymap options](./docs/keymap-options.md) for the config format and
@@ -494,6 +558,7 @@ ResizePaneLeft = { keys = ["<A-h>", "<A-left>"] }
 ResizePaneRight = { keys = ["<A-l>", "<A-right>"] }
 Quit = "q"
 CopyMessage = "y"
+TranslateMessage = "T"
 ReactMessage = "r"
 ReplyMessage = "R"
 DeleteMessage = "d"
@@ -541,6 +606,7 @@ ToggleMute = "u"
 
 [keymap.message_actions]
 CopyMessage = "y"
+TranslateMessage = "T"
 ReactMessage = "r"
 ReplyMessage = "R"
 DeleteMessage = "d"
@@ -580,6 +646,7 @@ Submit = "enter"
 Close = "esc"
 ClearInput = "<C-c>"
 RemoveLastAttachment = "delete"
+TranslateComposer = "<C-t>"
 DeletePreviousChar = "backspace"
 DeletePreviousWord = { keys = ["<A-backspace>", "<C-backspace>", "<C-w>"] }
 DeleteToLineStart = "<C-u>"

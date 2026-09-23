@@ -4,7 +4,8 @@ use crate::tui::keybindings::KeyBindings;
 use concord::config::{
     AnimatePreviews, AppOptions, ComposerOptions, CredentialOptions, DisplayOptions,
     ImagePreviewQualityPreset, KeymapOptions, NotificationOptions, PresenceOptions,
-    ReactionOptions, UiStateOptions, VoiceOptions, VoiceParticipantPlaybackOption,
+    ReactionOptions, TranslationOptions, UiStateOptions, VoiceOptions,
+    VoiceParticipantPlaybackOption,
 };
 use concord::discord::ids::{Id, marker::UserMarker};
 use concord::discord::{AppCommand, VoiceAudioSourceOptions, VoiceParticipantPlaybackSettings};
@@ -120,6 +121,14 @@ impl DashboardState {
 
     pub(in crate::tui) fn apply_reaction_options(&mut self, reaction_options: ReactionOptions) {
         self.options.reaction_options = reaction_options;
+    }
+
+    pub(in crate::tui) fn apply_translation_options(
+        &mut self,
+        translation_options: TranslationOptions,
+    ) {
+        self.translations.set_options(translation_options);
+        self.clear_message_row_content_metrics_cache();
     }
 
     #[cfg(test)]
@@ -398,6 +407,7 @@ impl DashboardState {
             // so it writes back what it read rather than clearing it - a save
             // from here must not wipe a setting made in the other client.
             embeds: self.options.embed_options.clone(),
+            translation: self.translations.options().clone(),
         })
     }
 

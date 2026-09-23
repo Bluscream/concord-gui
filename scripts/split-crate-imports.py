@@ -54,10 +54,18 @@ def split_entries(body):
 def emit(entries):
     """The replacement statements, or None when the group needs no splitting."""
     heads = {entry.split("::", 1)[0].split("{", 1)[0].strip() for entry in entries}
-    # Nothing to split: one side of the boundary or the other, and the flat
-    # substitution in upstream.sh already handles those.
-    if not (heads & FOREIGN) or heads <= FOREIGN:
+    if not heads & FOREIGN:
+        # Entirely local: the group stays as it is.
         return None
+    if heads <= FOREIGN:
+        # Entirely foreign, so the group needs no splitting - only its root
+        # renamed. `rewrite_imports` cannot do it either: its substitution
+        # matches `crate::discord`, and here the two halves sit on different
+        # lines. Nothing handled this shape until it appeared in v2.6.0.
+        out = ["use concord::{\n"]
+        out.extend(f"    {entry},\n" for entry in entries)
+        out.append("};\n")
+        return out
     out = []
     for crate in ("concord", "crate"):
         picked = [

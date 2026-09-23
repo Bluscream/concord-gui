@@ -18,6 +18,7 @@ use super::{
     message::format::{
         MessageContentLine, ReactionLayout, WrappedTextLine, embed_color,
         format_message_content_sections_with_loaded_custom_emoji_urls, format_message_relative_age,
+        format_message_translation_lines_with_loaded_custom_emoji_urls,
         lay_out_reaction_chips_with_custom_emoji_images, reaction_line_spans,
         wrap_plain_text_at_words, wrap_text_lines, wrap_text_with_metadata,
     },
@@ -33,6 +34,7 @@ use super::{
     },
     text::{EmojiImageSize, sanitize_for_display_width, truncate_display_width},
 };
+
 use concord::discord::{
     ActivityInfo, ChannelState, ChannelUnreadState, FriendStatus, MessageState, PresenceStatus,
     ReactionInfo, RoleState, UserProfileInfo, is_thread_kind,
@@ -43,7 +45,7 @@ pub(in crate::tui) const LOCAL_UPLOAD_PREVIEW_WIDTH: u16 = 32;
 
 mod activity;
 mod emoji_overlay;
-mod hit_test;
+mod interaction;
 mod layout;
 pub(in crate::tui) mod loading_indicator;
 mod message;
@@ -52,7 +54,7 @@ mod popups;
 pub(in crate::tui) mod thread_card;
 mod types;
 
-pub(crate) use self::hit_test::{focus_pane_at, mouse_target_at};
+pub(crate) use self::interaction::{FormButton, InteractionMap, InteractionTarget};
 #[cfg(test)]
 use self::layout::composer_prompt_line_count;
 use self::layout::{
@@ -95,13 +97,14 @@ use self::popups::{
     thread_edit_popup_area, user_profile_popup_has_avatar, user_profile_popup_metrics,
     user_profile_popup_text_geometry,
 };
-pub(crate) use self::types::MouseTarget;
+pub(crate) use self::types::UserProfileControl;
 pub use self::types::{
     AvatarImage, EmojiImage, ImagePreview, ImagePreviewLayout, ImagePreviewState,
 };
 use self::types::{
     EMBED_PREVIEW_GUTTER_PREFIX, MESSAGE_AVATAR_OFFSET, MESSAGE_AVATAR_PLACEHOLDER,
-    MESSAGE_SELECTION_PREFIX_WIDTH, MessageViewportLayout, UserProfilePopupText,
+    MESSAGE_SELECTION_PREFIX_WIDTH, MessageViewportLayout, UserProfileControlRegion,
+    UserProfilePopupText,
 };
 #[cfg(test)]
 use self::{
@@ -251,7 +254,7 @@ fn sync_composer_viewport(area: Rect, state: &mut DashboardState) {
         state.composer_cursor_byte_index(),
         inner_width,
     );
-    let cursor_row = composer_rows_before_input(state).saturating_add(prompt_row);
+    let cursor_row = composer_rows_before_input(state, inner_width).saturating_add(prompt_row);
     let total_lines = usize::from(composer_content_line_count(state, inner_width))
         .max(cursor_row.saturating_add(1));
     state.sync_composer_scroll(view_height, total_lines, cursor_row);

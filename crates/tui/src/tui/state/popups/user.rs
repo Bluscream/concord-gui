@@ -28,11 +28,6 @@ impl DashboardState {
 
     /// Direct shortcut from the member pane: open the profile popup for the
     /// currently selected member without going through Leader Actions.
-    pub fn show_selected_member_profile(&mut self) -> Option<AppCommand> {
-        let context = self.selected_member_action_context()?;
-        self.open_user_profile_popup(context.user_id, context.guild_id)
-    }
-
     pub fn open_current_user_profile_popup(&mut self) -> Option<AppCommand> {
         let user_id = self.current_user_id()?;
         let guild_id = match self.navigation.guilds.active {
@@ -581,6 +576,30 @@ impl DashboardState {
             popup.settings.previous_field();
             popup.pending_scroll_reveal = true;
         }
+    }
+
+    pub(in crate::tui) fn select_user_profile_settings_field(
+        &mut self,
+        field: UserProfileSettingsField,
+    ) -> bool {
+        if !self.is_current_user_profile_popup() {
+            return false;
+        }
+        let Some(popup) = self.popups.user_profile_popup_mut() else {
+            return false;
+        };
+        if popup
+            .settings
+            .editing
+            .is_some_and(|editing| editing != field)
+        {
+            return false;
+        }
+        let selected = popup.settings.select_field(field);
+        if selected {
+            popup.pending_scroll_reveal = true;
+        }
+        selected
     }
 
     pub fn switch_user_profile_settings_to_global(&mut self) {

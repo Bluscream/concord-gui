@@ -107,6 +107,11 @@ define_composer_actions! {
         action: ComposerAction::RemoveLastAttachment,
         defaults: vec![key_chord(KeyCode::Delete)]
     ),
+    TranslateComposer => (
+        aliases: ["Translate"],
+        action: ComposerAction::Translate,
+        defaults: vec![ctrl_chord('t')]
+    ),
     DeletePreviousChar => (
         aliases: [],
         action: ComposerAction::EditText(TextEditAction::DeletePreviousChar),

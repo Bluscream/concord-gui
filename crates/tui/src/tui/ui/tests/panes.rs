@@ -230,7 +230,7 @@ fn header_labels_active_voice_broadcast() {
 }
 
 #[test]
-fn focus_pane_at_maps_dashboard_regions_and_ignores_non_panes() {
+fn pane_at_maps_dashboard_regions_and_ignores_non_panes() {
     let area = Rect::new(0, 0, 120, 20);
     let state = DashboardState::new();
     let cases = [
@@ -244,33 +244,27 @@ fn focus_pane_at_maps_dashboard_regions_and_ignores_non_panes() {
     ];
 
     for (x, y, expected) in cases {
-        assert_eq!(focus_pane_at(area, &state, x, y), expected);
+        assert_eq!(pane_at(area, &state, x, y), expected);
     }
 }
 
 #[test]
-fn focus_pane_at_expands_messages_over_hidden_panes() {
+fn pane_at_expands_messages_over_hidden_panes() {
     let area = Rect::new(0, 0, 120, 20);
     let mut state = DashboardState::new();
 
     state.toggle_pane_visibility(FocusPane::Channels);
-    assert_eq!(
-        focus_pane_at(area, &state, 21, 1),
-        Some(FocusPane::Messages)
-    );
-    assert_eq!(focus_pane_at(area, &state, 95, 1), Some(FocusPane::Members));
+    assert_eq!(pane_at(area, &state, 21, 1), Some(FocusPane::Messages));
+    assert_eq!(pane_at(area, &state, 95, 1), Some(FocusPane::Members));
 
     state.toggle_pane_visibility(FocusPane::Guilds);
     state.toggle_pane_visibility(FocusPane::Members);
-    assert_eq!(focus_pane_at(area, &state, 1, 1), Some(FocusPane::Messages));
-    assert_eq!(
-        focus_pane_at(area, &state, 119, 1),
-        Some(FocusPane::Messages)
-    );
+    assert_eq!(pane_at(area, &state, 1, 1), Some(FocusPane::Messages));
+    assert_eq!(pane_at(area, &state, 119, 1), Some(FocusPane::Messages));
 }
 
 #[test]
-fn focus_pane_at_uses_persisted_pane_widths() {
+fn pane_at_uses_persisted_pane_widths() {
     let state = DashboardState::new_with_options(
         DisplayOptions::default(),
         Default::default(),
@@ -287,21 +281,17 @@ fn focus_pane_at_uses_persisted_pane_widths() {
     );
     let area = Rect::new(0, 0, 100, 20);
 
-    assert_eq!(focus_pane_at(area, &state, 9, 1), Some(FocusPane::Guilds));
-    assert_eq!(
-        focus_pane_at(area, &state, 10, 1),
-        Some(FocusPane::Channels)
-    );
-    assert_eq!(
-        focus_pane_at(area, &state, 30, 1),
-        Some(FocusPane::Messages)
-    );
-    assert_eq!(focus_pane_at(area, &state, 85, 1), Some(FocusPane::Members));
+    assert_eq!(pane_at(area, &state, 9, 1), Some(FocusPane::Guilds));
+    assert_eq!(pane_at(area, &state, 10, 1), Some(FocusPane::Channels));
+    assert_eq!(pane_at(area, &state, 30, 1), Some(FocusPane::Messages));
+    assert_eq!(pane_at(area, &state, 85, 1), Some(FocusPane::Members));
 }
 
 #[test]
-fn mouse_target_at_maps_visible_message_action_rows() {
-    let area = Rect::new(0, 0, 120, 20);
+fn interaction_at_maps_visible_message_action_rows() {
+    // Taller than upstream's 20 rows: this fork's action menu carries extra
+    // entries, and the assertions below need every row on screen at once.
+    let area = Rect::new(0, 0, 120, 40);
     let mut state = state_with_file_attachment_message();
     state.open_selected_message_actions();
     let action_count = state.selected_message_action_items().len();
@@ -313,19 +303,19 @@ fn mouse_target_at_maps_visible_message_action_rows() {
     let first_action_y = area.y + (area.height - popup_height) / 2 + 1;
 
     assert_eq!(
-        mouse_target_at(area, &state, 46, first_action_y - 1),
-        Some(MouseTarget::ModalBackdrop)
+        interaction_at(area, &state, 46, first_action_y - 1),
+        Some(InteractionTarget::ModalSurface)
     );
     assert_eq!(
-        mouse_target_at(area, &state, 46, first_action_y),
-        Some(MouseTarget::PopupRow {
+        interaction_at(area, &state, 46, first_action_y),
+        Some(InteractionTarget::PopupItem {
             target: SelectablePopupTarget::MessageActions,
             row: 0,
         })
     );
     assert_eq!(
-        mouse_target_at(area, &state, 46, first_action_y + last_row as u16),
-        Some(MouseTarget::PopupRow {
+        interaction_at(area, &state, 46, first_action_y + last_row as u16),
+        Some(InteractionTarget::PopupItem {
             target: SelectablePopupTarget::MessageActions,
             row: last_row,
         })
@@ -343,8 +333,8 @@ fn mouse_target_at_maps_visible_message_action_rows() {
     let popup_height = (action_count as u16 + 2).min(short_area.height.saturating_sub(2));
     let first_visible_y = (short_area.height - popup_height) / 2 + 1;
     assert_eq!(
-        mouse_target_at(short_area, &state, 46, first_visible_y),
-        Some(MouseTarget::PopupRow {
+        interaction_at(short_area, &state, 46, first_visible_y),
+        Some(InteractionTarget::PopupItem {
             target: SelectablePopupTarget::MessageActions,
             row: scroll,
         })
@@ -352,7 +342,7 @@ fn mouse_target_at_maps_visible_message_action_rows() {
 }
 
 #[test]
-fn mouse_target_at_maps_guild_and_channel_action_menu_rows() {
+fn interaction_at_maps_guild_and_channel_action_menu_rows() {
     type MenuCase = (
         fn(&mut DashboardState),
         fn(&DashboardState) -> usize,
@@ -387,13 +377,13 @@ fn mouse_target_at_maps_guild_and_channel_action_menu_rows() {
         let first_row_y = area.y + (area.height - popup_height) / 2 + 1;
 
         assert_eq!(
-            mouse_target_at(area, &state, 46, first_row_y - 1),
-            Some(MouseTarget::ModalBackdrop),
+            interaction_at(area, &state, 46, first_row_y - 1),
+            Some(InteractionTarget::ModalSurface),
             "{target:?}"
         );
         assert_eq!(
-            mouse_target_at(area, &state, 46, first_row_y),
-            Some(MouseTarget::PopupRow { target, row: 0 }),
+            interaction_at(area, &state, 46, first_row_y),
+            Some(InteractionTarget::PopupItem { target, row: 0 }),
             "{target:?}"
         );
     }

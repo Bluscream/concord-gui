@@ -1,10 +1,11 @@
 use tokio::sync::mpsc;
 
 use crate::{
-    DiscordClient,
+    DiscordClient, config,
     discord::{AppCommand, AppEvent},
     error::AppError,
     logging,
+    translation::TranslationService,
 };
 
 use super::command_dispatch::CommandDispatcher;
@@ -12,9 +13,13 @@ use super::command_dispatch::CommandDispatcher;
 pub(super) fn start_command_loop(
     client: DiscordClient,
     mut commands: mpsc::Receiver<AppCommand>,
+    translation_options: config::TranslationOptions,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let dispatcher = CommandDispatcher::new(client);
+        let dispatcher = CommandDispatcher::new(
+            client,
+            TranslationService::from_options(translation_options),
+        );
         while let Some(command) = commands.recv().await {
             dispatcher.dispatch(command).await;
         }

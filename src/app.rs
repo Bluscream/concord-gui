@@ -11,6 +11,7 @@ mod notification_commands;
 mod read_state_commands;
 mod session_commands;
 mod shutdown;
+mod translation_commands;
 
 mod user_commands;
 mod voice_commands;
@@ -102,7 +103,10 @@ impl Session {
             .unwrap_or(true);
 
         let gateway_task = client.start_gateway(serve_rich_presence);
-        let command_task = start_command_loop(client.clone(), commands_rx);
+        let translation_options = config::load_options()
+            .map(|options| options.translation)
+            .unwrap_or_default();
+        let command_task = start_command_loop(client.clone(), commands_rx, translation_options);
 
         let version_client = client.clone();
         tokio::spawn(async move {

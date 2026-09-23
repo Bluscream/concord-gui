@@ -254,6 +254,43 @@ pub(in crate::tui::ui) fn user_profile_popup_text_geometry(
     (content.width.saturating_sub(1).max(1), content.height)
 }
 
+pub(in crate::tui::ui) fn user_profile_control_at(
+    area: Rect,
+    state: &DashboardState,
+    column: u16,
+    row: u16,
+) -> Option<UserProfileControl> {
+    let content = user_profile_popup_areas_for_frame(area, state).document;
+    let document = Rect {
+        width: content.width.saturating_sub(1).max(1),
+        ..content
+    };
+    if column < document.x
+        || column >= document.x.saturating_add(document.width)
+        || row < document.y
+        || row >= document.y.saturating_add(document.height)
+    {
+        return None;
+    }
+
+    let has_avatar = user_profile_popup_has_avatar_inside(
+        content,
+        state.show_avatars() && state.user_profile_popup_has_avatar_preview(),
+    );
+    let text = user_profile_popup_text_for_render(state, document.width, has_avatar, &[]);
+    let viewport = usize::from(document.height);
+    let scroll = state
+        .user_profile_popup_scroll()
+        .min(text.lines.len().saturating_sub(viewport));
+    let document_row = scroll.saturating_add(usize::from(row.saturating_sub(document.y)));
+    let document_column = usize::from(column.saturating_sub(document.x));
+
+    text.controls
+        .into_iter()
+        .find(|region| region.contains(document_row, document_column))
+        .map(|region| region.control)
+}
+
 fn user_profile_popup_text_for_render(
     state: &DashboardState,
     width: u16,
@@ -280,6 +317,7 @@ fn user_profile_popup_text_for_render(
             cursor: None,
             reveal_rows: None,
             picker_rows: None,
+            controls: Vec::new(),
         }
     } else {
         UserProfilePopupText {
@@ -291,6 +329,7 @@ fn user_profile_popup_text_for_render(
             cursor: None,
             reveal_rows: None,
             picker_rows: None,
+            controls: Vec::new(),
         }
     }
 }
@@ -440,6 +479,7 @@ pub(in crate::tui::ui) fn user_profile_popup_text(
         cursor: None,
         reveal_rows: None,
         picker_rows: None,
+        controls: Vec::new(),
     }
 }
 
@@ -452,6 +492,7 @@ fn user_profile_settings_popup_text(
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut cursor = None;
     let mut reveal_rows = None;
+    let mut controls = Vec::new();
     push_profile_identity_lines(
         &mut lines,
         profile,
@@ -463,13 +504,39 @@ fn user_profile_settings_popup_text(
     lines.push(Line::from(Span::raw(String::new())));
 
     let active_tab = state.user_profile_settings_tab();
+    let tab_row = lines.len();
+    let global_tab = profile_tab_text("g", "Global", active_tab == UserProfileSettingsTab::Global);
+    let guild_tab = profile_tab_text(
+        "v",
+        "This Server",
+        active_tab == UserProfileSettingsTab::Guild,
+    );
+    let guild_tab_start = global_tab.width().saturating_add(2);
+    controls.extend([
+        UserProfileControlRegion {
+            control: UserProfileControl::Tab(UserProfileSettingsTab::Global),
+            row_start: tab_row,
+            row_end: tab_row.saturating_add(1),
+            column_start: 0,
+            column_end: global_tab.width(),
+        },
+        UserProfileControlRegion {
+            control: UserProfileControl::Tab(UserProfileSettingsTab::Guild),
+            row_start: tab_row,
+            row_end: tab_row.saturating_add(1),
+            column_start: guild_tab_start,
+            column_end: guild_tab_start.saturating_add(guild_tab.width()),
+        },
+    ]);
     lines.push(Line::from(vec![
-        profile_tab_span("g", "Global", active_tab == UserProfileSettingsTab::Global),
+        Span::styled(
+            global_tab,
+            profile_tab_style(active_tab == UserProfileSettingsTab::Global),
+        ),
         Span::raw("  "),
-        profile_tab_span(
-            "v",
-            "This Server",
-            active_tab == UserProfileSettingsTab::Guild,
+        Span::styled(
+            guild_tab,
+            profile_tab_style(active_tab == UserProfileSettingsTab::Guild),
         ),
     ]));
     lines.push(Line::from(Span::raw(String::new())));
@@ -482,6 +549,7 @@ fn user_profile_settings_popup_text(
                 &mut lines,
                 &mut cursor,
                 &mut reveal_rows,
+                &mut controls,
                 state,
                 width,
                 &[
@@ -499,6 +567,7 @@ fn user_profile_settings_popup_text(
                 &mut lines,
                 &mut cursor,
                 &mut reveal_rows,
+                &mut controls,
                 state,
                 width,
                 &[(UserProfileSettingsField::CurrentStatus, "Status")],
@@ -515,6 +584,7 @@ fn user_profile_settings_popup_text(
                 &mut lines,
                 &mut cursor,
                 &mut reveal_rows,
+                &mut controls,
                 state,
                 width,
                 &[(UserProfileSettingsField::ManualActivity, "Activity")],
@@ -538,6 +608,7 @@ fn user_profile_settings_popup_text(
                     &mut lines,
                     &mut cursor,
                     &mut reveal_rows,
+                    &mut controls,
                     state,
                     width,
                     &[
@@ -552,7 +623,7 @@ fn user_profile_settings_popup_text(
     }
 
     lines.push(Line::default());
-    push_profile_settings_action_lines(&mut lines, &mut reveal_rows, state);
+    push_profile_settings_action_lines(&mut lines, &mut reveal_rows, &mut controls, state);
 
     UserProfilePopupText {
         lines,
@@ -560,12 +631,14 @@ fn user_profile_settings_popup_text(
         cursor,
         reveal_rows,
         picker_rows,
+        controls,
     }
 }
 
 fn push_profile_settings_action_lines(
     lines: &mut Vec<Line<'static>>,
     reveal_rows: &mut Option<std::ops::Range<usize>>,
+    controls: &mut Vec<UserProfileControlRegion>,
     state: &DashboardState,
 ) {
     let active = state.user_profile_settings_active_field();
@@ -581,6 +654,23 @@ fn push_profile_settings_action_lines(
             "o",
             "Sign out",
             active == Some(UserProfileSettingsField::SignOut),
+        ),
+    ]);
+    controls.extend([
+        UserProfileControlRegion::rows(
+            UserProfileControl::Field(UserProfileSettingsField::Save),
+            start,
+            start.saturating_add(1),
+        ),
+        UserProfileControlRegion::rows(
+            UserProfileControl::Field(UserProfileSettingsField::Close),
+            start.saturating_add(1),
+            start.saturating_add(2),
+        ),
+        UserProfileControlRegion::rows(
+            UserProfileControl::Field(UserProfileSettingsField::SignOut),
+            start.saturating_add(2),
+            start.saturating_add(3),
         ),
     ]);
 
@@ -645,26 +735,27 @@ fn push_profile_activity_picker_lines(
     }
 }
 
-fn profile_tab_span(shortcut: &str, label: &str, active: bool) -> Span<'static> {
-    let text = if active {
+fn profile_tab_text(shortcut: &str, label: &str, active: bool) -> String {
+    if active {
         format!("[{shortcut}] {label}")
     } else {
         format!(" {shortcut}  {label}")
-    };
-    Span::styled(
-        text,
-        if active {
-            theme::current().style(theme::HighlightGroup::ActiveTab)
-        } else {
-            theme::current().style(theme::HighlightGroup::Disabled)
-        },
-    )
+    }
+}
+
+fn profile_tab_style(active: bool) -> Style {
+    theme::current().style(if active {
+        theme::HighlightGroup::ActiveTab
+    } else {
+        theme::HighlightGroup::Disabled
+    })
 }
 
 fn push_profile_settings_field_lines(
     lines: &mut Vec<Line<'static>>,
     cursor: &mut Option<(usize, usize)>,
     reveal_rows: &mut Option<std::ops::Range<usize>>,
+    controls: &mut Vec<UserProfileControlRegion>,
     state: &DashboardState,
     width: usize,
     fields: &[(UserProfileSettingsField, &str)],
@@ -820,6 +911,12 @@ fn push_profile_settings_field_lines(
                 Some(field_start..lines.len())
             };
         }
+
+        controls.push(UserProfileControlRegion::rows(
+            UserProfileControl::Field(*field),
+            field_start,
+            lines.len(),
+        ));
 
         if index + 1 < fields.len() {
             lines.push(Line::default());

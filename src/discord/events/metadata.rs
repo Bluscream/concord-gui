@@ -254,6 +254,8 @@ impl AppEventKind {
         | AppEventKind::AttachmentDownloadProgress
         | AppEventKind::AttachmentDownloadCompleted
         | AppEventKind::AttachmentDownloadFailed
+        | AppEventKind::TranslationCompleted
+        | AppEventKind::TranslationFailed
         | AppEventKind::UpdateAvailable
         | AppEventKind::ReactionUsersLoaded
         | AppEventKind::ReactionUsersLoadFailed

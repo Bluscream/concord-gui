@@ -366,6 +366,20 @@ impl DashboardState {
                     Instant::now(),
                 );
             }
+            AppEvent::TranslationCompleted {
+                request_id,
+                target,
+                translated_text,
+            } => {
+                self.apply_translation_completed(*request_id, *target, translated_text);
+            }
+            AppEvent::TranslationFailed {
+                request_id,
+                target,
+                message,
+            } => {
+                self.apply_translation_failed(*request_id, *target, message);
+            }
             AppEvent::UpdateAvailable { latest_version } => {
                 self.discord.update_available_version = Some(latest_version.clone());
             }

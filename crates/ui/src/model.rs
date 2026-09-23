@@ -832,6 +832,7 @@ impl GuildPaneEntry<'_> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MessageActionKind {
     CopyContent,
+    Translate,
     OpenReactionPicker,
     Reply,
     OpenDeleteConfirmation,
@@ -862,6 +863,7 @@ impl MessageActionKind {
             Self::OpenPinConfirmation => Some(DiscordAction::PinMessage),
             Self::OpenPollVotePicker => Some(DiscordAction::VotePoll),
             Self::CopyContent
+            | Self::Translate
             | Self::OpenUrl
             | Self::PlayMedia
             | Self::ViewAttachment

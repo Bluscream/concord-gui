@@ -37,7 +37,7 @@ use tokio::sync::{mpsc, watch};
 
 use concord::{
     AppError, Result,
-    config::{KeymapOptions, ThemeOptions},
+    config::{AppOptions, KeymapOptions, ThemeOptions},
     discord::{AppCommand, DiscordAuthSession, DiscordClient, SequencedAppEvent, SnapshotRevision},
 };
 
@@ -74,10 +74,39 @@ pub async fn prompt_login_with_auth_session(
 }
 
 pub async fn run(
+    effects: mpsc::Receiver<SequencedAppEvent>,
+    snapshots: watch::Receiver<SnapshotRevision>,
+    commands: mpsc::Sender<AppCommand>,
+    client: DiscordClient,
+    mut config_warnings: Vec<String>,
+) -> Result<DashboardExit> {
+    let options = match concord::config::load_options_with_warnings() {
+        Ok((options, warnings)) => {
+            config_warnings.extend(warnings);
+            options
+        }
+        Err(error) => {
+            concord::logging::error("config", format!("failed to load config: {error}"));
+            AppOptions::default()
+        }
+    };
+    run_with_options(
+        effects,
+        snapshots,
+        commands,
+        client,
+        options,
+        config_warnings,
+    )
+    .await
+}
+
+pub(crate) async fn run_with_options(
     mut effects: mpsc::Receiver<SequencedAppEvent>,
     mut snapshots: watch::Receiver<SnapshotRevision>,
     commands: mpsc::Sender<AppCommand>,
     client: DiscordClient,
+    options: AppOptions,
     config_warnings: Vec<String>,
 ) -> Result<DashboardExit> {
     let mut terminal = ratatui::init();
@@ -89,6 +118,7 @@ pub async fn run(
         &mut snapshots,
         commands,
         client,
+        options,
         config_warnings,
     )
     .await

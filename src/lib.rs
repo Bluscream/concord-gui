@@ -8,6 +8,9 @@ pub mod risk;
 /// Paths and small helpers. Public because a front end, or the cache crate
 /// beside it, needs to put its own files where this client keeps its state.
 pub mod support;
+/// Message and composer translation. Public for the same reason: both front
+/// ends call it, and neither is in this crate.
+pub mod translation;
 
 /// Notification and voice sounds, shared by both front ends.
 pub use support::notification_audio as sound;

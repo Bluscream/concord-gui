@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.0] - 2026-09-22
+
+### Features
+
+- _(tui)_ Rebuild mouse input around semantic interaction targets by @chojs23
+- _(message)_ Add message and composer translation by @chojs23
+
 ## [2.5.22] - 2026-09-19
 
 ### Bug Fixes

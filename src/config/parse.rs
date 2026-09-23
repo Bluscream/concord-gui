@@ -31,6 +31,7 @@ pub(super) fn parse_app_options(content: &str) -> Result<(AppOptions, Vec<String
         storage: section(&root, "storage", &mut warnings),
         warnings: section(&root, "warnings", &mut warnings),
         embeds: section(&root, "embeds", &mut warnings),
+        translation: section(&root, "translation", &mut warnings),
     };
 
     Ok((options, warnings))

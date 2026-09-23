@@ -1158,6 +1158,8 @@ impl DiscordState {
             | AppEvent::AttachmentDownloadProgress { .. }
             | AppEvent::AttachmentDownloadCompleted { .. }
             | AppEvent::AttachmentDownloadFailed { .. }
+            | AppEvent::TranslationCompleted { .. }
+            | AppEvent::TranslationFailed { .. }
             | AppEvent::UpdateAvailable { .. }
             | AppEvent::ReactionUsersLoaded { .. }
             | AppEvent::ReactionUsersLoadFailed { .. }

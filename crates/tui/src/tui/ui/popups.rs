@@ -228,9 +228,9 @@ pub(super) use channel_switcher::{
 pub(super) use confirmation::{
     channel_delete_confirmation_popup_area_for_state, channel_edit_popup_area,
     guild_leave_confirmation_popup_area_for_state, long_message_confirmation_popup_area_for_state,
-    message_confirmation_popup_area_for_state, quit_confirmation_popup_area,
-    render_channel_delete_confirmation, render_channel_edit, render_guild_leave_confirmation,
-    render_long_message_confirmation, render_message_confirmation,
+    message_confirmation_popup_area_for_state, notification_inbox_mark_all_confirmation_popup_area,
+    quit_confirmation_popup_area, render_channel_delete_confirmation, render_channel_edit,
+    render_guild_leave_confirmation, render_long_message_confirmation, render_message_confirmation,
     render_notification_inbox_mark_all_confirmation, render_quit_confirmation, render_risk_warning,
     render_thread_delete_confirmation, risk_warning_popup_area_for_state,
     thread_delete_confirmation_popup_area_for_state,
@@ -249,8 +249,8 @@ pub(super) use downloads::{
 pub(super) use folder_settings::folder_settings_input_line_for_test;
 pub(super) use folder_settings::{folder_settings_popup_area, render_folder_settings_popup};
 pub(super) use forum_post::{
-    forum_post_composer_metrics, forum_post_composer_popup_area, forum_post_tag_picker_list_layout,
-    render_forum_post_composer, render_forum_post_tag_picker,
+    forum_post_composer_field_at, forum_post_composer_metrics, forum_post_composer_popup_area,
+    forum_post_tag_picker_list_layout, render_forum_post_composer, render_forum_post_tag_picker,
 };
 pub(super) use join_server::render_join_server;
 #[cfg(test)]
@@ -259,7 +259,8 @@ pub(super) use keymap::{
     keymap_popup_area, keymap_popup_text_area, keymap_popup_total_lines, render_keymap_help_popup,
 };
 pub(super) use notification_inbox::{
-    notification_inbox_list_layout, notification_inbox_popup_area, render_notification_inbox_popup,
+    notification_inbox_list_layout, notification_inbox_popup_area, notification_inbox_tab_at,
+    render_notification_inbox_popup,
 };
 #[cfg(test)]
 pub(super) use options::options_popup_lines;
@@ -270,8 +271,8 @@ pub(super) use polls::{poll_vote_picker_popup_area, render_poll_vote_picker};
 #[cfg(test)]
 pub(super) use profile::user_profile_popup_text;
 pub(super) use profile::{
-    render_user_profile_popup, user_profile_picker_list_layout, user_profile_popup_has_avatar,
-    user_profile_popup_metrics, user_profile_popup_text_geometry,
+    render_user_profile_popup, user_profile_control_at, user_profile_picker_list_layout,
+    user_profile_popup_has_avatar, user_profile_popup_metrics, user_profile_popup_text_geometry,
 };
 pub(in crate::tui) use profile::{user_profile_popup_area, user_profile_popup_avatar_viewport};
 #[cfg(test)]
@@ -285,14 +286,15 @@ pub(super) use reactions::{
     render_reaction_users_popup,
 };
 pub(super) use search::{
-    render_search_popup, search_popup_area_for_state, search_popup_list_layout,
+    render_search_popup, search_popup_area_for_state, search_popup_field_at,
+    search_popup_list_layout,
 };
 pub(super) use stream_info::{render_stream_info, stream_info_area, stream_info_lines_for_area};
 #[cfg(test)]
 pub(super) use stream_info::{stream_info_lines, stream_info_lines_for_width};
 pub(super) use thread_edit::{
-    render_thread_edit, render_thread_edit_tag_picker, thread_edit_metrics, thread_edit_popup_area,
-    thread_edit_tag_picker_list_layout,
+    render_thread_edit, render_thread_edit_tag_picker, thread_edit_field_at, thread_edit_metrics,
+    thread_edit_popup_area, thread_edit_tag_picker_list_layout,
 };
 #[cfg(test)]
 pub(super) use toast::toast_line;
@@ -450,7 +452,7 @@ pub(super) fn background_media_occlusion_areas(
     areas.into_iter().filter(|area| !area.is_empty()).collect()
 }
 
-fn active_modal_popup_area(frame_area: Rect, state: &DashboardState) -> Option<Rect> {
+pub(super) fn active_modal_popup_area(frame_area: Rect, state: &DashboardState) -> Option<Rect> {
     let kind = state.active_modal_popup_kind()?;
     match kind {
         ActiveModalPopupKind::ChannelEdit => Some(channel_edit_popup_area(frame_area)),
@@ -543,6 +545,13 @@ fn active_modal_popup_area(frame_area: Rect, state: &DashboardState) -> Option<R
         ActiveModalPopupKind::DebugLog => Some(debug_panel_area(frame_area)),
         ActiveModalPopupKind::KeymapHelp => Some(keymap_popup_area(frame_area)),
         ActiveModalPopupKind::ChannelSwitcher => Some(channel_switcher_popup_area(frame_area)),
+        ActiveModalPopupKind::NotificationInbox
+            if state.notification_inbox_is_confirming_mark_all() =>
+        {
+            Some(notification_inbox_mark_all_confirmation_popup_area(
+                frame_area,
+            ))
+        }
         ActiveModalPopupKind::NotificationInbox => Some(notification_inbox_popup_area(frame_area)),
         ActiveModalPopupKind::Search => search_popup_area_for_state(frame_area, state),
         ActiveModalPopupKind::ForumPostComposer => Some(forum_post_composer_popup_area(frame_area)),

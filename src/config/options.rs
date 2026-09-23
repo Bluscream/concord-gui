@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{collections::BTreeMap, fmt, path::PathBuf};
 
 use serde::{Deserialize, Serialize, de};
 
@@ -250,6 +250,55 @@ impl Default for PresenceOptions {
     }
 }
 
+#[derive(Clone, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct TranslationOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<TranslationProviderKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_target_language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub composer_target_language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
+}
+
+impl fmt::Debug for TranslationOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TranslationOptions")
+            .field("provider", &self.provider)
+            .field("message_target_language", &self.message_target_language)
+            .field("composer_target_language", &self.composer_target_language)
+            .field("endpoint", &self.endpoint)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .field("api_key_env", &self.api_key_env)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[non_exhaustive]
+pub enum TranslationProviderKind {
+    #[serde(rename = "deepl")]
+    DeepL,
+    #[serde(rename = "libretranslate")]
+    LibreTranslate,
+}
+
+impl TranslationProviderKind {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::DeepL => "DeepL",
+            Self::LibreTranslate => "LibreTranslate",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AppOptions {
@@ -263,6 +312,7 @@ pub struct AppOptions {
     pub warnings: WarningOptions,
     pub storage: StorageOptions,
     pub embeds: EmbedOptions,
+    pub translation: TranslationOptions,
 }
 
 /// How link previews are obtained for links Discord did not preview itself.

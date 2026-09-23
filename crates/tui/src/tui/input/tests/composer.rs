@@ -18,6 +18,42 @@ fn composer_requires_selected_channel() {
 }
 
 #[test]
+fn ctrl_t_translates_and_toggles_the_active_composer_input() {
+    let mut state = state_with_channel_permissions(PERM_VIEW_CHANNEL | PERM_SEND_MESSAGES);
+    state.apply_translation_options(TranslationOptions {
+        provider: Some(TranslationProviderKind::LibreTranslate),
+        composer_target_language: Some("en".to_owned()),
+        ..Default::default()
+    });
+    state.start_composer();
+    state.insert_composer_text_at_cursor("안녕하세요");
+
+    let command = handle_key(&mut state, ctrl_key('t'));
+
+    assert_eq!(
+        command,
+        Some(AppCommand::Translate {
+            request_id: 1,
+            target: concord::discord::TranslationTarget::Composer,
+            target_language: "en".to_owned(),
+            content: "안녕하세요".to_owned(),
+        })
+    );
+
+    state.push_event(AppEvent::TranslationCompleted {
+        request_id: 1,
+        target: concord::discord::TranslationTarget::Composer,
+        translated_text: "hello".to_owned(),
+    });
+    assert_eq!(state.composer_input(), "hello");
+
+    assert_eq!(handle_key(&mut state, ctrl_key('t')), None);
+    assert_eq!(state.composer_input(), "안녕하세요");
+    assert_eq!(handle_key(&mut state, ctrl_key('t')), None);
+    assert_eq!(state.composer_input(), "hello");
+}
+
+#[test]
 fn enter_confirms_long_message_file_upload() {
     let permissions = PERM_VIEW_CHANNEL | PERM_SEND_MESSAGES | PERM_ATTACH_FILES;
     let draft = "x".repeat(2_001);

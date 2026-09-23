@@ -390,6 +390,23 @@ impl DashboardState {
             .is_some_and(|settings| matches!(settings.active_field, FolderSettingsField::Cancel))
     }
 
+    pub(in crate::tui) fn select_folder_settings_field(
+        &mut self,
+        field: FolderSettingsField,
+    ) -> bool {
+        let Some(settings) = self.navigation.guilds.folder_settings.as_mut() else {
+            return false;
+        };
+        if settings
+            .editing_field
+            .is_some_and(|editing| editing != field)
+        {
+            return false;
+        }
+        settings.active_field = field;
+        true
+    }
+
     pub(in crate::tui) fn is_folder_settings_editing(&self) -> bool {
         self.navigation
             .guilds

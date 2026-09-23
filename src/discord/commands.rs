@@ -437,6 +437,12 @@ pub struct ReplyReference {
     pub mention_author: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TranslationTarget {
+    Message(Id<MessageMarker>),
+    Composer,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AppCommand {
     SignOut,
@@ -1100,6 +1106,15 @@ pub enum AppCommand {
     },
     OpenUrl {
         url: String,
+    },
+    Translate {
+        request_id: u64,
+        target: TranslationTarget,
+        target_language: String,
+        content: String,
+    },
+    CancelComposerTranslation {
+        request_id: u64,
     },
     PlayMedia {
         target: MediaPlaybackTarget,

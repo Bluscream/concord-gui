@@ -1396,6 +1396,24 @@ fn handle_command(
             });
         }
 
+        // Demo mode answers a translation locally: reaching a real provider
+        // would need an API key and a network, and the point of the fixture is
+        // to exercise the path without either.
+        AppCommand::Translate {
+            request_id,
+            target,
+            target_language,
+            content,
+        } => {
+            publish_event!(AppEvent::TranslationCompleted {
+                request_id,
+                target,
+                translated_text: format!("[{target_language}] {content}"),
+            });
+        }
+
+        AppCommand::CancelComposerTranslation { .. } => {}
+
         AppCommand::PlayMedia { .. } => {
             publish_event!(AppEvent::GatewayError {
                 message: "Demo mode has no external player".to_string(),

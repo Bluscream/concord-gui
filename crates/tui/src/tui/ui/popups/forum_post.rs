@@ -133,6 +133,41 @@ pub(in crate::tui::ui) fn forum_post_composer_popup_area(area: Rect) -> Rect {
     )
 }
 
+pub(in crate::tui::ui) fn forum_post_composer_field_at(
+    area: Rect,
+    state: &DashboardState,
+    column: u16,
+    row: u16,
+) -> Option<ForumPostComposerField> {
+    let view = state.forum_post_composer_view()?;
+    let popup = forum_post_composer_popup_area(area);
+    let content = popup_form_areas(popup).content;
+    if column < content.x
+        || column >= content.x.saturating_add(content.width)
+        || row < content.y
+        || row >= content.y.saturating_add(content.height)
+    {
+        return None;
+    }
+
+    let width = usize::from(content.width.saturating_sub(1)).max(1);
+    let layout = build_composer_layout(&view, width, state.forum_post_attachment_previews().len());
+    let document_row = state
+        .forum_post_composer_scroll()
+        .saturating_add(usize::from(row.saturating_sub(content.y)));
+    if (layout.title_row..layout.body_row).contains(&document_row) {
+        Some(ForumPostComposerField::Title)
+    } else if (layout.body_row..layout.attachments_row).contains(&document_row) {
+        Some(ForumPostComposerField::Body)
+    } else if (layout.attachments_row..layout.tags_row).contains(&document_row) {
+        Some(ForumPostComposerField::Attachments)
+    } else if (layout.tags_row..layout.lines.len()).contains(&document_row) {
+        Some(ForumPostComposerField::Tags)
+    } else {
+        None
+    }
+}
+
 fn render_body_scrollbar(
     frame: &mut Frame,
     content: Rect,

@@ -180,6 +180,9 @@ pub fn apply(workspace: &mut Workspace, action: UiAction, cx: &mut Context<Works
         UiAction::OpenStickerPicker => workspace.open_sticker_picker(),
         UiAction::OpenCurrentUserProfile => workspace.open_own_profile(),
         UiAction::OpenDebugPanel => workspace.toggle_debug_log(),
+        // Message translation is a core feature, but the GUI has no surface
+        // for it yet. Recorded in docs/PARITY.md rather than silently ignored.
+        UiAction::TranslateMessage => return false,
         UiAction::ClosePopup => {
             workspace.close_popup();
         }

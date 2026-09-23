@@ -90,6 +90,7 @@ define_ui_actions! {
     ResizePaneRight => ("resize pane right", &[&[ModifiedKey(KeyCode::Char('l'), KeyModifiers::ALT)], &[ModifiedKey(KeyCode::Right, KeyModifiers::ALT)]], Some(DashboardAction::ResizePaneRight)),
     Quit => ("quit", &[&[Char('q')]], Some(DashboardAction::Quit)),
     CopyMessage => ("copy message", &[&[Char('y')]], None),
+    TranslateMessage => ("translate message", &[&[Char('T')]], None),
     ReactMessage => ("react", &[&[Char('r')]], None),
     ReplyMessage => ("reply", &[&[Char('R')]], None),
     DeleteMessage => ("delete message", &[&[Char('d')]], None),
@@ -178,6 +179,7 @@ macro_rules! define_message_action_bindings {
 
 define_message_action_bindings! {
     CopyContent => (CopyMessage, "CopyMessage"),
+    Translate => (TranslateMessage, "TranslateMessage"),
     OpenReactionPicker => (ReactMessage, "ReactMessage"),
     Reply => (ReplyMessage, "ReplyMessage"),
     OpenDeleteConfirmation => (DeleteMessage, "DeleteMessage"),
@@ -504,6 +506,7 @@ pub enum ComposerAction {
     Close,
     ClearInput,
     RemoveLastAttachment,
+    Translate,
     EditText(TextEditAction),
     ToggleReplyPing,
     InsertChar(char),

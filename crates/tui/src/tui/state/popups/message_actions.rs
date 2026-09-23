@@ -83,6 +83,7 @@ impl DashboardState {
         }
         [
             (MessageActionKind::CopyContent, "copy message"),
+            (MessageActionKind::Translate, "translate message"),
             (MessageActionKind::OpenReactionPicker, "react"),
             (MessageActionKind::Reply, "reply"),
             (MessageActionKind::Forward, "forward message"),
@@ -134,6 +135,12 @@ impl DashboardState {
             // Forwarding needs somewhere to forward to, which is the only
             // thing that can be missing: any message can be forwarded.
             MessageActionKind::Forward => None,
+            MessageActionKind::Translate => message
+                .copyable_content()
+                .filter(|content| !content.trim().is_empty())
+                .is_none()
+                .then(|| "no message text".to_owned())
+                .or_else(|| self.translation_disabled_reason()),
             MessageActionKind::OpenReactionPicker => {
                 if self.can_open_reaction_picker(message) {
                     return None;
@@ -529,6 +536,10 @@ impl DashboardState {
         if !action.is_enabled() {
             if kind == MessageActionKind::PlayMedia && !self.media_playback_enabled() {
                 self.show_media_playback_disabled_toast(std::time::Instant::now());
+            } else if kind == MessageActionKind::Translate
+                && let Some(reason) = action.disabled_reason()
+            {
+                self.show_error_toast(reason, std::time::Instant::now());
             }
             return None;
         }
@@ -548,6 +559,7 @@ impl DashboardState {
                 self.start_message_forward();
                 None
             }
+            MessageActionKind::Translate => self.toggle_selected_message_translation(),
             MessageActionKind::OpenReactionPicker => {
                 self.direct_open_selected_message_reaction_picker();
                 None

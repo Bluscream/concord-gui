@@ -4,6 +4,7 @@ use super::{
     ComposerUiState, DiscordUiState, LayoutCacheState, MessageHistoryRefreshState,
     MessageViewportState, NavigationState, PendingMessageUiState, PopupUiState,
     RequestTrackingState, RuntimeUiState, SettingsState, ThreadCardListCacheState,
+    TranslationUiState,
 };
 
 #[derive(Debug, Default)]
@@ -21,6 +22,7 @@ pub struct DashboardState {
     pub(super) layout_cache: LayoutCacheState,
     pub(super) tabs: super::tabs::TabState,
     pub(super) thread_cards: ThreadCardListCacheState,
+    pub(super) translations: TranslationUiState,
     pub(in crate::tui) syntax_highlight_cache: SyntaxHighlightCache,
 }
 

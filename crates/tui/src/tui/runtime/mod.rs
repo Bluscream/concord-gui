@@ -71,18 +71,9 @@ pub(super) async fn run_dashboard(
     snapshots: &mut watch::Receiver<SnapshotRevision>,
     commands: mpsc::Sender<AppCommand>,
     client: DiscordClient,
+    options: config::AppOptions,
     mut config_warnings: Vec<String>,
 ) -> Result<DashboardExit> {
-    let options = match config::load_options_with_warnings() {
-        Ok((options, warnings)) => {
-            config_warnings.extend(warnings);
-            options
-        }
-        Err(error) => {
-            logging::error("config", format!("failed to load config: {error}"));
-            config::AppOptions::default()
-        }
-    };
     // Language before the first draw. The TUI's own strings are not yet
     // translated, but honouring the setting here keeps the two clients from
     // disagreeing about which language is active.
@@ -124,6 +115,7 @@ pub(super) async fn run_dashboard(
     );
     state.apply_presence_options(options.presence);
     state.apply_reaction_options(options.reactions);
+    state.apply_translation_options(options.translation);
     drop(snapshots.borrow_and_update());
     let initial_snapshot = client.current_discord_snapshot();
     let mut current_snapshot_revision = initial_snapshot.revision.global;
@@ -146,7 +138,7 @@ pub(super) async fn run_dashboard(
     }
     let mut media_runtime = DashboardMediaRuntime::new(options.display.image_protocol);
     let mut terminal_events = EventStream::new();
-    let mut mouse_clicks = input::MouseClickTracker::default();
+    let mut mouse_input = input::MouseInputState::default();
     let (media_decode_tx, mut media_decode_rx) = mpsc::unbounded_channel();
     let (media_protocol_tx, mut media_protocol_rx) = mpsc::unbounded_channel();
     let (local_upload_preview_tx, mut local_upload_preview_rx) =
@@ -293,7 +285,7 @@ pub(super) async fn run_dashboard(
                             &mut state,
                             event,
                             &mut last_frame_area,
-                            &mut mouse_clicks,
+                            &mut mouse_input,
                         )?;
                         if state.take_terminal_refresh_request() {
                             // Redrawing alone cannot recover a picture whose
