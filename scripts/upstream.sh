@@ -4,10 +4,14 @@
 #
 #   ./scripts/upstream.sh status      what upstream has that we do not
 #   ./scripts/upstream.sh sync-main   fast-forward the main mirror and push it
-#   ./scripts/upstream.sh preview     trial-merge in a throwaway worktree
-#   ./scripts/upstream.sh merge       start the real merge on its own branch
+#   ./scripts/upstream.sh preview [R] trial-merge in a throwaway worktree
+#   ./scripts/upstream.sh merge [R]   start the real merge on its own branch
 #   ./scripts/upstream.sh finish      after you resolve: fix imports, relock
 #   ./scripts/upstream.sh gate        fmt, clippy and tests, both feature sets
+#
+# [R] is any upstream ref, and defaults to upstream/main. Pass a release tag
+# to take one release at a time, which is the whole point: 87 commits at once
+# conflicted in 111 files, and no amount of tooling makes that a good morning.
 #
 # Why this exists
 # ---------------
@@ -85,6 +89,19 @@ require_clean() {
 
 base_rev() { git merge-base "$WORK_BRANCH" "$UPSTREAM_REMOTE/$MIRROR_BRANCH"; }
 
+# The thing being merged. Defaults to the tip; a release tag is better.
+target_rev() {
+    local want="${1:-$UPSTREAM_REMOTE/$MIRROR_BRANCH}"
+    git rev-parse --verify --quiet "$want^{commit}" >/dev/null ||
+        die "no such ref: $want"
+    git merge-base --is-ancestor "$want" "$UPSTREAM_REMOTE/$MIRROR_BRANCH" ||
+        die "$want is not on $UPSTREAM_REMOTE/$MIRROR_BRANCH - refusing to merge it"
+    printf '%s' "$want"
+}
+
+# A short name for the ref, for branch names and messages.
+target_slug() { printf '%s' "${1##*/}" | tr -c 'A-Za-z0-9._-' '-'; }
+
 # ---------------------------------------------------------------------------
 # status
 # ---------------------------------------------------------------------------
@@ -135,7 +152,24 @@ cmd_status() {
     [[ "$overlap" -gt 40 ]] && echo "  ... and $((overlap - 40)) more"
 
     echo
-    echo "Run './scripts/upstream.sh preview' for what the merge would actually cost."
+    echo "Unmerged upstream releases - one of these is a sitting, all of them is not:"
+    local tag n
+    while read -r tag; do
+        n="$(git rev-list --count "$WORK_BRANCH..$tag")"
+        printf '  %-10s %s  %3s commits\n' "$tag" \
+            "$(git show -s --format=%ad --date=short "$tag")" "$n"
+    done < <(unmerged_releases)
+
+    echo
+    echo "Run './scripts/upstream.sh preview <tag>' for what one of them would cost."
+}
+
+# Upstream's release tags that gui does not already contain, oldest first.
+# `--no-merged` is the whole test: a tag gui has already taken is not a
+# sitting's work, it is history.
+unmerged_releases() {
+    git tag --list 'v*' --sort=v:refname --merged "$UPSTREAM_REMOTE/$MIRROR_BRANCH" \
+        --no-merged "$WORK_BRANCH"
 }
 
 # Upstream paths this fork has moved. Said out loud in the status report
@@ -202,6 +236,8 @@ preview_cleanup() {
 cmd_preview() {
     require_remote "$UPSTREAM_REMOTE"
     git fetch --quiet "$UPSTREAM_REMOTE" --tags
+    local target
+    target="$(target_rev "${1:-}")"
 
     # Deliberately not `local`: the EXIT trap runs after this function has
     # returned, and a local would be out of scope by then - which under `set
@@ -209,12 +245,12 @@ cmd_preview() {
     PREVIEW_WORKTREE="$(mktemp -d)"
     trap preview_cleanup EXIT
 
-    info "Trial-merging in a throwaway worktree"
+    info "Trial-merging $target in a throwaway worktree"
     git worktree add --quiet --detach "$PREVIEW_WORKTREE" "$WORK_BRANCH"
 
     local conflicts=0
     if git -C "$PREVIEW_WORKTREE" merge --no-commit --no-ff \
-        -X "find-renames=$RENAME_THRESHOLD" "$UPSTREAM_REMOTE/$MIRROR_BRANCH" >/dev/null 2>&1; then
+        -X "find-renames=$RENAME_THRESHOLD" "$target" >/dev/null 2>&1; then
         info "Clean merge. Nothing to think about."
         return 0
     fi
@@ -264,17 +300,20 @@ cmd_merge() {
     git config rerere.enabled true
     git config rerere.autoupdate true
 
-    local branch
-    branch="merge-upstream-$(date +%Y-%m-%d)"
+    local target branch
+    target="$(target_rev "${1:-}")"
+    branch="merge-upstream-$(target_slug "$target")"
     git rev-parse --verify --quiet "$branch" >/dev/null &&
         die "branch $branch already exists. Finish or delete it first."
 
+    local n
+    n="$(git rev-list --count "$WORK_BRANCH..$target")"
     info "Branching $branch off $WORK_BRANCH"
     git checkout --quiet -b "$branch" "$WORK_BRANCH"
 
-    info "Merging $UPSTREAM_REMOTE/$MIRROR_BRANCH (rename threshold $RENAME_THRESHOLD)"
+    info "Merging $target - $n commits (rename threshold $RENAME_THRESHOLD)"
     git merge --no-commit --no-ff \
-        -X "find-renames=$RENAME_THRESHOLD" "$UPSTREAM_REMOTE/$MIRROR_BRANCH" || true
+        -X "find-renames=$RENAME_THRESHOLD" "$target" || true
 
     cmd_finish
 
@@ -420,8 +459,8 @@ in_box() {
 case "${1:-}" in
     status)    cmd_status ;;
     sync-main) cmd_sync_main ;;
-    preview)   cmd_preview ;;
-    merge)     cmd_merge ;;
+    preview)   cmd_preview "${2:-}" ;;
+    merge)     cmd_merge "${2:-}" ;;
     finish)    cmd_finish ;;
     gate)      cmd_gate ;;
     -h|--help|"") sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \?//' ;;
