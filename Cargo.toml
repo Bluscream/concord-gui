@@ -10,7 +10,7 @@ members = [
 
 [package]
 name = "concord"
-version = "2.5.10"
+version = "2.5.11"
 edition = "2024"
 rust-version = "1.90"
 description = "A terminal user interface client for Discord"
@@ -145,6 +145,9 @@ stream-broadcast = [
   "dep:libc",
   "dep:glow",
   "dep:khronos-egl",
+  "x11rb/image",
+  "x11rb/randr",
+  "x11rb/xfixes",
   "dep:wasapi",
   "dep:windows",
   "dep:block2",
