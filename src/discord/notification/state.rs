@@ -74,7 +74,7 @@ struct ChannelNotificationSettingsState {
 /// Gated to match its only caller, `set_fixture_channel_muted`, which is
 /// behind the same feature. Without the gate this is dead code in every build
 /// that does not enable fixtures - which is every release build.
-#[cfg(feature = "fixtures")]
+#[cfg(any(test, feature = "fixtures"))]
 impl ChannelNotificationSettingsState {
     fn set_fixture_muted(&mut self, muted: bool) {
         self.muted = muted;
@@ -832,7 +832,7 @@ fn notification_level_from_channel_flags(flags: u64) -> NotificationLevel {
     }
 }
 
-#[cfg(feature = "fixtures")]
+#[cfg(any(test, feature = "fixtures"))]
 impl super::super::state::caches::NotificationCache {
     /// Mark a channel unread with `mentions` mentions and `notifications`
     /// unread messages, as the sidebar projections read them.

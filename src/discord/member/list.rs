@@ -501,7 +501,7 @@ fn item_entry(item: &GuildMemberListItem) -> Option<GuildMemberListEntry> {
     }
 }
 
-#[cfg(feature = "fixtures")]
+#[cfg(any(test, feature = "fixtures"))]
 impl GuildMemberListState {
     /// Build a list directly from positional entries, bypassing the sync
     /// protocol. Fixture use only.

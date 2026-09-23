@@ -235,7 +235,7 @@ pub(in crate::discord) struct NotificationCache {
 // cannot be reached from a release build.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "fixtures")]
+#[cfg(any(test, feature = "fixtures"))]
 impl MessageCache {
     /// Replace a channel's timeline with `messages`, oldest first.
     ///
@@ -252,7 +252,7 @@ impl MessageCache {
     }
 }
 
-#[cfg(feature = "fixtures")]
+#[cfg(any(test, feature = "fixtures"))]
 impl PresenceCache {
     pub(in crate::discord) fn set_fixture_typing(
         &mut self,
@@ -281,7 +281,7 @@ impl PresenceCache {
     }
 }
 
-#[cfg(feature = "fixtures")]
+#[cfg(any(test, feature = "fixtures"))]
 impl GuildDetailCache {
     pub(in crate::discord) fn set_fixture_member_list(
         &mut self,

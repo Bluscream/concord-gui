@@ -14,10 +14,10 @@ mod emoji;
 mod events;
 pub mod extension;
 mod fingerprint;
+#[cfg(any(test, feature = "fixtures"))]
 pub mod fixtures;
 #[cfg(any(test, feature = "fixtures"))]
 pub use events::test_builders;
-#[cfg(feature = "fixtures")]
 mod gateway;
 mod guild;
 pub mod ids;

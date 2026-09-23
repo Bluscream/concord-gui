@@ -576,7 +576,7 @@ fn sort_voice_participants(participants: &mut [VoiceParticipantState]) {
     });
 }
 
-#[cfg(feature = "fixtures")]
+#[cfg(any(test, feature = "fixtures"))]
 impl crate::discord::state::caches::VoiceStateCache {
     /// Seat participants in a guild voice channel.
     ///
