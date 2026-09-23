@@ -1982,6 +1982,7 @@ mod voice_tick_tests {
             output_source: None,
             allow_microphone_transmit: false,
             noise_suppression: true,
+            microphone_buffer_ms: None,
             microphone_sensitivity: Default::default(),
             microphone_volume: Default::default(),
             voice_output_volume: Default::default(),

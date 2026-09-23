@@ -340,6 +340,7 @@ fn voice_microphone_conditioning_combines_gain_before_soft_limiting() {
             transmit_enabled: true,
             use_voice_activity: true,
             noise_suppression: false,
+            microphone_buffer_ms: None,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::new(200),
         },

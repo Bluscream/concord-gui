@@ -20,7 +20,7 @@ pub(super) struct VoiceAudioRuntime {
 }
 
 impl VoiceAudioRuntime {
-    pub(super) fn start() -> Result<Self, String> {
+    pub fn start() -> Result<Self, String> {
         let (handle_tx, handle_rx) = sync_channel::<Handle>(1);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let worker = thread::Builder::new()

@@ -28,6 +28,7 @@ impl Workspace {
             channel_id,
             allow_microphone_transmit: allowed,
             noise_suppression: self.options.voice.noise_suppression,
+            microphone_buffer_ms: self.options.voice.microphone_buffer_ms,
             microphone_sensitivity: Default::default(),
             microphone_volume: Default::default(),
             voice_output_volume: Default::default(),
@@ -82,6 +83,7 @@ impl Workspace {
                 // Audio tuning lives in settings, which does not exist yet; the
                 // core's defaults are the right starting point.
                 noise_suppression: self.options.voice.noise_suppression,
+                microphone_buffer_ms: self.options.voice.microphone_buffer_ms,
                 microphone_sensitivity: Default::default(),
                 microphone_volume: Default::default(),
                 voice_output_volume: Default::default(),

@@ -1535,6 +1535,10 @@ fn no_icon_glyph_needs_a_font_we_do_not_ship() {
 fn german_reaches_the_interface_end_to_end() {
     use concord::i18n::{Language, set_language, translate, translate_text};
 
+    let _guard = crate::language_test_lock()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+
     // The whole chain: a .ftl file, a bundle, a lookup, a fallback. Testing
     // the pieces separately would not have caught a key renamed in one file
     // and not the other.

@@ -132,6 +132,7 @@ fn local_speaking_follows_microphone_activity_and_emits_only_edges() {
         transmit_enabled: true,
         use_voice_activity: true,
         noise_suppression: false,
+        microphone_buffer_ms: None,
         microphone_sensitivity: MicrophoneSensitivityDb::default(),
         microphone_volume: VoiceVolumePercent::default(),
     };

@@ -104,8 +104,6 @@ use cpal::traits::{DeviceTrait, StreamTrait};
 use futures::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 #[cfg(feature = "voice-playback")]
-use std::sync::Mutex as StdMutex;
-#[cfg(feature = "voice-playback")]
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use tokio::{
     net::UdpSocket,
@@ -121,8 +119,8 @@ use crate::discord::ids::{
 };
 use crate::{logging, support::tls};
 pub use levels::{
-    MicrophoneSensitivityDb, VoiceParticipantPlaybackSettings, VoiceParticipantVolumePercent,
-    VoiceVolumePercent,
+    MicrophoneBufferMs, MicrophoneSensitivityDb, VoiceParticipantPlaybackSettings,
+    VoiceParticipantVolumePercent, VoiceVolumePercent,
 };
 
 use super::{client::AppEventPublisher, events::AppEvent, gateway::GatewayCommand};

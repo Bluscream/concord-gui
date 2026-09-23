@@ -325,6 +325,9 @@ mod connection_row_tests {
 
     #[test]
     fn each_button_says_what_clicking_it_would_do() {
+        let _guard = crate::language_test_lock()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let hidden = ConnectionRow::new(&connection(ConnectionVisibility::Hidden, false));
         assert_eq!(
             hidden.visibility_action,
@@ -348,6 +351,9 @@ mod connection_row_tests {
 
     #[test]
     fn the_two_controls_are_independent() {
+        let _guard = crate::language_test_lock()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let row = ConnectionRow::new(&connection(ConnectionVisibility::Everyone, false));
         assert_eq!(row.visibility_action, concord::t!("action-connection-hide"));
         assert_eq!(

@@ -125,6 +125,7 @@ fn voice_runtime_capture_gate_requires_allowed_active_unmuted_voice() {
             transmit_enabled: true,
             use_voice_activity: true,
             noise_suppression: true,
+            microphone_buffer_ms: None,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::new(40),
         })
@@ -146,6 +147,7 @@ fn voice_runtime_capture_gate_requires_allowed_active_unmuted_voice() {
             transmit_enabled: false,
             use_voice_activity: true,
             noise_suppression: true,
+            microphone_buffer_ms: None,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::new(40),
         })
@@ -167,6 +169,7 @@ fn voice_runtime_capture_gate_requires_allowed_active_unmuted_voice() {
             transmit_enabled: false,
             use_voice_activity: true,
             noise_suppression: true,
+            microphone_buffer_ms: None,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::new(40),
         })
@@ -190,6 +193,7 @@ fn voice_runtime_capture_gate_requires_allowed_active_unmuted_voice() {
             transmit_enabled: false,
             use_voice_activity: true,
             noise_suppression: true,
+            microphone_buffer_ms: None,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::new(40),
         })
@@ -236,6 +240,7 @@ fn voice_runtime_push_to_talk_transmits_only_while_pressed() {
             transmit_enabled: false,
             use_voice_activity: false,
             noise_suppression: false,
+            microphone_buffer_ms: None,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::default(),
         })
@@ -249,6 +254,7 @@ fn voice_runtime_push_to_talk_transmits_only_while_pressed() {
             transmit_enabled: true,
             use_voice_activity: false,
             noise_suppression: false,
+            microphone_buffer_ms: None,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::default(),
         })

@@ -182,6 +182,7 @@ pub(super) async fn connect_voice_gateway(
                             transmit_enabled: false,
                             use_voice_activity: true,
                             noise_suppression: false,
+                            microphone_buffer_ms: None,
                             microphone_sensitivity: MicrophoneSensitivityDb::default(),
                             microphone_volume: VoiceVolumePercent::default(),
                         });

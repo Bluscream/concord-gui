@@ -12,6 +12,19 @@
 //
 // See docs/REWRITE.md for the phased plan and what remains.
 
+/// Serialises the tests that read or write the global interface language.
+///
+/// `i18n::ACTIVE` is one process-wide atomic, and cargo runs tests in this
+/// binary on several threads, so a test that switches to German makes every
+/// concurrently running test that reads a translated string flaky. It is
+/// cheaper to take a lock around the handful that care than to thread a
+/// language through every view signature.
+#[cfg(test)]
+pub(crate) fn language_test_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
 mod demo;
 mod editor;
 mod http;

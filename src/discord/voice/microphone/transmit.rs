@@ -133,6 +133,8 @@ pub(crate) async fn run_voice_udp_transmit(
     let mut previous_microphone_frame_at = None;
     let mut next_stats_log_at = transmit_started_at + VOICE_TRANSMIT_STATS_LOG_INTERVAL;
     let mut local_speaking = false;
+    let mut transmit_interval = tokio::time::interval(DISCORD_OPUS_FRAME_DURATION);
+    transmit_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     let result = loop {
         tokio::select! {
@@ -173,11 +175,15 @@ pub(crate) async fn run_voice_udp_transmit(
                 }
                 sender.set_capture_gate(gate.transmit_enabled, false);
             }
-            received = pcm_rx.recv() => {
-                let Some(frame) = received else {
-                    silence_voice_transmission(&context, &mut sender, &mut transmit_stats).await;
-                    microphone_gate.reset();
-                    break Ok(());
+            _ = transmit_interval.tick() => {
+                let frame = match pcm_rx.try_recv() {
+                    Ok(frame) => frame,
+                    Err(mpsc::error::TryRecvError::Empty) => continue,
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        silence_voice_transmission(&context, &mut sender, &mut transmit_stats).await;
+                        microphone_gate.reset();
+                        break Ok(());
+                    }
                 };
                 transmit_stats.max_microphone_queue_depth = transmit_stats
                     .max_microphone_queue_depth
@@ -271,9 +277,7 @@ pub(crate) async fn run_voice_udp_transmit(
                             transmit_stats.max_microphone_queue_depth = transmit_stats
                                 .max_microphone_queue_depth
                                 .max(pcm_rx.len().saturating_add(1));
-                            if frame_age > VOICE_MIC_MAX_FRAME_AGE
-                                || pcm_rx.len().saturating_add(1) > VOICE_MIC_MAX_LIVE_FRAMES
-                            {
+                            if frame_age > VOICE_MIC_MAX_FRAME_AGE {
                                 transmit_stats.stale_microphone_frames_dropped = transmit_stats
                                     .stale_microphone_frames_dropped
                                     .saturating_add(1);

@@ -3,6 +3,7 @@ use super::*;
 #[cfg(feature = "voice-playback")]
 pub(super) struct VoiceMicrophoneCapture {
     pub(super) _stream: cpal::Stream,
+    pub(super) _processor: VoiceMicrophoneInputProcessor,
     pub(super) stats: Arc<VoiceMicrophoneCaptureStats>,
 }
 

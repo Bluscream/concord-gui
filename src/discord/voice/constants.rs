@@ -63,11 +63,19 @@ pub(super) const DISCORD_TRAILING_SILENCE_FRAMES: usize = 5;
 pub(super) const OPUS_MAX_ENCODED_FRAME_BYTES: usize = 4000;
 
 #[cfg(feature = "voice-playback")]
-pub(super) const VOICE_MIC_PCM_FRAME_QUEUE: usize = 16;
+pub(super) const VOICE_MIC_PCM_FRAME_QUEUE: usize = 32;
 #[cfg(feature = "voice-playback")]
 pub(super) const VOICE_MIC_MAX_LIVE_FRAMES: usize = 3;
 #[cfg(feature = "voice-playback")]
-pub(super) const VOICE_MIC_MAX_FRAME_AGE: Duration = Duration::from_millis(60);
+pub(super) const VOICE_MIC_INPUT_CALLBACK_QUEUE: usize = 8;
+#[cfg(feature = "voice-playback")]
+pub(super) const VOICE_MIC_MAX_FRAME_AGE: Duration = Duration::from_millis(80);
+/// How many input callbacks a second the automatic buffer aims for. Linux
+/// audio servers settle better with fewer, larger callbacks than the rest.
+#[cfg(all(feature = "voice-playback", target_os = "linux"))]
+pub(super) const VOICE_MIC_AUTOMATIC_CALLBACKS_PER_SECOND: u32 = 20;
+#[cfg(all(feature = "voice-playback", not(target_os = "linux")))]
+pub(super) const VOICE_MIC_AUTOMATIC_CALLBACKS_PER_SECOND: u32 = 100;
 #[cfg(feature = "voice-playback")]
 pub(super) const VOICE_TRANSMIT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(feature = "voice-playback")]

@@ -179,8 +179,8 @@ pub use verification::{
     GuildParticipationBlock, GuildParticipationDataGap, GuildParticipationRestriction,
 };
 pub use voice::{
-    MicrophoneSensitivityDb, VoiceAudioSettings, VoiceParticipantPlaybackSettings,
-    VoiceParticipantVolumePercent, VoiceVolumePercent,
+    MicrophoneBufferMs, MicrophoneSensitivityDb, VoiceAudioSettings,
+    VoiceParticipantPlaybackSettings, VoiceParticipantVolumePercent, VoiceVolumePercent,
 };
 pub use voice::{
     StreamCaptureTarget, StreamCaptureTargetKind, StreamCreateInfo, StreamDeleteInfo,

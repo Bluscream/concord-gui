@@ -52,7 +52,7 @@ pub(super) struct CommandDispatcher {
 }
 
 impl CommandDispatcher {
-    pub(super) fn new(client: DiscordClient) -> Self {
+    pub fn new(client: DiscordClient) -> Self {
         Self {
             client,
             attachment_preview_permits: Arc::new(Semaphore::new(
@@ -232,6 +232,7 @@ impl CommandDispatcher {
                 output_source,
                 allow_microphone_transmit,
                 noise_suppression,
+                microphone_buffer_ms,
                 microphone_sensitivity,
                 microphone_volume,
                 voice_output_volume,
@@ -251,6 +252,7 @@ impl CommandDispatcher {
                         audio_settings: VoiceAudioSettings {
                             allow_microphone_transmit,
                             noise_suppression,
+                            microphone_buffer_ms,
                             microphone_sensitivity,
                             microphone_volume,
                             voice_output_volume,
@@ -280,6 +282,7 @@ impl CommandDispatcher {
                 channel_id,
                 allow_microphone_transmit,
                 noise_suppression,
+                microphone_buffer_ms,
                 microphone_sensitivity,
                 microphone_volume,
                 voice_output_volume,
@@ -291,6 +294,7 @@ impl CommandDispatcher {
                     VoiceAudioSettings {
                         allow_microphone_transmit,
                         noise_suppression,
+                        microphone_buffer_ms,
                         microphone_sensitivity,
                         microphone_volume,
                         voice_output_volume,
@@ -1462,6 +1466,7 @@ mod tests {
             channel_id: Id::new(2),
             allow_microphone_transmit: true,
             noise_suppression: false,
+            microphone_buffer_ms: None,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::default(),
             voice_output_volume: VoiceVolumePercent::default(),
@@ -1479,6 +1484,7 @@ mod tests {
             output_source: None,
             allow_microphone_transmit: true,
             noise_suppression: false,
+            microphone_buffer_ms: None,
             microphone_sensitivity: MicrophoneSensitivityDb::default(),
             microphone_volume: VoiceVolumePercent::default(),
             voice_output_volume: VoiceVolumePercent::default(),

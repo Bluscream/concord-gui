@@ -150,9 +150,23 @@ fn fake_outbound_trailing_silence_uses_dave_policy() {
 #[test]
 fn microphone_capture_stats_track_callback_size_and_clipping() {
     let stats = VoiceMicrophoneCaptureStats::default();
+    let first_captured_at = stats.started_at + Duration::from_millis(10);
+    let second_captured_at = first_captured_at + Duration::from_millis(10);
 
-    record_voice_input_chunk(960, 2, &stats);
-    record_voice_input_chunk(480, 2, &stats);
+    record_voice_input_chunk(
+        960,
+        2,
+        first_captured_at,
+        first_captured_at + Duration::from_millis(10),
+        &stats,
+    );
+    record_voice_input_chunk(
+        480,
+        2,
+        second_captured_at,
+        second_captured_at + Duration::from_millis(5),
+        &stats,
+    );
     record_voice_input_pcm_stats(&[0, i16::MAX, i16::MIN + 1, 120], &stats);
 
     assert_eq!(stats.chunks.load(Ordering::Relaxed), 2);
@@ -295,7 +309,7 @@ fn microphone_pcm_frames_count_full_queue_drops() {
         VoiceMicrophonePcmFrames::new(tx, Arc::clone(&stats), DISCORD_VOICE_SAMPLE_RATE);
     let samples = vec![1i16; DISCORD_OPUS_20MS_STEREO_SAMPLES * 2];
 
-    frames.push_stereo_samples(&samples);
+    frames.push_stereo_samples(&samples, Instant::now());
 
     assert_eq!(
         rx.try_recv()
@@ -321,7 +335,7 @@ fn microphone_pcm_frames_resample_44100_to_48000() {
         samples.push(-(index as i16));
     }
 
-    frames.push_stereo_samples(&samples);
+    frames.push_stereo_samples(&samples, Instant::now());
     let frame = rx
         .try_recv()
         .expect("resampled 20 ms frame should be queued");
@@ -371,11 +385,18 @@ fn voice_audio_source_watch_retains_only_the_latest_selection() {
 
 #[cfg(feature = "voice-playback")]
 #[test]
-fn voice_input_buffer_size_lets_the_host_negotiate() {
-    // Upstream v2.5.19 (#356) stopped asking for a small fixed callback: a
-    // reported range does not mean the device and audio server can hold it,
-    // and the ones that cannot produced dropouts rather than an error.
-    assert_eq!(voice_input_buffer_size(), cpal::BufferSize::Default);
+fn voice_input_buffer_size_follows_the_requested_milliseconds() {
+    // v2.5.19 (#356) stopped asking for a small fixed callback, and v2.5.20
+    // (#363) replaced the adaptive recovery with an explicit setting: a user
+    // who names a buffer length gets exactly that many frames.
+    assert_eq!(
+        voice_input_buffer_size(MicrophoneBufferMs::new(20), DISCORD_VOICE_SAMPLE_RATE),
+        cpal::BufferSize::Fixed(960)
+    );
+    assert_eq!(
+        voice_input_buffer_size(MicrophoneBufferMs::new(10), DISCORD_VOICE_SAMPLE_RATE),
+        cpal::BufferSize::Fixed(480)
+    );
 }
 
 #[cfg(feature = "voice-playback")]
