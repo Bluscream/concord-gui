@@ -324,6 +324,7 @@ cmd_merge() {
 
     remap_relocated "$base" "$target"
     cmd_finish
+    divergence_report "$base"
     split_report "$base" "$target"
 
     local left
@@ -344,6 +345,47 @@ cmd_merge() {
     echo "is not merged until it exists in crates/gui too. The merge cannot tell you"
     echo "that; read the upstream log for what arrived:"
     echo "     git log --oneline $(base_rev)..$UPSTREAM_REMOTE/$MIRROR_BRANCH"
+}
+
+# How far each conflicted file has actually drifted from upstream.
+#
+# "The fork barely touches crates/tui" is true in aggregate - four commits -
+# and useless per file. On v2.5.10, most of that tree was upstream's own code
+# on both sides and wanted theirs; state/tests/leader_actions.rs differed by
+# 1,170 lines and taking theirs threw away a whole fork type. Seventeen
+# compile errors, all from one heuristic applied without measuring.
+#
+# So measure. The number here is our file against upstream's at the merge
+# base, with the import rewrite applied first so the move is not counted as
+# drift. Small means upstream's copy is the file and theirs is usually right.
+# Large means the fork has put work in and every hunk wants reading.
+divergence_report() {
+    local base="$1" f up tmp ours theirs n
+
+    tmp="$(mktemp -d)"
+    ours="$tmp/ours"; theirs="$tmp/theirs"
+
+    echo
+    echo "How far each conflicted file has drifted from upstream:"
+    while IFS= read -r f; do
+        up=""
+        [[ "$f" == crates/tui/src/tui/* ]] && up="src/tui/${f#crates/tui/src/tui/}"
+        [[ -n "$up" ]] || continue
+        git cat-file -e "$base:$up" 2>/dev/null || continue
+
+        git show ":2:$f" >| "$ours" 2>/dev/null || continue
+        git show "$base:$up" | sed -E "s/\b$REWRITE_RE/concord::\1/g" >| "$theirs"
+        n="$(diff "$ours" "$theirs" | grep -c '^[<>]' || true)"
+
+        if [[ "${n:-0}" -le 20 ]]; then
+            printf '  %-56s %5s lines - upstream\047s file, theirs is usually right\n' "$f" "${n:-0}"
+        else
+            printf '  %-56s %5s lines - WE HAVE WORK IN HERE, read every hunk\n' "$f" "${n:-0}"
+        fi
+    done < <(git diff --name-only --diff-filter=U | sort -u)
+
+    rm -rf "$tmp"
+    return 0
 }
 
 # Say which conflicts are file splits, because those are the expensive ones.

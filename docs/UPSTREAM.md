@@ -170,9 +170,17 @@ There are only five.
 
 ### `UU` - both modified
 
-The ordinary case, and the majority. Take both sides. Upstream's change is
-usually a bug fix in code we also restructured; our change is usually the
-restructuring. Keep our structure, apply their fix inside it.
+The ordinary case, and the majority. Which side to prefer depends on how far
+that *file* has drifted, not on how far the tree has - `merge` prints the
+number for every conflicted file under `crates/tui`.
+
+Under about twenty lines, our copy is upstream's file plus the import rewrite,
+and theirs is usually right. Above it the fork has put work in, and every hunk
+wants reading: `state/tests/leader_actions.rs` differs by 1,170 lines, and
+taking theirs there deleted a fork type and cost seventeen compile errors.
+
+Where both sides have really changed, keep our structure and apply their fix
+inside it.
 
 ### `UA` / `AU` - one side added
 
