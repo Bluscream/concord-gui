@@ -502,11 +502,20 @@ cmd_finish() {
 # flat form is a substitution rewrite_imports can do; this one is not, and it
 # arrived as a compile error at every merge until it was automated.
 split_crate_imports() {
-    local files
+    local files clean=() f
     files="$(git diff --name-only --diff-filter=ACMU HEAD -- 'crates/*.rs' | sort -u)"
     [[ -n "$files" ]] || return 0
-    # shellcheck disable=SC2086  # deliberate word splitting: one path per arg
-    python3 "$REPO/scripts/split-crate-imports.py" $files >/dev/null 2>&1 || true
+    # Skip anything still conflicted, as rewrite_imports does. A conflict
+    # marker sits inside the brace group this pass rewrites, so it was read as
+    # one more import and emitted into the middle of a statement - turning a
+    # conflict you could still resolve into a file neither side recognised.
+    while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
+        grep -q '^<<<<<<<' "$f" && continue
+        clean+=("$f")
+    done <<<"$files"
+    [[ "${#clean[@]}" -gt 0 ]] || return 0
+    python3 "$REPO/scripts/split-crate-imports.py" "${clean[@]}" >/dev/null 2>&1 || true
     return 0
 }
 
@@ -695,13 +704,20 @@ cmd_gate() {
     # warnings that matter: imports left behind by a resolution, variables
     # orphaned by a field upstream deleted. A lenient gate passed twelve of
     # those on v2.5.10 that CI would have rejected.
+    #
+    # `--workspace` on the test step, and `-p concord-tui` named explicitly.
+    # A bare `cargo test` at the root resolves to the `concord` package alone,
+    # so `crates/tui` - which holds the relocated half of upstream's test
+    # suite, over a thousand tests - was never run. Four of them were failing
+    # across v2.5.12 to v2.5.15 and this gate reported clean every time.
     local step
     for step in \
         "cargo fmt --all -- --check" \
         "cargo clippy --workspace --all-targets --features fixtures -j $jobs -- -D warnings" \
         "cargo clippy -p concord --all-targets -j $jobs -- -D warnings" \
-        "cargo test --features fixtures -j $jobs" \
+        "cargo test --workspace --features fixtures -j $jobs" \
         "cargo test -p concord-gui --features fixtures -j $jobs" \
+        "cargo test -p concord-tui --features fixtures -j $jobs" \
         "cargo test -p concord -j $jobs"
     do
         info "$step"

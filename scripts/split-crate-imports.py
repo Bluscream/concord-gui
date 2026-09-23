@@ -49,7 +49,13 @@ def split_entries(body):
 
 
 def rewrite(path):
-    lines = path.read_text().splitlines(keepends=True)
+    text = path.read_text()
+    # A conflict marker sits inside the very brace group this rewrites, so it
+    # would be read as one more import and emitted into the middle of a
+    # statement. Refuse the file; it is not resolved yet.
+    if "\n<<<<<<<" in text or text.startswith("<<<<<<<"):
+        raise ValueError("file still has conflict markers")
+    lines = text.splitlines(keepends=True)
     out, i, changed = [], 0, 0
     while i < len(lines):
         if not START.match(lines[i]):
@@ -103,7 +109,11 @@ def main():
         path = pathlib.Path(name)
         if not path.is_file():
             continue
-        split = rewrite(path)
+        try:
+            split = rewrite(path)
+        except (OSError, ValueError) as error:
+            print(f"{path}: skipped ({error})", file=sys.stderr)
+            continue
         if split:
             print(f"{path}: split {split} grouped import(s)")
         total += split

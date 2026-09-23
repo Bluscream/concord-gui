@@ -1020,7 +1020,11 @@ fn current_user_profile_settings_viewport_and_feedback_contract() {
     for _ in 0..5 {
         state.next_user_profile_settings_field();
     }
-    assert!(state.save_user_profile_settings_command().is_some());
+    // Saving your own profile is one of the actions this fork holds behind a
+    // risk warning, so the first call returns nothing and raises the prompt.
+    assert!(state.save_user_profile_settings_command().is_none());
+    assert!(state.is_active_modal_popup(crate::tui::state::ActiveModalPopupKind::RiskWarning));
+    assert!(state.confirm_risk_warning().is_some());
     state.record_user_profile_update_failed(user_id, None, "profile validation rejected the value");
     let failed_dump = render_dashboard_dump(100, 14, &mut state).join("\n");
     assert!(

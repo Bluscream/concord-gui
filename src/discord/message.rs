@@ -406,9 +406,13 @@ pub struct StickerInfo {
     pub id: Id<crate::discord::ids::marker::StickerMarker>,
     pub name: String,
     pub format: StickerFormat,
-    /// CDN URL, stored rather than derived so it can be borrowed by an
-    /// inline preview. Empty for formats with no image, such as Lottie.
-    pub url: String,
+    /// Sticker URL, stored rather than derived so it can be borrowed by an
+    /// inline preview. `None` only if Discord ever serves a format with no
+    /// image at all.
+    pub url: Option<String>,
+    /// Media-proxy URL for the same sticker, sized for a preview. `None` for
+    /// Lottie, which the proxy does not resize.
+    pub proxy_url: Option<String>,
 }
 
 #[cfg(any(test, feature = "fixtures"))]
@@ -420,29 +424,51 @@ impl StickerInfo {
 }
 
 impl StickerInfo {
-    /// Build one, deriving the CDN URL from the id and format.
+    /// Build one, deriving both URLs from the id and format.
     pub fn new(
         id: Id<crate::discord::ids::marker::StickerMarker>,
         name: impl Into<String>,
         format: StickerFormat,
     ) -> Self {
-        let url = if format.is_image() {
-            format!(
-                "https://media.discordapp.net/stickers/{}.{}",
-                id.get(),
-                format.extension()
-            )
-        } else {
-            String::new()
-        };
+        let (url, proxy_url) = sticker_preview_urls(id, format);
         Self {
             id,
             name: name.into(),
             format,
             url,
+            proxy_url,
         }
     }
 }
+
+/// Discord serves stickers two ways, and which one you want depends on the
+/// format. Lottie is a vector animation the media proxy will not resize, so it
+/// comes from the CDN at its own address; everything else goes through the
+/// proxy at preview size, with `passthrough` deciding whether an animated
+/// sticker keeps its frames.
+fn sticker_preview_urls(
+    id: Id<crate::discord::ids::marker::StickerMarker>,
+    format: StickerFormat,
+) -> (Option<String>, Option<String>) {
+    let extension = format.extension();
+    if format == StickerFormat::Lottie {
+        return (Some(format!("{STICKER_CDN_BASE}/{id}.{extension}")), None);
+    }
+    let passthrough = if format.is_animated() {
+        "true"
+    } else {
+        "false"
+    };
+    let proxy_url = format!(
+        "{STICKER_MEDIA_PROXY_BASE}/{id}.{extension}?size={STICKER_PREVIEW_SIZE}&passthrough={passthrough}"
+    );
+    (Some(proxy_url.clone()), Some(proxy_url))
+}
+
+const STICKER_MEDIA_PROXY_BASE: &str = "https://media.discordapp.net/stickers";
+const STICKER_CDN_BASE: &str = "https://cdn.discordapp.com/stickers";
+const STICKER_PREVIEW_SIZE: u64 = 160;
+const STICKER_NATIVE_PIXEL_SIZE: u64 = 320;
 
 /// Discord's sticker `format_type`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -503,6 +529,10 @@ impl StickerFormat {
         !matches!(self, Self::Lottie)
     }
 
+    pub const fn is_animated(self) -> bool {
+        matches!(self, Self::Apng | Self::Gif)
+    }
+
     pub const fn extension(self) -> &'static str {
         match self {
             Self::Png | Self::Apng => "png",
@@ -515,29 +545,29 @@ impl StickerFormat {
 impl StickerInfo {
     /// A sticker as an inline preview, so it renders where images do.
     ///
-    /// Lottie stickers return `None`: they are vector animations, and no front
-    /// end here can play one, so they fall back to the name instead of showing
-    /// a broken image.
+    /// Lottie included: it is a vector animation no front end here can play,
+    /// but it still has an address, and the media layer decides what to do
+    /// with a format it cannot decode.
     pub fn inline_preview_info(&self) -> Option<InlinePreviewInfo<'_>> {
-        self.format.is_image().then_some(InlinePreviewInfo {
-            url: self.url.as_str(),
-            proxy_url: None,
+        Some(InlinePreviewInfo {
+            url: self.url.as_deref()?,
+            proxy_url: self.proxy_url.as_deref(),
             filename: self.name.as_str(),
-            // Discord renders stickers at 160 square. Sending the real size
-            // lets a terminal reserve the right number of cells before the
-            // image arrives, rather than reflowing when it does.
-            width: Some(160),
-            height: Some(160),
+            // Discord renders stickers at 320 square natively. Sending the
+            // real size lets a terminal reserve the right number of cells
+            // before the image arrives, rather than reflowing when it does.
+            width: Some(STICKER_NATIVE_PIXEL_SIZE),
+            height: Some(STICKER_NATIVE_PIXEL_SIZE),
             accent_color: None,
-            animated: matches!(self.format, StickerFormat::Apng | StickerFormat::Gif),
+            animated: self.format.is_animated(),
             proxy_preview_only: false,
             show_play_marker: false,
         })
     }
 
-    /// CDN URL for the sticker image, if it has one.
+    /// URL for the sticker image, if it has one.
     pub fn image_url(&self) -> Option<String> {
-        (!self.url.is_empty()).then(|| self.url.clone())
+        self.url.clone()
     }
 }
 
@@ -1419,29 +1449,47 @@ fn filename_has_extension(filename: &str, extensions: &[&str]) -> bool {
 mod sticker_tests {
     use super::*;
 
+    fn url_of(sticker: &StickerInfo) -> &str {
+        sticker.url.as_deref().expect("a sticker should have a URL")
+    }
+
     #[test]
     fn a_sticker_url_matches_its_format() {
         let png = StickerInfo::new(Id::new(1), "wave".to_owned(), StickerFormat::Png);
-        assert!(png.url.ends_with("/1.png"));
+        assert!(url_of(&png).contains("/1.png?"));
 
         // APNG is served as .png: the extension is the container, not the
         // animation, and asking for .apng returns nothing.
         let apng = StickerInfo::new(Id::new(2), "spin".to_owned(), StickerFormat::Apng);
-        assert!(apng.url.ends_with("/2.png"));
+        assert!(url_of(&apng).contains("/2.png?"));
 
         let gif = StickerInfo::new(Id::new(3), "dance".to_owned(), StickerFormat::Gif);
-        assert!(gif.url.ends_with("/3.gif"));
+        assert!(url_of(&gif).contains("/3.gif?"));
     }
 
     #[test]
-    fn a_lottie_sticker_has_no_image() {
-        // A vector animation neither front end can play. It must not produce
-        // a preview, or both would show a broken image where a name belongs.
+    fn only_animated_stickers_ask_the_proxy_to_pass_frames_through() {
+        // `passthrough=false` lets the media proxy flatten to a still. Asking
+        // for it on a GIF would drop the animation the sticker exists for.
+        let png = StickerInfo::new(Id::new(1), "wave".to_owned(), StickerFormat::Png);
+        assert!(url_of(&png).ends_with("?size=160&passthrough=false"));
+
+        let gif = StickerInfo::new(Id::new(3), "dance".to_owned(), StickerFormat::Gif);
+        assert!(url_of(&gif).ends_with("?size=160&passthrough=true"));
+    }
+
+    #[test]
+    fn a_lottie_sticker_comes_from_the_cdn_unproxied() {
+        // A vector animation. The media proxy will not resize it, so it has
+        // its own CDN address and no proxy URL at all.
         let lottie = StickerInfo::new(Id::new(4), "bounce".to_owned(), StickerFormat::Lottie);
 
-        assert!(lottie.url.is_empty());
-        assert!(lottie.image_url().is_none());
-        assert!(lottie.inline_preview_info().is_none());
+        assert_eq!(
+            url_of(&lottie),
+            "https://cdn.discordapp.com/stickers/4.json"
+        );
+        assert!(lottie.proxy_url.is_none());
+        assert!(lottie.image_url().is_some());
     }
 
     #[test]
@@ -1453,9 +1501,9 @@ mod sticker_tests {
 
         // Sent so a terminal can reserve cells before the image arrives,
         // rather than reflowing the log when it does.
-        assert_eq!(preview.width, Some(160));
-        assert_eq!(preview.height, Some(160));
-        assert_eq!(preview.url, sticker.url);
+        assert_eq!(preview.width, Some(320));
+        assert_eq!(preview.height, Some(320));
+        assert_eq!(Some(preview.url), sticker.url.as_deref());
         assert!(!preview.animated);
     }
 }

@@ -354,6 +354,12 @@ image_preview_quality = "balanced"
 # Attachment viewer quality: efficient, balanced, high, or original.
 attachment_viewer_quality = "original"
 
+# Which animated GIF and WebP previews keep playing: always, selected, or never.
+# Each animated frame rebuilds a terminal graphics protocol, so "always" costs
+# roughly 8% of a CPU core per animated preview on screen. Custom emoji animate
+# regardless; theirs are small enough not to matter.
+animate_previews = "always"
+
 # Render custom Discord emoji as images when possible.
 show_custom_emoji = true
 
@@ -388,13 +394,13 @@ desktop_notifications = true
 # Optional notification icon to include in notifications. May not work on all platforms.
 # When unset, no icon is used. It must either be a name of an icon (typically in /usr/share/icons)
 # or a path to an icon.
-notification_icon = "/path/to/icon.svg"
+# notification_icon = "/path/to/icon.svg"
 
 # Optional WAV files for message, voice join/leave notification sounds.
 # When unset, Concord uses built-in generated tones.
-notification_sound = "/path/to/message.wav"
-voice_join_sound = "/path/to/join.wav"
-voice_leave_sound = "/path/to/leave.wav"
+# notification_sound = "/path/to/message.wav"
+# voice_join_sound = "/path/to/join.wav"
+# voice_leave_sound = "/path/to/leave.wav"
 
 [voice]
 # Join or update Discord voice with Concord self-muted.
@@ -930,6 +936,10 @@ bold = true
 
 [highlight.InlineCode]
 foreground = "#FFA500"
+
+[highlight.InlineTimestamp]
+foreground = "#DBDEE1"
+background = "#3B3C43"
 
 [highlight.MessageLink]
 foreground = "cyan"

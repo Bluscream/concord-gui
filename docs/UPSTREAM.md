@@ -192,6 +192,15 @@ Rename detection tuned to 25%, which on the trial merge turned seven
 delete/modify conflicts back into ordinary content conflicts without
 misattributing any.
 
+**Every automated pass skips a file that still has conflict markers.** This
+is not a nicety. A marker sits inside the very brace group the import passes
+rewrite, so a pass that does not check reads `>>>>>>> v2.5.16` as one more
+import and emits it into the middle of a statement - turning a conflict you
+could still resolve by hand into a file neither side recognises, with the
+marker gone so nothing warns you. `split-crate-imports.py` did exactly that to
+three files on v2.5.16. `git checkout -m -- <file>` recreates the conflict from
+the index and is the way back.
+
 **`finish` tells you where you stand.** It ends by printing the remaining
 compile errors, because the alternative was running cargo yourself to find out
 whether the pass that was supposed to save you that had worked.

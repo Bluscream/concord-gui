@@ -31,6 +31,7 @@ pub struct DisplayOptions {
     pub image_preview_quality: ImagePreviewQualityPreset,
     pub attachment_viewer_quality: ImagePreviewQualityPreset,
     pub image_protocol: ImageProtocolPreference,
+    pub animate_previews: AnimatePreviews,
     pub show_custom_emoji: bool,
     pub circular_avatars: bool,
     pub hour_format_24: bool,
@@ -617,6 +618,7 @@ define_highlight_groups! {
     MessageAttachment => "MessageAttachment",
     ImageOverflow => "ImageOverflow",
     InlineCode => "InlineCode",
+    InlineTimestamp => "InlineTimestamp",
     MessageLink => "MessageLink",
     MentionSelf => "MentionSelf",
     MentionOther => "MentionOther",
@@ -737,6 +739,37 @@ pub enum ImagePreviewQualityPreset {
     Original,
 }
 
+/// How much of an animated preview keeps moving. Every animation frame costs a
+/// fresh terminal graphics protocol (~4ms and ~1.3MB for a message-pane
+/// preview), so animating each one on screen is what makes a busy channel
+/// expensive. Emoji are excluded: theirs cost ~87us and stay animated.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AnimatePreviews {
+    #[default]
+    Always,
+    Selected,
+    Never,
+}
+
+impl AnimatePreviews {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Always => "always",
+            Self::Selected => "selected",
+            Self::Never => "never",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Always => Self::Selected,
+            Self::Selected => Self::Never,
+            Self::Never => Self::Always,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ImageProtocolPreference {
@@ -801,6 +834,7 @@ impl Default for DisplayOptions {
             media_playback: false,
             image_preview_quality: ImagePreviewQualityPreset::default(),
             attachment_viewer_quality: ImagePreviewQualityPreset::Original,
+            animate_previews: AnimatePreviews::default(),
             image_protocol: ImageProtocolPreference::default(),
             show_custom_emoji: true,
             circular_avatars: false,

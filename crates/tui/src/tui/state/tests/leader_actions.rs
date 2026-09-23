@@ -109,7 +109,7 @@ fn channel_action_menu_show_threads_opens_thread_list_view() {
 }
 
 #[test]
-fn channel_thread_list_view_fetches_and_sections_active_and_archived_threads() {
+fn channel_thread_list_view_sections_active_threads_only() {
     use crate::tui::state::MessagePaneSource;
 
     let guild_id = Id::new(1);
@@ -136,14 +136,13 @@ fn channel_thread_list_view_fetches_and_sections_active_and_archived_threads() {
         state.message_pane_source(),
         Some(MessagePaneSource::ChannelThreads { channel_id })
     );
-    // The open view is now the fetch target, so the scheduler issues the
-    // `/threads/search` request for this non-forum channel.
-    // v2.5.10 dropped the paged loader, so there is no "with load more" any
-    // more - the open view is simply the selected forum channel.
-    assert_eq!(state.selected_forum_channel(), Some((guild_id, channel_id)));
-
-    // v2.5.10 split this in two. Active threads arrive as ordinary channel
-    // upserts; only the archive is fetched, and it comes back as a page.
+    // No fetch assertion here, and deliberately: `selected_forum_channel` is
+    // `None` for a channel thread list, because only forums are fetched. A
+    // resolution during the v2.5.10 merge asserted the opposite, which was
+    // wrong on both sides - upstream does not claim it either.
+    //
+    // Active threads arrive as ordinary channel upserts; only the archive is
+    // fetched, and it comes back as a page.
     state.push_event(AppEvent::ChannelUpsert(ChannelInfo {
         name: "active thread".to_owned(),
         ..thread_channel_info(guild_id, channel_id, Id::new(30), "active thread")
@@ -164,16 +163,17 @@ fn channel_thread_list_view_fetches_and_sections_active_and_archived_threads() {
         },
     });
 
+    // Only the active section. An "Archived threads" section is built for
+    // forums alone, both here and upstream, so the page above is ignored -
+    // which is worth asserting, because a resolution during the v2.5.10 merge
+    // claimed the opposite and nothing ran this test for four releases.
     let cards = state.visible_thread_card_items();
     assert_eq!(
         cards
             .iter()
             .map(|card| (card.label.as_str(), card.section_label.as_deref()))
             .collect::<Vec<_>>(),
-        vec![
-            ("active thread", Some("Active threads")),
-            ("archived thread", Some("Archived threads")),
-        ]
+        vec![("active thread", Some("Active threads"))]
     );
 }
 

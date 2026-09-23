@@ -2,7 +2,7 @@ use ratatui::style::{Color, Style};
 use unicode_width::UnicodeWidthStr;
 
 use crate::tui::{
-    message::time::format_rfc3339_local_time,
+    message::time::{format_rfc3339_local_time, render_discord_timestamps},
     text::{RenderedText, replace_custom_emoji_markup_in_rendered_with_images},
     theme,
 };
@@ -62,6 +62,7 @@ fn format_embed(
         &mut lines,
         provider.as_deref(),
         show_custom_emoji,
+        hour_format_24,
         inner_width,
         embed_provider_style(),
         loaded_custom_emoji_urls,
@@ -71,6 +72,7 @@ fn format_embed(
         &mut lines,
         author.as_deref(),
         show_custom_emoji,
+        hour_format_24,
         inner_width,
         embed_author_style(),
         loaded_custom_emoji_urls,
@@ -79,6 +81,7 @@ fn format_embed(
         &mut lines,
         embed.title.as_deref(),
         show_custom_emoji,
+        hour_format_24,
         inner_width,
         embed_title_style(),
         loaded_custom_emoji_urls,
@@ -88,6 +91,7 @@ fn format_embed(
         &mut lines,
         description.as_deref(),
         show_custom_emoji,
+        hour_format_24,
         inner_width,
         Style::default(),
         loaded_custom_emoji_urls,
@@ -96,6 +100,7 @@ fn format_embed(
         &mut lines,
         embed,
         show_custom_emoji,
+        hour_format_24,
         inner_width,
         loaded_custom_emoji_urls,
     );
@@ -117,6 +122,7 @@ fn format_embed(
             &mut lines,
             Some(&format!("[{kind}: {description}]")),
             show_custom_emoji,
+            hour_format_24,
             inner_width,
             embed_footer_style(),
             loaded_custom_emoji_urls,
@@ -127,6 +133,7 @@ fn format_embed(
         &mut lines,
         footer.as_deref(),
         show_custom_emoji,
+        hour_format_24,
         inner_width,
         embed_footer_style(),
         loaded_custom_emoji_urls,
@@ -142,6 +149,7 @@ fn format_embed(
             &mut lines,
             Some(url),
             show_custom_emoji,
+            hour_format_24,
             inner_width,
             embed_url_style(),
             loaded_custom_emoji_urls,
@@ -170,6 +178,7 @@ fn push_embed_fields(
     lines: &mut Vec<MessageContentLine>,
     embed: &EmbedInfo,
     show_custom_emoji: bool,
+    hour_format_24: bool,
     width: usize,
     loaded_custom_emoji_urls: &[String],
 ) {
@@ -197,6 +206,7 @@ fn push_embed_fields(
                 lines,
                 Some(&row),
                 show_custom_emoji,
+                hour_format_24,
                 width,
                 embed_field_name_style(),
                 loaded_custom_emoji_urls,
@@ -210,6 +220,7 @@ fn push_embed_fields(
             lines,
             Some(field.name.as_str()),
             show_custom_emoji,
+            hour_format_24,
             width,
             embed_field_name_style(),
             loaded_custom_emoji_urls,
@@ -218,6 +229,7 @@ fn push_embed_fields(
             lines,
             Some(field.value.as_str()),
             show_custom_emoji,
+            hour_format_24,
             width,
             Style::default(),
             loaded_custom_emoji_urls,
@@ -333,6 +345,7 @@ fn push_embed_text(
     lines: &mut Vec<MessageContentLine>,
     value: Option<&str>,
     show_custom_emoji: bool,
+    hour_format_24: bool,
     width: usize,
     style: Style,
     loaded_custom_emoji_urls: &[String],
@@ -342,14 +355,14 @@ fn push_embed_text(
     };
     // Skip the mention pass. Embeds never carry user mentions but custom
     // emojis in title/fields/footer must still produce slots.
-    let rendered = replace_custom_emoji_markup_in_rendered_with_images(
+    let rendered = render_discord_timestamps(
         RenderedText {
             text: value.to_owned(),
-            highlights: Vec::new(),
-            emoji_slots: Vec::new(),
+            ..RenderedText::default()
         },
-        show_custom_emoji,
+        hour_format_24,
     );
+    let rendered = replace_custom_emoji_markup_in_rendered_with_images(rendered, show_custom_emoji);
     lines.extend(wrap_rendered_text_lines_with_loaded_custom_emoji_urls(
         rendered,
         width,

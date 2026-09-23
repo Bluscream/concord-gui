@@ -450,6 +450,108 @@ fn components_v2_message_renders_text_layout_and_link_fallback() {
 }
 
 #[test]
+fn components_v2_text_renders_discord_timestamp_markup() {
+    let timestamp = 1_735_689_600;
+    let expected = chrono::DateTime::from_timestamp(timestamp, 0)
+        .expect("static timestamp is valid")
+        .with_timezone(&chrono::Local)
+        .format("%H:%M")
+        .to_string();
+    let message = MessageState {
+        flags: MESSAGE_FLAG_IS_COMPONENTS_V2,
+        components: vec![MessageComponentInfo::TextDisplay {
+            content: format!("Starts <t:{timestamp}:t>"),
+        }],
+        ..MessageState::default()
+    };
+
+    assert_eq!(
+        line_texts(&format_message_content_lines(
+            &message,
+            &DashboardState::new(),
+            80,
+        )),
+        vec![format!("Starts {expected}")]
+    );
+}
+
+#[test]
+fn rendered_discord_timestamp_is_distinct_from_identical_plain_text() {
+    let timestamp = 1_735_689_600;
+    let expected = chrono::DateTime::from_timestamp(timestamp, 0)
+        .expect("static timestamp is valid")
+        .with_timezone(&chrono::Local)
+        .format("%H:%M")
+        .to_string();
+    let message = message_with_content(Some(format!("Discord <t:{timestamp}:t> plain {expected}")));
+
+    let lines = format_message_content_lines(&message, &DashboardState::new(), 80);
+    let spans = lines[0].spans();
+    let timestamp_style = theme::current().style(theme::HighlightGroup::InlineTimestamp);
+
+    assert_eq!(spans[1].content.as_ref(), expected);
+    assert_eq!(spans[1].style, timestamp_style);
+    assert_eq!(spans[2].content.as_ref(), format!(" plain {expected}"));
+    assert_ne!(spans[2].style.bg, timestamp_style.bg);
+}
+
+#[test]
+fn timestamp_markup_inside_a_resolved_mention_name_remains_literal() {
+    let timestamp = 1_735_689_600;
+    let markup = format!("<t:{timestamp}:t>");
+    let message = message_with_content(Some("<@10>".to_owned()));
+    let state = state_with_member(10, &markup);
+
+    let lines = format_message_content_lines(&message, &state, 80);
+    let spans = lines[0].spans();
+
+    assert_eq!(line_texts(&lines), vec![format!("@{markup}")]);
+    assert_eq!(spans.len(), 1);
+    assert_eq!(
+        spans[0].style.bg,
+        text_highlight_style(TextHighlightKind::OtherMention).bg
+    );
+    assert_ne!(
+        spans[0].style.bg,
+        theme::current()
+            .style(theme::HighlightGroup::InlineTimestamp)
+            .bg
+    );
+}
+
+#[test]
+fn message_timestamps_remain_literal_inside_markdown_code() {
+    let timestamp = 1_735_689_600;
+    let message = message_with_content(Some(format!(
+        "outside <t:{timestamp}:d>\ninline `<t:{timestamp}:d>`\n```text\n<t:{timestamp}:d>\n```"
+    )));
+
+    let lines = format_message_content_lines(&message, &DashboardState::new(), 80);
+    let timestamp_markup = format!("<t:{timestamp}:d>");
+
+    assert_eq!(
+        line_texts(&lines)
+            .iter()
+            .filter(|line| line.contains(&timestamp_markup))
+            .count(),
+        2
+    );
+    assert!(line_texts(&lines)[0].starts_with("outside "));
+    assert!(!line_texts(&lines)[0].contains("<t:"));
+    let timestamp_background = theme::current()
+        .style(theme::HighlightGroup::InlineTimestamp)
+        .bg;
+    assert_eq!(
+        lines
+            .iter()
+            .flat_map(MessageContentLine::spans)
+            .filter(|span| span.style.bg == timestamp_background)
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn attachment_summary_uses_own_accent_line_after_text_content() {
     let message = message_with_attachment(Some("look".to_owned()), image_attachment());
     let lines = format_message_content_lines(&message, &DashboardState::new(), 200);
@@ -872,7 +974,7 @@ fn message_content_applies_supported_markdown_formatting() {
         .expect("mention span should survive quote formatting");
     assert_eq!(
         mention.style.fg,
-        mention_highlight_style(TextHighlightKind::OtherMention).fg
+        text_highlight_style(TextHighlightKind::OtherMention).fg
     );
 
     let emoji = message_with_content(Some("- <:party:99> party".to_owned()));
@@ -906,7 +1008,7 @@ fn message_content_applies_supported_markdown_formatting() {
     assert!(mention_span.style.add_modifier.contains(Modifier::BOLD));
     assert_eq!(
         mention_span.style.fg,
-        mention_highlight_style(TextHighlightKind::OtherMention).fg
+        text_highlight_style(TextHighlightKind::OtherMention).fg
     );
 
     let emoji = message_with_content(Some("**<:party:99>**".to_owned()));
@@ -1210,7 +1312,7 @@ fn message_content_highlights_current_user_mentions() {
     assert_eq!(lines[1].spans[2].content.as_ref(), "@server alias");
     assert_eq!(
         lines[1].spans[2].style.fg,
-        mention_highlight_style(TextHighlightKind::SelfMention).fg
+        text_highlight_style(TextHighlightKind::SelfMention).fg
     );
 }
 
@@ -1245,11 +1347,11 @@ fn message_content_highlights_other_user_mentions_with_softer_color() {
     assert_eq!(lines[1].spans[2].content.as_ref(), "@alice");
     assert_eq!(
         lines[1].spans[2].style.fg,
-        mention_highlight_style(TextHighlightKind::OtherMention).fg
+        text_highlight_style(TextHighlightKind::OtherMention).fg
     );
     assert_ne!(
         lines[1].spans[2].style.fg,
-        mention_highlight_style(TextHighlightKind::SelfMention).fg,
+        text_highlight_style(TextHighlightKind::SelfMention).fg,
         "other-user mentions must not look like a self-mention notification"
     );
 }
@@ -1272,7 +1374,7 @@ fn message_content_highlights_detected_urls() {
     );
     assert_eq!(
         lines[0].spans()[1].style.fg,
-        mention_highlight_style(TextHighlightKind::Url).fg
+        text_highlight_style(TextHighlightKind::Url).fg
     );
     assert!(
         lines[0].spans()[1]
@@ -1332,7 +1434,7 @@ fn message_content_highlights_broadcast_mentions_for_current_user() {
         assert_eq!(lines[1].spans[2].content.as_ref(), keyword);
         assert_eq!(
             lines[1].spans[2].style.fg,
-            mention_highlight_style(TextHighlightKind::SelfMention).fg
+            text_highlight_style(TextHighlightKind::SelfMention).fg
         );
     }
 }
@@ -1367,11 +1469,11 @@ fn message_content_highlights_mixed_everyone_and_direct_mentions_in_order() {
     assert_eq!(lines[1].spans[3].content.as_ref(), "@neo");
     assert_eq!(
         lines[1].spans[1].style.fg,
-        mention_highlight_style(TextHighlightKind::SelfMention).fg
+        text_highlight_style(TextHighlightKind::SelfMention).fg
     );
     assert_eq!(
         lines[1].spans[3].style.fg,
-        mention_highlight_style(TextHighlightKind::SelfMention).fg
+        text_highlight_style(TextHighlightKind::SelfMention).fg
     );
 }
 
@@ -1463,7 +1565,7 @@ fn message_content_highlights_role_mentions_with_role_name() {
         .expect("resolved role mention should have its own span");
     assert_eq!(
         mention.style.fg,
-        mention_highlight_style(TextHighlightKind::OtherMention).fg
+        text_highlight_style(TextHighlightKind::OtherMention).fg
     );
     assert_eq!(mention.style.bg, Some(Color::Rgb(40, 50, 92)));
 }
@@ -1550,7 +1652,7 @@ fn mention_like_display_name_does_not_duplicate_highlight_spans() {
     assert_eq!(lines[1].spans[2].content.as_ref(), "@everyone");
     assert_eq!(
         lines[1].spans[2].style.fg,
-        mention_highlight_style(TextHighlightKind::SelfMention).fg
+        text_highlight_style(TextHighlightKind::SelfMention).fg
     );
 }
 
@@ -1762,7 +1864,7 @@ fn poll_message_body_highlights_mentions_inside_box() {
     assert_eq!(spans[1].content.as_ref(), "@server alias");
     assert_eq!(
         spans[1].style.fg,
-        mention_highlight_style(TextHighlightKind::SelfMention).fg
+        text_highlight_style(TextHighlightKind::SelfMention).fg
     );
 }
 

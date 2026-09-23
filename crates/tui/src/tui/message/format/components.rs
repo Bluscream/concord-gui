@@ -1,7 +1,9 @@
 use ratatui::style::Style;
 use unicode_width::UnicodeWidthStr;
 
-use crate::tui::{state::DashboardState, text::truncate_text, theme};
+use crate::tui::{
+    message::time::render_discord_timestamps, state::DashboardState, text::truncate_text, theme,
+};
 use concord::discord::{
     AttachmentInfo, AttachmentMediaType, ComponentMediaInfo, ComponentSelectKind, MentionInfo,
     MessageComponentInfo,
@@ -118,6 +120,7 @@ fn format_component(
                 width,
                 theme::current().style(theme::HighlightGroup::MessageBody),
                 loaded_custom_emoji_urls,
+                false,
             )
         }
         MessageComponentInfo::Select {
@@ -147,6 +150,7 @@ fn format_component(
                 width,
                 theme::current().style(theme::HighlightGroup::MessageBody),
                 loaded_custom_emoji_urls,
+                false,
             )
         }
         MessageComponentInfo::Section {
@@ -211,6 +215,7 @@ fn format_component(
             width,
             theme::current().style(theme::HighlightGroup::MessageBody),
             loaded_custom_emoji_urls,
+            true,
         ),
         MessageComponentInfo::Thumbnail {
             media, description, ..
@@ -333,10 +338,16 @@ fn format_text(
     width: usize,
     style: Style,
     loaded_custom_emoji_urls: &[String],
+    render_timestamps: bool,
 ) -> Vec<MessageContentLine> {
     if content.is_empty() {
         return Vec::new();
     }
+    let content = if render_timestamps {
+        render_discord_timestamps(content, state.hour_format_24())
+    } else {
+        content.into()
+    };
     let rendered = state.render_user_mentions_with_highlights(
         context.guild_id,
         context.mentions,
