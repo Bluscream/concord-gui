@@ -315,10 +315,14 @@ cmd_merge() {
     info "Branching $branch off $WORK_BRANCH"
     git checkout --quiet -b "$branch" "$WORK_BRANCH"
 
+    local base
+    base="$(git merge-base "$WORK_BRANCH" "$target")"
+
     info "Merging $target - $n commits (rename threshold $RENAME_THRESHOLD)"
     git merge --no-commit --no-ff \
         -X "find-renames=$RENAME_THRESHOLD" "$target" || true
 
+    remap_relocated "$base" "$target"
     cmd_finish
 
     local left
@@ -379,6 +383,51 @@ resolve_lockfile() {
     else
         warn "cargo could not read the workspace; Cargo.lock left as ours"
     fi
+}
+
+# Re-merge the relocated TUI against a base git cannot see.
+#
+# crates/tui/src/tui/X is upstream's src/tui/X, moved, with `crate::` rewritten
+# to `concord::`. Git's merge base for it is the pre-move file, which still
+# says `crate::` - so our prefix rewrite looks like OUR edit on every import
+# line, and collides with any import line upstream touches. That is not a
+# disagreement about anything; it is an artifact of the move.
+#
+# Feeding a 3-way merge the same base with the prefixes already rewritten
+# removes the artifact. Measured on v2.5.10: 19 conflicted files and 31 hunks
+# became 15 and 19.
+#
+# Only a clean result is taken. When this still conflicts, the two sides
+# genuinely disagree and git's own conflict - which carries its rename and
+# context handling - is the better thing to hand a person.
+remap_relocated() {
+    local base="$1" target="$2"
+    local f up tmp ours theirs newbase fixed=0
+
+    tmp="$(mktemp -d)"
+    ours="$tmp/ours"; theirs="$tmp/theirs"; newbase="$tmp/base"
+
+    while IFS= read -r f; do
+        [[ "$f" == crates/tui/src/tui/* ]] || continue
+        up="src/tui/${f#crates/tui/src/tui/}"
+        git cat-file -e "$base:$up" 2>/dev/null || continue
+        git cat-file -e "$target:$up" 2>/dev/null || continue
+
+        # `--ours` is the fork's file as it stood before this merge.
+        git show ":2:$f" >| "$ours" 2>/dev/null || continue
+        git show "$base:$up"   | sed -E "s/\b$REWRITE_RE/concord::\1/g" >| "$newbase"
+        git show "$target:$up" | sed -E "s/\b$REWRITE_RE/concord::\1/g" >| "$theirs"
+
+        if git merge-file -q -L ours -L base -L theirs "$ours" "$newbase" "$theirs" 2>/dev/null; then
+            cat "$ours" >| "$f"
+            git add -- "$f"
+            fixed=$((fixed + 1))
+        fi
+    done < <(git diff --name-only --diff-filter=U)
+
+    rm -rf "$tmp"
+    [[ "$fixed" -gt 0 ]] && info "Re-merged $fixed relocated file(s) against a prefix-corrected base"
+    return 0
 }
 
 # Upstream's own code says `crate::discord`. Here the core is a dependency, so
