@@ -276,6 +276,7 @@ impl AppEventKind {
         | AppEventKind::VoiceConnectionStatusChanged
         | AppEventKind::VoiceSound
         | AppEventKind::RichPresenceDetected
+        | AppEventKind::RichPresenceWarning
         | AppEventKind::GatewayResumed
         | AppEventKind::GatewayClosed => AppEventMetadata::effect_only(),
 

@@ -273,9 +273,11 @@ pub enum AppEvent {
         message: String,
     },
     MessageSearchLoaded {
+        request_id: u64,
         page: MessageSearchPage,
     },
     MessageSearchLoadFailed {
+        request_id: u64,
         query: MessageSearchQuery,
         message: String,
     },
@@ -350,6 +352,12 @@ pub enum AppEvent {
     /// does not change presence on its own.
     RichPresenceDetected {
         activities: Vec<ActivityInfo>,
+    },
+    /// Rich Presence server could not take over `discord-ipc-0` (or any socket),
+    /// so local apps likely relay through another client. Surfaced as a toast
+    /// because the silent fallback is otherwise invisible.
+    RichPresenceWarning {
+        message: String,
     },
     VoiceStateUpdate {
         state: VoiceStateInfo,
@@ -945,6 +953,7 @@ define_app_event_kinds! {
     GuildMemberRemove: AppEvent::GuildMemberRemove { .. },
     PresenceUpdate: AppEvent::PresenceUpdate { .. },
     RichPresenceDetected: AppEvent::RichPresenceDetected { .. },
+    RichPresenceWarning: AppEvent::RichPresenceWarning { .. },
     VoiceStateUpdate: AppEvent::VoiceStateUpdate { .. },
     VoiceSpeakingUpdate: AppEvent::VoiceSpeakingUpdate { .. },
     VoiceServerUpdate: AppEvent::VoiceServerUpdate { .. },

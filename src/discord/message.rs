@@ -875,32 +875,7 @@ impl AttachmentInfo {
     }
 
     pub fn media_type(&self) -> Option<AttachmentMediaType> {
-        if let Some(content_type) = self.content_type.as_deref() {
-            if content_type.starts_with("image/") {
-                return Some(AttachmentMediaType::Image);
-            } else if content_type.starts_with("video/") {
-                return Some(AttachmentMediaType::Video);
-            } else if content_type.starts_with("audio/") {
-                return Some(AttachmentMediaType::Audio);
-            }
-        }
-
-        if filename_has_extension(
-            &self.filename,
-            &["avif", "gif", "jpeg", "jpg", "png", "webp"],
-        ) {
-            return Some(AttachmentMediaType::Image);
-        }
-        if filename_has_extension(&self.filename, &["m4v", "mov", "mp4", "webm"]) {
-            return Some(AttachmentMediaType::Video);
-        }
-        if filename_has_extension(
-            &self.filename,
-            &["mp3", "m4a", "opus", "ogg", "flac", "wav", "aiff"],
-        ) {
-            return Some(AttachmentMediaType::Audio);
-        }
-        None
+        media_type_from(self.content_type.as_deref(), &self.filename)
     }
 
     pub fn inline_preview_url(&self) -> Option<&str> {
@@ -1054,30 +1029,7 @@ impl ComponentMediaInfo {
     }
 
     pub fn media_type(&self) -> Option<AttachmentMediaType> {
-        if let Some(content_type) = self.content_type.as_deref() {
-            if content_type.starts_with("image/") {
-                return Some(AttachmentMediaType::Image);
-            } else if content_type.starts_with("video/") {
-                return Some(AttachmentMediaType::Video);
-            } else if content_type.starts_with("audio/") {
-                return Some(AttachmentMediaType::Audio);
-            }
-        }
-
-        let filename = self.display_filename();
-        if filename_has_extension(filename, &["avif", "gif", "jpeg", "jpg", "png", "webp"]) {
-            return Some(AttachmentMediaType::Image);
-        }
-        if filename_has_extension(filename, &["m4v", "mov", "mp4", "webm"]) {
-            return Some(AttachmentMediaType::Video);
-        }
-        if filename_has_extension(
-            filename,
-            &["mp3", "m4a", "opus", "ogg", "flac", "wav", "aiff"],
-        ) {
-            return Some(AttachmentMediaType::Audio);
-        }
-        None
+        media_type_from(self.content_type.as_deref(), self.display_filename())
     }
 
     fn inline_preview_info<'a>(
@@ -1416,6 +1368,34 @@ impl MessageComponentInfo {
 
 fn media_is_animated(flags: u64, filename: &str, url: &str) -> bool {
     flags & MEDIA_FLAG_IS_ANIMATED != 0 || media_name_is_animated(filename, url)
+}
+
+fn media_type_from(content_type: Option<&str>, filename: &str) -> Option<AttachmentMediaType> {
+    if let Some(content_type) = content_type {
+        if content_type.starts_with("image/") {
+            return Some(AttachmentMediaType::Image);
+        }
+        if content_type.starts_with("video/") {
+            return Some(AttachmentMediaType::Video);
+        }
+        if content_type.starts_with("audio/") {
+            return Some(AttachmentMediaType::Audio);
+        }
+    }
+
+    if filename_has_extension(filename, &["avif", "gif", "jpeg", "jpg", "png", "webp"]) {
+        return Some(AttachmentMediaType::Image);
+    }
+    if filename_has_extension(filename, &["m4v", "mov", "mp4", "webm"]) {
+        return Some(AttachmentMediaType::Video);
+    }
+    if filename_has_extension(
+        filename,
+        &["mp3", "m4a", "opus", "ogg", "flac", "wav", "aiff"],
+    ) {
+        return Some(AttachmentMediaType::Audio);
+    }
+    None
 }
 
 fn component_media_is_animated(flags: u64, filename: &str, url: &str) -> bool {

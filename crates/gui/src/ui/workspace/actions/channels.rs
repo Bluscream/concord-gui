@@ -536,12 +536,15 @@ impl Workspace {
         search.running = true;
         search.error = None;
         search.results.clear();
+        search.request_id = search.request_id.wrapping_add(1);
+        let request_id = search.request_id;
 
         let Some(handle) = &self.handle else {
             return;
         };
 
         handle.send(AppCommand::SearchMessages {
+            request_id,
             query: MessageSearchQuery {
                 guild_id: match self.nav.selection {
                     Selection::Guild(id) => Some(id),

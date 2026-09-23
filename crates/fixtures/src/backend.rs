@@ -760,7 +760,7 @@ fn handle_command(
             publish_state!();
         }
 
-        AppCommand::SearchMessages { query } => {
+        AppCommand::SearchMessages { request_id, query } => {
             let needle = query.content.clone().unwrap_or_default().to_lowercase();
 
             // Searched against the fixture's own messages, so results are
@@ -777,6 +777,7 @@ fn handle_command(
 
             let total = messages.len();
             publish_event!(AppEvent::MessageSearchLoaded {
+                request_id,
                 page: concord::discord::MessageSearchPage {
                     query,
                     messages,

@@ -14,6 +14,9 @@ publish = false
 [dependencies]
 concord = { path = "../.." }
 unicode-segmentation = "1.12.0"
+# Cursor movement has to agree with what the terminal actually draws, so the
+# column arithmetic is by display width rather than bytes or graphemes.
+unicode-width = "0.2.2"
 # Optional, and only for converting a terminal key event into the vocabulary
 # in `key.rs`. The GPUI front end builds this crate without it and so never
 # pulls a console library in order to ask what a key is bound to.

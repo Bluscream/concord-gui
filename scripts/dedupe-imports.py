@@ -48,8 +48,15 @@ def bound_names(body):
     path = match.group(1)
     if path.endswith("*"):
         return set()
-    if " as " in path:
-        return {path.rsplit(" as ", 1)[1].strip()}
+    # Only a whole-path rename, never a group. `std::hash::{Hash as _}` also
+    # contains " as ", and reading its alias off the end yielded `_}` - which
+    # matched the `_}` of any other group ending in a rename, and so declared
+    # two unrelated trait imports duplicates of each other.
+    if " as " in path and "{" not in path:
+        alias = path.rsplit(" as ", 1)[1].strip()
+        # `as _` imports a trait's methods without naming it. Two of them bind
+        # nothing in common, so neither can be a duplicate of the other.
+        return set() if alias == "_" else {alias}
     if "{" in path:
         if "}" not in path:
             # A `use` whose braces the merge left unbalanced. Nothing here can
@@ -74,8 +81,28 @@ def bound_names(body):
             if head:
                 continue
             continue
+        if " as " in piece:
+            alias = piece.rsplit(" as ", 1)[1].strip()
+            if alias != "_":
+                names.add(alias)
+            continue
         names.add(piece.split("::")[-1].strip())
     return {n for n in names if n and n != "self"}
+
+
+def is_attributed(lines, start):
+    """True when the statement at `start` carries an attribute above it.
+
+    `use x11 as platform;` under `#[cfg(target_os = "linux")]` binds the same
+    name as `use macos as platform;` under a different cfg, and exactly one of
+    them exists in any build. Dropping the second as a duplicate deletes the
+    import for every target but the first, which is how this pass silently
+    broke push-to-talk on Windows and Linux.
+    """
+    index = start - 1
+    while index >= 0 and not lines[index].strip():
+        index -= 1
+    return index >= 0 and lines[index].lstrip().startswith("#[")
 
 
 def dedupe(path):
@@ -84,6 +111,9 @@ def dedupe(path):
     seen, drop = set(), []
     for start, end, body in statements(text):
         names = bound_names(body)
+        if is_attributed(lines, start):
+            seen |= names
+            continue
         if names and names <= seen:
             drop.append((start, end))
         else:

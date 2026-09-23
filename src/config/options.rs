@@ -640,12 +640,6 @@ define_highlight_groups! {
     Info => "Info",
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
-#[serde(default)]
-pub(super) struct KeymapFileOptions {
-    pub(super) keymap: KeymapOptions,
-}
-
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub(super) struct UiStateFileOptions {
@@ -662,17 +656,11 @@ pub struct VoiceParticipantPlaybackOption {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct UiStateOptions {
-    #[serde(default = "default_pane_visible")]
     pub guild_pane_visible: bool,
-    #[serde(default = "default_pane_visible")]
     pub channel_pane_visible: bool,
-    #[serde(default = "default_pane_visible")]
     pub member_pane_visible: bool,
-    #[serde(default = "default_server_width")]
     pub server_width: u16,
-    #[serde(default = "default_channel_list_width")]
     pub channel_list_width: u16,
-    #[serde(default = "default_member_list_width")]
     pub member_list_width: u16,
     /// Channels the user has open as tabs, in strip order.
     ///
@@ -699,9 +687,9 @@ impl Default for UiStateOptions {
             guild_pane_visible: true,
             channel_pane_visible: true,
             member_pane_visible: true,
-            server_width: default_server_width(),
-            channel_list_width: default_channel_list_width(),
-            member_list_width: default_member_list_width(),
+            server_width: DEFAULT_SERVER_WIDTH,
+            channel_list_width: DEFAULT_CHANNEL_LIST_WIDTH,
+            member_list_width: DEFAULT_MEMBER_LIST_WIDTH,
             open_tabs: Vec::new(),
             active_tab: 0,
             collapsed_channel_categories: Vec::new(),
@@ -711,22 +699,6 @@ impl Default for UiStateOptions {
             voice_participant_playback: Vec::new(),
         }
     }
-}
-
-fn default_pane_visible() -> bool {
-    true
-}
-
-fn default_server_width() -> u16 {
-    DEFAULT_SERVER_WIDTH
-}
-
-fn default_channel_list_width() -> u16 {
-    DEFAULT_CHANNEL_LIST_WIDTH
-}
-
-fn default_member_list_width() -> u16 {
-    DEFAULT_MEMBER_LIST_WIDTH
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]

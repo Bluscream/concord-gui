@@ -898,7 +898,8 @@ fn relationship_remove_emits_event() {
 }
 
 #[test]
-fn channel_parser_keeps_last_message_id() {
+fn channel_parser_preserves_scalar_and_dm_fields() {
+    let case = "channel_parser_keeps_last_message_id";
     let channel = parse_channel_info(
         &json!({
             "id": "10",
@@ -910,11 +911,13 @@ fn channel_parser_keeps_last_message_id() {
     )
     .expect("dm channel should parse");
 
-    assert_eq!(channel.last_message_id.map(|id| id.get()), Some(99));
-}
+    assert_eq!(
+        channel.last_message_id.map(|id| id.get()),
+        Some(99),
+        "{case}"
+    );
 
-#[test]
-fn channel_parser_reads_voice_user_limit() {
+    let case = "channel_parser_reads_voice_user_limit";
     let channel = parse_channel_info(
         &json!({
             "id": "10",
@@ -926,11 +929,9 @@ fn channel_parser_reads_voice_user_limit() {
     )
     .expect("voice channel should parse");
 
-    assert_eq!(channel.user_limit, Some(5));
-}
+    assert_eq!(channel.user_limit, Some(5), "{case}");
 
-#[test]
-fn channel_parser_reads_dm_message_request_and_spam_flags() {
+    let case = "channel_parser_reads_dm_message_request_and_spam_flags";
     let channel = parse_channel_info(
         &json!({
             "id": "10",
@@ -943,6 +944,6 @@ fn channel_parser_reads_dm_message_request_and_spam_flags() {
     )
     .expect("dm channel should parse");
 
-    assert_eq!(channel.is_message_request, Some(true));
-    assert_eq!(channel.is_spam, Some(true));
+    assert_eq!(channel.is_message_request, Some(true), "{case}");
+    assert_eq!(channel.is_spam, Some(true), "{case}");
 }

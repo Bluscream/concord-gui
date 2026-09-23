@@ -852,6 +852,10 @@ pub struct Search {
     pub total: Option<usize>,
     pub running: bool,
     pub error: Option<String>,
+    /// The id of the search currently in flight. Discord answers out of
+    /// order, so a reply carrying anything else belongs to a query the user
+    /// has already replaced and must not overwrite what is on screen.
+    pub request_id: u64,
 }
 
 pub struct SearchResult {

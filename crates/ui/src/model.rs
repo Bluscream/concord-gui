@@ -202,7 +202,7 @@ pub enum ForumPostComposerField {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ForumPostComposerTagView {
+pub struct ForumTagView {
     pub name: String,
     /// Unicode emoji shown inline. `None` for a custom or emoji-less tag.
     pub unicode_emoji: Option<String>,
@@ -216,6 +216,8 @@ pub struct ForumPostComposerTagView {
     /// once the five-tag cap is reached, so the renderer can dim them.
     pub selectable: bool,
 }
+
+pub type ForumPostComposerTagView = ForumTagView;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ForumPostComposerAttachmentView {
@@ -263,21 +265,7 @@ pub enum ThreadEditField {
     Cancel,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ThreadEditTagView {
-    pub name: String,
-    /// Unicode emoji shown inline. `None` for a custom or emoji-less tag.
-    pub unicode_emoji: Option<String>,
-    /// CDN url of a custom tag emoji, overlaid as an image on a reserved gap.
-    pub custom_emoji_url: Option<String>,
-    /// Resolved `:name:` text fallback shown until the custom emoji image loads.
-    pub custom_emoji_label: Option<String>,
-    pub selected: bool,
-    pub active: bool,
-    /// Whether this tag can still be toggled on. `false` for unselected tags
-    /// once the five-tag cap is reached, so the renderer can dim them.
-    pub selectable: bool,
-}
+pub type ThreadEditTagView = ForumTagView;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ThreadEditView {
@@ -700,13 +688,13 @@ pub enum ChannelPaneCursor {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum ChannelBranch {
+pub enum TreeBranch {
     None,
     Middle,
     Last,
 }
 
-impl ChannelBranch {
+impl TreeBranch {
     pub fn prefix(self) -> &'static str {
         match self {
             Self::None => "",
@@ -726,7 +714,13 @@ impl ChannelBranch {
     pub fn is_category_child(self) -> bool {
         !matches!(self, Self::None)
     }
+
+    pub fn is_folder_child(self) -> bool {
+        !matches!(self, Self::None)
+    }
 }
+
+pub type ChannelBranch = TreeBranch;
 
 #[derive(Debug, Clone, Copy)]
 pub enum GuildPaneEntry<'a> {
@@ -741,26 +735,7 @@ pub enum GuildPaneEntry<'a> {
     },
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum GuildBranch {
-    None,
-    Middle,
-    Last,
-}
-
-impl GuildBranch {
-    pub fn prefix(self) -> &'static str {
-        match self {
-            Self::None => "",
-            Self::Middle => "├ ",
-            Self::Last => "└ ",
-        }
-    }
-
-    pub fn is_folder_child(self) -> bool {
-        !matches!(self, Self::None)
-    }
-}
+pub type GuildBranch = TreeBranch;
 
 impl GuildPaneEntry<'_> {
     pub fn guild_state(&self) -> Option<&GuildState> {

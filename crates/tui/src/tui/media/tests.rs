@@ -164,46 +164,6 @@ fn image_preview_targets_keep_background_previews_while_modal_is_open() {
 }
 
 #[test]
-fn image_preview_targets_include_multiple_attachments_from_one_message() {
-    let mut state = state_with_image_messages(0, &[]);
-    push_media_message(
-        &mut state,
-        MessageCreateFixture {
-            message_id: Id::new(1),
-            content: Some("album".to_owned()),
-            attachments: vec![image_attachment(1), image_attachment(2)],
-            ..guild_message_create_fixture()
-        },
-    );
-
-    let targets = visible_image_preview_targets(&state, layout(12));
-
-    assert_eq!(target_message_ids(&targets), vec![Id::new(1), Id::new(1)]);
-    assert_eq!(
-        targets
-            .iter()
-            .map(|target| target.url.as_str())
-            .collect::<Vec<_>>(),
-        vec![
-            "https://cdn.discordapp.com/image-1.png",
-            "https://cdn.discordapp.com/image-2.png",
-        ]
-    );
-    assert_eq!(
-        targets
-            .iter()
-            .map(|target| (
-                target.preview_x_offset_columns,
-                target.preview_y_offset_rows,
-                target.preview_width,
-                target.preview_height,
-            ))
-            .collect::<Vec<_>>(),
-        vec![(0, 0, 8, 3), (8, 0, 8, 3)]
-    );
-}
-
-#[test]
 fn image_preview_quality_rewrites_attachment_preview_urls() {
     let cases = [
         (
@@ -280,6 +240,51 @@ fn image_preview_quality_rewrites_attachment_preview_urls() {
             .expect("image attachment should produce preview target");
 
         assert_eq!(target.url, expected_url);
+    }
+
+    for (case, proxy_url, expected_url) in [
+        (
+            "attachment media proxy route",
+            concat!(
+                "https://media.discordapp.net/attachments/691/150/photo.png",
+                "?ex=abc&is=def&hm=123&format=png&width=4000&height=3000"
+            ),
+            concat!(
+                "https://media.discordapp.net/attachments/691/150/photo.png",
+                "?ex=abc&is=def&hm=123&format=webp&width=320&height=240"
+            ),
+        ),
+        (
+            "ephemeral attachment media proxy route",
+            concat!(
+                "https://media.discordapp.net/ephemeral-attachments/691/150/photo.png",
+                "?ex=abc&is=def&hm=123&width=4000&height=3000"
+            ),
+            concat!(
+                "https://media.discordapp.net/ephemeral-attachments/691/150/photo.png",
+                "?ex=abc&is=def&hm=123&format=webp&width=320&height=240"
+            ),
+        ),
+    ] {
+        let mut state = state_with_image_messages(0, &[]);
+        let mut attachment = image_attachment(1);
+        attachment.proxy_url = proxy_url.to_owned();
+        push_media_message(
+            &mut state,
+            MessageCreateFixture {
+                message_id: Id::new(1),
+                content: Some("photo".to_owned()),
+                attachments: vec![attachment],
+                ..guild_message_create_fixture()
+            },
+        );
+
+        let target = visible_image_preview_targets(&state, layout(12))
+            .into_iter()
+            .next()
+            .expect("image attachment should produce preview target");
+
+        assert_eq!(target.url, expected_url, "{case}");
     }
 }
 
@@ -396,12 +401,14 @@ fn image_preview_quality_does_not_change_avatar_or_custom_emoji_requests() {
 
 #[test]
 fn image_preview_targets_choose_embed_media_url() {
-    for (name, embed, content, expected_url) in [
+    for (name, embed, content, expected_url, expected_filename, playable) in [
         (
             "youtube thumbnail is downgraded to a preview size",
             youtube_embed(),
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
             "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg",
+            "embed-thumbnail",
+            true,
         ),
         (
             "youtube thumbnail that is already small is kept",
@@ -413,6 +420,8 @@ fn image_preview_targets_choose_embed_media_url() {
             },
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
             "https://i.ytimg.com/vi/dQw4w9WgXcQ/default.jpg",
+            "embed-thumbnail",
+            true,
         ),
         (
             "media proxy is resized",
@@ -432,6 +441,8 @@ fn image_preview_targets_choose_embed_media_url() {
                 "https://media.discordapp.net/external/cache-key/https/example.com/photo.png",
                 "?ex=abc&is=def&hm=123&format=webp&width=240&height=180"
             ),
+            "embed-thumbnail",
+            true,
         ),
         (
             "images-ext proxy is resized",
@@ -451,6 +462,8 @@ fn image_preview_targets_choose_embed_media_url() {
                 "https://images-ext-1.discordapp.net/external/cache-key/https/example.com/photo.png",
                 "?format=webp&width=240&height=180"
             ),
+            "embed-thumbnail",
+            true,
         ),
         (
             "proxy outside the resizable routes falls back to the source url",
@@ -463,6 +476,40 @@ fn image_preview_targets_choose_embed_media_url() {
             },
             "https://example.com/post",
             "https://example.com/photo.png",
+            "embed-thumbnail",
+            true,
+        ),
+        (
+            "image_preview_targets_do_not_mark_plain_image_embed_thumbnail_as_playable",
+            EmbedInfo {
+                thumbnail_url: Some("https://example.com/photo.png".to_owned()),
+                thumbnail_width: Some(640),
+                thumbnail_height: Some(480),
+                ..EmbedInfo::test()
+            },
+            "https://example.com/post",
+            "https://example.com/photo.png",
+            "embed-thumbnail",
+            false,
+        ),
+        (
+            "image_preview_targets_downscale_youtube_embed_image_url",
+            EmbedInfo {
+                thumbnail_url: None,
+                thumbnail_width: None,
+                thumbnail_height: None,
+                image_url: Some(
+                    "https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg?token=abc"
+                        .to_owned(),
+                ),
+                image_width: Some(1280),
+                image_height: Some(720),
+                ..youtube_embed()
+            },
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg?token=abc",
+            "embed-image",
+            true,
         ),
     ] {
         let mut state = state_with_image_messages(1, &[]);
@@ -480,8 +527,8 @@ fn image_preview_targets_choose_embed_media_url() {
 
         assert_eq!(target_message_ids(&targets), vec![Id::new(2)], "{name}");
         assert_eq!(targets[0].url, expected_url, "{name}");
-        assert_eq!(targets[0].filename, "embed-thumbnail", "{name}");
-        assert!(targets[0].show_play_marker, "{name}");
+        assert_eq!(targets[0].filename, expected_filename, "{name}");
+        assert_eq!(targets[0].show_play_marker, playable, "{name}");
     }
 
     let mut state = state_with_image_messages(1, &[]);
@@ -725,31 +772,6 @@ fn image_preview_targets_preserve_non_giphy_gifv_thumbnail_animation() {
 }
 
 #[test]
-fn image_preview_targets_do_not_mark_plain_image_embed_thumbnail_as_playable() {
-    let mut state = state_with_image_messages(1, &[]);
-    push_media_message(
-        &mut state,
-        MessageCreateFixture {
-            message_id: Id::new(2),
-            content: Some("https://example.com/post".to_owned()),
-            embeds: vec![EmbedInfo {
-                thumbnail_url: Some("https://example.com/photo.png".to_owned()),
-                thumbnail_width: Some(640),
-                thumbnail_height: Some(480),
-                ..EmbedInfo::test()
-            }],
-            ..guild_message_create_fixture()
-        },
-    );
-
-    let targets = visible_image_preview_targets(&state, layout(8));
-
-    assert_eq!(target_message_ids(&targets), vec![Id::new(2)]);
-    assert_eq!(targets[0].filename, "embed-thumbnail");
-    assert!(!targets[0].show_play_marker);
-}
-
-#[test]
 fn image_preview_targets_layout_album_grids() {
     let portrait_album = {
         let mut first = image_attachment(1);
@@ -762,10 +784,17 @@ fn image_preview_targets_layout_album_grids() {
     };
     let cases = [
         (
+            "image_preview_targets_include_multiple_attachments_from_one_message",
+            vec![image_attachment(1), image_attachment(2)],
+            vec![(0, 0, 0, 8, 3), (1, 8, 0, 8, 3)],
+        ),
+        (
+            "three image album",
             (1..=3).map(image_attachment).collect::<Vec<_>>(),
             vec![(0, 0, 0, 8, 3), (1, 8, 0, 8, 2), (2, 8, 2, 4, 1)],
         ),
         (
+            "four image album",
             (1..=4).map(image_attachment).collect::<Vec<_>>(),
             vec![
                 (0, 0, 0, 8, 2),
@@ -775,6 +804,7 @@ fn image_preview_targets_layout_album_grids() {
             ],
         ),
         (
+            "five image album is capped at four previews",
             (1..=5).map(image_attachment).collect::<Vec<_>>(),
             vec![
                 (0, 0, 0, 8, 2),
@@ -783,10 +813,14 @@ fn image_preview_targets_layout_album_grids() {
                 (3, 4, 2, 4, 1),
             ],
         ),
-        (portrait_album, vec![(0, 0, 0, 5, 3), (1, 5, 0, 5, 3)]),
+        (
+            "portrait album",
+            portrait_album,
+            vec![(0, 0, 0, 5, 3), (1, 5, 0, 5, 3)],
+        ),
     ];
 
-    for (attachments, expected_geometry) in cases {
+    for (case, attachments, expected_geometry) in cases {
         let mut state = state_with_image_messages(0, &[]);
         push_media_message(
             &mut state,
@@ -801,6 +835,21 @@ fn image_preview_targets_layout_album_grids() {
         let targets = visible_image_preview_targets(&state, layout(12));
 
         assert_eq!(
+            target_message_ids(&targets),
+            vec![Id::new(1); expected_geometry.len()],
+            "{case}"
+        );
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.url.as_str())
+                .collect::<Vec<_>>(),
+            (1..=expected_geometry.len())
+                .map(|id| format!("https://cdn.discordapp.com/image-{id}.png"))
+                .collect::<Vec<_>>(),
+            "{case}"
+        );
+        assert_eq!(
             targets
                 .iter()
                 .map(|target| (
@@ -811,7 +860,8 @@ fn image_preview_targets_layout_album_grids() {
                     target.preview_height,
                 ))
                 .collect::<Vec<_>>(),
-            expected_geometry
+            expected_geometry,
+            "{case}"
         );
     }
 }
@@ -1238,38 +1288,6 @@ fn original_quality_video_attachment_still_uses_proxy_webp_thumbnail() {
 }
 
 #[test]
-fn image_preview_targets_downscale_youtube_embed_image_url() {
-    let mut embed = youtube_embed();
-    embed.thumbnail_url = None;
-    embed.thumbnail_width = None;
-    embed.thumbnail_height = None;
-    embed.image_url =
-        Some("https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg?token=abc".to_owned());
-    embed.image_width = Some(1280);
-    embed.image_height = Some(720);
-    let mut state = state_with_image_messages(1, &[]);
-    push_media_message(
-        &mut state,
-        MessageCreateFixture {
-            message_id: Id::new(2),
-            content: Some("https://www.youtube.com/watch?v=dQw4w9WgXcQ".to_owned()),
-            embeds: vec![embed],
-            ..guild_message_create_fixture()
-        },
-    );
-
-    let targets = visible_image_preview_targets(&state, layout(8));
-
-    assert_eq!(target_message_ids(&targets), vec![Id::new(2)]);
-    assert_eq!(
-        targets[0].url,
-        "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg?token=abc"
-    );
-    assert_eq!(targets[0].filename, "embed-image");
-    assert!(targets[0].show_play_marker);
-}
-
-#[test]
 fn image_preview_targets_include_forwarded_image_attachments() {
     let mut state = state_with_image_messages(1, &[]);
     push_media_message(
@@ -1289,53 +1307,40 @@ fn image_preview_targets_include_forwarded_image_attachments() {
 }
 
 #[test]
-fn image_preview_targets_include_guild_stickers() {
-    let mut state = state_with_image_messages(0, &[]);
-    push_media_message(
-        &mut state,
-        MessageCreateFixture {
-            message_id: Id::new(1),
-            content: Some(String::new()),
-            stickers: vec![StickerInfo::new(Id::new(11), "Laugh", StickerFormat::Png)],
-            ..guild_message_create_fixture()
-        },
-    );
+fn image_preview_targets_include_supported_stickers() {
+    for (case, id, name, format, expected_url) in [
+        (
+            "image_preview_targets_include_guild_stickers",
+            11,
+            "Laugh",
+            StickerFormat::Png,
+            "https://media.discordapp.net/stickers/11.png?size=160&passthrough=false",
+        ),
+        (
+            "image_preview_targets_include_lottie_stickers",
+            12,
+            "Wumpus",
+            StickerFormat::Lottie,
+            "https://cdn.discordapp.com/stickers/12.json",
+        ),
+    ] {
+        let mut state = state_with_image_messages(0, &[]);
+        push_media_message(
+            &mut state,
+            MessageCreateFixture {
+                message_id: Id::new(1),
+                content: Some(String::new()),
+                stickers: vec![StickerInfo::new(Id::new(id), name, format)],
+                ..guild_message_create_fixture()
+            },
+        );
 
-    let targets = visible_image_preview_targets(&state, layout(12));
+        let targets = visible_image_preview_targets(&state, layout(12));
 
-    assert_eq!(target_message_ids(&targets), vec![Id::new(1)]);
-    assert_eq!(
-        targets[0].url,
-        "https://media.discordapp.net/stickers/11.png?size=160&passthrough=false"
-    );
-    assert_eq!(targets[0].filename, "Laugh");
-}
-
-#[test]
-fn image_preview_targets_include_lottie_stickers() {
-    let mut state = state_with_image_messages(0, &[]);
-    push_media_message(
-        &mut state,
-        MessageCreateFixture {
-            message_id: Id::new(1),
-            content: Some(String::new()),
-            stickers: vec![StickerInfo::new(
-                Id::new(12),
-                "Wumpus",
-                StickerFormat::Lottie,
-            )],
-            ..guild_message_create_fixture()
-        },
-    );
-
-    let targets = visible_image_preview_targets(&state, layout(12));
-
-    assert_eq!(target_message_ids(&targets), vec![Id::new(1)]);
-    assert_eq!(
-        targets[0].url,
-        "https://cdn.discordapp.com/stickers/12.json"
-    );
-    assert_eq!(targets[0].filename, "Wumpus");
+        assert_eq!(target_message_ids(&targets), vec![Id::new(1)], "{case}");
+        assert_eq!(targets[0].url, expected_url, "{case}");
+        assert_eq!(targets[0].filename, name, "{case}");
+    }
 }
 
 #[test]
@@ -1613,69 +1618,117 @@ fn split_animation_builds_each_visible_crop_before_prefetching() {
 }
 
 #[test]
-fn oversized_split_animation_keeps_current_crops_and_resumes_when_unsplit() {
-    let top = ImagePreviewTarget {
-        preview_width: 100,
-        preview_height: 30,
+fn oversized_split_previews_keep_every_active_crop_and_continue_animating() {
+    let targets = [0, 15, 30].map(|top_clip_rows| ImagePreviewTarget {
+        preview_width: 160,
+        preview_height: 45,
         visible_preview_height: 15,
+        top_clip_rows,
+        preview_y_offset_rows: usize::from(top_clip_rows),
         ..image_preview_target(1)
-    };
-    let bottom = ImagePreviewTarget {
-        preview_width: 100,
-        preview_height: 30,
-        preview_y_offset_rows: 15,
-        visible_preview_height: 15,
-        top_clip_rows: 15,
-        ..image_preview_target(1)
-    };
-    let key = top.key();
-    let mut cache = ImagePreviewCache::new(Some(ratatui_image::picker::Picker::halfblocks()));
-    cache.cache.entries.insert(
-        key.clone(),
-        ImagePreviewEntry::Decoding {
-            filename: top.filename.clone(),
-            generation: 1,
-            last_used: 1,
-        },
-    );
-    cache.store_decoded(
-        key,
-        1,
-        decode_media_image_bytes(&encoded_animated_gif()).map_err(MediaWorkError::Failed),
-    );
-    let split = [top.clone(), bottom];
-    for _ in 0..2 {
-        cache.prepare(&split);
-        for job in cache.take_protocol_jobs() {
-            cache.store_protocol(build_media_protocol(job));
+    });
+    for bytes in [encoded_png(2, 2), encoded_three_frame_gif()] {
+        let mut cache = loaded_preview_cache(&targets[0], &bytes);
+        for _ in 0..6 {
+            cache.prepare(&targets);
+            for job in cache.take_protocol_jobs() {
+                cache.store_protocol(build_media_protocol(job));
+            }
         }
-    }
+        assert!(
+            cache.render_state(&targets).iter().all(|preview| matches!(
+                preview.state,
+                super::super::ui::ImagePreviewState::Ready { .. }
+            )),
+            "all three large current crops must remain ready together"
+        );
+        cache.prepare(&targets);
+        assert!(
+            cache.take_protocol_jobs().is_empty(),
+            "active crops must not rebuild"
+        );
 
-    cache.prepare(&split);
-    assert!(cache.take_protocol_jobs().is_empty());
-    assert!(cache.render_state(&split).iter().all(|preview| matches!(
-        preview.state,
-        super::super::ui::ImagePreviewState::Ready { .. }
-    )));
-    cache.sync_animation_visibility(&split, Instant::now(), AnimatePreviews::Always);
-    assert_eq!(cache.next_animation_deadline(), None);
-
-    for _ in 0..4 {
-        cache.prepare(std::slice::from_ref(&top));
-        let jobs = cache.take_protocol_jobs();
-        if jobs.is_empty() {
-            break;
+        let animated = cache.cache.entries[&targets[0].key()]
+            .decoded_image()
+            .expect("loaded preview has pixels")
+            .frame_count()
+            > 1;
+        if animated {
+            for _ in 0..3 {
+                cache.sync_animation_visibility(&targets, Instant::now(), AnimatePreviews::Always);
+                let deadline = cache
+                    .next_animation_deadline()
+                    .expect("split preview keeps animating");
+                assert!(cache.advance_animations(deadline));
+                for _ in 0..3 {
+                    cache.prepare(&targets);
+                    for job in cache.take_protocol_jobs() {
+                        cache.store_protocol(build_media_protocol(job));
+                    }
+                }
+                assert!(cache.render_state(&targets).iter().all(|preview| matches!(
+                    preview.state,
+                    super::super::ui::ImagePreviewState::Ready { .. }
+                )));
+            }
         }
-        for job in jobs {
-            cache.store_protocol(build_media_protocol(job));
-        }
+        cache.prepare(&[]);
+        assert!(cache.take_protocol_jobs().is_empty());
+        let (_, _, protocol_bytes) = cache.retained_stats();
+        assert!(
+            protocol_bytes <= super::cache::RENDER_PROTOCOL_BYTE_BUDGET_PER_MEDIA_ENTRY,
+            "the soft-budget exception ends when crops leave the screen"
+        );
     }
-    cache.sync_animation_visibility(
-        std::slice::from_ref(&top),
-        Instant::now(),
-        AnimatePreviews::Always,
-    );
-    assert!(cache.next_animation_deadline().is_some());
+}
+
+#[test]
+fn obsolete_crop_jobs_do_not_block_or_replace_the_latest_request() {
+    let first = image_preview_target(1);
+    let second = ImagePreviewTarget {
+        top_clip_rows: 1,
+        visible_preview_height: 2,
+        ..first.clone()
+    };
+    for complete_before_change in [false, true] {
+        let mut cache = loaded_preview_cache(&first, &encoded_png(2, 2));
+        cache.prepare(std::slice::from_ref(&first));
+        let old = cache
+            .take_protocol_jobs()
+            .pop()
+            .expect("first crop is queued");
+        // Also cover a successful old completion already waiting in the mailbox.
+        let old = if complete_before_change {
+            Ok(build_media_protocol(old))
+        } else {
+            Err(old)
+        };
+        cache.prepare(std::slice::from_ref(&second));
+        let middle = cache
+            .take_protocol_jobs()
+            .pop()
+            .expect("new crop bypasses obsolete work");
+        cache.prepare(std::slice::from_ref(&first));
+        let latest = cache
+            .take_protocol_jobs()
+            .pop()
+            .expect("returning crop gets a fresh request");
+
+        cache.store_protocol(match old {
+            Ok(result) => result,
+            Err(job) => build_media_protocol(job),
+        });
+        cache.store_protocol(build_media_protocol(middle));
+        assert!(matches!(
+            cache.render_state(std::slice::from_ref(&first))[0].state,
+            super::super::ui::ImagePreviewState::Loading { .. }
+        ));
+        cache.store_protocol(build_media_protocol(latest));
+        assert!(matches!(
+            cache.render_state(std::slice::from_ref(&first))[0].state,
+            super::super::ui::ImagePreviewState::Ready { .. }
+        ));
+    }
 }
 
 #[test]
@@ -1856,7 +1909,7 @@ fn image_preview_reuses_retained_source_before_over_budget_pruning() {
         .expect("source preview should be ready")
         .clone();
 
-    assert!(cache.reuse_cached_sources(std::slice::from_ref(&moved), &mut shared));
+    assert!(cache.reuse_cached_sources(std::slice::from_ref(&moved), |url| shared.get(url)));
     cache.prepare(std::slice::from_ref(&moved));
 
     let moved_image = cache
@@ -1868,6 +1921,212 @@ fn image_preview_reuses_retained_source_before_over_budget_pruning() {
     assert!(original_image.shares_frames_with(moved_image));
     assert!(cache.cache.entries.contains_key(&moved.key()));
     assert!(cache.next_requests(std::slice::from_ref(&moved)).is_empty());
+}
+
+#[test]
+fn ready_pixels_replace_transient_surface_states_and_ignore_late_failures() {
+    let preview = image_preview_target(1);
+    let avatar = AvatarTarget {
+        url: preview.url.clone(),
+        row: 0,
+        visible_height: 2,
+        top_clip_rows: 0,
+    };
+    let emoji = EmojiImageTarget {
+        url: preview.url.clone(),
+        image_size: EmojiImageSize::Compact,
+    };
+    let source = decode_media_image_bytes(&encoded_animated_gif()).expect("shared pixels decode");
+    for state in ["loading", "decoding", "failed"] {
+        let mut previews = ImagePreviewCache::new(Some(Picker::halfblocks()));
+        let mut avatars = AvatarImageCache::new(Some(Picker::halfblocks()));
+        let mut emojis = EmojiImageCache::new(Some(Picker::halfblocks()));
+        previews.next_requests(std::slice::from_ref(&preview));
+        avatars.next_requests(std::slice::from_ref(&avatar));
+        emojis.next_requests(std::slice::from_ref(&emoji));
+        let failure = AppEvent::AttachmentPreviewLoadFailed {
+            url: preview.url.clone(),
+            message: "old download failed".to_owned(),
+        };
+        let generations = if state == "decoding" {
+            Some((
+                previews.store_loaded(&preview.url)[0].generation,
+                avatars
+                    .store_loaded(&preview.url)
+                    .expect("avatar starts decode")
+                    .generation,
+                emojis
+                    .store_loaded(&preview.url)
+                    .expect("emoji starts decode")
+                    .generation,
+            ))
+        } else {
+            if state == "failed" {
+                previews.record_event(&failure);
+                avatars.record_event(&failure);
+                emojis.record_event(&failure);
+            }
+            None
+        };
+        assert!(
+            previews.reuse_cached_sources(std::slice::from_ref(&preview), |_| Some(
+                source.fresh_playback()
+            )),
+            "{state}"
+        );
+        assert!(
+            avatars.reuse_cached_sources(std::slice::from_ref(&avatar), None, |_| Some(
+                source.fresh_playback()
+            )),
+            "{state}"
+        );
+        assert!(
+            emojis.reuse_cached_sources(std::slice::from_ref(&emoji), |_| Some(
+                source.fresh_playback()
+            )),
+            "{state}"
+        );
+
+        if let Some((p, a, e)) = generations {
+            previews.store_decoded(
+                preview.key(),
+                p,
+                Err(MediaWorkError::Failed("old decode".into())),
+            );
+            avatars.store_decoded(
+                preview.url.clone(),
+                a,
+                Err(MediaWorkError::Failed("old decode".into())),
+            );
+            emojis.store_decoded(
+                preview.url.clone(),
+                e,
+                Err(MediaWorkError::Failed("old decode".into())),
+            );
+        }
+        previews.record_event(&failure);
+        avatars.record_event(&failure);
+        emojis.record_event(&failure);
+        for recovered in [
+            previews.ready_image_for_url(&preview.url),
+            avatars.ready_image_for_url(&preview.url),
+            emojis.ready_image_for_url(&preview.url),
+        ] {
+            assert!(
+                recovered
+                    .expect("late failures do not replace recovered pixels")
+                    .shares_frames_with(&source),
+                "{state}"
+            );
+        }
+        assert!(
+            previews
+                .next_requests(std::slice::from_ref(&preview))
+                .is_empty()
+        );
+        assert!(
+            avatars
+                .next_requests(std::slice::from_ref(&avatar))
+                .is_empty()
+        );
+        assert!(
+            emojis
+                .next_requests(std::slice::from_ref(&emoji))
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn visible_surfaces_reuse_exact_url_pixels_without_sharing_playback() {
+    let avatar = AvatarTarget {
+        row: 0,
+        visible_height: AVATAR_PREVIEW_HEIGHT,
+        top_clip_rows: 0,
+        url: "https://cdn.discordapp.com/avatars/1/a_test.gif".to_owned(),
+    };
+    let url = avatar_preview_url(&avatar.url, AVATAR_PREVIEW_WIDTH, AVATAR_PREVIEW_HEIGHT);
+    let preview = ImagePreviewTarget {
+        url: url.clone(),
+        ..image_preview_target(1)
+    };
+    let mut previews = loaded_preview_cache(&preview, &encoded_three_frame_gif());
+    let source = previews
+        .cache
+        .entries
+        .get_mut(&preview.key())
+        .and_then(MediaImageCacheEntry::decoded_image_mut)
+        .expect("source pixels exist");
+    source.start_animation(Instant::now());
+    assert!(source.advance_frame(source.next_frame_deadline().expect("animation starts")));
+
+    let mut avatars = AvatarImageCache::new(Some(Picker::halfblocks()));
+    let mut emojis = EmojiImageCache::new(Some(Picker::halfblocks()));
+    let emoji = EmojiImageTarget {
+        url: url.clone(),
+        image_size: EmojiImageSize::Compact,
+    };
+    assert!(
+        avatars.reuse_cached_sources(std::slice::from_ref(&avatar), None, |url| previews
+            .ready_image_for_url(url))
+    );
+    assert!(
+        emojis.reuse_cached_sources(std::slice::from_ref(&emoji), |url| previews
+            .ready_image_for_url(url))
+    );
+    assert!(
+        avatars
+            .next_requests(std::slice::from_ref(&avatar))
+            .is_empty()
+    );
+    assert!(
+        emojis
+            .next_requests(std::slice::from_ref(&emoji))
+            .is_empty()
+    );
+
+    let source = previews.cache.entries[&preview.key()]
+        .decoded_image()
+        .expect("preview remains ready");
+    for image in [
+        avatars.cache.entries[&url].decoded_image(),
+        emojis.cache.entries[&url].decoded_image(),
+    ] {
+        let image = image.expect("surface is hydrated before rendering");
+        assert!(source.shares_frames_with(image));
+        assert_eq!(image.current_frame_index(), 0);
+        assert!(image.next_frame_deadline().is_none());
+    }
+    assert_eq!(
+        source.current_frame_index(),
+        1,
+        "new surfaces do not reset the original playback"
+    );
+
+    // The shared cache is absent. Either surface can still serve a new preview.
+    for from_avatar in [true, false] {
+        let mut destination = ImagePreviewCache::new(Some(Picker::halfblocks()));
+        assert!(
+            destination.reuse_cached_sources(std::slice::from_ref(&preview), |url| {
+                if from_avatar {
+                    avatars.ready_image_for_url(url)
+                } else {
+                    emojis.ready_image_for_url(url)
+                }
+            })
+        );
+        assert!(
+            destination
+                .next_requests(std::slice::from_ref(&preview))
+                .is_empty()
+        );
+        assert!(
+            destination
+                .ready_image_for_url(&url)
+                .expect("new preview reuses pixels")
+                .shares_frames_with(source)
+        );
+    }
 }
 
 #[test]
@@ -1891,27 +2150,45 @@ fn image_preview_cache_limits_visible_requests() {
 }
 
 #[test]
-fn image_preview_request_limit_counts_distinct_previews_not_fragments() {
-    let first = image_preview_target(1);
-    let split_fragment = ImagePreviewTarget {
+fn preview_fragment_admission_keeps_whole_groups_within_sixteen_slots() {
+    // Interleave the two fragments so admission cannot count only adjacent rows.
+    let split = image_preview_target(16);
+    let fragment = ImagePreviewTarget {
         preview_y_offset_rows: 2,
         visible_preview_height: 1,
         top_clip_rows: 2,
-        ..first.clone()
+        ..split.clone()
     };
-    let mut targets = vec![first, split_fragment];
-    targets.extend((2..=MAX_IMAGE_PREVIEW_CACHE_ENTRIES as u64).map(image_preview_target));
-    let last = targets
-        .last()
-        .expect("last unique preview should exist")
-        .key();
-    let mut cache = ImagePreviewCache::new(None);
-
-    let requests = cache.next_requests(&targets);
-
-    assert_eq!(requests.len(), MAX_IMAGE_PREVIEW_CACHE_ENTRIES);
-    assert_eq!(cache.cache.entries.len(), MAX_IMAGE_PREVIEW_CACHE_ENTRIES);
-    assert!(cache.cache.entries.contains_key(&last));
+    for ordinary_count in [14, 15] {
+        let mut targets = (1..=ordinary_count)
+            .map(image_preview_target)
+            .collect::<Vec<_>>();
+        targets.push(split.clone());
+        targets.push(image_preview_target(17));
+        targets.push(fragment.clone());
+        let mut admitted = targets.clone();
+        admit_image_preview_targets(&mut admitted);
+        assert_eq!(admitted.len(), MAX_IMAGE_PREVIEW_CACHE_ENTRIES);
+        assert_eq!(
+            admitted
+                .iter()
+                .filter(|target| target.key() == split.key())
+                .count(),
+            if ordinary_count == 14 { 2 } else { 0 }
+        );
+        let mut cache = ImagePreviewCache::new(None);
+        let requests = cache.next_requests(&targets);
+        let fits = ordinary_count == 14;
+        assert_eq!(cache.cache.entries.contains_key(&split.key()), fits);
+        assert_eq!(
+            cache
+                .cache
+                .entries
+                .contains_key(&image_preview_target(17).key()),
+            !fits
+        );
+        assert_eq!(requests.len(), if fits { 15 } else { 16 });
+    }
 }
 
 #[test]
@@ -2347,6 +2624,59 @@ fn attachment_preview_waits_when_protocol_encoding_falls_behind() {
         Some(ImagePreviewEntry::Ready { image, .. })
             if image.current_frame_index() == 2
     ));
+}
+
+#[test]
+fn preview_protocol_requests_bound_running_work_while_replacing_queued_crops() {
+    let mut protocols = super::cache::RenderProtocolCache::<usize>::new();
+    protocols.protect([0]);
+    let first = protocols
+        .request_protected_build(&0)
+        .expect("first request fits");
+    assert!(first.try_start());
+    protocols.protect([1]);
+    let second = protocols
+        .request_protected_build(&1)
+        .expect("current can bypass one retiring encoder");
+    assert!(first.is_cancelled());
+    assert!(!first.is_finished());
+    assert!(second.try_start());
+
+    protocols.protect([2]);
+    assert!(second.is_cancelled());
+    assert!(
+        protocols.request_protected_build(&2).is_none(),
+        "two running encoders bound replacement work"
+    );
+    first.finish();
+    protocols.protect([2]);
+    let queued = protocols
+        .request_protected_build(&2)
+        .expect("finished encoder releases capacity");
+    protocols.protect([3]);
+    assert!(queued.is_finished());
+    assert!(
+        !queued.try_start(),
+        "obsolete queued work never starts encoding"
+    );
+    let latest = protocols
+        .request_protected_build(&3)
+        .expect("queued crops coalesce to latest");
+    second.finish();
+    protocols.protect([3]);
+    assert!(!protocols.store_requested_result(
+        1,
+        &second,
+        Err(MediaWorkError::Failed("stale".into())),
+        0
+    ));
+    assert!(!protocols.is_terminally_failed(&1));
+    latest.finish();
+    assert!(protocols.store_requested_result(3, &latest, Err(MediaWorkError::Busy), 0));
+    assert!(
+        protocols.request_protected_build(&3).is_some(),
+        "Busy remains retryable"
+    );
 }
 
 #[test]
@@ -3555,6 +3885,24 @@ fn push_attachment_message(state: &mut DashboardState, attachment: AttachmentInf
     );
 }
 
+fn loaded_preview_cache(target: &ImagePreviewTarget, bytes: &[u8]) -> ImagePreviewCache {
+    let mut cache = ImagePreviewCache::new(Some(Picker::halfblocks()));
+    cache.cache.entries.insert(
+        target.key(),
+        ImagePreviewEntry::Decoding {
+            filename: target.filename.clone(),
+            generation: 1,
+            last_used: 1,
+        },
+    );
+    cache.store_decoded(
+        target.key(),
+        1,
+        decode_media_image_bytes(bytes).map_err(MediaWorkError::Failed),
+    );
+    cache
+}
+
 fn image_preview_target(id: u64) -> ImagePreviewTarget {
     ImagePreviewTarget {
         viewer: false,
@@ -3665,41 +4013,5 @@ fn image_preview_targets_track_the_visible_message_window() {
             vec![Id::new(expected)],
             "{label}"
         );
-    }
-}
-
-#[test]
-fn image_preview_targets_resize_every_media_proxy_url_shape() {
-    let cases = [
-        (
-            "https://media.discordapp.net/attachments/691/150/photo.png?ex=abc&is=def&hm=123&format=png&width=4000&height=3000",
-            "https://media.discordapp.net/attachments/691/150/photo.png?ex=abc&is=def&hm=123&format=webp&width=320&height=240",
-        ),
-        (
-            "https://media.discordapp.net/ephemeral-attachments/691/150/photo.png?ex=abc&is=def&hm=123&width=4000&height=3000",
-            "https://media.discordapp.net/ephemeral-attachments/691/150/photo.png?ex=abc&is=def&hm=123&format=webp&width=320&height=240",
-        ),
-    ];
-
-    for (proxy_url, expected) in cases {
-        let mut state = state_with_image_messages(0, &[]);
-        let mut attachment = image_attachment(1);
-        attachment.proxy_url = proxy_url.to_owned();
-        push_media_message(
-            &mut state,
-            MessageCreateFixture {
-                message_id: Id::new(1),
-                content: Some("photo".to_owned()),
-                attachments: vec![attachment],
-                ..guild_message_create_fixture()
-            },
-        );
-
-        let target = visible_image_preview_targets(&state, layout(12))
-            .into_iter()
-            .next()
-            .expect("image attachment should produce preview target");
-
-        assert_eq!(target.url, expected, "{proxy_url}");
     }
 }

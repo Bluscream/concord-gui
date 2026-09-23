@@ -60,8 +60,8 @@ use voice_participant_audio::{
 
 use super::scroll::{VerticalScrollState, clamp_list_scroll};
 use super::{
-    DashboardState, EmojiReactionItem, FocusPane, MessageUrlItem, PollVotePickerItem,
-    ThreadEditField,
+    DashboardState, EmojiReactionItem, FocusPane, ForumPostComposerField, MessageUrlItem,
+    PollVotePickerItem, ThreadEditField,
 };
 use channel_edit::{ChannelDeleteState, ChannelEditState};
 pub use channel_edit::{ChannelEditPurpose, ChannelField};
@@ -84,6 +84,8 @@ pub(super) struct PopupUiState {
     key_sequence: Option<KeySequenceState>,
     /// Bumped per inbox open so a previous open's late responses are ignored.
     pub(super) inbox_request_generation: u64,
+    /// Lives beyond a search popup so reopening the same query cannot reuse an id.
+    pub(super) message_search_request_generation: u64,
     /// Lives beyond a forum composer so closed popups cannot deliver current previews.
     forum_attachment_preview_generation: u64,
 }
@@ -344,16 +346,6 @@ pub(in crate::tui) enum ScrollablePopupTarget {
     ThreadEdit,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::tui::state) enum ForumPostComposerFieldState {
-    Title,
-    Body,
-    Attachments,
-    Tags,
-    Submit,
-    Cancel,
-}
-
 #[derive(Debug)]
 pub(super) struct PopupFormStatus<F> {
     pub(super) field: Option<F>,
@@ -382,8 +374,8 @@ pub(super) struct ForumPostComposerState {
     pub(super) title: TextInputState,
     pub(super) body: TextInputState,
     pub(super) edit_input: TextInputState,
-    pub(super) active_field: ForumPostComposerFieldState,
-    pub(super) editing: Option<ForumPostComposerFieldState>,
+    pub(super) active_field: ForumPostComposerField,
+    pub(super) editing: Option<ForumPostComposerField>,
     pub(super) tag_selection: SelectablePopupState,
     /// Display order of tags while the tag picker is open. Captured on entry
     /// (selected tags first) so the cursor does not jump as tags are toggled.
@@ -394,7 +386,7 @@ pub(super) struct ForumPostComposerState {
     /// body, mirroring the main message composer.
     pub(super) attachments: Vec<MessageAttachmentUpload>,
     pub(super) attachment_previews: Vec<super::local_upload_preview::LocalUploadPreviewState>,
-    pub(super) status: Option<PopupFormStatus<ForumPostComposerFieldState>>,
+    pub(super) status: Option<PopupFormStatus<ForumPostComposerField>>,
     /// Scroll for the whole form. The body owns a separate viewport so a long
     /// draft cannot push the other fields out of the form document.
     pub(super) scroll: ScrollablePopupState,
@@ -409,7 +401,7 @@ impl ForumPostComposerState {
             title: TextInputState::default(),
             body: TextInputState::default(),
             edit_input: TextInputState::default(),
-            active_field: ForumPostComposerFieldState::Title,
+            active_field: ForumPostComposerField::Title,
             editing: None,
             tag_selection: SelectablePopupState::default(),
             tag_order: Vec::new(),
@@ -2219,7 +2211,7 @@ impl DashboardState {
                 ActivePopupInteraction::Custom(CustomPopupTarget::Search),
             ),
             ModalPopup::ForumPostComposer(popup)
-                if popup.editing == Some(ForumPostComposerFieldState::Tags) =>
+                if popup.editing == Some(ForumPostComposerField::Tags) =>
             {
                 ActivePopupPolicy::selectable(kind, SelectablePopupTarget::ForumPostTags)
             }
@@ -2397,7 +2389,7 @@ impl DashboardState {
                     .settings
                     .activity_picker
                     .as_ref()?;
-                (selection, self.detected_rich_presence().len() + 1)
+                (selection, self.detected_rich_presence().len() + 2)
             }
             SelectablePopupTarget::EmojiReactions => {
                 let selection = &self.popups.emoji_reaction_picker()?.selection;
@@ -2695,7 +2687,7 @@ impl DashboardState {
                 }
             }
             SelectablePopupTarget::UserProfileActivity => {
-                let len = self.detected_rich_presence().len() + 1;
+                let len = self.detected_rich_presence().len() + 2;
                 if let Some(selection) = self
                     .popups
                     .user_profile_popup_mut()

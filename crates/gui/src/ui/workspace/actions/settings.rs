@@ -477,7 +477,7 @@ impl Workspace {
             status: self.status,
             activities,
             // Typed by hand, so an RPC-detected game must not replace it.
-            track_client_id: None,
+            rich_presence: concord::discord::RichPresenceSelection::Manual,
         });
     }
 
@@ -489,7 +489,7 @@ impl Workspace {
             handle.send(AppCommand::UpdateCurrentUserActivity {
                 status: self.status,
                 activities: Vec::new(),
-                track_client_id: None,
+                rich_presence: concord::discord::RichPresenceSelection::Manual,
             });
         }
     }
@@ -516,7 +516,7 @@ impl Workspace {
             status: self.status,
             activities,
             // Manual, so the RPC server must not overwrite it with a game.
-            track_client_id: None,
+            rich_presence: concord::discord::RichPresenceSelection::Manual,
         });
     }
 

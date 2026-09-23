@@ -711,8 +711,10 @@ impl Workspace {
                 self.model.status_line =
                     "Sharing without audio - system audio capture unavailable".to_string();
             }
-            AppEvent::MessageSearchLoaded { page } => {
-                if let Some(search) = &mut self.search {
+            AppEvent::MessageSearchLoaded { request_id, page } => {
+                if let Some(search) = &mut self.search
+                    && search.request_id == request_id
+                {
                     search.running = false;
                     search.total = page.total_results;
                     search.results = page
@@ -727,8 +729,10 @@ impl Workspace {
                         .collect();
                 }
             }
-            AppEvent::MessageSearchLoadFailed { .. } => {
-                if let Some(search) = &mut self.search {
+            AppEvent::MessageSearchLoadFailed { request_id, .. } => {
+                if let Some(search) = &mut self.search
+                    && search.request_id == request_id
+                {
                     search.running = false;
                     search.error = Some("search failed".to_string());
                 }

@@ -345,7 +345,6 @@ pub fn append_annex_b_nal(frame: &mut Vec<u8>, nal: &[u8]) {
 
 pub fn h264_nal_types(frame: &[u8]) -> Vec<u8> {
     annex_b_nals(frame)
-        .into_iter()
         .filter_map(|nal| nal.first().map(|byte| byte & 0x1f))
         .collect()
 }

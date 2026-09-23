@@ -119,7 +119,16 @@ pub async fn connect_stream_broadcast(
                 let value: Value = serde_json::from_str(&text)
                     .map_err(|error| format!("broadcast websocket JSON parse failed: {error}"))?;
                 gateway_control.record_sequence(&value).await;
-                let opcode = value.get("op").and_then(Value::as_u64).unwrap_or_default() as u8;
+                // `as u8` silently truncated, so `op: 258` arrived as opcode 2
+                // and was handled as a different message. Upstream added this
+                // guard in v2.5.18; the helper was already here, unused.
+                let Some(opcode) = gateway::voice_gateway_opcode(&value) else {
+                    logging::debug(
+                        "stream",
+                        "ignored broadcast gateway payload with invalid opcode",
+                    );
+                    continue;
+                };
                 match opcode {
                     VOICE_OP_READY => {
                         let ready = gateway::parse_voice_ready_payload(&value)?;

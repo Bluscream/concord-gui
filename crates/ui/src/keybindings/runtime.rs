@@ -717,15 +717,24 @@ impl KeyBindings {
         key_set: SelectionKeySet,
     ) -> Option<SelectionAction> {
         let key: KeyEvent = key.into();
+        if let Some(action) = self.fixed_selection_action(key) {
+            return Some(action);
+        }
+        if key_set == SelectionKeySet::Navigation || !is_text_entry_character(key) {
+            return self.keymap_selection_action(key);
+        }
+        None
+    }
+
+    /// Row movement aliases that keep their meaning outside text entry modes.
+    pub fn fixed_selection_action(&self, key: impl Into<KeyEvent>) -> Option<SelectionAction> {
+        let key: KeyEvent = key.into();
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Down => Some(SelectionAction::Next),
             KeyCode::Up => Some(SelectionAction::Previous),
             KeyCode::Char('n') if ctrl => Some(SelectionAction::Next),
             KeyCode::Char('p') if ctrl => Some(SelectionAction::Previous),
-            _ if key_set == SelectionKeySet::Navigation || !is_text_entry_character(key) => {
-                self.keymap_selection_action(key)
-            }
             _ => None,
         }
     }
@@ -834,21 +843,16 @@ impl KeyBindings {
 
     pub fn scroll_action(&self, key: impl Into<KeyEvent>) -> Option<ScrollAction> {
         let key: KeyEvent = key.into();
-        match key.code {
-            KeyCode::Down => Some(ScrollAction::Down),
-            KeyCode::Up => Some(ScrollAction::Up),
-            _ => self
-                .keymap_single_key_shortcuts(UiAction::ScrollViewportDown)
-                .iter()
-                .any(|shortcut| shortcut.matches(key))
-                .then_some(ScrollAction::Down)
-                .or_else(|| {
-                    self.keymap_single_key_shortcuts(UiAction::ScrollViewportUp)
-                        .iter()
-                        .any(|shortcut| shortcut.matches(key))
-                        .then_some(ScrollAction::Up)
-                }),
-        }
+        self.keymap_single_key_shortcuts(UiAction::ScrollViewportDown)
+            .iter()
+            .any(|shortcut| shortcut.matches(key))
+            .then_some(ScrollAction::Down)
+            .or_else(|| {
+                self.keymap_single_key_shortcuts(UiAction::ScrollViewportUp)
+                    .iter()
+                    .any(|shortcut| shortcut.matches(key))
+                    .then_some(ScrollAction::Up)
+            })
     }
 
     pub fn start_composer_key_label(&self) -> String {
@@ -908,30 +912,14 @@ impl KeyBindings {
         "Enter verify | Esc choose method | Ctrl-C quit"
     }
 
-    pub fn channel_action_shortcuts(
-        &self,
-        actions: &[ChannelActionItem],
-        index: usize,
-    ) -> Vec<KeyChord> {
-        scoped_action_shortcuts(
-            index,
-            actions.iter().map(|item| item.kind),
-            &self.action_shortcuts.channel,
-            |kind| self.default_channel_action_shortcut(kind),
-        )
-    }
-
-    pub fn channel_action_label(&self, action: &ChannelActionItem) -> String {
-        action_label(&self.action_shortcuts.channel, action.kind, &action.label)
-    }
-
-    pub fn channel_action_shortcut_label(
-        &self,
-        actions: &[ChannelActionItem],
-        index: usize,
-    ) -> String {
-        key_chord_list_label(&self.channel_action_shortcuts(actions, index))
-    }
+    define_action_menu_scope!(
+        channel,
+        ChannelActionItem,
+        channel_action_shortcuts,
+        channel_action_label,
+        default_channel_action_shortcut,
+        channel_action_shortcut_label
+    );
 
     fn default_channel_action_shortcut(&self, kind: ChannelActionKind) -> Vec<KeyChord> {
         match kind {

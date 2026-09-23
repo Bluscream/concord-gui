@@ -224,6 +224,32 @@ fn remote_speaking_activity_ignores_silence_and_unplayable_media() {
 }
 
 #[test]
+fn voice_gateway_opcode_rejects_values_that_do_not_fit_u8() {
+    assert_eq!(gateway::voice_gateway_opcode(&json!({ "op": 2 })), Some(2));
+    assert_eq!(gateway::voice_gateway_opcode(&json!({ "op": 258 })), None);
+    assert_eq!(gateway::voice_gateway_opcode(&json!({ "op": "2" })), None);
+}
+
+#[test]
+fn remote_speaking_activity_queue_is_bounded_and_recovers_capacity() {
+    let (tx, mut rx) = mpsc::channel(1);
+    let first = Id::new(10);
+    let second = Id::new(20);
+
+    gateway::queue_remote_speaking_activity(&tx, first);
+    gateway::queue_remote_speaking_activity(&tx, second);
+
+    assert_eq!(rx.try_recv(), Ok(first));
+    assert!(matches!(
+        rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+
+    gateway::queue_remote_speaking_activity(&tx, second);
+    assert_eq!(rx.try_recv(), Ok(second));
+}
+
+#[test]
 fn microphone_sensitivity_filters_quiet_pcm_frames() {
     let quiet = vec![100i16; DISCORD_OPUS_20MS_STEREO_SAMPLES];
     let normal = vec![1500i16; DISCORD_OPUS_20MS_STEREO_SAMPLES];
@@ -577,40 +603,39 @@ fn voice_microphone_overload_promotes_sparse_clipped_transients_to_handling_nois
 }
 
 #[test]
-fn voice_microphone_overload_gain_keeps_sub_extreme_same_polarity_clip_audible() {
-    let mut clipped = vec![0i16; DISCORD_OPUS_20MS_STEREO_SAMPLES];
-    for sample in clipped
-        .iter_mut()
-        .take(VOICE_MIC_OVERLOAD_EXTREME_CLIPPED_SAMPLES - 1)
-    {
-        *sample = i16::MAX;
+fn voice_microphone_same_polarity_clip_threshold_selects_attenuation_or_blank() {
+    for (name, clipped_samples, expected_kind, expected_gain) in [
+        (
+            "sub-extreme",
+            VOICE_MIC_OVERLOAD_EXTREME_CLIPPED_SAMPLES - 1,
+            VoiceMicrophoneOverloadKind::Transient,
+            VOICE_MIC_OVERLOAD_TRANSIENT_GAIN,
+        ),
+        (
+            "extreme",
+            VOICE_MIC_OVERLOAD_EXTREME_CLIPPED_SAMPLES,
+            VoiceMicrophoneOverloadKind::HandlingNoise,
+            VOICE_MIC_HANDLING_NOISE_GAIN,
+        ),
+    ] {
+        let mut clipped = vec![0i16; DISCORD_OPUS_20MS_STEREO_SAMPLES];
+        clipped[..clipped_samples].fill(i16::MAX);
+
+        let decision = voice_microphone_overload_decision(&clipped)
+            .unwrap_or_else(|| panic!("{name} clipped frame should be classified"));
+        assert_eq!(decision.kind, expected_kind, "{name}");
+        assert_eq!(decision.gain, expected_gain, "{name}");
+        assert_eq!(
+            voice_microphone_overload_gain(&clipped),
+            Some(expected_gain),
+            "{name}"
+        );
+        assert_eq!(
+            voice_microphone_clipped_sample_count(&clipped),
+            clipped_samples,
+            "{name}"
+        );
     }
-
-    assert_eq!(
-        voice_microphone_overload_gain(&clipped),
-        Some(VOICE_MIC_OVERLOAD_TRANSIENT_GAIN)
-    );
-}
-
-#[test]
-fn voice_microphone_overload_gain_blanks_extreme_same_polarity_clip() {
-    let mut clipped = vec![0i16; DISCORD_OPUS_20MS_STEREO_SAMPLES];
-    for sample in clipped
-        .iter_mut()
-        .take(VOICE_MIC_OVERLOAD_EXTREME_CLIPPED_SAMPLES)
-    {
-        *sample = i16::MAX;
-    }
-
-    let decision = voice_microphone_overload_decision(&clipped)
-        .expect("extreme clipped frame should be blanked");
-
-    assert_eq!(decision.kind, VoiceMicrophoneOverloadKind::HandlingNoise);
-    assert_eq!(decision.gain, VOICE_MIC_HANDLING_NOISE_GAIN);
-    assert_eq!(
-        voice_microphone_clipped_sample_count(&clipped),
-        VOICE_MIC_OVERLOAD_EXTREME_CLIPPED_SAMPLES
-    );
 }
 
 #[test]

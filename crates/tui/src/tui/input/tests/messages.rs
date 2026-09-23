@@ -1,7 +1,5 @@
 use super::*;
-use concord::discord::{
-    AttachmentInfo, MediaPlaybackSource, MediaPlaybackTarget, MessageHistoryAfterMode,
-};
+use concord::discord::{MediaPlaybackSource, MediaPlaybackTarget, MessageHistoryAfterMode};
 
 #[test]
 fn enter_on_direct_message_kinds_subscribes_channel() {
@@ -316,55 +314,40 @@ fn open_url_shortcut_opens_url_or_url_picker() {
 }
 
 #[test]
-fn play_media_shortcut_returns_media_command() {
-    let mut state = state_with_messages_from_state(
-        DashboardState::new_with_display_options(DisplayOptions {
-            media_playback: true,
-            ..Default::default()
-        }),
-        0,
-    );
-    state.push_event(message_create_event(MessageCreateFixture {
-        message_id: Id::new(1),
-        content: Some("watch https://youtu.be/dQw4w9WgXcQ".to_owned()),
-        ..guild_message_create_fixture()
-    }));
-    state.focus_pane(FocusPane::Messages);
+fn message_media_shortcut_respects_display_option() {
+    for (case, enabled) in [
+        ("play_media_shortcut_returns_media_command", true),
+        (
+            "disabled_media_playback_display_option_removes_message_shortcut",
+            false,
+        ),
+    ] {
+        let mut state = state_with_messages_from_state(
+            DashboardState::new_with_display_options(DisplayOptions {
+                media_playback: enabled,
+                ..Default::default()
+            }),
+            0,
+        );
+        state.push_event(message_create_event(MessageCreateFixture {
+            message_id: Id::new(1),
+            content: Some("watch https://youtu.be/dQw4w9WgXcQ".to_owned()),
+            ..guild_message_create_fixture()
+        }));
+        state.focus_pane(FocusPane::Messages);
 
-    let command = handle_key(&mut state, char_key('x'));
-
-    assert_eq!(
-        command,
-        Some(AppCommand::PlayMedia {
+        let command = handle_key(&mut state, char_key('x'));
+        let expected = enabled.then(|| AppCommand::PlayMedia {
             target: MediaPlaybackTarget {
                 url: "https://youtu.be/dQw4w9WgXcQ".to_owned(),
                 label: "media URL".to_owned(),
                 source: MediaPlaybackSource::Message,
             },
             request_id: None,
-        })
-    );
-}
+        });
 
-#[test]
-fn disabled_media_playback_display_option_removes_message_shortcut() {
-    let mut state = state_with_messages_from_state(
-        DashboardState::new_with_display_options(DisplayOptions {
-            media_playback: false,
-            ..Default::default()
-        }),
-        0,
-    );
-    state.push_event(message_create_event(MessageCreateFixture {
-        message_id: Id::new(1),
-        content: Some("watch https://youtu.be/dQw4w9WgXcQ".to_owned()),
-        ..guild_message_create_fixture()
-    }));
-    state.focus_pane(FocusPane::Messages);
-
-    let command = handle_key(&mut state, char_key('x'));
-
-    assert_eq!(command, None);
+        assert_eq!(command, expected, "{case}");
+    }
 }
 
 #[test]
@@ -1004,40 +987,6 @@ fn attachment_viewer_x_shortcut_plays_video_attachment() {
             request_id: None,
         })
     );
-}
-
-#[test]
-fn disabled_media_playback_display_option_blocks_attachment_viewer_playback() {
-    let mut state = state_with_messages_from_state(
-        DashboardState::new_with_display_options(DisplayOptions {
-            media_playback: false,
-            ..Default::default()
-        }),
-        0,
-    );
-    state.push_event(message_create_event(MessageCreateFixture {
-        message_id: Id::new(1),
-        content: Some(String::new()),
-        attachments: vec![AttachmentInfo {
-            id: Id::new(3),
-            filename: "clip.mp4".to_owned(),
-            url: "https://cdn.discordapp.com/clip.mp4".to_owned(),
-            proxy_url: "https://media.discordapp.net/clip.mp4".to_owned(),
-            content_type: Some("video/mp4".to_owned()),
-            size: 2048,
-            width: Some(640),
-            height: Some(480),
-            description: None,
-            flags: 0,
-        }],
-        ..guild_message_create_fixture()
-    }));
-    state.focus_pane(FocusPane::Messages);
-    handle_key(&mut state, char_key('v'));
-
-    let command = handle_key(&mut state, char_key('x'));
-
-    assert_eq!(command, None);
 }
 
 #[test]

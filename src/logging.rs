@@ -1,14 +1,15 @@
 use std::{
     collections::VecDeque,
     env,
-    fs::{File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
-    path::{Path, PathBuf},
+    fs::OpenOptions,
+    io::Write,
+    path::PathBuf,
     sync::{Mutex, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 #[cfg(all(target_os = "linux", feature = "stream-broadcast", not(test)))]
 use std::{
+    fs::File,
     io::{BufRead, BufReader},
     os::fd::{AsRawFd, FromRawFd, OwnedFd},
     thread,
@@ -19,14 +20,14 @@ use chrono::{DateTime, Utc};
 use crate::paths;
 
 static LOGGER: OnceLock<FileLogger> = OnceLock::new();
-/// Kept beside upstream's log-file tail, not replaced by it: `crates/gui` has
-/// no terminal to point at a file and reads recent errors straight out of
-/// memory. Upstream dropped this in v2.5.17 when the debug panel took over.
+/// Kept beside upstream's in-process log tail rather than replaced by it:
+/// `crates/gui` shows recent *errors* in its settings view and wants them
+/// separated from ordinary debug output, which the tail does not do.
 static ERROR_LOG: OnceLock<Mutex<VecDeque<ErrorLogEntry>>> = OnceLock::new();
 
 const MAX_ERROR_LOG_ENTRIES: usize = 200;
 const MAX_LOG_TAIL_LINES: usize = 200;
-const MAX_LOG_TAIL_BYTES: u64 = 256 * 1024;
+const MAX_LOG_TAIL_BYTES: usize = 256 * 1024;
 #[cfg(all(target_os = "linux", feature = "stream-broadcast", not(test)))]
 const NATIVE_STDERR_TARGET: &str = "native-stderr";
 
@@ -49,9 +50,41 @@ impl ErrorLogEntry {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LogFileLine {
-    pub offset: u64,
+pub struct LogLine {
+    pub id: u64,
     pub text: String,
+}
+
+#[derive(Debug, Default)]
+struct LogTail {
+    lines: VecDeque<LogLine>,
+    bytes: usize,
+    next_id: u64,
+}
+
+impl LogTail {
+    fn push(&mut self, text: &str) {
+        for text in text.split_terminator('\n') {
+            let text = text.strip_suffix('\r').unwrap_or(text);
+            // Keep a bounded suffix even for a single huge line, without
+            // splitting a UTF-8 character. Retained lines never change IDs.
+            let mut start = text.len().saturating_sub(MAX_LOG_TAIL_BYTES);
+            while !text.is_char_boundary(start) {
+                start += 1;
+            }
+            let text = text[start..].to_owned();
+            self.bytes += text.len();
+            self.lines.push_back(LogLine {
+                id: self.next_id,
+                text,
+            });
+            self.next_id += 1;
+            while self.lines.len() > MAX_LOG_TAIL_LINES || self.bytes > MAX_LOG_TAIL_BYTES {
+                let removed = self.lines.pop_front().expect("tail exceeds its bound");
+                self.bytes -= removed.text.len();
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,12 +112,13 @@ impl Level {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[cfg_attr(test, allow(dead_code))]
 struct FileLogger {
     path: Option<PathBuf>,
     debug_enabled: bool,
     trace_enabled: bool,
+    tail: Mutex<LogTail>,
 }
 
 impl FileLogger {
@@ -93,18 +127,27 @@ impl FileLogger {
             path: log_path(),
             debug_enabled: debug_enabled(),
             trace_enabled: trace_flag(),
+            ..Default::default()
         }
     }
 
     #[cfg(not(test))]
     fn write(&self, level: Level, target: &str, message: &str) {
-        self.write_to_file(level, target, message);
+        self.record(level, target, message);
     }
 
-    fn write_to_file(&self, level: Level, target: &str, message: &str) {
+    fn record(&self, level: Level, target: &str, message: &str) {
         if !self.should_write(level) {
             return;
         }
+        let mut line = format_log_line(unix_timestamp_millis(), level, target, message);
+        line.push('\n');
+        // Capture at the logging call, not by reading back a shared file.
+        // Release the buffer lock before disk I/O so snapshots stay responsive.
+        self.tail
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(&line);
         let Some(path) = self.path.as_ref() else {
             return;
         };
@@ -112,12 +155,18 @@ impl FileLogger {
             let _ = std::fs::create_dir_all(parent);
         }
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-            let _ = writeln!(
-                file,
-                "{}",
-                format_log_line(unix_timestamp_millis(), level, target, message)
-            );
+            let _ = file.write_all(line.as_bytes());
         }
+    }
+
+    fn recent_lines(&self) -> Vec<LogLine> {
+        self.tail
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .lines
+            .iter()
+            .cloned()
+            .collect()
     }
 
     /// Tests exercise logging with synthetic entries, so they must not write to
@@ -173,8 +222,9 @@ pub fn error(target: &str, message: impl AsRef<str>) {
 }
 
 /// Records a native library failure without presenting it as an application
-/// error in the TUI. Native backends often report a recoverable hardware
-/// failure before Concord falls back to another backend.
+/// error in the UI. Native backends routinely report a recoverable hardware
+/// failure before Concord falls back to another one, and surfacing that as an
+/// application error reads as a fault that is not there.
 #[cfg(any(all(target_os = "linux", feature = "stream-broadcast"), test))]
 fn file_error(target: &str, message: impl AsRef<str>) {
     logger().write(Level::Error, target, message.as_ref());
@@ -205,88 +255,13 @@ fn push_error_entry(target: &str, message: &str) {
     });
 }
 
-/// Reads the recent physical lines from the same file used by the logger.
-///
-/// The file is reopened for each snapshot so replacement and truncation are
-/// visible. Reads stay bounded even when the configured path points at a large
-/// file. Non-file paths are rejected before opening so a FIFO cannot block the
-/// UI's background reader.
-pub fn read_log_tail() -> std::io::Result<Vec<LogFileLine>> {
-    read_log_tail_from_path(logger().path.as_deref())
+/// Snapshots the current process's recent log lines without accessing disk.
+pub fn recent_log_lines() -> Vec<LogLine> {
+    logger().recent_lines()
 }
 
 fn logger() -> &'static FileLogger {
     LOGGER.get_or_init(FileLogger::from_env)
-}
-
-fn read_log_tail_from_path(path: Option<&Path>) -> std::io::Result<Vec<LogFileLine>> {
-    let Some(path) = path else {
-        return Ok(Vec::new());
-    };
-    let metadata = match std::fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error),
-    };
-    if !metadata.is_file() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Concord log path is not a regular file",
-        ));
-    }
-
-    let mut file = match File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error),
-    };
-    let length = file.metadata()?.len();
-    let start = length.saturating_sub(MAX_LOG_TAIL_BYTES);
-    file.seek(SeekFrom::Start(start))?;
-
-    let mut bytes = Vec::with_capacity((length - start) as usize);
-    file.take(MAX_LOG_TAIL_BYTES).read_to_end(&mut bytes)?;
-
-    // A bounded tail can begin inside a UTF-8 scalar. Logger output is UTF-8,
-    // so skipping continuation bytes preserves every complete scalar in range.
-    let leading_continuations = bytes
-        .iter()
-        .take_while(|byte| (**byte & 0b1100_0000) == 0b1000_0000)
-        .count();
-    let mut bytes = &bytes[leading_continuations..];
-    let mut content_start = start + leading_continuations as u64;
-
-    // Select the retained line range before constructing Strings. This keeps a
-    // newline-dense tail from allocating one temporary entry per byte.
-    let line_count = bytes.iter().filter(|byte| **byte == b'\n').count()
-        + usize::from(!bytes.is_empty() && bytes.last() != Some(&b'\n'));
-    let lines_to_skip = line_count.saturating_sub(MAX_LOG_TAIL_LINES);
-    if lines_to_skip > 0 {
-        let retained_start = bytes
-            .iter()
-            .enumerate()
-            .filter(|(_, byte)| **byte == b'\n')
-            .nth(lines_to_skip - 1)
-            .map_or(0, |(index, _)| index + 1);
-        bytes = &bytes[retained_start..];
-        content_start += retained_start as u64;
-    }
-
-    let lines = bytes
-        .split_inclusive(|byte| *byte == b'\n')
-        .scan(content_start, |offset, line| {
-            let line_offset = *offset;
-            *offset += line.len() as u64;
-            let text = line.strip_suffix(b"\n").unwrap_or(line);
-            let text = text.strip_suffix(b"\r").unwrap_or(text);
-            Some(LogFileLine {
-                offset: line_offset,
-                text: String::from_utf8_lossy(text).into_owned(),
-            })
-        })
-        .collect::<Vec<_>>();
-    debug_assert!(lines.len() <= MAX_LOG_TAIL_LINES);
-    Ok(lines)
 }
 
 fn log_path() -> Option<PathBuf> {
@@ -300,10 +275,6 @@ fn debug_enabled() -> bool {
     env_flag("CONCORD_DEBUG")
 }
 
-/// Whether to record everything crossing a seam.
-///
-/// Implies debug: somebody who asked for every command and event did not mean
-/// to also switch the ordinary diagnostics off.
 fn trace_flag() -> bool {
     env_flag("CONCORD_TRACE")
 }
@@ -323,14 +294,7 @@ fn flag_enabled(value: &str) -> bool {
 }
 
 #[cfg(any(all(target_os = "linux", feature = "stream-broadcast"), test))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum NativeStderrLevel {
-    Debug,
-    Error,
-}
-
-#[cfg(any(all(target_os = "linux", feature = "stream-broadcast"), test))]
-fn classify_native_stderr(message: &str) -> NativeStderrLevel {
+fn classify_native_stderr(message: &str) -> Level {
     let message = message.trim_start().to_ascii_lowercase();
     let informational_prefixes = [
         "libva info:",
@@ -350,11 +314,11 @@ fn classify_native_stderr(message: &str) -> NativeStderrLevel {
         .iter()
         .any(|prefix| message.starts_with(prefix))
     {
-        NativeStderrLevel::Debug
+        Level::Debug
     } else {
         // stderr has no standard severity metadata. Unknown output stays in the
         // normal log so a native failure is not silently discarded.
-        NativeStderrLevel::Error
+        Level::Error
     }
 }
 
@@ -366,12 +330,10 @@ fn record_native_stderr(message: &str) {
     }
 
     match classify_native_stderr(message) {
-        NativeStderrLevel::Debug => debug(NATIVE_STDERR_TARGET, message),
-        // `file_error`, not `error`: a native backend routinely reports a
-        // recoverable hardware failure before Concord falls back to another
-        // one, and surfacing that in the TUI's error list reads as a fault in
-        // the application. Upstream routes it to `error`; this fork does not.
-        NativeStderrLevel::Error => file_error(NATIVE_STDERR_TARGET, message),
+        Level::Debug => debug(NATIVE_STDERR_TARGET, message),
+        // `file_error`, not `error`: see the note on `file_error`. Upstream
+        // routes this to `error`; this fork keeps it out of the error list.
+        _ => file_error(NATIVE_STDERR_TARGET, message),
     }
 }
 
@@ -521,97 +483,75 @@ fn format_log_timestamp(timestamp_millis: u128) -> String {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn an_info_line_is_written_even_when_debug_logging_is_off() {
-        // The rule this level exists for. A log that drops it whenever nobody
-        // asked for debug output cannot answer which account a run used, which
-        // is the first thing anybody wants from it afterwards.
-        let quiet = FileLogger {
-            path: None,
-            debug_enabled: false,
-            trace_enabled: false,
-        };
-
-        assert!(quiet.should_write(Level::Info));
-        assert!(quiet.should_write(Level::Error));
-        assert!(!quiet.should_write(Level::Debug));
-    }
+    use std::fs;
 
     use std::sync::{Mutex, OnceLock};
 
-    use std::{
-        fs,
-        io::Write,
-        path::PathBuf,
-        sync::atomic::{AtomicU64, Ordering},
-    };
-
     use super::{
-        FileLogger, Level, MAX_LOG_TAIL_BYTES, MAX_LOG_TAIL_LINES, NativeStderrLevel,
-        classify_native_stderr, error, error_entries, error_log, file_error,
-        read_log_tail_from_path,
+        FileLogger, Level, LogTail, MAX_LOG_TAIL_BYTES, MAX_LOG_TAIL_LINES, classify_native_stderr,
+        error, error_entries, error_log, file_error,
     };
-
-    static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
-
-    fn temp_path(name: &str) -> PathBuf {
-        let unique = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "concord-logging-{}-{unique}-{name}",
-            std::process::id()
-        ))
-    }
-
-    fn remove_temp(path: &PathBuf) {
-        let _ = fs::remove_file(path);
-        let _ = fs::remove_dir(path);
-    }
 
     #[test]
-    fn file_logger_and_tail_reader_share_debug_filtering_and_text() {
-        let path = temp_path("write.log");
-        let normal_logger = FileLogger {
-            path: Some(path.clone()),
-            debug_enabled: false,
-            trace_enabled: false,
-        };
-        normal_logger.write_to_file(Level::Debug, "gateway", "not recorded");
-        normal_logger.write_to_file(Level::Error, "gateway", "first\nsecond");
+    fn process_log_tail_captures_only_its_own_output_with_the_file_log_level_policy() {
+        for debug_enabled in [false, true] {
+            let directory = tempfile::tempdir().expect("temporary log directory should be created");
+            let path = directory.path().join("write.log");
+            let previous = "previous process log\n";
+            fs::write(&path, previous).expect("write previous process log");
+            let logger = FileLogger {
+                path: Some(path.clone()),
+                debug_enabled,
+                ..Default::default()
+            };
+            assert!(
+                logger.recent_lines().is_empty(),
+                "the current process starts without previous process logs"
+            );
+            logger.record(Level::Error, "gateway", "first\n\nsecond");
+            logger.record(Level::Debug, "media", "decoded image");
 
-        let debug_logger = FileLogger {
-            path: Some(path.clone()),
-            debug_enabled: true,
-            trace_enabled: false,
-        };
-        debug_logger.write_to_file(Level::Debug, "media", "decoded image");
+            let lines = logger.recent_lines();
+            assert_eq!(lines.len(), if debug_enabled { 4 } else { 3 });
+            assert!(lines[0].text.contains("[ERROR] gateway: first"));
+            assert_eq!(lines[1].text, "");
+            assert_eq!(lines[2].text, "second");
+            if debug_enabled {
+                assert!(lines[3].text.contains("[DEBUG] media: decoded image"));
+            }
+            assert!(lines.windows(2).all(|pair| pair[0].id < pair[1].id));
+            let current = lines
+                .iter()
+                .map(|line| format!("{}\n", line.text))
+                .collect::<String>();
+            assert_eq!(
+                fs::read_to_string(&path).expect("read written log"),
+                format!("{previous}{current}"),
+                "file history is preserved and new output matches the panel"
+            );
 
-        let lines = read_log_tail_from_path(Some(&path)).expect("read written log");
-        assert_eq!(lines.len(), 3);
-        assert!(lines[0].text.contains("[ERROR] gateway: first"));
-        assert_eq!(lines[1].text, "second");
-        assert!(lines[2].text.contains("[DEBUG] media: decoded image"));
-        assert!(lines.windows(2).all(|pair| pair[0].offset < pair[1].offset));
-        assert!(!lines.iter().any(|line| line.text.contains("not recorded")));
-
-        remove_temp(&path);
+            let other_logger = FileLogger {
+                path: Some(path.clone()),
+                ..Default::default()
+            };
+            assert!(other_logger.recent_lines().is_empty());
+            other_logger.record(Level::Error, "gateway", "another process");
+            assert_eq!(other_logger.recent_lines().len(), 1);
+            assert_eq!(
+                logger.recent_lines(),
+                lines,
+                "other writers cannot enter the buffer"
+            );
+        }
     }
 
     #[test]
     fn native_stderr_levels_follow_debug_and_error_policy() {
         for (message, expected) in [
-            (
-                "libva info: VA-API version 1.23.0",
-                NativeStderrLevel::Debug,
-            ),
-            (
-                "warning: optional encoder unavailable",
-                NativeStderrLevel::Debug,
-            ),
-            (
-                "libva error: driver initialization failed",
-                NativeStderrLevel::Error,
-            ),
-            ("unclassified native failure", NativeStderrLevel::Error),
+            ("libva info: VA-API version 1.23.0", Level::Debug),
+            ("warning: optional encoder unavailable", Level::Debug),
+            ("libva error: driver initialization failed", Level::Error),
+            ("unclassified native failure", Level::Error),
         ] {
             assert_eq!(classify_native_stderr(message), expected, "{message}");
         }
@@ -619,7 +559,7 @@ mod tests {
         let logger = FileLogger {
             path: None,
             debug_enabled: false,
-            trace_enabled: false,
+            ..Default::default()
         };
         assert!(!logger.should_write(Level::Debug));
         assert!(logger.should_write(Level::Error));
@@ -627,107 +567,68 @@ mod tests {
 
     #[test]
     fn log_tail_is_bounded_by_line_count_and_bytes() {
-        let line_path = temp_path("line-limit.log");
+        let mut tail = LogTail::default();
         let content = (0..MAX_LOG_TAIL_LINES + 5)
             .map(|index| format!("line {index}\n"))
             .collect::<String>();
-        fs::write(&line_path, content).expect("write line-limited log");
+        tail.push(&content);
+        assert_eq!(tail.lines.len(), MAX_LOG_TAIL_LINES);
+        assert_eq!(tail.lines[0].text, "line 5");
+        assert_eq!(tail.lines[0].id, 5);
+        assert_eq!(tail.lines[MAX_LOG_TAIL_LINES - 1].text, "line 204");
+        tail.push("next\n");
+        assert_eq!(tail.lines[0].id, 6, "eviction preserves line identity");
 
-        let lines = read_log_tail_from_path(Some(&line_path)).expect("read line-limited log");
-        assert_eq!(lines.len(), MAX_LOG_TAIL_LINES);
-        assert_eq!(lines[0].text, "line 5");
-        assert_eq!(lines[MAX_LOG_TAIL_LINES - 1].text, "line 204");
+        let mut tail = LogTail::default();
+        let half = "x".repeat(MAX_LOG_TAIL_BYTES / 2);
+        tail.push(&format!("{half}\n{half}\n"));
+        assert_eq!(tail.lines.len(), 2);
+        tail.push("new\n");
+        assert_eq!(tail.lines.len(), 2);
+        assert_eq!(tail.lines[0].id, 1);
+        assert!(tail.lines.iter().map(|line| line.text.len()).sum::<usize>() <= MAX_LOG_TAIL_BYTES);
 
-        let byte_path = temp_path("byte-limit.log");
-        let prefix = "discarded\n";
-        let oversized = "x".repeat(MAX_LOG_TAIL_BYTES as usize);
-        fs::write(&byte_path, format!("{prefix}{oversized}")).expect("write byte-limited log");
+        for oversized in [
+            "x".repeat(MAX_LOG_TAIL_BYTES + 10),
+            format!("{}끝", "가".repeat(MAX_LOG_TAIL_BYTES / 3 + 2)),
+        ] {
+            tail.push(&oversized);
+            assert_eq!(tail.lines.len(), 1);
+            let text = &tail.lines[0].text;
+            assert!(text.len() <= MAX_LOG_TAIL_BYTES);
+            assert!(text.len() >= MAX_LOG_TAIL_BYTES - 3);
+            assert!(oversized.ends_with(text));
+            assert!(!text.contains('\u{fffd}'));
+        }
 
-        let byte_lines = read_log_tail_from_path(Some(&byte_path)).expect("read byte-limited log");
-        assert_eq!(byte_lines.len(), 1);
-        assert_eq!(byte_lines[0].offset, prefix.len() as u64);
-        assert_eq!(byte_lines[0].text.len(), MAX_LOG_TAIL_BYTES as usize);
-
-        let dense_path = temp_path("dense-lines.log");
-        fs::write(&dense_path, "\n".repeat(MAX_LOG_TAIL_BYTES as usize))
-            .expect("write newline-dense log");
-        let dense_lines =
-            read_log_tail_from_path(Some(&dense_path)).expect("read newline-dense log");
-        assert_eq!(dense_lines.len(), MAX_LOG_TAIL_LINES);
-        assert!(dense_lines.iter().all(|line| line.text.is_empty()));
-
-        remove_temp(&line_path);
-        remove_temp(&byte_path);
-        remove_temp(&dense_path);
+        tail.push(&"\n".repeat(MAX_LOG_TAIL_BYTES));
+        assert_eq!(tail.lines.len(), MAX_LOG_TAIL_LINES);
+        assert!(tail.lines.iter().all(|line| line.text.is_empty()));
     }
 
     #[test]
-    fn log_tail_reopens_for_append_truncation_and_replacement() {
-        let path = temp_path("updates.log");
-        fs::write(&path, "one\ntwo").expect("write initial log");
-        let initial = read_log_tail_from_path(Some(&path)).expect("read initial log");
-        assert_eq!(initial[1].offset, 4);
-        assert_eq!(initial[1].text, "two");
+    fn process_log_tail_survives_file_changes_and_write_failures() {
+        let directory = tempfile::tempdir().expect("temporary log directory should be created");
+        let path = directory.path().join("updates.log");
+        let logger = FileLogger {
+            path: Some(path.clone()),
+            ..Default::default()
+        };
+        logger.record(Level::Error, "media", "current process");
+        let initial = logger.recent_lines();
+        fs::write(&path, "external file content\n").expect("overwrite log file");
+        assert_eq!(logger.recent_lines(), initial);
 
-        let mut file = fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .expect("open log for append");
-        file.write_all(b" extended\nthree\n").expect("append log");
-        drop(file);
-        let appended = read_log_tail_from_path(Some(&path)).expect("read appended log");
-        assert_eq!(appended[1].offset, initial[1].offset);
-        assert_eq!(appended[1].text, "two extended");
-
-        fs::write(&path, "short\n").expect("truncate log");
-        let truncated = read_log_tail_from_path(Some(&path)).expect("read truncated log");
-        assert_eq!(
-            truncated,
-            vec![super::LogFileLine {
-                offset: 0,
-                text: "short".to_owned()
-            }]
-        );
-
-        let replacement = temp_path("replacement.log");
-        fs::write(&replacement, "replacement\n").expect("write replacement log");
-        fs::rename(&replacement, &path).expect("replace log");
-        let replaced = read_log_tail_from_path(Some(&path)).expect("read replaced log");
-        assert_eq!(replaced[0].offset, 0);
-        assert_eq!(replaced[0].text, "replacement");
-
-        remove_temp(&path);
-    }
-
-    #[test]
-    fn log_tail_handles_utf8_cut_missing_and_non_file_paths() {
-        let path = temp_path("utf8.log");
-        let content = format!("{}끝", "가".repeat(MAX_LOG_TAIL_BYTES as usize / 3 + 2));
-        fs::write(&path, content).expect("write UTF-8 log");
-        let lines = read_log_tail_from_path(Some(&path)).expect("read UTF-8 tail");
-        assert_eq!(lines.len(), 1);
-        assert!(!lines[0].text.starts_with('\u{fffd}'));
-        assert!(lines[0].text.ends_with("끝"));
-
-        let missing = temp_path("missing.log");
-        assert!(
-            read_log_tail_from_path(None)
-                .expect("read unconfigured log")
-                .is_empty()
-        );
-        assert!(
-            read_log_tail_from_path(Some(&missing))
-                .expect("read missing log")
-                .is_empty()
-        );
-
-        let directory = temp_path("directory");
-        fs::create_dir(&directory).expect("create non-file log path");
-        let error = read_log_tail_from_path(Some(&directory)).expect_err("reject directory");
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-
-        remove_temp(&path);
-        remove_temp(&directory);
+        fs::remove_file(&path).expect("remove log file");
+        fs::create_dir(&path).expect("block file writes with a directory");
+        logger.record(Level::Error, "media", "still visible");
+        let lines = logger.recent_lines();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], initial[0]);
+        assert!(lines[1].text.ends_with("still visible"));
+        let logger = FileLogger::default();
+        logger.record(Level::Error, "media", "no log path");
+        assert_eq!(logger.recent_lines().len(), 1);
     }
 
     static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -738,6 +639,24 @@ mod tests {
 
     fn clear_error_log() {
         error_log().lock().expect("error log mutex").clear();
+    }
+
+    #[test]
+    fn an_info_line_is_written_even_when_debug_logging_is_off() {
+        // The rule this level exists for. A log that drops it whenever nobody
+        // asked for debug output cannot answer which account a run used, which
+        // is the first thing anybody wants from it afterwards.
+        let quiet = FileLogger {
+            path: None,
+            debug_enabled: false,
+            trace_enabled: false,
+            ..Default::default()
+        };
+
+        assert!(quiet.should_write(Level::Info));
+        assert!(quiet.should_write(Level::Error));
+        assert!(!quiet.should_write(Level::Debug));
+        assert!(!quiet.should_write(Level::Trace));
     }
 
     #[test]
@@ -769,7 +688,7 @@ mod tests {
     }
 
     #[test]
-    fn file_only_native_error_does_not_enter_tui_error_log() {
+    fn file_only_native_error_does_not_enter_the_error_list() {
         let _guard = test_lock().lock().expect("logging test mutex");
         clear_error_log();
 

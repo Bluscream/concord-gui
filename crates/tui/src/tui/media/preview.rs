@@ -15,9 +15,7 @@ use concord::{
 use super::{
     ImagePreviewTarget, MediaProtocolRenderSpec,
     cache::{MediaCacheStats, MediaImageCacheCore, MediaImageCacheEntry, RenderProtocolCache},
-    decode::{
-        DecodedMediaImage, MediaImageDecodeCache, MediaImageDecodeKey, MediaImageDecodeRequest,
-    },
+    decode::{DecodedMediaImage, MediaImageDecodeKey, MediaImageDecodeRequest},
     estimated_media_protocol_bytes, picker_font_size,
     protocol_job::{MediaProtocolBuildJob, MediaProtocolBuildResult},
     work::{MediaWorkError, MediaWorkResult},
@@ -92,7 +90,6 @@ impl ImagePreviewCache {
 
     pub(in crate::tui) fn prepare(&mut self, targets: &[ImagePreviewTarget]) {
         let picker = self.picker.clone();
-        let font_size = picker.as_ref().map_or((10, 20), picker_font_size);
         self.prepared_specs.clear();
         let admitted = admitted_preview_keys(targets);
         for target in targets
@@ -113,10 +110,23 @@ impl ImagePreviewCache {
                 .is_some_and(|specs| specs.contains(render_spec))
         });
         for (key, entry) in &mut self.cache.entries {
-            let ImagePreviewEntry::Ready { protocols, .. } = entry else {
+            let ImagePreviewEntry::Ready {
+                image, protocols, ..
+            } = entry
+            else {
                 continue;
             };
             let prepared_specs = self.prepared_specs.get(key);
+            protocols.protect(prepared_specs.into_iter().flat_map(|specs| {
+                specs.iter().flat_map(|render_spec| {
+                    protocol_window_frame_indices(image).map(move |frame_index| {
+                        PreviewFrameProtocolKey {
+                            render_spec: *render_spec,
+                            frame_index,
+                        }
+                    })
+                })
+            }));
             protocols.retain_failures(|protocol_key| {
                 prepared_specs.is_some_and(|specs| specs.contains(&protocol_key.render_spec))
             });
@@ -140,83 +150,50 @@ impl ImagePreviewCache {
                 .prepared_specs
                 .get(&key)
                 .expect("prepared preview key has render specs");
+            let reservation = PreviewProtocolReservation {
+                key: &key,
+                generation: *generation,
+                image,
+                picker,
+            };
             let current_frame_index = image.current_frame_index();
-            let mut current_missing = false;
-            for render_spec in specs {
-                let protocol_key = PreviewFrameProtocolKey {
-                    render_spec: *render_spec,
-                    frame_index: current_frame_index,
-                };
-                if protocols.get(&protocol_key).is_some()
-                    || protocols.is_terminally_failed(&protocol_key)
-                {
-                    continue;
-                }
-                current_missing = true;
-                if protocols.request_build(&protocol_key) {
-                    self.protocol_jobs.push(MediaProtocolBuildJob::preview(
-                        key.clone(),
-                        *generation,
-                        *render_spec,
-                        current_frame_index,
-                        picker.clone(),
-                        image.frame_shared(current_frame_index),
-                    ));
-                }
-                break;
-            }
+            let current_missing = reservation.reserve_first_missing(
+                protocols,
+                specs,
+                current_frame_index,
+                &mut self.protocol_jobs,
+            );
             if current_missing || image.frame_count() < ANIMATION_PROTOCOL_WINDOW_FRAMES {
                 continue;
             }
 
-            let window_bytes = specs.iter().fold(0u64, |bytes, render_spec| {
-                bytes.saturating_add(
-                    estimated_preview_protocol_bytes(*render_spec, font_size)
-                        .saturating_mul(ANIMATION_PROTOCOL_WINDOW_FRAMES as u64),
-                )
-            });
-            if specs.len().saturating_mul(ANIMATION_PROTOCOL_WINDOW_FRAMES) > 2
-                && window_bytes > super::cache::RENDER_PROTOCOL_BYTE_BUDGET_PER_MEDIA_ENTRY
-            {
-                // Every visible crop must remain available together. Prefetching
-                // an oversized second-frame window would evict those current
-                // crops and rebuild them forever, so hold only this oversized
-                // split animation still until a smaller window becomes visible.
-                image.pause_animation();
-                continue;
-            }
-
             let next_frame_index = image.frame_index_with_offset(1);
-            for render_spec in specs {
-                let protocol_key = PreviewFrameProtocolKey {
-                    render_spec: *render_spec,
-                    frame_index: next_frame_index,
-                };
-                if protocols.get(&protocol_key).is_some()
-                    || protocols.is_terminally_failed(&protocol_key)
-                {
-                    continue;
-                }
-                if protocols.request_build(&protocol_key) {
-                    self.protocol_jobs.push(MediaProtocolBuildJob::preview(
-                        key.clone(),
-                        *generation,
-                        *render_spec,
-                        next_frame_index,
-                        picker.clone(),
-                        image.frame_shared(next_frame_index),
-                    ));
-                }
-                break;
-            }
+            reservation.reserve_first_missing(
+                protocols,
+                specs,
+                next_frame_index,
+                &mut self.protocol_jobs,
+            );
         }
         self.prune_to_limit(targets);
+        self.protocol_jobs.retain(|job| !job.is_cancelled());
+    }
+
+    pub(in crate::tui) fn retain_source_consumers(&mut self, targets: &[ImagePreviewTarget]) {
+        let admitted = admitted_preview_keys(targets);
+        self.cache.entries.retain(|key, entry| {
+            admitted.contains(key)
+                || !matches!(
+                    entry,
+                    ImagePreviewEntry::Loading { .. } | ImagePreviewEntry::Decoding { .. }
+                )
+        });
     }
 
     pub(in crate::tui) fn reuse_cached_sources(
         &mut self,
         targets: &[ImagePreviewTarget],
-        shared: &mut MediaImageDecodeCache,
+        mut lookup: impl FnMut(&str) -> Option<DecodedMediaImage>,
     ) -> bool {
         let mut reused = false;
         let admitted = admitted_preview_keys(targets);
@@ -225,12 +202,13 @@ impl ImagePreviewCache {
             .filter(|target| admitted.contains(&target.key()))
         {
             let key = target.key();
-            if self.cache.entries.contains_key(&key) {
+            if matches!(
+                self.cache.entries.get(&key),
+                Some(ImagePreviewEntry::Ready { .. })
+            ) {
                 continue;
             }
-            let image = shared
-                .get(&target.url)
-                .or_else(|| self.ready_image_for_url(&target.url));
+            let image = lookup(&target.url).or_else(|| self.ready_image_for_url(&target.url));
             let Some(image) = image else {
                 continue;
             };
@@ -634,6 +612,9 @@ impl ImagePreviewCache {
 
     pub(in crate::tui) fn take_protocol_jobs(&mut self) -> Vec<MediaProtocolBuildJob> {
         std::mem::take(&mut self.protocol_jobs)
+            .into_iter()
+            .filter(|job| !job.is_cancelled())
+            .collect()
     }
 
     fn estimated_protocol_bytes(&self, render_spec: MediaProtocolRenderSpec) -> u64 {
@@ -665,7 +646,17 @@ impl ImagePreviewCache {
                 protocols,
                 ..
             }) if *generation == completed.generation => {
-                protocols.store_result(protocol_key, completed.result, protocol_bytes);
+                let Some(request) = completed.request.as_ref() else {
+                    return;
+                };
+                if !protocols.store_requested_result(
+                    protocol_key,
+                    request,
+                    completed.result,
+                    protocol_bytes,
+                ) {
+                    return;
+                }
                 Some((
                     protocols
                         .get_or_last_matching(&protocol_key, |candidate| {
@@ -733,20 +724,85 @@ impl ImagePreviewCache {
     }
 }
 
+struct PreviewProtocolReservation<'a> {
+    key: &'a ImagePreviewKey,
+    generation: u64,
+    image: &'a DecodedMediaImage,
+    picker: &'a Picker,
+}
+
+impl PreviewProtocolReservation<'_> {
+    fn reserve_first_missing(
+        &self,
+        protocols: &mut RenderProtocolCache<PreviewFrameProtocolKey>,
+        specs: &HashSet<MediaProtocolRenderSpec>,
+        frame_index: usize,
+        jobs: &mut Vec<MediaProtocolBuildJob>,
+    ) -> bool {
+        for render_spec in specs {
+            let protocol_key = PreviewFrameProtocolKey {
+                render_spec: *render_spec,
+                frame_index,
+            };
+            if protocols.get(&protocol_key).is_some()
+                || protocols.is_terminally_failed(&protocol_key)
+            {
+                continue;
+            }
+            if let Some(request) = protocols.request_protected_build(&protocol_key) {
+                jobs.push(
+                    MediaProtocolBuildJob::preview(
+                        self.key.clone(),
+                        self.generation,
+                        *render_spec,
+                        frame_index,
+                        self.picker.clone(),
+                        self.image.frame_shared(frame_index),
+                    )
+                    .with_request(request),
+                );
+            }
+            return true;
+        }
+        false
+    }
+}
+
 fn protocol_window_frame_indices(image: &DecodedMediaImage) -> impl Iterator<Item = usize> + '_ {
     (0..image.frame_count().min(ANIMATION_PROTOCOL_WINDOW_FRAMES))
         .map(|offset| image.frame_index_with_offset(offset))
 }
 
+/// Admit all fragments of a logical image together, preserving display order.
+/// The same vector feeds placement, preparation, rendering, and source work.
+pub(in crate::tui) fn admit_image_preview_targets(targets: &mut Vec<ImagePreviewTarget>) {
+    let admitted = admitted_preview_keys(targets);
+    targets.retain(|target| admitted.contains(&target.key()));
+}
+
 fn admitted_preview_keys(targets: &[ImagePreviewTarget]) -> HashSet<ImagePreviewKey> {
-    let mut admitted = HashSet::new();
+    let mut group_sizes = HashMap::new();
+    let mut ordered_keys = Vec::new();
     for target in targets {
-        if admitted.len() >= MAX_IMAGE_PREVIEW_CACHE_ENTRIES {
-            break;
-        }
-        admitted.insert(target.key());
+        let key = target.key();
+        let count = group_sizes.entry(key.clone()).or_insert_with(|| {
+            ordered_keys.push(key);
+            0usize
+        });
+        *count += 1;
     }
-    admitted
+    let mut remaining = MAX_IMAGE_PREVIEW_CACHE_ENTRIES;
+    ordered_keys
+        .into_iter()
+        .filter(|key| {
+            let count = group_sizes[key];
+            if count > remaining {
+                return false;
+            }
+            remaining -= count;
+            true
+        })
+        .collect()
 }
 
 fn estimated_preview_protocol_bytes(

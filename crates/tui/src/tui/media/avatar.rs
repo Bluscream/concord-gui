@@ -8,7 +8,10 @@ use concord::discord::{AppCommand, AppEvent, ProfileAvatarUpload};
 use super::{
     AVATAR_PREVIEW_HEIGHT, AVATAR_PREVIEW_WIDTH, AvatarTarget, MediaProtocolRenderSpec,
     PROFILE_POPUP_AVATAR_HEIGHT, PROFILE_POPUP_AVATAR_WIDTH, avatar_preview_url,
-    cache::{MediaCacheStats, MediaImageCacheCore, MediaImageCacheEntry, RenderProtocolCache},
+    cache::{
+        MediaCacheStats, MediaImageCacheCore, MediaImageCacheEntry, MediaImageEntry,
+        RenderProtocolCache,
+    },
     decode::{DecodedMediaImage, MediaImageDecodeKey, MediaImageDecodeRequest},
     estimated_media_protocol_bytes, picker_font_size,
     protocol_job::{MediaProtocolBuildJob, MediaProtocolBuildResult, MediaProtocolBuildTarget},
@@ -27,24 +30,7 @@ pub(in crate::tui) struct AvatarImageCache {
     pub(super) protocol_jobs: Vec<MediaProtocolBuildJob>,
 }
 
-pub(super) enum AvatarImageEntry {
-    Loading {
-        last_used: u64,
-    },
-    Decoding {
-        generation: u64,
-        last_used: u64,
-    },
-    Ready {
-        generation: u64,
-        image: DecodedMediaImage,
-        protocols: Box<RenderProtocolCache<AvatarFrameProtocolKey>>,
-        last_used: u64,
-    },
-    Failed {
-        last_used: u64,
-    },
-}
+pub(super) type AvatarImageEntry = MediaImageEntry<RenderProtocolCache<AvatarFrameProtocolKey>>;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) struct AvatarProtocolKey {
@@ -100,68 +86,6 @@ impl AvatarProtocolKey {
             top_clip_rows: self.top_clip_rows,
             show_play_marker: false,
             mask_circular: self.circular,
-        }
-    }
-}
-
-impl MediaImageCacheEntry for AvatarImageEntry {
-    fn last_used(&self) -> u64 {
-        match self {
-            AvatarImageEntry::Loading { last_used }
-            | AvatarImageEntry::Decoding { last_used, .. }
-            | AvatarImageEntry::Ready { last_used, .. }
-            | AvatarImageEntry::Failed { last_used } => *last_used,
-        }
-    }
-
-    fn decoded_image(&self) -> Option<&DecodedMediaImage> {
-        match self {
-            AvatarImageEntry::Ready { image, .. } => Some(image),
-            AvatarImageEntry::Loading { .. }
-            | AvatarImageEntry::Decoding { .. }
-            | AvatarImageEntry::Failed { .. } => None,
-        }
-    }
-
-    fn decoded_image_mut(&mut self) -> Option<&mut DecodedMediaImage> {
-        match self {
-            AvatarImageEntry::Ready { image, .. } => Some(image),
-            AvatarImageEntry::Loading { .. }
-            | AvatarImageEntry::Decoding { .. }
-            | AvatarImageEntry::Failed { .. } => None,
-        }
-    }
-
-    fn touch(&mut self, tick: u64) {
-        match self {
-            AvatarImageEntry::Loading { last_used }
-            | AvatarImageEntry::Decoding { last_used, .. }
-            | AvatarImageEntry::Ready { last_used, .. }
-            | AvatarImageEntry::Failed { last_used } => *last_used = tick,
-        }
-    }
-
-    fn is_loading(&self) -> bool {
-        matches!(self, AvatarImageEntry::Loading { .. })
-    }
-
-    fn is_failed(&self) -> bool {
-        matches!(self, AvatarImageEntry::Failed { .. })
-    }
-
-    fn retained_protocol_bytes(&self) -> u64 {
-        match self {
-            AvatarImageEntry::Ready { protocols, .. } => protocols.retained_bytes(),
-            _ => 0,
-        }
-    }
-
-    fn decoding_generation(&self) -> Option<u64> {
-        match self {
-            AvatarImageEntry::Decoding { generation, .. } => Some(*generation),
-            AvatarImageEntry::Loading { .. }
-            | AvatarImageEntry::Ready { .. }
-            | AvatarImageEntry::Failed { .. } => None,
         }
     }
 }
@@ -409,6 +333,63 @@ impl AvatarImageCache {
             .collect()
     }
 
+    pub(in crate::tui) fn retain_source_consumers(
+        &mut self,
+        targets: &[AvatarTarget],
+        popup_url: Option<&str>,
+    ) {
+        let protected = admitted_avatar_urls(targets)
+            .into_iter()
+            .chain(popup_url.map(|url| {
+                avatar_preview_url(url, PROFILE_POPUP_AVATAR_WIDTH, PROFILE_POPUP_AVATAR_HEIGHT)
+            }))
+            .collect::<HashSet<_>>();
+        self.cache.entries.retain(|url, entry| {
+            !matches!(
+                entry,
+                AvatarImageEntry::Loading { .. } | AvatarImageEntry::Decoding { .. }
+            ) || protected.contains(url)
+        });
+    }
+
+    pub(in crate::tui) fn reuse_cached_sources(
+        &mut self,
+        targets: &[AvatarTarget],
+        popup_url: Option<&str>,
+        mut lookup: impl FnMut(&str) -> Option<DecodedMediaImage>,
+    ) -> bool {
+        let mut reused = false;
+        let urls = admitted_avatar_urls(targets)
+            .into_iter()
+            .chain(popup_url.map(|url| {
+                avatar_preview_url(url, PROFILE_POPUP_AVATAR_WIDTH, PROFILE_POPUP_AVATAR_HEIGHT)
+            }));
+        for url in urls {
+            if matches!(
+                self.cache.entries.get(&url),
+                Some(AvatarImageEntry::Ready { .. })
+            ) {
+                continue;
+            }
+            let Some(image) = lookup(&url) else {
+                continue;
+            };
+            let generation = self.cache.next_decode_generation();
+            let last_used = self.cache.next_tick();
+            self.cache.entries.insert(
+                url,
+                AvatarImageEntry::Ready {
+                    generation,
+                    image,
+                    protocols: Box::new(RenderProtocolCache::new()),
+                    last_used,
+                },
+            );
+            reused = true;
+        }
+        reused
+    }
+
     pub(in crate::tui) fn store_loaded(&mut self, url: &str) -> Option<MediaImageDecodeRequest> {
         self.cache.start_decode_request(
             url.to_owned(),
@@ -420,6 +401,13 @@ impl AvatarImageCache {
             |last_used| AvatarImageEntry::Failed { last_used },
             MediaImageDecodeKey::Avatar,
         )
+    }
+
+    pub(in crate::tui) fn ready_image_for_url(&self, url: &str) -> Option<DecodedMediaImage> {
+        let AvatarImageEntry::Ready { image, .. } = self.cache.entries.get(url)? else {
+            return None;
+        };
+        Some(image.fresh_playback())
     }
 
     pub(in crate::tui) fn store_decoded(
@@ -458,6 +446,15 @@ impl AvatarImageCache {
     }
 
     fn store_failed(&mut self, url: &str) {
+        // A cache hit may have replaced the placeholder while HTTP was in flight.
+        if !self
+            .cache
+            .entries
+            .get(url)
+            .is_some_and(MediaImageCacheEntry::is_loading)
+        {
+            return;
+        }
         self.cache
             .store_failed_if_present(url.to_owned(), |last_used| AvatarImageEntry::Failed {
                 last_used,

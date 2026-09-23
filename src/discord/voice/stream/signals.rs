@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::atomic::AtomicBool};
 
 use uuid::Uuid;
 
+use super::super::rtp::{RtcpPacketError, RtcpPackets};
 use super::media::GatewayChildTasks;
 use super::*;
 
@@ -101,7 +102,16 @@ pub async fn connect_stream_gateway(
                 let value: Value = serde_json::from_str(&text)
                     .map_err(|error| format!("stream websocket JSON parse failed: {error}"))?;
                 gateway_control.record_sequence(&value).await;
-                let opcode = value.get("op").and_then(Value::as_u64).unwrap_or_default() as u8;
+                // `as u8` silently truncated, so `op: 258` arrived as opcode 2
+                // and was handled as a different message. Upstream added this
+                // guard in v2.5.18; the helper was already here, unused.
+                let Some(opcode) = gateway::voice_gateway_opcode(&value) else {
+                    logging::debug(
+                        "stream",
+                        "ignored stream gateway payload with invalid opcode",
+                    );
+                    continue;
+                };
                 match opcode {
                     VOICE_OP_READY => {
                         let ready = gateway::parse_voice_ready_payload(&value)?;
@@ -530,43 +540,33 @@ pub fn parse_stream_rtcp_sender_reports(
     compound: &[u8],
 ) -> Result<Vec<StreamRtcpSenderReport>, String> {
     let mut reports = Vec::new();
-    let mut offset = 0usize;
-    while offset < compound.len() {
-        let remaining = compound.len() - offset;
-        if remaining < 4 {
-            return Err("RTCP compound packet has a truncated header".to_owned());
-        }
-        if compound[offset] >> 6 != RTP_VERSION {
-            return Err("RTCP packet has an invalid version".to_owned());
-        }
-        let length_words_minus_one =
-            u16::from_be_bytes([compound[offset + 2], compound[offset + 3]]);
-        let packet_len = (usize::from(length_words_minus_one) + 1)
-            .checked_mul(4)
-            .ok_or_else(|| "RTCP packet length overflowed".to_owned())?;
-        let packet_end = offset
-            .checked_add(packet_len)
-            .filter(|end| *end <= compound.len())
-            .ok_or_else(|| "RTCP packet length exceeds the compound packet".to_owned())?;
-
-        if compound[offset + 1] == RTCP_SENDER_REPORT {
-            let report_count = usize::from(compound[offset] & 0x1f);
-            let minimum_len = 28 + report_count * 24;
-            if packet_len < minimum_len {
+    for packet in RtcpPackets::new(compound) {
+        let packet = packet.map_err(|error| match error {
+            RtcpPacketError::TruncatedHeader => {
+                "RTCP compound packet has a truncated header".to_owned()
+            }
+            RtcpPacketError::InvalidVersion => "RTCP packet has an invalid version".to_owned(),
+            RtcpPacketError::LengthExceedsData => {
+                "RTCP packet length exceeds the compound packet".to_owned()
+            }
+        })?;
+        if packet.packet_type() == RTCP_SENDER_REPORT {
+            let packet = packet.bytes();
+            let report_count = usize::from(packet[0] & 0x1f);
+            if packet.len() < 28 + report_count * 24 {
                 return Err("RTCP sender report is truncated".to_owned());
             }
-            let sender_ssrc = rtcp_u32(compound, offset + 4);
-            let ntp_seconds = rtcp_u32(compound, offset + 8);
-            let ntp_fraction = rtcp_u32(compound, offset + 12);
+            let sender_ssrc = rtcp_u32(packet, 4);
+            let ntp_seconds = rtcp_u32(packet, 8);
+            let ntp_fraction = rtcp_u32(packet, 12);
             reports.push(StreamRtcpSenderReport {
                 sender_ssrc,
                 ntp_timestamp: (u64::from(ntp_seconds) << 32) | u64::from(ntp_fraction),
-                rtp_timestamp: rtcp_u32(compound, offset + 16),
-                packet_count: rtcp_u32(compound, offset + 20),
-                octet_count: rtcp_u32(compound, offset + 24),
+                rtp_timestamp: rtcp_u32(packet, 16),
+                packet_count: rtcp_u32(packet, 20),
+                octet_count: rtcp_u32(packet, 24),
             });
         }
-        offset = packet_end;
     }
     Ok(reports)
 }

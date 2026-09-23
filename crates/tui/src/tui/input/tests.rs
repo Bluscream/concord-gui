@@ -29,7 +29,7 @@ use crate::tui::state::{
 };
 use concord::discord::AppCommand;
 use concord::{
-    config::{AppOptions, DisplayOptions, ImagePreviewQualityPreset, KeymapBinding, KeymapOptions},
+    config::{AppOptions, DisplayOptions, KeymapBinding, KeymapOptions},
     discord::{
         ActivityInfo, AppEvent, ApplicationCommandInfo, ApplicationCommandOptionInfo,
         AttachmentDownloadId, ChannelInfo, ChannelNotificationOverrideInfo, ChannelRecipientInfo,
@@ -37,8 +37,9 @@ use concord::{
         GuildMemberListOperation, GuildMemberListUpdateInfo, GuildNotificationSettingsInfo,
         MemberInfo, MessageInfo, MessageReferenceInfo, MessageSnapshotInfo,
         MicrophoneSensitivityDb, NotificationLevel, PollAnswerInfo, PollInfo, PresenceEventFields,
-        PresenceStatus, ReactionEmoji, ReactionUserInfo, ReadStateInfo, RoleInfo,
-        UserGuildSettingsInfo, UserSettingsInfo, VoiceConnectionStatus, VoiceVolumePercent,
+        PresenceStatus, ReactionEmoji, ReactionUserInfo, ReadStateInfo, RichPresenceSelection,
+        RoleInfo, UserGuildSettingsInfo, UserSettingsInfo, VoiceConnectionStatus,
+        VoiceVolumePercent,
     },
 };
 

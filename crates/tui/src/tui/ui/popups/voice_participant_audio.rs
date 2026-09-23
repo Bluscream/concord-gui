@@ -100,7 +100,7 @@ pub(in crate::tui::ui) fn voice_participant_audio_popup_lines(
     vec![
         selected_row_line(
             Line::from(vec![
-                selectable_popup_marker(volume_selected),
+                selection_marker(volume_selected),
                 Span::styled(format!("[{volume_label}] "), volume_style),
                 Span::styled("Volume", volume_style),
             ]),
@@ -114,7 +114,7 @@ pub(in crate::tui::ui) fn voice_participant_audio_popup_lines(
         ),
         selected_row_line(
             Line::from(vec![
-                selectable_popup_marker(muted_selected),
+                selection_marker(muted_selected),
                 Span::styled(if muted { "[x] " } else { "[ ] " }, muted_style),
                 Span::styled("Muted", muted_style),
             ]),
@@ -122,7 +122,7 @@ pub(in crate::tui::ui) fn voice_participant_audio_popup_lines(
         ),
         selected_row_line(
             Line::from(vec![
-                selectable_popup_marker(hidden_selected),
+                selection_marker(hidden_selected),
                 Span::styled(if video_hidden { "[x] " } else { "[ ] " }, hidden_style),
                 // Named for what it hides, since a stream and a camera are two
                 // different things and this covers both.

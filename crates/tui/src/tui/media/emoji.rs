@@ -7,7 +7,10 @@ use concord::discord::{AppCommand, AppEvent};
 
 use super::{
     EmojiImageTarget,
-    cache::{MediaCacheStats, MediaImageCacheCore, MediaImageCacheEntry, RenderProtocolCache},
+    cache::{
+        MediaCacheStats, MediaImageCacheCore, MediaImageCacheEntry, MediaImageEntry,
+        MediaProtocolCachePayload, RenderProtocolCache,
+    },
     decode::{DecodedMediaImage, MediaImageDecodeKey, MediaImageDecodeRequest},
     estimated_media_protocol_bytes, fixed_media_protocol_render_spec, picker_font_size,
     protocol_job::{MediaProtocolBuildJob, MediaProtocolBuildResult, MediaProtocolBuildTarget},
@@ -26,24 +29,7 @@ pub(in crate::tui) struct EmojiImageCache {
     pub(super) protocol_jobs: Vec<MediaProtocolBuildJob>,
 }
 
-pub(super) enum EmojiImageEntry {
-    Loading {
-        last_used: u64,
-    },
-    Decoding {
-        generation: u64,
-        last_used: u64,
-    },
-    Ready {
-        generation: u64,
-        image: DecodedMediaImage,
-        protocols: Box<EmojiProtocolCaches>,
-        last_used: u64,
-    },
-    Failed {
-        last_used: u64,
-    },
-}
+pub(super) type EmojiImageEntry = MediaImageEntry<EmojiProtocolCaches>;
 
 pub(super) struct EmojiProtocolCaches {
     pub(super) compact: RenderProtocolCache<usize>,
@@ -65,65 +51,9 @@ impl EmojiProtocolCaches {
     }
 }
 
-impl MediaImageCacheEntry for EmojiImageEntry {
-    fn last_used(&self) -> u64 {
-        match self {
-            EmojiImageEntry::Loading { last_used }
-            | EmojiImageEntry::Decoding { last_used, .. }
-            | EmojiImageEntry::Ready { last_used, .. }
-            | EmojiImageEntry::Failed { last_used } => *last_used,
-        }
-    }
-
-    fn decoded_image(&self) -> Option<&DecodedMediaImage> {
-        match self {
-            EmojiImageEntry::Ready { image, .. } => Some(image),
-            EmojiImageEntry::Loading { .. }
-            | EmojiImageEntry::Decoding { .. }
-            | EmojiImageEntry::Failed { .. } => None,
-        }
-    }
-
-    fn decoded_image_mut(&mut self) -> Option<&mut DecodedMediaImage> {
-        match self {
-            EmojiImageEntry::Ready { image, .. } => Some(image),
-            EmojiImageEntry::Loading { .. }
-            | EmojiImageEntry::Decoding { .. }
-            | EmojiImageEntry::Failed { .. } => None,
-        }
-    }
-
-    fn touch(&mut self, tick: u64) {
-        match self {
-            EmojiImageEntry::Loading { last_used }
-            | EmojiImageEntry::Decoding { last_used, .. }
-            | EmojiImageEntry::Ready { last_used, .. }
-            | EmojiImageEntry::Failed { last_used } => *last_used = tick,
-        }
-    }
-
-    fn is_loading(&self) -> bool {
-        matches!(self, EmojiImageEntry::Loading { .. })
-    }
-
-    fn is_failed(&self) -> bool {
-        matches!(self, EmojiImageEntry::Failed { .. })
-    }
-
-    fn retained_protocol_bytes(&self) -> u64 {
-        match self {
-            EmojiImageEntry::Ready { protocols, .. } => protocols.retained_bytes(),
-            _ => 0,
-        }
-    }
-
-    fn decoding_generation(&self) -> Option<u64> {
-        match self {
-            EmojiImageEntry::Decoding { generation, .. } => Some(*generation),
-            EmojiImageEntry::Loading { .. }
-            | EmojiImageEntry::Ready { .. }
-            | EmojiImageEntry::Failed { .. } => None,
-        }
+impl MediaProtocolCachePayload for EmojiProtocolCaches {
+    fn retained_bytes(&self) -> u64 {
+        self.retained_bytes()
     }
 }
 
@@ -275,6 +205,59 @@ impl EmojiImageCache {
         }
     }
 
+    pub(in crate::tui) fn retain_source_consumers(&mut self, targets: &[EmojiImageTarget]) {
+        let protected = targets
+            .iter()
+            .take(MAX_EMOJI_IMAGE_CACHE_ENTRIES)
+            .map(|target| target.url.as_str())
+            .collect::<HashSet<_>>();
+        self.cache.entries.retain(|url, entry| {
+            !matches!(
+                entry,
+                EmojiImageEntry::Loading { .. } | EmojiImageEntry::Decoding { .. }
+            ) || protected.contains(url.as_str())
+        });
+    }
+
+    pub(in crate::tui) fn reuse_cached_sources(
+        &mut self,
+        targets: &[EmojiImageTarget],
+        mut lookup: impl FnMut(&str) -> Option<DecodedMediaImage>,
+    ) -> bool {
+        if self.picker.is_none() {
+            return false;
+        }
+        let mut reused = false;
+        for url in targets
+            .iter()
+            .take(MAX_EMOJI_IMAGE_CACHE_ENTRIES)
+            .map(|target| target.url.clone())
+        {
+            if matches!(
+                self.cache.entries.get(&url),
+                Some(EmojiImageEntry::Ready { .. })
+            ) {
+                continue;
+            }
+            let Some(image) = lookup(&url) else {
+                continue;
+            };
+            let generation = self.cache.next_decode_generation();
+            let last_used = self.cache.next_tick();
+            self.cache.entries.insert(
+                url,
+                EmojiImageEntry::Ready {
+                    generation,
+                    image,
+                    protocols: Box::new(EmojiProtocolCaches::new()),
+                    last_used,
+                },
+            );
+            reused = true;
+        }
+        reused
+    }
+
     pub(in crate::tui) fn store_loaded(&mut self, url: &str) -> Option<MediaImageDecodeRequest> {
         self.cache.start_decode_request(
             url.to_owned(),
@@ -286,6 +269,13 @@ impl EmojiImageCache {
             |last_used| EmojiImageEntry::Failed { last_used },
             MediaImageDecodeKey::Emoji,
         )
+    }
+
+    pub(in crate::tui) fn ready_image_for_url(&self, url: &str) -> Option<DecodedMediaImage> {
+        let EmojiImageEntry::Ready { image, .. } = self.cache.entries.get(url)? else {
+            return None;
+        };
+        Some(image.fresh_playback())
     }
 
     pub(in crate::tui) fn store_decoded(
@@ -330,6 +320,15 @@ impl EmojiImageCache {
     }
 
     fn store_failed(&mut self, url: &str) {
+        // A cache hit may have replaced the placeholder while HTTP was in flight.
+        if !self
+            .cache
+            .entries
+            .get(url)
+            .is_some_and(MediaImageCacheEntry::is_loading)
+        {
+            return;
+        }
         self.cache
             .store_failed_if_present(url.to_owned(), |last_used| EmojiImageEntry::Failed {
                 last_used,

@@ -574,15 +574,18 @@ widen_for_workspace() {
         # matches nothing, `set -o pipefail` carries that to the pipeline, and
         # a failing assignment under `set -e` kills the pass outright - so the
         # first name that was not an item silently ended the widening.
-        hit="$(grep -rln "pub(crate) \(fn\|struct\|enum\) $name\b" src/ 2>/dev/null | head -n1 || true)"
+        # `pub(crate)` and `pub(super)` both, and in the shared crates as well
+        # as the core: a front-end crate cannot reach either, and upstream
+        # writes whichever its single-crate layout happened to allow.
+        hit="$(grep -rln "pub(\(crate\|super\)) \(fn\|struct\|enum\) $name\b" src/ crates/ui/src/ crates/cache/src/ 2>/dev/null | head -n1 || true)"
         if [[ -z "$hit" ]]; then
-            hit="$(grep -rln "pub(crate) $name *:" src/ 2>/dev/null | head -n1 || true)"
+            hit="$(grep -rln "pub(\(crate\|super\)) $name *:" src/ crates/ui/src/ crates/cache/src/ 2>/dev/null | head -n1 || true)"
             [[ -n "$hit" ]] || continue
-            sed -i "s/pub(crate) $name *:/pub $name:/" "$hit"
+            sed -i "s/pub(crate) $name *:/pub $name:/; s/pub(super) $name *:/pub $name:/" "$hit"
             widened=$((widened + 1))
             continue
         fi
-        sed -i "s/pub(crate) fn $name\b/pub fn $name/; s/pub(crate) struct $name\b/pub struct $name/; s/pub(crate) enum $name\b/pub enum $name/" "$hit"
+        sed -i -E "s/pub\\((crate|super)\\) (fn|struct|enum) $name\\b/pub \\2 $name/" "$hit"
         widened=$((widened + 1))
     done <<<"$names"
 
@@ -718,7 +721,12 @@ cmd_gate() {
     # cargo serialises on the build directory, and two gates started by
     # accident do not queue politely - they sit on each other's locks until
     # one is killed. One at a time.
-    exec 9>"$REPO/target/.upstream-gate.lock" 2>/dev/null || true
+    # No `2>/dev/null` here. On an `exec` with no command, a redirection
+    # applies to the shell itself and stays applied - so that one silenced
+    # every error this script wrote for the rest of the run, including the
+    # gate's own "Gate failed." verdict.
+    mkdir -p "$REPO/target"
+    exec 9>"$REPO/target/.upstream-gate.lock" || true
     if ! flock -n 9 2>/dev/null; then
         die "another gate is already running in this checkout"
     fi

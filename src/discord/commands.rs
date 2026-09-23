@@ -20,7 +20,7 @@ use super::emoji::custom_emoji_image_url;
 use super::message::MessageInfo;
 use super::{
     ActivityInfo, ChannelEdit, GuildEdit, NewChannelKind, OverwriteTarget, PresenceStatus,
-    RoleEdit, VoiceScope,
+    RichPresenceSelection, RoleEdit, VoiceScope,
 };
 
 pub const MAX_UPLOAD_ATTACHMENT_COUNT: usize = 10;
@@ -471,6 +471,7 @@ pub enum AppCommand {
         before: Option<String>,
     },
     SearchMessages {
+        request_id: u64,
         query: MessageSearchQuery,
     },
     LoadGuildMembersByIds {
@@ -1158,9 +1159,10 @@ pub enum AppCommand {
     UpdateCurrentUserActivity {
         status: PresenceStatus,
         activities: Vec<ActivityInfo>,
-        /// RPC `client_id` whose live activity this is, so the RPC server keeps
-        /// re-broadcasting it. `None` for a manual activity, which RPC must not override.
-        track_client_id: Option<String>,
+        /// How RPC activities are relayed afterwards: automatic (most recent
+        /// app wins, native-like), a pinned app, or manual (RPC never
+        /// overrides).
+        rich_presence: RichPresenceSelection,
     },
     AckChannel {
         channel_id: Id<ChannelMarker>,
