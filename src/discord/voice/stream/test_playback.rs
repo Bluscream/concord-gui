@@ -41,30 +41,28 @@ mod cases {
     }
 
     #[test]
-    pub fn stream_runtime_waits_for_parent_voice_and_both_stream_events() {
+    fn stream_runtime_waits_for_parent_voice_and_both_stream_events() {
         let mut state = StreamRuntimeState::default();
         assert!(
             state
                 .apply(&VoiceRuntimeEvent::WatchStreamRequested(stream_request()))
                 .connect
-                .is_none()
+                .is_empty()
         );
         state.apply(&VoiceRuntimeEvent::CurrentUserReady(Some(Id::new(5))));
         state.apply(&VoiceRuntimeEvent::VoiceState(current_voice_state()));
-        state.apply(&VoiceRuntimeEvent::StreamCreate(StreamCreateInfo {
-            stream_key: "guild:10:20:99".to_owned(),
-            rtc_server_id: "400".to_owned(),
-            rtc_channel_id: Id::new(401),
-            viewer_ids: Vec::new(),
-            paused: false,
-        }));
+        state.apply(&VoiceRuntimeEvent::StreamCreate(stream_create(
+            "guild:10:20:99",
+            "400",
+            401,
+        )));
 
-        let update = state.apply(&VoiceRuntimeEvent::StreamServer(StreamServerInfo {
-            stream_key: "guild:10:20:99".to_owned(),
-            endpoint: Some("stream.example.com".to_owned()),
-            token: "stream-token".to_owned(),
-        }));
-        let session = update.connect.expect("stream session should now be ready");
+        let update = state.apply(&VoiceRuntimeEvent::StreamServer(stream_server(
+            "guild:10:20:99",
+            Some("stream.example.com"),
+            "stream-token",
+        )));
+        let session = only_connection(update, "stream session should now be ready");
         assert_eq!(session.session_id, "parent-session");
         assert_eq!(session.rtc_server_id, "400");
         assert_eq!(session.rtc_channel_id, Id::new(401));
@@ -72,7 +70,7 @@ mod cases {
     }
 
     #[test]
-    pub fn stream_runtime_pending_cancel_ends_playback_once() {
+    fn stream_runtime_pending_cancel_ends_playback_once() {
         let request = stream_request();
         let mut state = StreamRuntimeState::default();
         state.apply(&VoiceRuntimeEvent::WatchStreamRequested(request.clone()));
@@ -82,6 +80,8 @@ mod cases {
         });
         let ended = cancelled
             .playback_ended
+            .into_iter()
+            .next()
             .expect("pending stream cancellation ends preparing playback");
         assert_eq!(ended.request, request);
         assert!(!ended.reconnecting);
@@ -89,65 +89,69 @@ mod cases {
         let repeated = state.apply(&VoiceRuntimeEvent::WatchStreamCancelled {
             stream_key: ended.request.stream_key,
         });
-        assert!(repeated.playback_ended.is_none());
+        assert!(repeated.playback_ended.is_empty());
     }
 
     #[test]
-    pub fn stream_runtime_rotates_active_stream_servers() {
+    fn stream_runtime_rotates_active_stream_servers() {
         let (mut state, initial) = connected_stream_runtime();
 
-        let rotated = state.apply(&VoiceRuntimeEvent::StreamServer(StreamServerInfo {
-            stream_key: initial.request.stream_key.clone(),
-            endpoint: Some("replacement.example.com".to_owned()),
-            token: "replacement-token".to_owned(),
-        }));
+        let rotated = state.apply(&VoiceRuntimeEvent::StreamServer(stream_server(
+            &initial.request.stream_key,
+            Some("replacement.example.com"),
+            "replacement-token",
+        )));
         assert_eq!(
-            rotated.close_stream_key.as_deref(),
-            Some(initial.request.stream_key.as_str())
+            rotated.close,
+            vec![StreamWatchClose {
+                stream_key: initial.request.stream_key.clone(),
+                send_delete: false,
+            }]
         );
-        assert!(!rotated.send_delete);
-        assert!(
-            rotated
-                .playback_ended
-                .as_ref()
-                .is_some_and(|ended| ended.reconnecting)
-        );
+        assert_eq!(rotated.playback_ended.len(), 1);
+        assert!(rotated.playback_ended[0].reconnecting);
+        assert_eq!(rotated.connect.len(), 1);
         let replacement = rotated
             .connect
+            .into_iter()
+            .next()
             .expect("new stream server starts a replacement connection");
         assert_eq!(replacement.endpoint, "replacement.example.com");
         assert_eq!(replacement.token, "replacement-token");
 
-        let unavailable = state.apply(&VoiceRuntimeEvent::StreamServer(StreamServerInfo {
-            stream_key: initial.request.stream_key.clone(),
-            endpoint: None,
-            token: "pending-token".to_owned(),
-        }));
+        let unavailable = state.apply(&VoiceRuntimeEvent::StreamServer(stream_server(
+            &initial.request.stream_key,
+            None,
+            "pending-token",
+        )));
         assert_eq!(
-            unavailable.close_stream_key.as_deref(),
-            Some(initial.request.stream_key.as_str())
+            unavailable.close,
+            vec![StreamWatchClose {
+                stream_key: initial.request.stream_key.clone(),
+                send_delete: false,
+            }]
         );
-        assert!(!unavailable.send_delete);
-        assert!(unavailable.connect.is_none());
+        assert!(unavailable.connect.is_empty());
 
-        let reallocated = state.apply(&VoiceRuntimeEvent::StreamServer(StreamServerInfo {
-            stream_key: initial.request.stream_key.clone(),
-            endpoint: Some("reallocated.example.com".to_owned()),
-            token: "reallocated-token".to_owned(),
-        }));
-        let active = reallocated
-            .connect
-            .expect("reallocated stream server reconnects");
+        let reallocated = state.apply(&VoiceRuntimeEvent::StreamServer(stream_server(
+            &initial.request.stream_key,
+            Some("reallocated.example.com"),
+            "reallocated-token",
+        )));
+        let active = only_connection(reallocated, "reallocated stream server reconnects");
         assert_ne!(active.connection_id, replacement.connection_id);
 
         let stale_end = state.apply(&stream_connection_ended(
             &replacement,
             VoiceConnectionEnd::Stop,
         ));
-        assert!(stale_end.close_stream_key.is_none());
-        assert!(stale_end.connect.is_none());
+        assert!(stale_end.close.is_empty());
+        assert!(stale_end.connect.is_empty());
         assert_eq!(
             state
+                .watches
+                .get(&active.request.stream_key)
+                .expect("reallocated stream watch remains active")
                 .active
                 .as_ref()
                 .expect("reallocated connection remains active")
@@ -157,7 +161,7 @@ mod cases {
     }
 
     #[test]
-    pub fn stream_runtime_stops_after_consecutive_pre_playback_failures() {
+    fn stream_runtime_stops_after_consecutive_pre_playback_failures() {
         let (mut state, mut active) = connected_stream_runtime();
 
         for attempt in 1..=MAX_VOICE_RECONNECT_ATTEMPTS {
@@ -166,50 +170,51 @@ mod cases {
                 VoiceConnectionEnd::Reconnect,
             ));
             assert!(
-                update.close_stream_key.is_none(),
+                update.close.is_empty(),
                 "retry {attempt} should keep the watch request active"
             );
-            active = update
-                .connect
-                .expect("retry within the limit should reconnect");
+            active = only_connection(update, "retry within the limit should reconnect");
         }
 
         let stopped = state.apply(&stream_connection_ended(
             &active,
             VoiceConnectionEnd::Reconnect,
         ));
-        assert!(stopped.connect.is_none());
+        assert!(stopped.connect.is_empty());
         assert_eq!(
-            stopped.close_stream_key.as_deref(),
-            Some(active.request.stream_key.as_str())
+            stopped.close,
+            vec![StreamWatchClose {
+                stream_key: active.request.stream_key.clone(),
+                send_delete: true,
+            }]
         );
-        assert!(stopped.send_delete);
     }
 
     #[test]
-    pub fn stream_runtime_stops_immediately_after_terminal_failure() {
+    fn stream_runtime_stops_immediately_after_terminal_failure() {
         let (mut state, active) = connected_stream_runtime();
 
         let stopped = state.apply(&stream_connection_ended(&active, VoiceConnectionEnd::Stop));
 
-        assert!(stopped.connect.is_none());
+        assert!(stopped.connect.is_empty());
         assert_eq!(
-            stopped.close_stream_key.as_deref(),
-            Some(active.request.stream_key.as_str())
+            stopped.close,
+            vec![StreamWatchClose {
+                stream_key: active.request.stream_key.clone(),
+                send_delete: true,
+            }]
         );
-        assert!(stopped.send_delete);
     }
 
     #[test]
-    pub fn stream_runtime_resets_retries_only_after_stable_playback() {
+    fn stream_runtime_resets_retries_only_after_stable_playback() {
         let (mut state, initial) = connected_stream_runtime();
         let first_retry = state.apply(&stream_connection_ended(
             &initial,
             VoiceConnectionEnd::Reconnect,
         ));
-        let mut active = first_retry
-            .connect
-            .expect("the first transport failure should reconnect");
+        let mut active =
+            only_connection(first_retry, "the first transport failure should reconnect");
 
         state.apply(&VoiceRuntimeEvent::StreamConnectionEstablished {
             connection_id: active.connection_id,
@@ -217,13 +222,13 @@ mod cases {
         });
 
         for _ in 0..MAX_VOICE_RECONNECT_ATTEMPTS {
-            active = state
-                .apply(&stream_connection_ended(
+            active = only_connection(
+                state.apply(&stream_connection_ended(
                     &active,
                     VoiceConnectionEnd::Reconnect,
-                ))
-                .connect
-                .expect("stable playback should restore the full retry budget");
+                )),
+                "stable playback should restore the full retry budget",
+            );
         }
     }
 
@@ -575,5 +580,146 @@ mod cases {
         assert_eq!(before_wrap.local_timestamp, 4_800);
         assert_eq!(after_wrap.local_timestamp, 5_760);
         assert!(after_wrap.discontinuity.is_none());
+    }
+    fn stream_request_for(owner_id: u64, display_name: &str) -> StreamWatchRequest {
+        StreamWatchRequest {
+            stream_key: format!("guild:10:20:{owner_id}"),
+            scope: VoiceScope::Guild(Id::new(10)),
+            channel_id: Id::new(20),
+            owner_id: Id::new(owner_id),
+            display_name: display_name.to_owned(),
+        }
+    }
+
+    fn stream_request() -> StreamWatchRequest {
+        stream_request_for(99, "Streamer")
+    }
+
+    fn stream_create(
+        stream_key: &str,
+        rtc_server_id: &str,
+        rtc_channel_id: u64,
+    ) -> StreamCreateInfo {
+        StreamCreateInfo {
+            stream_key: stream_key.to_owned(),
+            rtc_server_id: rtc_server_id.to_owned(),
+            rtc_channel_id: Id::new(rtc_channel_id),
+            viewer_ids: Vec::new(),
+            paused: false,
+        }
+    }
+
+    fn stream_server(stream_key: &str, endpoint: Option<&str>, token: &str) -> StreamServerInfo {
+        StreamServerInfo {
+            stream_key: stream_key.to_owned(),
+            endpoint: endpoint.map(str::to_owned),
+            token: token.to_owned(),
+        }
+    }
+
+    fn only_connection(update: StreamRuntimeUpdate, message: &str) -> StreamGatewaySession {
+        assert_eq!(update.connect.len(), 1, "{message}");
+        update.connect.into_iter().next().expect(message)
+    }
+
+    #[test]
+    fn stream_runtime_keeps_concurrent_watches_isolated() {
+        let (mut state, first) = connected_stream_runtime();
+        let second_request = stream_request_for(100, "Second Streamer");
+
+        let requested = state.apply(&VoiceRuntimeEvent::WatchStreamRequested(
+            second_request.clone(),
+        ));
+        assert!(requested.close.is_empty());
+        assert!(requested.playback_ended.is_empty());
+        assert!(requested.connect.is_empty());
+
+        state.apply(&VoiceRuntimeEvent::StreamCreate(stream_create(
+            &second_request.stream_key,
+            "500",
+            501,
+        )));
+        let second = only_connection(
+            state.apply(&VoiceRuntimeEvent::StreamServer(stream_server(
+                &second_request.stream_key,
+                Some("second-stream.example.com"),
+                "second-stream-token",
+            ))),
+            "second stream should connect independently",
+        );
+
+        assert_eq!(state.watches.len(), 2);
+        assert_eq!(
+            state
+                .watches
+                .get(&first.request.stream_key)
+                .and_then(|watch| watch.active.as_ref())
+                .map(|active| active.connection_id),
+            Some(first.connection_id)
+        );
+        assert_eq!(
+            state
+                .watches
+                .get(&second.request.stream_key)
+                .and_then(|watch| watch.active.as_ref())
+                .map(|active| active.connection_id),
+            Some(second.connection_id)
+        );
+
+        let stopped = state.apply(&stream_connection_ended(&second, VoiceConnectionEnd::Stop));
+        assert_eq!(
+            stopped.close,
+            vec![StreamWatchClose {
+                stream_key: second.request.stream_key.clone(),
+                send_delete: true,
+            }]
+        );
+        assert_eq!(stopped.playback_ended.len(), 1);
+        assert_eq!(stopped.playback_ended[0].request, second_request);
+        assert!(state.watches.contains_key(&first.request.stream_key));
+        assert!(!state.watches.contains_key(&second.request.stream_key));
+    }
+
+    #[test]
+    fn stream_runtime_voice_leave_closes_all_concurrent_watches() {
+        let (mut state, first) = connected_stream_runtime();
+        let second_request = stream_request_for(100, "Second Streamer");
+        state.apply(&VoiceRuntimeEvent::WatchStreamRequested(
+            second_request.clone(),
+        ));
+        state.apply(&VoiceRuntimeEvent::StreamCreate(stream_create(
+            &second_request.stream_key,
+            "500",
+            501,
+        )));
+        let second = only_connection(
+            state.apply(&VoiceRuntimeEvent::StreamServer(stream_server(
+                &second_request.stream_key,
+                Some("second-stream.example.com"),
+                "second-stream-token",
+            ))),
+            "second stream should connect independently",
+        );
+        let mut left_voice = current_voice_state();
+        left_voice.channel_id = None;
+        left_voice.session_id = None;
+
+        let update = state.apply(&VoiceRuntimeEvent::VoiceState(left_voice));
+
+        let mut closed_keys = update
+            .close
+            .iter()
+            .map(|close| close.stream_key.as_str())
+            .collect::<Vec<_>>();
+        closed_keys.sort_unstable();
+        let mut expected_keys = vec![
+            first.request.stream_key.as_str(),
+            second.request.stream_key.as_str(),
+        ];
+        expected_keys.sort_unstable();
+        assert_eq!(closed_keys, expected_keys);
+        assert!(update.close.iter().all(|close| close.send_delete));
+        assert_eq!(update.playback_ended.len(), 2);
+        assert!(state.watches.is_empty());
     }
 }

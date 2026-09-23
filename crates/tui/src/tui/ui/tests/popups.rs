@@ -271,11 +271,12 @@ fn owned_stream_info_omits_local_capture_source_without_viewers() {
 }
 
 #[test]
-fn stream_info_panel_separates_owned_and_watched_streams() {
+fn stream_info_panel_lists_owned_and_multiple_watched_streams() {
     let guild_id = Id::new(1);
     let channel_id = Id::new(10);
     let current_user_id = Id::new(20);
     let watched_owner_id = Id::new(30);
+    let second_watched_owner_id = Id::new(31);
     let viewer_id = Id::new(40);
     let scope = concord::discord::VoiceScope::Guild(guild_id);
     let mut state = DashboardState::new();
@@ -287,6 +288,7 @@ fn stream_info_panel_separates_owned_and_watched_streams() {
         users: vec![
             ChannelRecipientInfo::test(current_user_id, "Me"),
             ChannelRecipientInfo::test(watched_owner_id, "Broadcaster"),
+            ChannelRecipientInfo::test(second_watched_owner_id, "Second Broadcaster"),
             ChannelRecipientInfo::test(viewer_id, "Viewer"),
         ],
     });
@@ -296,6 +298,15 @@ fn stream_info_panel_separates_owned_and_watched_streams() {
             rtc_server_id: "100".to_owned(),
             rtc_channel_id: Id::new(101),
             viewer_ids: vec![viewer_id],
+            paused: false,
+        },
+    });
+    state.push_event(AppEvent::StreamCreate {
+        stream: concord::discord::StreamCreateInfo {
+            stream_key: "guild:1:10:31".to_owned(),
+            rtc_server_id: "300".to_owned(),
+            rtc_channel_id: Id::new(301),
+            viewer_ids: vec![current_user_id],
             paused: false,
         },
     });
@@ -316,6 +327,12 @@ fn stream_info_panel_separates_owned_and_watched_streams() {
         channel_id,
         user_id: watched_owner_id,
     });
+    state.show_stream_playback_preparing_toast(scope, channel_id, second_watched_owner_id);
+    state.push_effect(AppEvent::StreamPlaybackWindowReady {
+        scope,
+        channel_id,
+        user_id: second_watched_owner_id,
+    });
 
     let lines = stream_info_lines(&state);
     assert_eq!(
@@ -326,6 +343,10 @@ fn stream_info_panel_separates_owned_and_watched_streams() {
             "Viewer",
             "==================================",
             "Broadcaster 🔴",
+            "----------------------------------",
+            "Me",
+            "==================================",
+            "Second Broadcaster 🔴",
             "----------------------------------",
             "Me",
         ]

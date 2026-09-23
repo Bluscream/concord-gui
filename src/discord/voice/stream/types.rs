@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 
 use rand::random;
@@ -153,25 +154,69 @@ impl From<String> for StreamConnectionFailure {
     }
 }
 
+#[cfg(test)]
+impl StreamGatewaySession {
+    pub fn for_test(stream_key: &str) -> Self {
+        Self {
+            connection_id: 1,
+            request: StreamWatchRequest {
+                stream_key: stream_key.to_owned(),
+                scope: VoiceScope::Guild(Id::new(1)),
+                channel_id: Id::new(2),
+                owner_id: Id::new(3),
+                display_name: "Streamer".to_owned(),
+            },
+            current_user_id: Id::new(4),
+            session_id: "parent-session".to_owned(),
+            rtc_server_id: "5".to_owned(),
+            rtc_channel_id: Id::new(6),
+            endpoint: "stream.example.com".to_owned(),
+            token: "stream-token".to_owned(),
+            reconnect_delay: Duration::ZERO,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct StreamRuntimeState {
-    pub current_user_id: Option<Id<UserMarker>>,
-    pub current_voice: Option<ObservedStreamVoiceState>,
-    pub requested: Option<StreamWatchRequest>,
-    pub create: Option<StreamCreateInfo>,
-    pub server: Option<StreamServerInfo>,
-    pub active: Option<StreamGatewaySession>,
-    pub reconnect_attempts: u8,
-    pub next_connection_id: u64,
+    current_user_id: Option<Id<UserMarker>>,
+    current_voice: Option<ObservedStreamVoiceState>,
+    pub(crate) watches: BTreeMap<String, StreamWatchState>,
+    next_connection_id: u64,
+}
+
+pub(crate) struct StreamWatchState {
+    pub(crate) request: StreamWatchRequest,
+    pub(crate) create: Option<StreamCreateInfo>,
+    pub(crate) server: Option<StreamServerInfo>,
+    pub(crate) active: Option<StreamGatewaySession>,
+    pub(crate) reconnect_attempts: u8,
+}
+
+impl StreamWatchState {
+    fn new(request: StreamWatchRequest) -> Self {
+        Self {
+            request,
+            create: None,
+            server: None,
+            active: None,
+            reconnect_attempts: 0,
+        }
+    }
 }
 
 #[derive(Default)]
 pub struct StreamRuntimeUpdate {
-    pub close_stream_key: Option<String>,
+    pub close: Vec<StreamWatchClose>,
+    pub connect: Vec<StreamGatewaySession>,
+    pub playback_ended: Vec<StreamPlaybackEnded>,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct StreamWatchClose {
+    pub stream_key: String,
     pub send_delete: bool,
-    pub connect: Option<StreamGatewaySession>,
-    pub playback_ended: Option<StreamPlaybackEnded>,
-    pub error: Option<String>,
 }
 
 pub struct StreamPlaybackEnded {
@@ -186,65 +231,42 @@ impl StreamRuntimeState {
             VoiceRuntimeEvent::CurrentUserReady(user_id) => self.current_user_id = *user_id,
             VoiceRuntimeEvent::VoiceState(state) => self.record_voice_state(state, &mut update),
             VoiceRuntimeEvent::WatchStreamRequested(request) => {
-                if self
-                    .requested
-                    .as_ref()
-                    .is_none_or(|current| current.stream_key != request.stream_key)
-                {
-                    update.playback_ended =
-                        self.requested.take().map(|request| StreamPlaybackEnded {
-                            request,
-                            reconnecting: false,
-                        });
-                    update.close_stream_key =
-                        self.active.take().map(|active| active.request.stream_key);
-                    update.send_delete = update.close_stream_key.is_some();
-                    self.create = None;
-                    self.server = None;
-                    self.reconnect_attempts = 0;
-                }
-                self.requested = Some(request.clone());
+                self.watches
+                    .entry(request.stream_key.clone())
+                    .and_modify(|watch| watch.request = request.clone())
+                    .or_insert_with(|| StreamWatchState::new(request.clone()));
             }
             VoiceRuntimeEvent::WatchStreamCancelled { stream_key } => {
                 self.clear_matching(stream_key, &mut update, false);
             }
             VoiceRuntimeEvent::StreamCreate(stream) => {
-                if self
-                    .requested
-                    .as_ref()
-                    .is_some_and(|request| request.stream_key == stream.stream_key)
-                {
-                    self.create = Some(stream.clone());
+                if let Some(watch) = self.watches.get_mut(&stream.stream_key) {
+                    watch.create = Some(stream.clone());
                 }
             }
             VoiceRuntimeEvent::StreamServer(server) => {
-                if self
-                    .requested
-                    .as_ref()
-                    .is_some_and(|request| request.stream_key == server.stream_key)
-                {
-                    if self.active.as_ref().is_some_and(|active| {
+                if let Some(watch) = self.watches.get_mut(&server.stream_key) {
+                    if watch.active.as_ref().is_some_and(|active| {
                         !server.matches_connection(&active.endpoint, &active.token)
                     }) {
-                        update.playback_ended =
-                            self.requested
-                                .as_ref()
-                                .cloned()
-                                .map(|request| StreamPlaybackEnded {
-                                    request,
-                                    reconnecting: true,
-                                });
-                        update.close_stream_key =
-                            self.active.take().map(|active| active.request.stream_key);
+                        update.playback_ended.push(StreamPlaybackEnded {
+                            request: watch.request.clone(),
+                            reconnecting: true,
+                        });
+                        watch.active = None;
+                        update.close.push(StreamWatchClose {
+                            stream_key: server.stream_key.clone(),
+                            send_delete: false,
+                        });
                     }
-                    self.server = Some(server.clone());
+                    watch.server = Some(server.clone());
                 }
             }
             VoiceRuntimeEvent::StreamDelete(stream) => {
                 if let Some(request) = self
-                    .requested
-                    .as_ref()
-                    .filter(|request| request.stream_key == stream.stream_key)
+                    .watches
+                    .get(&stream.stream_key)
+                    .map(|watch| &watch.request)
                     && (!stream.reason.is_empty() || stream.unavailable)
                 {
                     let reason = if stream.reason.is_empty() {
@@ -252,7 +274,7 @@ impl StreamRuntimeState {
                     } else {
                         stream.reason.as_str()
                     };
-                    update.error = Some(format!(
+                    update.errors.push(format!(
                         "Could not watch {}'s stream: {reason}",
                         request.display_name
                     ));
@@ -263,11 +285,13 @@ impl StreamRuntimeState {
                 connection_id,
                 stream_key,
             } => {
-                if self.active.as_ref().is_some_and(|active| {
-                    active.connection_id == *connection_id
-                        && active.request.stream_key == *stream_key
-                }) {
-                    self.reconnect_attempts = 0;
+                if let Some(watch) = self.watches.get_mut(stream_key)
+                    && watch
+                        .active
+                        .as_ref()
+                        .is_some_and(|active| active.connection_id == *connection_id)
+                {
+                    watch.reconnect_attempts = 0;
                 }
             }
             VoiceRuntimeEvent::StreamConnectionEnded {
@@ -275,71 +299,60 @@ impl StreamRuntimeState {
                 stream_key,
                 outcome,
             } => {
-                if self.active.as_ref().is_some_and(|active| {
-                    active.connection_id == *connection_id
-                        && active.request.stream_key == *stream_key
-                }) {
-                    self.active = None;
+                let terminal = if let Some(watch) = self.watches.get_mut(stream_key)
+                    && watch
+                        .active
+                        .as_ref()
+                        .is_some_and(|active| active.connection_id == *connection_id)
+                {
+                    watch.active = None;
                     if *outcome == VoiceConnectionEnd::Stop
-                        || self.reconnect_attempts >= MAX_VOICE_RECONNECT_ATTEMPTS
+                        || watch.reconnect_attempts >= MAX_VOICE_RECONNECT_ATTEMPTS
                     {
-                        update.playback_ended =
-                            self.requested.take().map(|request| StreamPlaybackEnded {
-                                request,
-                                reconnecting: false,
-                            });
-                        self.create = None;
-                        self.server = None;
-                        self.reconnect_attempts = 0;
-                        update.close_stream_key = Some(stream_key.clone());
-                        update.send_delete = true;
+                        true
                     } else {
-                        self.reconnect_attempts = self.reconnect_attempts.saturating_add(1);
-                        update.playback_ended =
-                            self.requested
-                                .as_ref()
-                                .cloned()
-                                .map(|request| StreamPlaybackEnded {
-                                    request,
-                                    reconnecting: true,
-                                });
+                        watch.reconnect_attempts = watch.reconnect_attempts.saturating_add(1);
+                        update.playback_ended.push(StreamPlaybackEnded {
+                            request: watch.request.clone(),
+                            reconnecting: true,
+                        });
+                        false
                     }
+                } else {
+                    false
+                };
+                if terminal {
+                    let watch = self
+                        .watches
+                        .remove(stream_key)
+                        .expect("matched stream watch remains present");
+                    update.playback_ended.push(StreamPlaybackEnded {
+                        request: watch.request,
+                        reconnecting: false,
+                    });
+                    update.close.push(StreamWatchClose {
+                        stream_key: stream_key.clone(),
+                        send_delete: true,
+                    });
                 }
             }
             VoiceRuntimeEvent::Shutdown => {
-                update.playback_ended = self.requested.take().map(|request| StreamPlaybackEnded {
-                    request,
-                    reconnecting: false,
-                });
-                update.close_stream_key =
-                    self.active.take().map(|active| active.request.stream_key);
-                update.send_delete = update.close_stream_key.is_some();
-                self.create = None;
-                self.server = None;
+                self.clear_all(&mut update, true);
             }
             _ => {}
         }
 
-        if self.active.is_none() {
-            update.connect = self.connect_if_ready();
-        }
+        self.connect_ready_watches(&mut update);
         update
     }
 
-    pub fn record_voice_state(&mut self, state: &VoiceStateInfo, update: &mut StreamRuntimeUpdate) {
+    fn record_voice_state(&mut self, state: &VoiceStateInfo, update: &mut StreamRuntimeUpdate) {
         if self.current_user_id != Some(state.user_id) {
             return;
         }
         let Some(channel_id) = state.channel_id else {
             self.current_voice = None;
-            update.playback_ended = self.requested.take().map(|request| StreamPlaybackEnded {
-                request,
-                reconnecting: false,
-            });
-            update.close_stream_key = self.active.take().map(|active| active.request.stream_key);
-            update.send_delete = update.close_stream_key.is_some();
-            self.create = None;
-            self.server = None;
+            self.clear_all(update, true);
             return;
         };
         let Some(scope) = state.scope() else {
@@ -357,81 +370,94 @@ impl StreamRuntimeState {
             channel_id,
             session_id: session_id.clone(),
         });
-        if self
-            .requested
-            .as_ref()
-            .is_some_and(|request| request.scope != scope || request.channel_id != channel_id)
-        {
-            update.playback_ended = self.requested.take().map(|request| StreamPlaybackEnded {
-                request,
-                reconnecting: false,
-            });
-            update.close_stream_key = self.active.take().map(|active| active.request.stream_key);
-            update.send_delete = update.close_stream_key.is_some();
-            self.create = None;
-            self.server = None;
+        let stale_keys = self
+            .watches
+            .iter()
+            .filter(|(_, watch)| {
+                watch.request.scope != scope || watch.request.channel_id != channel_id
+            })
+            .map(|(stream_key, _)| stream_key.clone())
+            .collect::<Vec<_>>();
+        for stream_key in stale_keys {
+            self.clear_matching(&stream_key, update, true);
         }
     }
 
-    pub fn clear_matching(
+    fn clear_all(&mut self, update: &mut StreamRuntimeUpdate, send_delete: bool) {
+        let stream_keys = self.watches.keys().cloned().collect::<Vec<_>>();
+        for stream_key in stream_keys {
+            self.clear_matching(&stream_key, update, send_delete);
+        }
+    }
+
+    fn clear_matching(
         &mut self,
         stream_key: &str,
         update: &mut StreamRuntimeUpdate,
         send_delete: bool,
     ) {
-        if self
-            .requested
-            .as_ref()
-            .is_some_and(|request| request.stream_key == stream_key)
-        {
-            update.playback_ended = self.requested.take().map(|request| StreamPlaybackEnded {
-                request,
-                reconnecting: false,
+        let Some(watch) = self.watches.remove(stream_key) else {
+            return;
+        };
+        update.playback_ended.push(StreamPlaybackEnded {
+            request: watch.request,
+            reconnecting: false,
+        });
+        if watch.active.is_some() {
+            update.close.push(StreamWatchClose {
+                stream_key: stream_key.to_owned(),
+                send_delete,
             });
-            self.create = None;
-            self.server = None;
-            self.reconnect_attempts = 0;
-        }
-        if self
-            .active
-            .as_ref()
-            .is_some_and(|active| active.request.stream_key == stream_key)
-        {
-            self.active = None;
-            update.close_stream_key = Some(stream_key.to_owned());
-            update.send_delete = send_delete;
         }
     }
 
-    pub fn connect_if_ready(&mut self) -> Option<StreamGatewaySession> {
-        let request = self.requested.as_ref()?;
+    fn connect_ready_watches(&mut self, update: &mut StreamRuntimeUpdate) {
+        let stream_keys = self.watches.keys().cloned().collect::<Vec<_>>();
+        for stream_key in stream_keys {
+            if let Some(session) = self.connect_if_ready(&stream_key) {
+                update.connect.push(session);
+            }
+        }
+    }
+
+    fn connect_if_ready(&mut self, stream_key: &str) -> Option<StreamGatewaySession> {
+        let current_user_id = self.current_user_id?;
         let current_voice = self.current_voice.as_ref()?;
-        if request.scope != current_voice.scope || request.channel_id != current_voice.channel_id {
+        let watch = self.watches.get(stream_key)?;
+        if watch.active.is_some()
+            || watch.request.scope != current_voice.scope
+            || watch.request.channel_id != current_voice.channel_id
+        {
             return None;
         }
-        let create = self.create.as_ref()?;
-        let server = self.server.as_ref()?;
-        if create.stream_key != request.stream_key || server.stream_key != request.stream_key {
-            return None;
-        }
+        let create = watch.create.as_ref()?;
+        let server = watch.server.as_ref()?;
         let endpoint = server.endpoint.as_ref()?.trim_end_matches('/').to_owned();
         if endpoint.is_empty() || server.token.is_empty() {
             return None;
         }
+        let request = watch.request.clone();
+        let rtc_server_id = create.rtc_server_id.clone();
+        let rtc_channel_id = create.rtc_channel_id;
+        let token = server.token.clone();
+        let reconnect_delay = stream_watch_reconnect_delay(watch.reconnect_attempts);
 
         self.next_connection_id = self.next_connection_id.wrapping_add(1).max(1);
         let session = StreamGatewaySession {
             connection_id: self.next_connection_id,
-            request: request.clone(),
-            current_user_id: self.current_user_id?,
+            request,
+            current_user_id,
             session_id: current_voice.session_id.clone(),
-            rtc_server_id: create.rtc_server_id.clone(),
-            rtc_channel_id: create.rtc_channel_id,
+            rtc_server_id,
+            rtc_channel_id,
             endpoint,
-            token: server.token.clone(),
-            reconnect_delay: stream_watch_reconnect_delay(self.reconnect_attempts),
+            token,
+            reconnect_delay,
         };
-        self.active = Some(session.clone());
+        self.watches
+            .get_mut(stream_key)
+            .expect("stream watch remains present while connecting")
+            .active = Some(session.clone());
         Some(session)
     }
 }

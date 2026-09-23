@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.22] - 2026-09-19
+
+### Bug Fixes
+
+- _(tui)_ Fix uncategorized channels appearing below category blocks (#372) in [#372](https://github.com/chojs23/concord/pull/372) by @chojs23
+- _(rpc)_ Preserve client-provided RPC activity names (#374) in [#374](https://github.com/chojs23/concord/pull/374) by @chojs23
+
+### Features
+
+- _(stream)_ Support concurrent stream playback (#373) in [#373](https://github.com/chojs23/concord/pull/373) by @chojs23
+
 ## [2.5.21] - 2026-09-15
 
 ### Bug Fixes

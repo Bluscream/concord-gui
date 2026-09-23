@@ -120,7 +120,9 @@ pub mod shared {
             endpoint: Some("stream.example.com".to_owned()),
             token: "stream-token".to_owned(),
         }));
-        let session = update.connect.expect("stream session should be ready");
+        let mut connect = update.connect;
+        assert_eq!(connect.len(), 1, "stream session should be ready");
+        let session = connect.remove(0);
         (state, session)
     }
 
