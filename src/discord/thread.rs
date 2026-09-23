@@ -18,7 +18,7 @@ pub use state::ThreadCreatorState;
 /// omits `before`; later pages use the oldest `archive_timestamp` returned by
 /// the previous response.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) enum ArchivedThreadPageCursor {
+pub enum ArchivedThreadPageCursor {
     Initial,
     Before(String),
 }
@@ -28,7 +28,7 @@ impl ArchivedThreadPageCursor {
         before.map_or(Self::Initial, Self::Before)
     }
 
-    pub(crate) fn into_before(self) -> Option<String> {
+    pub fn into_before(self) -> Option<String> {
         match self {
             Self::Initial => None,
             Self::Before(before) => Some(before),
@@ -71,7 +71,7 @@ pub struct ThreadListSyncInfo {
     pub extra_fields: BTreeMap<String, Value>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ThreadMemberInfo {
     pub thread_id: Option<Id<ChannelMarker>>,
     pub user_id: Option<Id<UserMarker>>,

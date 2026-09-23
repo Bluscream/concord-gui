@@ -10,6 +10,7 @@ use crate::tui::message::time as message_time;
 use crate::tui::state::{DashboardState, apply_discord_foreground, normal_text_style};
 use crate::tui::text::{truncate_display_width, truncate_text};
 use crate::tui::theme;
+use crate::tui::ui::thread_card::{thread_card_lines, thread_card_width_in_message};
 use concord::discord::ids::{Id, marker::MessageMarker};
 use concord::discord::{MessageKind, MessageSnapshotInfo, MessageState};
 

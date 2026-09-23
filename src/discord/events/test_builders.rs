@@ -25,8 +25,7 @@ use crate::discord::*;
 use super::app_event::AppEvent;
 use super::types::MessageHistoryLoadTarget;
 use crate::discord::commands::{
-    AttachmentDownloadId, DownloadAttachmentSource, MessageHistoryAfterMode,
-    ReactionEmoji,
+    AttachmentDownloadId, DownloadAttachmentSource, MessageHistoryAfterMode, ReactionEmoji,
 };
 
 /// Message fixtures, as an extension trait.

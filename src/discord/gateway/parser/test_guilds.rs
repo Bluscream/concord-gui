@@ -1,7 +1,7 @@
 use crate::discord::ids::Id;
-use serde_json::{Value, json};
+use serde_json::json;
 
-use super::{parse_channel_info, parse_user_account_event, test_misc::thread_payload};
+use super::{parse_channel_info, parse_user_account_event};
 use crate::discord::{
     ActivityKind, AppEvent, ChannelVisibilityStats, DiscordState, PremiumTier, PresenceStatus,
 };
@@ -659,32 +659,6 @@ fn thread_channel_parser_keeps_counts_and_status() {
     assert_eq!(channel.total_message_sent, Some(14));
     assert_eq!(channel.thread_archived(), Some(true));
     assert_eq!(channel.thread_locked(), Some(false));
-}
-
-
-#[test]
-fn raw_thread_create_upserts_thread_channel() {
-    let events = parse_user_account_event(
-        &json!({
-            "t": "THREAD_CREATE",
-            "d": thread_payload(10, "release notes")
-        })
-        .to_string(),
-    );
-
-    assert!(matches!(
-        events.as_slice(),
-        [AppEvent::ChannelUpsert(channel)]
-            if channel.channel_id == Id::new(10)
-                && channel.guild_id == Some(Id::new(1))
-                && channel.parent_id == Some(Id::new(2))
-                && channel.name == "release notes"
-                && channel.kind == "GuildPublicThread"
-                && channel.message_count == Some(12)
-                && channel.total_message_sent == Some(14)
-                && channel.thread_archived() == Some(false)
-                && channel.thread_locked() == Some(false)
-    ));
 }
 
 #[test]

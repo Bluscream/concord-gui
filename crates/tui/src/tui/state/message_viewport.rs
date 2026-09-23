@@ -1,10 +1,5 @@
 mod events;
 
-use concord::discord::ids::{
-    Id,
-    marker::{ChannelMarker, MessageMarker, RoleMarker},
-};
-use concord::discord::{ChannelState, MessageHistoryAfterMode, MessageState};
 use crate::tui::text;
 use crate::tui::text::{
     MentionTarget, RenderedText, TextHighlightKind, render_user_mentions,
@@ -14,7 +9,7 @@ use concord::discord::ids::{
     Id,
     marker::{ChannelMarker, MessageMarker, RoleMarker},
 };
-use concord::discord::{ChannelState, MessageHistoryAfterMode, MessageState, is_thread_kind};
+use concord::discord::{ChannelState, MessageHistoryAfterMode, MessageState};
 
 use super::scroll::{
     SCROLL_OFF, clamp_list_scroll, move_index_down, move_index_down_by, move_index_up,

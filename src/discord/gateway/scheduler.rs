@@ -1,6 +1,6 @@
 use super::payloads::*;
 use super::*;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use tokio::time::Instant;
 
 impl Default for GuildMemberRequestScheduler {
@@ -9,6 +9,7 @@ impl Default for GuildMemberRequestScheduler {
             pending: VecDeque::new(),
             in_flight: None,
             awaiting_response: VecDeque::new(),
+            next_guild_request_at: HashMap::new(),
             next_nonce: 1,
         }
     }
@@ -183,10 +184,9 @@ impl GuildMemberRequestScheduler {
         if self.pending.len() >= MAX_PENDING_GUILD_MEMBER_REQUESTS {
             return false;
         }
-        self.pending.push_back(PendingGuildMemberRequest {
-            request,
-            send_at: now,
-        });
+        let send_at = self.guild_request_at(request.guild_id, now);
+        self.pending
+            .push_back(PendingGuildMemberRequest { request, send_at });
         true
     }
 
@@ -367,7 +367,20 @@ impl GuildMemberRequestScheduler {
         }
     }
 
+    fn guild_request_at(&self, guild_id: Id<GuildMarker>, requested_at: Instant) -> Instant {
+        self.next_guild_request_at
+            .get(&guild_id)
+            .copied()
+            .unwrap_or(requested_at)
+            .max(requested_at)
+    }
+
     pub(super) fn delay_guild_until(&mut self, guild_id: Id<GuildMarker>, earliest: Instant) {
+        let earliest = *self
+            .next_guild_request_at
+            .entry(guild_id)
+            .and_modify(|current| *current = (*current).max(earliest))
+            .or_insert(earliest);
         for pending in self
             .pending
             .iter_mut()
@@ -418,8 +431,12 @@ impl GuildMemberRequestScheduler {
         self.prune_awaiting(now);
         self.cancel_in_flight(now);
         self.recover_awaiting(now);
+        // A new session is a clean slate: the per-guild interval was about
+        // pacing the old connection, and holding it here would delay the first
+        // request after a reidentify for no reason.
+        self.next_guild_request_at.clear();
         for pending in &mut self.pending {
-            pending.send_at = pending.send_at.max(now);
+            pending.send_at = now;
         }
     }
 }

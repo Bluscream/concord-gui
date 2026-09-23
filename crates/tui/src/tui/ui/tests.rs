@@ -62,7 +62,8 @@ use crate::tui::{
         AppliedForumTag, AttachmentDownloadProgressView, AttachmentViewerZoom, ChannelSwitcherItem,
         ChannelThreadItem, ComposerLock, DashboardState, DisplayOptionItem, EmojiPickerEntry,
         EmojiReactionItem, FocusPane, MentionPickerEntry, MentionPickerTarget, MessageActionItem,
-        MessageActionKind, PollVotePickerItem, SelectablePopupTarget, presence_style,
+        MessageActionKind, PollVotePickerItem, SelectablePopupTarget, ThreadCardImagePreview,
+        presence_style,
     },
     text::{TextHighlightKind, truncate_display_width_from},
     ui::{MouseTarget, mouse_target_at},
@@ -82,23 +83,6 @@ use concord::{
         ReactionEmoji, ReactionInfo, ReactionUserInfo, ReadStateInfo, ReplyInfo, RoleInfo,
         ThreadMetadataInfo, UserGuildSettingsInfo, UserProfileInfo, UserSettingsInfo,
         VoiceConnectionStatus, VoiceStateInfo,
-    },
-    tui::{
-        message::format::{
-            MessageContentLine, format_message_content, format_message_content_lines,
-            format_message_content_lines_with_loaded_custom_emoji_urls, lay_out_reaction_chips,
-            mention_highlight_style, poll_box_border, poll_card_inner_width,
-            reaction_line_test_spans, wrap_text_lines,
-        },
-        state::{
-            AppliedForumTag, AttachmentDownloadProgressView, AttachmentViewerZoom,
-            ChannelSwitcherItem, ChannelThreadItem, ComposerLock, DashboardState,
-            DisplayOptionItem, EmojiPickerEntry, EmojiReactionItem, FocusPane, MentionPickerEntry,
-            MentionPickerTarget, MessageActionItem, MessageActionKind, PollVotePickerItem,
-            SelectablePopupTarget, ThreadCardImagePreview, presence_style,
-        },
-        text::{TextHighlightKind, truncate_display_width_from},
-        ui::{MouseTarget, mouse_target_at},
     },
 };
 

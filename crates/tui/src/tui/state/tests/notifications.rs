@@ -1,7 +1,7 @@
 use super::*;
+use crate::tui::state::NotificationInboxItem;
 use concord::discord::ids::marker::RoleMarker;
 use concord::discord::{ForumPostDataInfo, ThreadMemberInfo};
-use crate::tui::state::NotificationInboxItem;
 
 fn current_user_thread_member(thread_id: Id<ChannelMarker>, muted: bool) -> ThreadMemberInfo {
     ThreadMemberInfo {

@@ -19,21 +19,20 @@ use super::{
     MessageActionKind, SearchResultItem,
 };
 use concord::discord::{
-    ActivityInfo, ActivityKind, AppCommand, AppEvent, AttachmentInfo, ChannelInfo,
-    ChannelNotificationOverrideInfo, ChannelRecipientInfo, ChannelUnreadState,
-    ChannelVisibilityStats, CustomEmojiInfo, DiscordState, DownloadAttachmentSource,
-    EmbedFieldInfo, EmbedInfo, ForumTagInfo, GuildFolder, GuildMemberListItem,
-    GuildMemberListOperation, GuildMemberListUpdateInfo, GuildNotificationSettingsInfo,
-    MessageInfo, MessageKind, MessageReferenceInfo, MessageSearchPage, MessageSnapshotInfo,
-    MessageState, MessageUpdateDispatchInfo, MessageUpdateEventFields, NotificationLevel,
-    PermissionOverwriteInfo, PermissionOverwriteKind, PremiumTier, PresenceEventFields,
-    PresenceStatus, ReactionEmoji, ReactionInfo, ReactionUserInfo, ReplyInfo, RoleInfo,
-    SnapshotRevision, UserGuildSettingsInfo, UserProfileInfo, UserSettingsInfo,
+    ActivityInfo, ActivityKind, AppCommand, AppEvent, AttachmentDownloadId, AttachmentInfo,
+    AttachmentMediaType, ChannelInfo, ChannelNotificationOverrideInfo, ChannelRecipientInfo,
+    ChannelUnreadState, ChannelVisibilityStats, CustomEmojiInfo, DiscordState,
+    DownloadAttachmentSource, EmbedFieldInfo, EmbedInfo, ForumTagInfo, GuildFolder,
+    GuildMemberListItem, GuildMemberListOperation, GuildMemberListUpdateInfo,
+    GuildNotificationSettingsInfo, MESSAGE_FLAG_SUPPRESS_EMBEDS, MediaPlaybackSource,
+    MediaPlaybackTarget, MessageInfo, MessageKind, MessageReferenceInfo, MessageSearchPage,
+    MessageSnapshotInfo, MessageState, MessageUpdateDispatchInfo, MessageUpdateEventFields,
+    NotificationLevel, PermissionOverwriteInfo, PermissionOverwriteKind, PremiumTier,
+    PresenceEventFields, PresenceStatus, ReactionEmoji, ReactionInfo, ReactionUserInfo, ReplyInfo,
+    RoleInfo, SnapshotRevision, UserGuildSettingsInfo, UserProfileInfo, UserSettingsInfo,
     VoiceConnectionStatus, VoiceStateInfo,
 };
-use concord_fixtures::events::{
-    ForumPostsLoadedFixture, MessageAckFixture, forum_posts_loaded_event, message_ack_event,
-};
+use concord_fixtures::events::{MessageAckFixture, message_ack_event};
 
 macro_rules! assert_send_message_eq {
     ($actual:expr, $expected:expr $(, $($message:tt)+)?) => {{

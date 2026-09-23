@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 
 use concord::discord::{
-    AppCommand, AppEvent, ArchivedThreadsPage, DiscordState, ForumPostDataInfo,
+    AppCommand, AppEvent, ArchivedThreadsPage, DiscordState, ForumPostDataInfo, ThreadMemberInfo,
 };
 
 /// Something the fake did, and the state as it stood at that moment.
@@ -688,8 +688,16 @@ fn handle_command(
         AppCommand::SetThreadMuted {
             channel_id, muted, ..
         } => {
-            fixtures::set_thread_muted(state, channel_id, muted);
-            publish_state!();
+            publish_event!(AppEvent::ThreadMemberUpdate {
+                guild_id: None,
+                channel_id,
+                member: ThreadMemberInfo {
+                    thread_id: Some(channel_id),
+                    user_id: Some(fixtures::demo_user_id()),
+                    muted: Some(muted),
+                    ..ThreadMemberInfo::default()
+                },
+            });
         }
 
         AppCommand::SetThreadPinned {
@@ -1086,8 +1094,17 @@ fn handle_command(
             followed,
             ..
         } => {
-            fixtures::set_thread_followed(state, channel_id, followed);
-            publish_state!();
+            // Leaving is the absence of a membership, so a `false` here is an
+            // update with no user on it - the same shape Discord sends.
+            publish_event!(AppEvent::ThreadMemberUpdate {
+                guild_id: None,
+                channel_id,
+                member: ThreadMemberInfo {
+                    thread_id: Some(channel_id),
+                    user_id: followed.then(fixtures::demo_user_id),
+                    ..ThreadMemberInfo::default()
+                },
+            });
         }
 
         // ---- own presence and profile ---------------------------------------

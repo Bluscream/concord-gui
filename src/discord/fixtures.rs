@@ -1645,14 +1645,6 @@ pub fn set_thread_locked(
     }
 }
 
-/// Mute or unmute a thread for the demo user.
-pub fn set_thread_muted(
-    state: &mut DiscordState,
-    channel_id: Id<marker::ChannelMarker>,
-    muted: bool,
-) {
-}
-
 /// Pin or unpin a thread in its forum parent.
 ///
 /// Only the `PINNED` bit is touched; the rest of the bitfield carries meaning
@@ -2147,14 +2139,6 @@ pub fn set_thread_archived(
     {
         metadata.archived = archived;
     }
-}
-
-/// Join or leave a thread.
-pub fn set_thread_followed(
-    state: &mut DiscordState,
-    channel_id: Id<marker::ChannelMarker>,
-    followed: bool,
-) {
 }
 
 /// Remove a member from a guild, as a kick or ban does.

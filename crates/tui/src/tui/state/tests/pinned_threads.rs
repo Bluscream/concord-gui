@@ -1,7 +1,6 @@
 use super::*;
-use concord::discord::{AppCommand, ThreadGatewayInfo};
 use crate::tui::state::MessagePaneSource;
-use concord::discord::AppCommand;
+use concord::discord::{AppCommand, ThreadGatewayInfo};
 
 fn state_with_thread_created_message_after_regular_message() -> DashboardState {
     let guild_id = Id::new(1);

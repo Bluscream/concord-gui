@@ -250,7 +250,9 @@ impl Workspace {
                     label: label.clone(),
                 },
             )),
-            FriendStatus::Blocked => {}
+            // Implicit is Discord's "we share a server and have spoken", which
+            // is not a relationship anything here can act on.
+            FriendStatus::Blocked | FriendStatus::Implicit => {}
         }
 
         entries.push(if status == FriendStatus::Blocked {

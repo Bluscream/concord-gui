@@ -58,17 +58,17 @@ pub(super) struct ReadAckRequests {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ForumPostDataRequestTarget {
-    pub(crate) guild_id: Id<GuildMarker>,
-    pub(crate) channel_id: Id<ChannelMarker>,
-    pub(crate) thread_ids: Vec<Id<ChannelMarker>>,
+pub struct ForumPostDataRequestTarget {
+    pub guild_id: Id<GuildMarker>,
+    pub channel_id: Id<ChannelMarker>,
+    pub thread_ids: Vec<Id<ChannelMarker>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ArchivedThreadRequestTarget {
-    pub(crate) guild_id: Id<GuildMarker>,
-    pub(crate) channel_id: Id<ChannelMarker>,
-    pub(crate) cursor: ArchivedThreadPageCursor,
+pub struct ArchivedThreadRequestTarget {
+    pub guild_id: Id<GuildMarker>,
+    pub channel_id: Id<ChannelMarker>,
+    pub cursor: ArchivedThreadPageCursor,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -283,7 +283,7 @@ impl RequestLifecycle {
         self.newer_history.begin_request(channel_id, after, mode)
     }
 
-    pub(crate) fn next_forum_post_data_request(
+    pub fn next_forum_post_data_request(
         &mut self,
         target: Option<ForumPostDataRequestTarget>,
     ) -> Option<ForumPostDataRequestTarget> {
@@ -298,14 +298,14 @@ impl RequestLifecycle {
         self.forum_post_data.release(channel_id, thread_ids);
     }
 
-    pub(crate) fn next_archived_thread_request(
+    pub fn next_archived_thread_request(
         &mut self,
         target: Option<ArchivedThreadRequestTarget>,
     ) -> Option<ArchivedThreadRequestTarget> {
         self.archived_threads.next(target)
     }
 
-    pub(crate) fn mark_archived_thread_request_send_failed(
+    pub fn mark_archived_thread_request_send_failed(
         &mut self,
         channel_id: Id<ChannelMarker>,
         cursor: &ArchivedThreadPageCursor,

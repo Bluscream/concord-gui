@@ -64,6 +64,8 @@ impl Workspace {
                     handle.send(AppCommand::UpdateMemberListSubscription {
                         guild_id,
                         channel_id,
+                        // The channel's own member list, not a thread's.
+                        thread_id: None,
                         ranges: vec![(0, 99), (100, 199)],
                     });
                 }

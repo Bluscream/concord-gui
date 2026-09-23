@@ -6,8 +6,7 @@ use crate::{
         AppEvent, ApplicationCommandAutocompleteInvocation, ApplicationCommandInvocation,
         AttachmentUpdate, ForumPostCreate, MessageAttachmentUpload, MessageInfo,
         MessageUpdateDispatchInfo, MessageUpdateEventFields, ReactionEmoji, ReplyReference,
-        friend_request_target,
-        ThreadGatewayInfo, ThreadMemberInfo,
+        ThreadGatewayInfo, ThreadMemberInfo, friend_request_target,
         ids::{
             Id,
             marker::{

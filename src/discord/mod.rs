@@ -131,15 +131,15 @@ pub use profile::{
 };
 pub use read::ReadStateInfo;
 pub use remote_config::RemoteConfig;
-pub(crate) use request_lifecycle::{ArchivedThreadRequestTarget, ForumPostDataRequestTarget};
 pub use request_lifecycle::GuildMemberSearchSurface;
+pub use request_lifecycle::{ArchivedThreadRequestTarget, ForumPostDataRequestTarget};
 pub use rest::{
     AFK_TIMEOUTS, AccountEdit, AuditLogAction, AuditLogEntryInfo, AuthSession, AuthorisedApp,
     AutoModAction, AutoModRule, AutoModTrigger, BackupCode, ChannelEdit, Connection,
     ConnectionVisibility, DefaultNotifications, DiscoverableGuild, DiscoveryCategory,
     DiscoveryMetadata, DiscoveryMetadataProblem, DmScanLevel, EventLocation, EventStatus,
-    ExplicitContentFilter, FriendDiscovery, FriendSources, GuildBanInfo, GuildEdit,
-    GuildEmojiInfo, GuildInviteInfo, GuildSticker, GuildTemplate, GuildWidget, InvitePreview,
+    ExplicitContentFilter, FriendDiscovery, FriendSources, GuildBanInfo, GuildEdit, GuildEmojiInfo,
+    GuildInviteInfo, GuildSticker, GuildTemplate, GuildWidget, InvitePreview,
     MAX_BAN_DELETE_MESSAGE_SECONDS, MAX_CHANNEL_NAME_CHARS, MAX_CHANNEL_TOPIC_CHARS,
     MAX_EMOJI_BYTES, MAX_GUILD_NAME_CHARS, MAX_INVITE_MAX_AGE_SECONDS, MAX_INVITE_MAX_USES,
     MAX_MESSAGE_STICKERS, MAX_ROLE_NAME_CHARS, MAX_SLOWMODE_SECONDS, MAX_SOUND_NAME_CHARS,
@@ -163,12 +163,12 @@ pub use state::{
     GuildMemberState, GuildState, MessageCapabilities, MessageState, RoleState, SnapshotAreas,
     SnapshotRevision, TypingUserState, VoiceParticipantState,
 };
-pub use totp::TotpSecret;
-pub(crate) use thread::ArchivedThreadPageCursor;
+pub use thread::ArchivedThreadPageCursor;
 pub use thread::{
     ArchivedThreadsPage, ForumPostDataInfo, ThreadCreatorState, ThreadGatewayInfo,
     ThreadListSyncInfo, ThreadMemberInfo, ThreadMemberListUpdateInfo, ThreadMembersUpdateInfo,
 };
+pub use totp::TotpSecret;
 pub(crate) use upload::read_profile_avatar_image;
 pub use user_settings::{UserCustomStatusInfo, UserFriendSourceFlagsInfo, UserSettingsInfo};
 pub(crate) use verification::GuildParticipationDecision;

@@ -10,8 +10,7 @@ use concord::discord::ids::{
     Id,
     marker::{ChannelMarker, GuildMarker, UserMarker},
 };
-use concord::discord::{ActivityInfo, AppCommand, ChannelInfo, MessageInfo, MessageState};
-use crate::tui::theme;
+use concord::discord::{ActivityInfo, AppCommand, MessageInfo, MessageState};
 
 use super::DashboardState;
 use super::member_grouping::{

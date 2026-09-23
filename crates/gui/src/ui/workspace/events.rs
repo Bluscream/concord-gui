@@ -574,43 +574,59 @@ impl Workspace {
             AppEvent::GatewayError { message } => {
                 self.model.status_line = message;
             }
-            AppEvent::ForumPostsLoaded {
-                channel_id,
-                threads,
-                first_messages,
-                has_more,
-                next_offset,
-                ..
+            // v2.5.10 loads a forum in two halves. The archive arrives as a
+            // page of threads, and the body of each post arrives separately for
+            // whichever threads are on screen - so a post is listed first and
+            // filled in afterwards, rather than arriving whole.
+            AppEvent::ArchivedThreadsLoaded {
+                channel_id, page, ..
             } => {
                 if let Some(forum) = &mut self.forum
                     && forum.channel_id == channel_id
                 {
                     forum.loading = false;
-                    forum.complete = !has_more;
-                    forum.next_offset = next_offset;
-
-                    for (index, thread) in threads.iter().enumerate() {
-                        // Discord returns opening messages positionally
-                        // alongside the threads, so they are paired by index.
-                        let opening = first_messages.get(index);
-
+                    forum.complete = !page.has_more;
+                    forum.archived_page_before = page.next_before.clone();
+                    for thread in &page.threads {
                         forum.posts.push(ForumPost {
                             channel_id: thread.channel_id,
                             title: thread.name.clone(),
-                            preview: opening
-                                .and_then(|message| message.content.clone())
-                                .map(|content| content.chars().take(160).collect())
-                                .unwrap_or_default(),
-                            author: opening
-                                .map(|message| message.author.clone())
-                                .unwrap_or_default(),
+                            preview: String::new(),
+                            author: String::new(),
                             message_count: thread.message_count.unwrap_or(0),
-                            archived: forum.showing_archived,
+                            archived: true,
                         });
                     }
                 }
             }
-            AppEvent::ForumPostsLoadFailed { channel_id, .. } => {
+            AppEvent::ForumPostDataLoaded {
+                channel_id, posts, ..
+            } => {
+                if let Some(forum) = &mut self.forum
+                    && forum.channel_id == channel_id
+                {
+                    forum.loading = false;
+                    for data in &posts {
+                        let Some(post) = forum
+                            .posts
+                            .iter_mut()
+                            .find(|post| post.channel_id == data.thread_id)
+                        else {
+                            continue;
+                        };
+                        if let Some(message) = &data.first_message {
+                            post.preview = message
+                                .content
+                                .clone()
+                                .map(|content| content.chars().take(160).collect())
+                                .unwrap_or_default();
+                            post.author = message.author.clone();
+                        }
+                    }
+                }
+            }
+            AppEvent::ArchivedThreadsLoadFailed { channel_id, .. }
+            | AppEvent::ForumPostDataLoadFailed { channel_id, .. } => {
                 if let Some(forum) = &mut self.forum
                     && forum.channel_id == channel_id
                 {

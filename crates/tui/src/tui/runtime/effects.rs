@@ -588,11 +588,6 @@ mod tests {
         MessageInfo, MessageUpdateDispatchInfo, MessageUpdateEventFields, ReactionEmoji,
         ReactionUserInfo, RoleInfo, SequencedAppEvent, VoiceStateInfo,
     };
-    use concord_fixtures::events::{
-        ForumPostsLoadedFixture, GuildCreateFixture, MessageHistoryLoadedFixture,
-        ReactionUsersLoadedFixture, forum_posts_loaded_event, guild_create_event,
-        message_history_loaded_event, reaction_users_loaded_event,
-    };
 
     use super::*;
 

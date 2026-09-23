@@ -457,7 +457,7 @@ impl DiscordState {
         self.threads.archived_has_response(parent_id)
     }
 
-    pub(crate) fn next_archived_thread_page_cursor(
+    pub fn next_archived_thread_page_cursor(
         &self,
         parent_id: Id<ChannelMarker>,
         should_load_more: bool,

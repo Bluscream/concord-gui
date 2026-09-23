@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashSet, VecDeque},
+    collections::{BTreeSet, HashMap, HashSet, VecDeque},
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -341,6 +341,9 @@ struct GuildMemberRequestScheduler {
     pending: VecDeque<PendingGuildMemberRequest>,
     in_flight: Option<ScheduledGuildMemberRequest>,
     awaiting_response: VecDeque<SentGuildMemberRequest>,
+    /// Earliest a guild may be asked again, kept outside `pending` so it
+    /// survives a request being dropped and re-queued across a resume.
+    next_guild_request_at: HashMap<Id<GuildMarker>, Instant>,
     next_nonce: u64,
 }
 

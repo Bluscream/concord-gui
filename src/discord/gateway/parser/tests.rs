@@ -7,8 +7,7 @@ use super::{
 };
 use crate::discord::{
     ActivityKind, AppEvent, FriendStatus, GuildMemberListItem, GuildMemberListOperation,
-    GuildOnboardingMode,
-    GuildVerificationLevel, PresenceStatus,
+    GuildOnboardingMode, GuildVerificationLevel, PresenceStatus,
 };
 
 #[test]

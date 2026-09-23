@@ -537,7 +537,10 @@ pub struct ChannelThreadItem {
     pub last_activity_message_id: Option<Id<MessageMarker>>,
 }
 
-#[cfg(test)]
+// `any(test, ...)` rather than upstream's bare `test`: over here the front
+// ends are separate crates and reach these constructors through the fixtures
+// feature, not through cfg(test).
+#[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl ChannelThreadItem {
     pub fn test(channel_id: Id<ChannelMarker>) -> Self {

@@ -2,9 +2,7 @@ use std::collections::HashSet;
 
 use concord::discord::ids::marker::{GuildMarker, UserMarker};
 
-use concord::discord::{
-    AppCommand, AppEvent, ForumPostArchiveState, MentionInfo, MessageSnapshotInfo,
-};
+use concord::discord::{AppCommand, AppEvent, MentionInfo, MessageSnapshotInfo};
 mod channel_rows;
 mod channel_tree;
 mod channels;

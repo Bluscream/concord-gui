@@ -95,7 +95,7 @@ impl DiscordClient {
             .begin_history_after_request(channel_id, after, mode)
     }
 
-    pub(crate) fn next_forum_post_data_request(
+    pub fn next_forum_post_data_request(
         &self,
         target: Option<ForumPostDataRequestTarget>,
     ) -> Option<ForumPostDataRequestTarget> {
@@ -105,7 +105,7 @@ impl DiscordClient {
             .next_forum_post_data_request(target)
     }
 
-    pub(crate) fn mark_forum_post_data_request_failed(
+    pub fn mark_forum_post_data_request_failed(
         &self,
         channel_id: Id<ChannelMarker>,
         thread_ids: &[Id<ChannelMarker>],
@@ -116,7 +116,7 @@ impl DiscordClient {
             .mark_forum_post_data_failed(channel_id, thread_ids);
     }
 
-    pub(crate) fn next_archived_thread_request(
+    pub fn next_archived_thread_request(
         &self,
         target: Option<ArchivedThreadRequestTarget>,
     ) -> Option<ArchivedThreadRequestTarget> {
@@ -126,7 +126,7 @@ impl DiscordClient {
             .next_archived_thread_request(target)
     }
 
-    pub(crate) fn mark_archived_thread_request_send_failed(
+    pub fn mark_archived_thread_request_send_failed(
         &self,
         channel_id: Id<ChannelMarker>,
         cursor: &ArchivedThreadPageCursor,

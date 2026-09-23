@@ -648,6 +648,7 @@ fn state_with_relationship(status: FriendStatus) -> DashboardState {
             nickname: None,
             display_name: Some("someone".to_owned()),
             username: Some("someone".to_owned()),
+            ignored: false,
         }],
     });
     state

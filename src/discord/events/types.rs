@@ -8,8 +8,8 @@ use crate::discord::ids::{
 };
 
 use crate::discord::{
-    ActivityInfo, AttachmentUpdate, ChannelInfo, EmbedInfo, GuildNotificationSettingsInfo,
-    MemberInfo, MentionInfo, PollInfo, PresenceStatus,
+    ActivityInfo, AttachmentUpdate, EmbedInfo, GuildNotificationSettingsInfo, MemberInfo,
+    MentionInfo, PollInfo, PresenceStatus,
 };
 
 #[derive(Clone, Debug, PartialEq)]

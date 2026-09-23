@@ -25,11 +25,11 @@ use super::{
     presentation::{is_direct_message_channel, sort_direct_message_channels},
     scroll::{clamp_selected_index, toggle_collapsed_key},
 };
-use concord::discord::AppCommand;
 use crate::tui::{
     fuzzy::{FuzzyMatchQuality, FuzzyScore, fuzzy_name_match_score},
     ui::thread_card,
 };
+use concord::discord::AppCommand;
 
 const RECENT_CHANNEL_LIMIT: usize = 10;
 

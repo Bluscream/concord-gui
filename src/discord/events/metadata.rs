@@ -135,6 +135,8 @@ impl AppEventKind {
         | AppEventKind::RelationshipUpdate
         | AppEventKind::UserIdentityUpdate
         | AppEventKind::RelationshipRemove
+        | AppEventKind::ThreadMemberUpdate
+        | AppEventKind::ThreadMemberListUpdate
         | AppEventKind::VoiceStateUpdate
         | AppEventKind::TypingStart
         | AppEventKind::ReadyUserDirectory => {
@@ -162,9 +164,7 @@ impl AppEventKind {
         | AppEventKind::CurrentUserVerification
         | AppEventKind::UserGuildSettingsInit
         | AppEventKind::UserGuildSettingsSync
-        | AppEventKind::UserGuildSettingsUpdate
-        | AppEventKind::ThreadMemberUpdate
-        | AppEventKind::ThreadMemberListUpdate => {
+        | AppEventKind::UserGuildSettingsUpdate => {
             AppEventMetadata::mutating(SnapshotAreas::navigation())
         }
 

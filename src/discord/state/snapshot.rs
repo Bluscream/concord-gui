@@ -122,7 +122,7 @@ impl SnapshotAreas {
 }
 
 impl DiscordSnapshot {
-    pub(crate) fn thread_card_catalog_changed_from(&self, state: &DiscordState) -> bool {
+    pub fn thread_card_catalog_changed_from(&self, state: &DiscordState) -> bool {
         !Arc::ptr_eq(&self.navigation.navigation, &state.navigation)
             || !Arc::ptr_eq(&self.navigation.threads, &state.threads)
     }

@@ -274,9 +274,9 @@ pub(super) fn close_code_outcome(code: u16) -> ConnectionOutcome {
     // Retrying the same IDENTIFY would hide the real problem behind Loading...
     // and can loop forever for codes such as 4004.
     match code {
-        4004 | 4010..=4014 => ConnectionOutcome::Fatal,
-        4007 | 4009 => ConnectionOutcome::Reidentify,
-        4000..=4003 | 4005 | 4008 => ConnectionOutcome::Resume,
+        4004 | 4010..=4016 => ConnectionOutcome::Fatal,
+        4003 | 4007 | 4009 => ConnectionOutcome::Reidentify,
+        4000..=4002 | 4005 | 4008 => ConnectionOutcome::Resume,
         _ => ConnectionOutcome::Reidentify,
     }
 }

@@ -335,7 +335,8 @@ pub fn project_profile(
         concord::discord::ActivityKind::Listening => 3,
         concord::discord::ActivityKind::Watching => 4,
         concord::discord::ActivityKind::Competing => 5,
-        concord::discord::ActivityKind::Unknown => 6,
+        concord::discord::ActivityKind::Hang => 6,
+        concord::discord::ActivityKind::Unknown(_) => 7,
     });
     let activities = activities
         .into_iter()
