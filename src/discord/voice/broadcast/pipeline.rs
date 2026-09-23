@@ -219,7 +219,7 @@ pub async fn connect_stream_broadcast(
                         });
                         child_tasks.install_media_gracefully(media_task, media_stop_tx);
                         child_tasks
-                            .replace_keepalive(tokio::spawn(gateway::run_voice_udp_keepalive(
+                            .replace_udp_ping(tokio::spawn(gateway::run_voice_udp_ping(
                                 Arc::clone(
                                     udp_socket
                                         .as_ref()

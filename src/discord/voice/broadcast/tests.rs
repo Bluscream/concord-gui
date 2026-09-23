@@ -149,10 +149,13 @@ pub mod shared {
 
     pub fn voice_description() -> VoiceSessionDescription {
         VoiceSessionDescription {
+            audio_codec: "opus".to_owned(),
             mode: AEAD_XCHACHA20_POLY1305_RTPSIZE.to_owned(),
             secret_key: vec![9; 32],
             dave_protocol_version: None,
             video_codec: Some("H264".to_owned()),
+            media_session_id: "media-session".to_owned(),
+            keyframe_interval: Some(1_000),
         }
     }
 

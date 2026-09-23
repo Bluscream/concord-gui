@@ -6,8 +6,8 @@ use super::{
     parse_user_account_event,
 };
 use crate::discord::{
-    AppEvent, FriendStatus, GuildMemberListItem, GuildMemberListOperation, GuildOnboardingMode,
-    GuildVerificationLevel, PresenceStatus,
+    ActivityKind, AppEvent, FriendStatus, GuildMemberListItem, GuildMemberListOperation,
+    GuildOnboardingMode, GuildVerificationLevel, PresenceStatus,
 };
 
 #[test]
@@ -96,6 +96,38 @@ fn guild_create_parser_preserves_complete_onboarding_payload() {
         onboarding.raw["prompts"][0]["future_prompt_field"],
         json!({ "kept": true })
     );
+}
+
+#[test]
+fn guild_create_parser_preserves_initial_presence_activities() {
+    let event = parse_guild_create(&json!({
+        "id": "10",
+        "name": "guild",
+        "channels": [],
+        "members": [],
+        "roles": [],
+        "emojis": [],
+        "presences": [{
+            "user": { "id": "20" },
+            "status": "online",
+            "activities": [{
+                "type": 2,
+                "name": "Spotify",
+                "details": "A song"
+            }]
+        }]
+    }))
+    .expect("guild should parse");
+
+    let AppEvent::GuildCreate { presences, .. } = event else {
+        panic!("expected guild create event");
+    };
+    assert_eq!(presences.len(), 1);
+    assert_eq!(presences[0].user_id, Id::new(20));
+    assert_eq!(presences[0].status, PresenceStatus::Online);
+    assert_eq!(presences[0].activities.len(), 1);
+    assert_eq!(presences[0].activities[0].kind, ActivityKind::Listening);
+    assert_eq!(presences[0].activities[0].name, "Spotify");
 }
 
 #[test]
@@ -785,6 +817,7 @@ fn relationship_payloads_emit_upserts_and_authoritative_empty_lists() {
                 "id": "20",
                 "type": 1,
                 "nickname": "Bestie",
+                "user_ignored": true,
                 "user": {
                     "id": "20",
                     "global_name": "Alice Global",
@@ -803,6 +836,7 @@ fn relationship_payloads_emit_upserts_and_authoritative_empty_lists() {
                 && relationship.nickname.as_deref() == Some("Bestie")
                 && relationship.display_name.as_deref() == Some("Alice Global")
                 && relationship.username.as_deref() == Some("alice")
+                && relationship.ignored
     ));
 
     let ready = parse_user_account_event(
@@ -842,6 +876,7 @@ fn relationship_update_accepts_a_partial_nickname_patch() {
                 && update.nickname == Some(Some("New nickname".to_owned()))
                 && update.display_name.is_none()
                 && update.username.is_none()
+                && update.ignored.is_none()
     ));
 }
 
@@ -857,7 +892,8 @@ fn relationship_remove_emits_event() {
     assert_eq!(events.len(), 1);
     assert!(matches!(
         &events[0],
-        AppEvent::RelationshipRemove { user_id } if *user_id == Id::new(20)
+        AppEvent::RelationshipRemove { user_id, status }
+            if *user_id == Id::new(20) && *status == Some(FriendStatus::IncomingRequest)
     ));
 }
 

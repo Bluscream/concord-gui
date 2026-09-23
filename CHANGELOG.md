@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.10] - 2026-08-15
+
+### Bug Fixes
+
+- Fix DMA-BUF ioctl compilation on musl Linux (#313) in [#313](https://github.com/chojs23/concord/pull/313) by @chojs23
+- Fix joined thread member and inactivity by @chojs23
+- Match embedded thread cards to post UI by @chojs23
+- Align read-state and presence activity handling by @chojs23
+- Fix Voice, Gateway, RPC, presence, and message pin protocol handling by @chojs23
+- Improve thread card layout by @chojs23
+- Preserve mute duration metadata by @chojs23
+
+### Features
+
+- Improve forum post cards with spacing, image thumbnails by @chojs23
+
+### Performance
+
+- Load forum previews by viewport by @chojs23
+
+### Refactor
+
+- Unify forum and thread card UI by @chojs23
+
+### Tests
+
+- Remove negative behavior coverage by @chojs23
+
 ## [2.5.9] - 2026-08-13
 
 ### Bug Fixes

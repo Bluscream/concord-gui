@@ -184,6 +184,10 @@ impl MessageKind {
         self.code == 46
     }
 
+    pub const fn is_recipient_remove(self) -> bool {
+        self.code == 2
+    }
+
     pub const fn known_label(self) -> Option<&'static str> {
         match self.code {
             0 => Some("Default"),

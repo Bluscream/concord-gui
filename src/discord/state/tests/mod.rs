@@ -30,8 +30,9 @@ use crate::discord::{
     MessageUpdateDispatchInfo, MessageUpdateEventFields, NotificationLevel,
     PermissionOverwriteInfo, PermissionOverwriteKind, PollAnswerInfo, PollInfo, PremiumTier,
     PresenceStatus, ReactionEmoji, ReactionInfo, ReadStateInfo, ReadySnapshotInfo,
-    RelationshipInfo, ReplyInfo, RoleInfo, ThreadListSyncInfo, ThreadMetadataInfo,
-    UserGuildSettingsInfo, UserProfileInfo, VoiceStateInfo,
+    RelationshipInfo, ReplyInfo, RoleInfo, ThreadGatewayInfo, ThreadListSyncInfo, ThreadMemberInfo,
+    ThreadMemberListUpdateInfo, ThreadMetadataInfo, UserGuildSettingsInfo, UserProfileInfo,
+    VoiceStateInfo,
 };
 
 mod channels;
@@ -67,6 +68,7 @@ fn relationship_info(
         nickname: nickname.map(str::to_owned),
         display_name: display_name.map(str::to_owned),
         username: username.map(str::to_owned),
+        ignored: false,
     }
 }
 

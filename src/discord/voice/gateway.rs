@@ -323,6 +323,9 @@ pub(super) async fn connect_voice_gateway(
                 }
                 let opcode = value.get("op").and_then(Value::as_u64).unwrap_or_default() as u8;
                 match opcode {
+                    VOICE_OP_HEARTBEAT => {
+                        send_requested_voice_heartbeat(&writer, &last_sequence).await?;
+                    }
                     VOICE_OP_READY => {
                         let (socket, ready) =
                             establish_voice_transport(&value, &writer, &audio_handle).await?;
@@ -423,6 +426,19 @@ pub(super) async fn connect_voice_gateway(
                             connection_stable_deadline =
                                 Some(Instant::now() + VOICE_CONNECTION_STABLE_INTERVAL);
                         }
+                    }
+                    VOICE_OP_SESSION_UPDATE => {
+                        let Some(description) = current_session_description.as_mut() else {
+                            return Err(
+                                "voice session update received before session description"
+                                    .to_owned(),
+                            );
+                        };
+                        apply_voice_session_update(&value, description)?;
+                        logging::debug(
+                            "voice",
+                            format!("voice session updated: {description:?}"),
+                        );
                     }
                     VOICE_OP_HEARTBEAT_ACK => {
                         heartbeat_ack.lock().await.mark_acknowledged();
@@ -606,6 +622,9 @@ impl StreamVoiceGatewayControl {
         child_tasks: &mut GatewayChildTasks,
     ) -> Result<bool, String> {
         match opcode {
+            VOICE_OP_HEARTBEAT => {
+                send_requested_voice_heartbeat(&self.writer, &self.last_sequence).await?;
+            }
             VOICE_OP_HEARTBEAT_ACK => {
                 self.heartbeat_ack.lock().await.mark_acknowledged();
             }
@@ -810,10 +829,10 @@ fn start_voice_session_audio(
         playback_tx,
         audio.remote_speaking_tx.clone(),
     )));
-    child_tasks.replace_udp_keepalive(
+    child_tasks.replace_udp_ping(
         audio
             .audio_handle
-            .spawn(run_voice_udp_keepalive(Arc::clone(audio.socket))),
+            .spawn(run_voice_udp_ping(Arc::clone(audio.socket))),
     );
     #[cfg(feature = "voice-playback")]
     if let Some(ready) = audio.voice_ready {
@@ -850,24 +869,21 @@ pub(super) fn publish_voice_udp_transmit_failure(
     }
 }
 
-pub(super) async fn run_voice_udp_keepalive(socket: Arc<UdpSocket>) {
-    let mut interval = tokio::time::interval(UDP_KEEPALIVE_INTERVAL);
+pub(super) async fn run_voice_udp_ping(socket: Arc<UdpSocket>) {
+    let mut interval = tokio::time::interval(UDP_PING_INTERVAL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut counter = 0u32;
+    let mut sequence = 0u32;
 
     loop {
         interval.tick().await;
-        if let Err(error) = socket.send(&udp_keepalive_packet(counter)).await {
-            logging::error("voice", format!("voice UDP keepalive failed: {error}"));
+        if let Err(error) = socket.send(&udp_ping_request(sequence)).await {
+            logging::error("voice", format!("voice UDP ping failed: {error}"));
             break;
         }
-        if counter == 0 || counter.is_multiple_of(12) {
-            logging::debug(
-                "voice",
-                format!("voice UDP keepalive sent: counter={counter}"),
-            );
+        if sequence == 0 || sequence.is_multiple_of(12) {
+            logging::debug("voice", format!("voice UDP ping sent: sequence={sequence}"));
         }
-        counter = counter.wrapping_add(1);
+        sequence = sequence.wrapping_add(1);
     }
 }
 
@@ -1042,17 +1058,17 @@ pub(super) async fn run_voice_udp_receive(
     let mut non_audio_packets = 0u64;
     let mut rtcp_packets = 0u64;
     let mut malformed_packets = 0u64;
-    let mut keepalive_acks = 0u64;
+    let mut udp_ping_responses = 0u64;
     loop {
         match socket.recv(&mut packet).await {
             Ok(len) => {
-                if let Some(counter) = parse_udp_keepalive_response(&packet[..len]) {
-                    keepalive_acks = keepalive_acks.saturating_add(1);
-                    if keepalive_acks == 1 || keepalive_acks.is_multiple_of(12) {
+                if let Some(sequence) = parse_udp_ping_response(&packet[..len]) {
+                    udp_ping_responses = udp_ping_responses.saturating_add(1);
+                    if udp_ping_responses == 1 || udp_ping_responses.is_multiple_of(12) {
                         logging::debug(
                             "voice",
                             format!(
-                                "voice UDP keepalive acknowledged: count={keepalive_acks} counter={counter}"
+                                "voice UDP ping acknowledged: count={udp_ping_responses} sequence={sequence}"
                             ),
                         );
                     }
@@ -1259,6 +1275,14 @@ pub(super) async fn run_voice_heartbeat(
     }
 }
 
+async fn send_requested_voice_heartbeat(
+    writer: &VoiceWriter,
+    last_sequence: &Arc<Mutex<Option<i64>>>,
+) -> Result<(), String> {
+    let sequence = last_sequence.lock().await.unwrap_or(-1);
+    send_voice_text(writer, voice_heartbeat_payload(sequence)).await
+}
+
 pub(super) async fn send_voice_text(writer: &VoiceWriter, payload: String) -> Result<(), String> {
     let mut writer = writer.lock().await;
     writer
@@ -1403,15 +1427,22 @@ pub(super) fn udp_discovery_request(ssrc: u32) -> [u8; UDP_DISCOVERY_PACKET_LEN]
     packet
 }
 
-pub(super) fn udp_keepalive_packet(counter: u32) -> [u8; UDP_KEEPALIVE_PACKET_LEN] {
-    let mut packet = [0u8; UDP_KEEPALIVE_PACKET_LEN];
-    packet[..size_of::<u32>()].copy_from_slice(&counter.to_le_bytes());
+pub(super) fn udp_ping_request(sequence: u32) -> [u8; UDP_PING_PACKET_LEN] {
+    const REQUEST_MAGIC: u32 = 0x1337_CAFE;
+
+    let mut packet = [0u8; UDP_PING_PACKET_LEN];
+    packet[..4].copy_from_slice(&REQUEST_MAGIC.to_be_bytes());
+    packet[4..].copy_from_slice(&sequence.to_be_bytes());
     packet
 }
 
-pub(super) fn parse_udp_keepalive_response(packet: &[u8]) -> Option<u32> {
-    let counter = packet.get(..size_of::<u32>())?.try_into().ok()?;
-    (packet.len() == UDP_KEEPALIVE_PACKET_LEN).then(|| u32::from_le_bytes(counter))
+pub(super) fn parse_udp_ping_response(packet: &[u8]) -> Option<u32> {
+    const RESPONSE_MAGIC: u32 = 0x1337_F00D;
+
+    let packet: &[u8; UDP_PING_PACKET_LEN] = packet.try_into().ok()?;
+    let magic = u32::from_be_bytes(packet[..4].try_into().expect("4-byte UDP ping magic"));
+    (magic == RESPONSE_MAGIC)
+        .then(|| u32::from_be_bytes(packet[4..].try_into().expect("4-byte UDP ping sequence")))
 }
 
 pub(super) fn parse_udp_discovery_response(
@@ -1472,6 +1503,13 @@ pub(super) fn parse_voice_session_description(
     let data = value
         .get("d")
         .ok_or_else(|| "voice session description missing data".to_owned())?;
+    let audio_codec = data
+        .get("audio_codec")
+        .and_then(Value::as_str)
+        .filter(|codec| !codec.is_empty())
+        .ok_or_else(|| "voice session description missing audio codec".to_owned())?
+        .to_owned();
+    ensure_supported_audio_codec(&audio_codec)?;
     let mode = data
         .get("mode")
         .and_then(Value::as_str)
@@ -1499,12 +1537,93 @@ pub(super) fn parse_voice_session_description(
         .and_then(Value::as_str)
         .filter(|codec| !codec.is_empty())
         .map(str::to_owned);
+    let media_session_id = data
+        .get("media_session_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| "voice session description missing media session ID".to_owned())?
+        .to_owned();
+    let keyframe_interval = data.get("keyframe_interval").and_then(Value::as_u64);
     Ok(VoiceSessionDescription {
+        audio_codec,
         mode,
         secret_key,
         dave_protocol_version,
         video_codec,
+        media_session_id,
+        keyframe_interval,
     })
+}
+
+#[derive(Debug, Default, Eq, PartialEq)]
+struct VoiceSessionUpdate {
+    audio_codec: Option<String>,
+    video_codec: Option<String>,
+    media_session_id: Option<String>,
+    keyframe_interval: Option<u64>,
+}
+
+fn parse_voice_session_update(value: &Value) -> Result<VoiceSessionUpdate, String> {
+    let data = value
+        .get("d")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "voice session update missing data".to_owned())?;
+    let string_field = |name: &str| -> Result<Option<String>, String> {
+        let Some(value) = data.get(name) else {
+            return Ok(None);
+        };
+        value
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .map(Some)
+            .ok_or_else(|| format!("voice session update has invalid {name}"))
+    };
+    let audio_codec = string_field("audio_codec")?;
+    if let Some(audio_codec) = audio_codec.as_deref() {
+        ensure_supported_audio_codec(audio_codec)?;
+    }
+    let keyframe_interval = match data.get("keyframe_interval") {
+        Some(value) => Some(
+            value
+                .as_u64()
+                .ok_or_else(|| "voice session update has invalid keyframe_interval".to_owned())?,
+        ),
+        None => None,
+    };
+    Ok(VoiceSessionUpdate {
+        audio_codec,
+        video_codec: string_field("video_codec")?,
+        media_session_id: string_field("media_session_id")?,
+        keyframe_interval,
+    })
+}
+
+pub(super) fn apply_voice_session_update(
+    value: &Value,
+    description: &mut VoiceSessionDescription,
+) -> Result<(), String> {
+    let update = parse_voice_session_update(value)?;
+    if let Some(audio_codec) = &update.audio_codec {
+        description.audio_codec.clone_from(audio_codec);
+    }
+    if let Some(video_codec) = &update.video_codec {
+        description.video_codec = Some(video_codec.clone());
+    }
+    if let Some(media_session_id) = &update.media_session_id {
+        description.media_session_id.clone_from(media_session_id);
+    }
+    if let Some(keyframe_interval) = update.keyframe_interval {
+        description.keyframe_interval = Some(keyframe_interval);
+    }
+    Ok(())
+}
+
+fn ensure_supported_audio_codec(codec: &str) -> Result<(), String> {
+    codec
+        .eq_ignore_ascii_case("opus")
+        .then_some(())
+        .ok_or_else(|| format!("voice selected unsupported audio codec: {codec}"))
 }
 
 pub(super) fn parse_voice_binary_frame(payload: &[u8]) -> Result<VoiceBinaryFrame<'_>, String> {

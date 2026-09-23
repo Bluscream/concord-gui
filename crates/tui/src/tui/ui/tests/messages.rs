@@ -151,7 +151,11 @@ fn message_viewport_author_uses_resolved_role_color() {
             role_ids: vec![role_id],
             ..MemberInfo::test(author_id, "neo")
         }],
-        presences: vec![(author_id, PresenceStatus::Online)],
+        presences: vec![PresenceEventFields {
+            user_id: author_id,
+            status: PresenceStatus::Online,
+            activities: Vec::new(),
+        }],
         roles: vec![RoleInfo {
             color: Some(0x3366CC),
             position: 10,
@@ -238,7 +242,7 @@ fn forum_post_reaction_summary_reserves_custom_emoji_image_slot() {
     }];
 
     assert_eq!(
-        forum_post_reaction_summary(&reactions, 80).as_deref(),
+        thread_card_reaction_summary(&reactions, 80).as_deref(),
         Some("[   1]")
     );
 }
@@ -261,7 +265,11 @@ fn history_message_author_uses_channel_guild_for_role_color() {
             role_ids: vec![role_id],
             ..MemberInfo::test(author_id, "neo")
         }],
-        presences: vec![(author_id, PresenceStatus::Online)],
+        presences: vec![PresenceEventFields {
+            user_id: author_id,
+            status: PresenceStatus::Online,
+            activities: Vec::new(),
+        }],
         roles: vec![RoleInfo {
             color: Some(0x3366CC),
             position: 10,
@@ -1318,17 +1326,18 @@ fn thread_created_message_uses_cached_thread_details() {
     assert_eq!(texts[0], "neo started release notes thread.");
     assert!(texts[1].starts_with("  ╭"));
     assert!(texts[2].starts_with("  │ release notes"));
-    assert!(texts[3].starts_with("  │ Preview unavailable"));
+    assert!(texts[3].trim().trim_matches('│').trim().is_empty());
+    assert!(texts[4].starts_with("  │ Preview unavailable"));
     // The thread has no tags, so the tags row is omitted: metadata follows the
     // preview directly.
-    assert!(texts[4].contains("12 comments"));
-    assert!(texts[4].contains("2 minutes ago"));
-    assert!(texts[5].starts_with("  ╰"));
+    assert!(texts[5].contains("12 comments"));
+    assert!(texts[5].contains("2 minutes ago"));
+    assert!(texts[6].starts_with("  ╰"));
     assert_eq!(lines[0].style, Style::default());
 }
 
 #[test]
-fn thread_created_message_renders_forum_post_card_shape() {
+fn thread_created_message_uses_shared_thread_card_layout() {
     let mut message = message_with_content(Some("release notes".to_owned()));
     message.message_kind = MessageKind::new(18);
     message.id =
@@ -1352,12 +1361,13 @@ fn thread_created_message_renders_forum_post_card_shape() {
     let item = state
         .thread_card_item_for_message(&message)
         .expect("kind-18 message yields a thread card item");
-    let card_width = 200usize.saturating_sub(2).clamp(4, 72).saturating_add(2);
-    let expected_card = line_texts_from_ratatui(&crate::tui::ui::forum::forum_post_card_lines(
+    let card_width = crate::tui::ui::thread_card::thread_card_width_in_message(200);
+    let expected_card = line_texts_from_ratatui(&crate::tui::ui::thread_card::thread_card_lines(
         &item,
         false,
         card_width,
         state.show_custom_emoji(),
+        state.show_images(),
     ));
 
     let lines = format_message_content_lines(&message, &state, 200);
@@ -1395,13 +1405,13 @@ fn thread_created_message_uses_cached_thread_message_when_last_id_missing() {
     let lines = format_message_content_lines(&message, &state, 200);
     let texts = line_texts(&lines);
 
-    assert!(texts[3].starts_with("  │ neo: latest reply"));
-    assert!(texts[4].contains("13 comments"));
-    assert!(texts[4].contains("2 minutes ago"));
+    assert!(texts[4].starts_with("  │ neo: latest reply"));
+    assert!(texts[5].contains("13 comments"));
+    assert!(texts[5].contains("2 minutes ago"));
 }
 
 #[test]
-fn thread_created_message_keeps_archived_and_locked_metadata() {
+fn thread_created_message_shows_archived_and_locked_after_the_title() {
     let mut message = message_with_content(Some("release notes".to_owned()));
     message.message_kind = MessageKind::new(18);
     message.id =
@@ -1419,7 +1429,11 @@ fn thread_created_message_keeps_archived_and_locked_metadata() {
 
     let lines = format_message_content_lines(&message, &state, 200);
 
-    assert!(line_texts(&lines)[4].contains("archived · locked"));
+    assert!(
+        line_texts(&lines)
+            .iter()
+            .any(|line| line.contains("release notes (archived) (locked)"))
+    );
 }
 
 #[test]

@@ -4,10 +4,9 @@ use std::{
 };
 
 use concord::discord::ids::{Id, marker::MessageMarker};
-use concord_fixtures::events::{
-    ForumPostsLoadedFixture, GuildCreateFixture, MessageCreateFixture,
-    empty_latest_message_history_loaded_event, forum_posts_loaded_event, guild_create_event,
-    guild_message_create_fixture, message_create_event,
+use concord::discord::test_builders::{
+    GuildCreateFixture, MessageCreateFixture, empty_latest_message_history_loaded_event,
+    guild_create_event, guild_message_create_fixture, message_create_event,
 };
 use ratatui::{
     Terminal,
@@ -30,13 +29,12 @@ use super::{
     debug_log_popup_lines, dm_presence_dot_span, emoji_picker_lines, emoji_reaction_picker_lines,
     emoji_reaction_picker_lines_for_width, emoji_reaction_picker_lines_with_own_reactions,
     filtered_emoji_reaction_picker_lines, focus_pane_at, folder_settings_input_line_for_test,
-    format_message_sent_time, forum_post_reaction_summary, forum_post_tag_rows_for_test,
-    forum_post_viewport_lines, highlight_style, inline_image_preview_area,
-    inline_image_preview_row, keymap_help_popup_lines, long_message_confirmation_lines_for_test,
-    member_display_label, member_name_style, mention_picker_lines_for_test,
-    message_action_menu_lines, message_action_menu_lines_with_keymap_options, message_areas,
-    message_author_style, message_body_custom_emoji_rows, message_delete_confirmation_lines,
-    message_item_lines, message_pin_confirmation_lines, message_remove_embeds_confirmation_lines,
+    format_message_sent_time, highlight_style, inline_image_preview_area, inline_image_preview_row,
+    keymap_help_popup_lines, long_message_confirmation_lines_for_test, member_display_label,
+    member_name_style, mention_picker_lines_for_test, message_action_menu_lines,
+    message_action_menu_lines_with_keymap_options, message_areas, message_author_style,
+    message_body_custom_emoji_rows, message_delete_confirmation_lines, message_item_lines,
+    message_pin_confirmation_lines, message_remove_embeds_confirmation_lines,
     message_url_picker_lines_for_width, message_viewport_layout, message_viewport_lines,
     new_messages_notice_line, options_popup_lines, panel_block, poll_vote_picker_lines,
     primary_activity_summary, quit_confirmation_lines, reaction_list_lines_with_ready_urls,
@@ -44,9 +42,10 @@ use super::{
     render_composer, render_guilds, render_header, render_members, selected_avatar_x_offset,
     selected_message_card_width, selected_message_content_x_offset, selection_marker,
     stream_info_area, stream_info_lines, stream_info_lines_for_width, sync_composer_viewport,
-    sync_view_heights, theme, toast_line, user_profile_popup_has_avatar, user_profile_popup_lines,
-    user_profile_popup_lines_with_activities, user_profile_popup_text_geometry,
-    verification_composer_text,
+    sync_view_heights, theme, thread_card_reaction_summary, thread_card_tag_rows_for_test,
+    thread_card_viewport_lines, toast_line, user_profile_popup_has_avatar,
+    user_profile_popup_lines, user_profile_popup_lines_with_activities,
+    user_profile_popup_text_geometry, verification_composer_text,
 };
 use crate::tui::message::time::{
     discord_epoch_unix_millis, format_unix_millis_with_offset, message_starts_new_day,
@@ -63,7 +62,8 @@ use crate::tui::{
         AppliedForumTag, AttachmentDownloadProgressView, AttachmentViewerZoom, ChannelSwitcherItem,
         ChannelThreadItem, ComposerLock, DashboardState, DisplayOptionItem, EmojiPickerEntry,
         EmojiReactionItem, FocusPane, MentionPickerEntry, MentionPickerTarget, MessageActionItem,
-        MessageActionKind, PollVotePickerItem, SelectablePopupTarget, presence_style,
+        MessageActionKind, PollVotePickerItem, SelectablePopupTarget, ThreadCardImagePreview,
+        presence_style,
     },
     text::{TextHighlightKind, truncate_display_width_from},
     ui::{MouseTarget, mouse_target_at},
@@ -79,10 +79,10 @@ use concord::{
         GuildMemberListUpdateInfo, GuildMemberState, GuildNotificationSettingsInfo, MemberInfo,
         MentionInfo, MessageAttachmentUpload, MessageInfo, MessageInteractionInfo, MessageKind,
         MessageSearchPage, MessageSearchQuery, MessageSnapshotInfo, MessageState, MutualGuildInfo,
-        NotificationLevel, PollAnswerInfo, PollInfo, PresenceStatus, ReactionEmoji, ReactionInfo,
-        ReactionUserInfo, ReadStateInfo, ReplyInfo, RoleInfo, ThreadMetadataInfo,
-        UserGuildSettingsInfo, UserProfileInfo, UserSettingsInfo, VoiceConnectionStatus,
-        VoiceStateInfo,
+        NotificationLevel, PollAnswerInfo, PollInfo, PresenceEventFields, PresenceStatus,
+        ReactionEmoji, ReactionInfo, ReactionUserInfo, ReadStateInfo, ReplyInfo, RoleInfo,
+        ThreadMetadataInfo, UserGuildSettingsInfo, UserProfileInfo, UserSettingsInfo,
+        VoiceConnectionStatus, VoiceStateInfo,
     },
 };
 
@@ -385,43 +385,34 @@ fn state_with_folder_settings() -> DashboardState {
 fn state_with_forum_posts(post_count: usize) -> DashboardState {
     let guild_id = Id::new(1);
     let forum_id = Id::new(20);
-    let mut state = DashboardState::new();
-
-    state.push_event(guild_create_event(GuildCreateFixture {
-        channels: vec![ChannelInfo {
+    let mut channels = vec![ChannelInfo {
+        guild_id: Some(guild_id),
+        name: "forum".to_owned(),
+        ..ChannelInfo::test(forum_id, "GuildForum")
+    }];
+    channels.extend((0..post_count).map(|index| {
+        let id = 100 + u64::try_from(index).expect("post index should fit u64");
+        ChannelInfo {
             guild_id: Some(guild_id),
-            name: "forum".to_owned(),
-            ..ChannelInfo::test(forum_id, "GuildForum")
-        }],
+            parent_id: Some(forum_id),
+            last_message_id: Some(Id::new(10_000 + id)),
+            name: format!("post {index}"),
+            message_count: Some(0),
+            total_message_sent: Some(1),
+            thread_metadata: Some(concord::discord::ThreadMetadataInfo::test(false, false)),
+            flags: Some(0),
+            ..ChannelInfo::test(Id::new(id), "GuildPublicThread")
+        }
+    }));
+
+    let mut state = DashboardState::new();
+    state.push_event(guild_create_event(GuildCreateFixture {
+        channels,
         ..GuildCreateFixture::new(guild_id)
     }));
     state.confirm_selected_guild();
     state.confirm_selected_channel();
     state.focus_pane(FocusPane::Messages);
-
-    let threads: Vec<_> = (0..post_count)
-        .map(|index| {
-            let id = 100 + u64::try_from(index).expect("post index should fit u64");
-            ChannelInfo {
-                guild_id: Some(guild_id),
-                parent_id: Some(forum_id),
-                last_message_id: Some(Id::new(10_000 + id)),
-                name: format!("post {index}"),
-                message_count: Some(0),
-                total_message_sent: Some(1),
-                thread_metadata: Some(concord::discord::ThreadMetadataInfo::test(false, false)),
-                flags: Some(0),
-                ..ChannelInfo::test(Id::new(id), "GuildPublicThread")
-            }
-        })
-        .collect();
-    state.push_event(forum_posts_loaded_event(ForumPostsLoadedFixture {
-        channel_id: forum_id,
-        archive_state: concord::discord::ForumPostArchiveState::Active,
-        next_offset: threads.len(),
-        threads,
-        ..ForumPostsLoadedFixture::new()
-    }));
     state
 }
 
@@ -537,7 +528,11 @@ fn state_with_member(user_id: u64, display_name: &str) -> DashboardState {
     let mut state = DashboardState::new();
     state.push_event(guild_create_event(GuildCreateFixture {
         members: vec![member_info(user_id, display_name)],
-        presences: vec![(Id::new(user_id), PresenceStatus::Online)],
+        presences: vec![PresenceEventFields {
+            user_id: Id::new(user_id),
+            status: PresenceStatus::Online,
+            activities: Vec::new(),
+        }],
         ..GuildCreateFixture::new(guild_id)
     }));
     state.push_event(guild_member_list_event(
@@ -613,10 +608,6 @@ fn channel_with_recipients(kind: &str, statuses: &[PresenceStatus]) -> ChannelSt
         user_limit: None,
         available_tags: Vec::new(),
         applied_tags: Vec::new(),
-        current_user_joined_thread: false,
-        current_user_thread_notification_flags: None,
-        current_user_thread_muted: false,
-        current_user_thread_mute_end_time: None,
         recipients: statuses
             .iter()
             .enumerate()

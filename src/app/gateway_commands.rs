@@ -61,11 +61,12 @@ pub(super) async fn update_member_list_subscription(
     client: DiscordClient,
     guild_id: Id<GuildMarker>,
     channel_id: Id<ChannelMarker>,
+    thread_id: Option<Id<ChannelMarker>>,
     ranges: Vec<(u32, u32)>,
 ) {
     publish_gateway_result(
         &client,
-        client.update_member_list_subscription(guild_id, channel_id, ranges),
+        client.update_member_list_subscription(guild_id, channel_id, thread_id, ranges),
     )
     .await;
 }

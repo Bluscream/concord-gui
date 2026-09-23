@@ -2,9 +2,7 @@ use std::collections::HashSet;
 
 use concord::discord::ids::marker::{GuildMarker, UserMarker};
 
-use concord::discord::{
-    AppCommand, AppEvent, ForumPostArchiveState, MentionInfo, MessageSnapshotInfo,
-};
+use concord::discord::{AppCommand, AppEvent, MentionInfo, MessageSnapshotInfo};
 mod channel_rows;
 mod channel_tree;
 mod channels;
@@ -40,6 +38,7 @@ mod toast;
 mod user;
 mod voice_actions;
 
+use channels::ThreadCardListCacheState;
 use composer::ComposerUiState;
 use discord_ui::DiscordUiState;
 use layout_cache::{LayoutCacheState, MessageRowContentMetrics, MessageRowContentMetricsCacheKey};
@@ -177,10 +176,6 @@ impl DashboardState {
     }
 
     pub fn push_effect(&mut self, event: AppEvent) {
-        if let AppEvent::ChannelUpsert(channel) = &event {
-            self.record_thread_channel_upserted(channel);
-            return;
-        }
         self.push_event_inner(event);
     }
 }

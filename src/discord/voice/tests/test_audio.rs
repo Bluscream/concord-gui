@@ -8,10 +8,13 @@ use tokio::sync::mpsc;
 #[test]
 fn voice_session_description_reuses_only_the_same_transport_key_and_mode() {
     let current = VoiceSessionDescription {
+        audio_codec: "opus".to_owned(),
         mode: "aead_xchacha20_poly1305_rtpsize".to_owned(),
         secret_key: vec![1, 2, 3],
         dave_protocol_version: Some(1),
         video_codec: None,
+        media_session_id: "media-session".to_owned(),
+        keyframe_interval: None,
     };
 
     for (next, expected) in [
@@ -31,6 +34,7 @@ fn voice_session_description_reuses_only_the_same_transport_key_and_mode() {
         ),
         (
             VoiceSessionDescription {
+                audio_codec: "opus".to_owned(),
                 mode: "aead_aes256_gcm_rtpsize".to_owned(),
                 ..current.clone()
             },

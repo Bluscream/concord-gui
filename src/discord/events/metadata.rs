@@ -58,6 +58,7 @@ impl AppEventKind {
         | AppEventKind::GuildUpdate
         | AppEventKind::GuildOnboardingUpdate
         | AppEventKind::ThreadListSync
+        | AppEventKind::ArchivedThreadsLoaded
         | AppEventKind::ThreadMembersUpdateDispatch
         | AppEventKind::ChannelUpsert
         | AppEventKind::LazyPrivateChannelUpsert
@@ -65,8 +66,17 @@ impl AppEventKind {
         | AppEventKind::ChannelRecipientRemove
         | AppEventKind::Ready => AppEventMetadata::mutating(SnapshotAreas::navigation()),
 
-        AppEventKind::ForumPostsLoaded => {
+
+        AppEventKind::ThreadUpsert => {
             AppEventMetadata::mutating_effect(SnapshotAreas::navigation_and_message())
+        }
+
+        AppEventKind::ForumPostDataLoaded => {
+            AppEventMetadata::mutating_effect(SnapshotAreas::navigation_and_message())
+        }
+
+        AppEventKind::ArchivedThreadsLoadFailed => {
+            AppEventMetadata::mutating_effect(SnapshotAreas::navigation())
         }
 
         AppEventKind::MessageCreate => {
@@ -125,6 +135,8 @@ impl AppEventKind {
         | AppEventKind::RelationshipUpdate
         | AppEventKind::UserIdentityUpdate
         | AppEventKind::RelationshipRemove
+        | AppEventKind::ThreadMemberUpdate
+        | AppEventKind::ThreadMemberListUpdate
         | AppEventKind::VoiceStateUpdate
         | AppEventKind::TypingStart
         | AppEventKind::ReadyUserDirectory => {
@@ -152,8 +164,7 @@ impl AppEventKind {
         | AppEventKind::CurrentUserVerification
         | AppEventKind::UserGuildSettingsInit
         | AppEventKind::UserGuildSettingsSync
-        | AppEventKind::UserGuildSettingsUpdate
-        | AppEventKind::ThreadMemberUpdate => {
+        | AppEventKind::UserGuildSettingsUpdate => {
             AppEventMetadata::mutating(SnapshotAreas::navigation())
         }
 
@@ -250,7 +261,7 @@ impl AppEventKind {
         | AppEventKind::AttachmentPreviewLoadFailed
         | AppEventKind::EmbedResolveFailed
         | AppEventKind::ThreadPreviewLoadFailed
-        | AppEventKind::ForumPostsLoadFailed
+        | AppEventKind::ForumPostDataLoadFailed
         | AppEventKind::MessageSearchLoadFailed
         | AppEventKind::MessageHistoryLoadFailed
         | AppEventKind::InboxMentionsLoaded

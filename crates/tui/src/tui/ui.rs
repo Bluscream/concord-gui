@@ -41,13 +41,13 @@ pub(in crate::tui) const LOCAL_UPLOAD_PREVIEW_WIDTH: u16 = 32;
 
 mod activity;
 mod emoji_overlay;
-pub(in crate::tui) mod forum;
 mod hit_test;
 mod layout;
 pub(in crate::tui) mod loading_indicator;
 mod message;
 mod panes;
 mod popups;
+pub(in crate::tui) mod thread_card;
 mod types;
 
 pub(crate) use self::hit_test::{focus_pane_at, mouse_target_at};
@@ -102,7 +102,6 @@ use self::types::{
 };
 #[cfg(test)]
 use self::{
-    forum::{forum_post_reaction_summary, forum_post_tag_rows_for_test, forum_post_viewport_lines},
     message::list::{
         date_separator_line, format_message_sent_time, inline_image_preview_row,
         message_author_style, message_body_custom_emoji_rows, message_item_lines,
@@ -122,6 +121,9 @@ use self::{
         quit_confirmation_lines, reaction_list_lines_with_ready_urls, reaction_users_popup_lines,
         stream_info_area, stream_info_lines, stream_info_lines_for_width, toast_line,
         user_profile_popup_lines, user_profile_popup_lines_with_activities,
+    },
+    thread_card::{
+        thread_card_reaction_summary, thread_card_tag_rows_for_test, thread_card_viewport_lines,
     },
 };
 use super::theme;
@@ -157,7 +159,9 @@ pub fn sync_view_heights(area: Rect, state: &mut DashboardState) {
             .saturating_sub(channel_header_rows)
             .saturating_sub(channel_filter_row),
     );
-    state.set_message_view_height(message_list_area(areas.messages, state).height as usize);
+    let message_list = message_list_area(areas.messages, state);
+    state.set_message_view_width(message_list.width as usize);
+    state.set_message_view_height(message_list.height as usize);
     state.set_member_view_height(visible_panel_content_height(
         areas.members,
         "Members",
@@ -257,6 +261,7 @@ pub fn image_preview_layout(area: Rect, state: &DashboardState) -> ImagePreviewL
     let avatar_offset = avatar_gutter_width(state.show_avatars());
     ImagePreviewLayout {
         list_height: list.height as usize,
+        list_width: list.width,
         content_width: message_content_width(list, avatar_offset),
         preview_width: inline_image_preview_width(list, avatar_offset),
         max_preview_height: inline_image_preview_height(list, true),

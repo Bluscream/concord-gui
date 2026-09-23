@@ -1,8 +1,6 @@
 use super::super::*;
 
-use concord::discord::{
-    AppCommand, ForumPostArchiveState, Id, StreamCaptureTargetsRequestId, marker,
-};
+use concord::discord::{AppCommand, Id, StreamCaptureTargetsRequestId, marker};
 
 use crate::model::projection::Selection;
 
@@ -237,7 +235,13 @@ impl Workspace {
         self.request_forum_posts(0);
     }
 
-    /// Request a page of posts for the open forum.
+    /// Request the open forum's posts.
+    ///
+    /// v2.5.10 replaced the paged loader with two commands: active posts
+    /// arrive with the channel's threads and only the archive is fetched, a
+    /// page at a time, by the id it should page before. `offset` no longer
+    /// means anything to the core - it is kept so the call sites that scroll
+    /// still read the same - and a non-zero one is a request for more archive.
     pub fn request_forum_posts(&mut self, offset: usize) {
         let (Some(handle), Some(forum), Selection::Guild(guild_id)) =
             (&self.handle, &self.forum, self.nav.selection)
@@ -245,15 +249,15 @@ impl Workspace {
             return;
         };
 
-        handle.send(AppCommand::LoadForumPosts {
+        if !forum.showing_archived {
+            return;
+        }
+        handle.send(AppCommand::LoadArchivedThreads {
             guild_id,
             channel_id: forum.channel_id,
-            archive_state: if forum.showing_archived {
-                ForumPostArchiveState::Archived
-            } else {
-                ForumPostArchiveState::Active
-            },
-            offset,
+            before: (offset > 0)
+                .then(|| forum.archived_page_before.clone())
+                .flatten(),
         });
     }
 

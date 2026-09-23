@@ -15,10 +15,12 @@
 //! returns what happened. Whichever channel, task or event loop carries that
 //! is the front end's business, and it differs between the two.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 
-use concord::discord::{AppCommand, AppEvent, DiscordState};
+use concord::discord::{
+    AppCommand, AppEvent, ArchivedThreadsPage, DiscordState, ForumPostDataInfo, ThreadMemberInfo,
+};
 
 /// Something the fake did, and the state as it stood at that moment.
 pub enum Emission {
@@ -686,8 +688,16 @@ fn handle_command(
         AppCommand::SetThreadMuted {
             channel_id, muted, ..
         } => {
-            fixtures::set_thread_muted(state, channel_id, muted);
-            publish_state!();
+            publish_event!(AppEvent::ThreadMemberUpdate {
+                guild_id: None,
+                channel_id,
+                member: ThreadMemberInfo {
+                    thread_id: Some(channel_id),
+                    user_id: Some(fixtures::demo_user_id()),
+                    muted: Some(muted),
+                    ..ThreadMemberInfo::default()
+                },
+            });
         }
 
         AppCommand::SetThreadPinned {
@@ -776,21 +786,65 @@ fn handle_command(
             });
         }
 
-        AppCommand::LoadForumPosts {
+        AppCommand::LoadArchivedThreads {
+            guild_id,
             channel_id,
-            archive_state,
-            offset,
+            before,
             ..
         } => {
-            let (threads, first_messages) = fixtures::forum_posts(channel_id, archive_state);
-            publish_event!(AppEvent::ForumPostsLoaded {
+            // One page, and no more: the demo forum's archive is small enough
+            // to hand over whole, and pretending otherwise would have the pane
+            // asking for a second page that does not exist.
+            let (threads, _) = fixtures::forum_posts(channel_id, true);
+            publish_event!(AppEvent::ArchivedThreadsLoaded {
+                guild_id,
                 channel_id,
-                archive_state,
-                offset,
-                next_offset: offset + threads.len(),
-                threads,
-                first_messages,
-                has_more: false,
+                before,
+                page: ArchivedThreadsPage {
+                    threads,
+                    members: Vec::new(),
+                    has_more: false,
+                    next_before: None,
+                    extra_fields: BTreeMap::new(),
+                },
+            });
+        }
+
+        AppCommand::LoadForumPostData {
+            channel_id,
+            thread_ids,
+            ..
+        } => {
+            // Both halves of the demo forum, because a request names threads
+            // rather than a page and may ask about either.
+            let mut threads = Vec::new();
+            let mut first_messages = Vec::new();
+            for archived in [false, true] {
+                let (posts, messages) = fixtures::forum_posts(channel_id, archived);
+                threads.extend(posts);
+                first_messages.extend(messages);
+            }
+            let posts = thread_ids
+                .iter()
+                .filter(|thread_id| {
+                    threads
+                        .iter()
+                        .any(|thread| thread.channel_id == **thread_id)
+                })
+                .map(|thread_id| ForumPostDataInfo {
+                    thread_id: *thread_id,
+                    owner: None,
+                    first_message: first_messages
+                        .iter()
+                        .find(|message| message.channel_id == *thread_id)
+                        .cloned(),
+                    extra_fields: BTreeMap::new(),
+                })
+                .collect();
+            publish_event!(AppEvent::ForumPostDataLoaded {
+                channel_id,
+                requested_thread_ids: thread_ids,
+                posts,
             });
         }
 
@@ -1040,8 +1094,17 @@ fn handle_command(
             followed,
             ..
         } => {
-            fixtures::set_thread_followed(state, channel_id, followed);
-            publish_state!();
+            // Leaving is the absence of a membership, so a `false` here is an
+            // update with no user on it - the same shape Discord sends.
+            publish_event!(AppEvent::ThreadMemberUpdate {
+                guild_id: None,
+                channel_id,
+                member: ThreadMemberInfo {
+                    thread_id: Some(channel_id),
+                    user_id: followed.then(fixtures::demo_user_id),
+                    ..ThreadMemberInfo::default()
+                },
+            });
         }
 
         // ---- own presence and profile ---------------------------------------
@@ -1281,7 +1344,11 @@ fn handle_command(
         }
 
         AppCommand::RemoveRelationship { user_id, .. } => {
-            publish_event!(AppEvent::RelationshipRemove { user_id });
+            publish_event!(AppEvent::RelationshipRemove {
+                user_id,
+                // The demo does not track which kind it was.
+                status: None,
+            });
         }
 
         // ---- odds and ends -------------------------------------------------

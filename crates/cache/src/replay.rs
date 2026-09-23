@@ -91,6 +91,10 @@ pub async fn guild_events(store: &Store) -> Vec<AppEvent> {
             guild_id,
             name: guild.name.unwrap_or_default(),
             member_count: None,
+            // Nothing stored carries a thread snapshot, so replay says so
+            // rather than claiming an empty one is complete.
+            thread_snapshot_complete: false,
+            current_user_thread_members: Vec::new(),
             owner_id: guild.owner_id.and_then(|id| id.parse().ok()).map(Id::new),
             boost_tier: GuildBoostTier::default(),
             boost_count: 0,

@@ -4,7 +4,7 @@ use crate::discord::ids::{
 };
 
 use crate::discord::commands::{
-    AttachmentDownloadId, DownloadAttachmentSource, ForumPostArchiveState, MediaPlaybackRequestId,
+    AttachmentDownloadId, DownloadAttachmentSource, MediaPlaybackRequestId,
     MessageHistoryAfterMode, MessageSearchPage, MessageSearchQuery, ReactionEmoji,
     StreamCaptureTargetsRequestId,
 };
@@ -12,16 +12,23 @@ use crate::discord::commands::{
 use crate::discord::{
     ActivityInfo, ApplicationCommandChoiceInfo, ApplicationCommandInfo, ChannelInfo,
     ChannelRecipientInfo, CustomEmojiInfo, GuildBoostTier, GuildOnboardingInfo,
-    GuildVerificationLevel, MemberInfo, MessageInfo, PremiumTier, PresenceStatus, ReactionUserInfo,
-    ReadStateInfo, RelationshipInfo, RoleInfo, StreamCaptureTarget, StreamCreateInfo,
-    StreamDeleteInfo, StreamServerInfo, StreamUpdateInfo, UserProfileInfo, UserSettingsInfo,
-    VoiceConnectionStatus, VoiceScope, VoiceServerInfo, VoiceSoundKind, VoiceStateInfo,
+    GuildVerificationLevel, MemberInfo, MessageInfo, PremiumTier, ReactionUserInfo, ReadStateInfo,
+    RelationshipInfo, RoleInfo, StreamCaptureTarget, StreamCreateInfo, StreamDeleteInfo,
+    StreamServerInfo, StreamUpdateInfo, UserProfileInfo, UserSettingsInfo, VoiceConnectionStatus,
+    VoiceScope, VoiceServerInfo, VoiceSoundKind, VoiceStateInfo,
 };
 
 use super::types::{
     ChannelUnreadInfo, GatewayDispatchInfo, GuildMemberListUpdateInfo, GuildMembersChunkInfo,
     MessageHistoryLoadTarget, MessageUpdateDispatchInfo, PresenceEventFields, ReadySnapshotInfo,
-    ThreadListSyncInfo, ThreadMembersUpdateInfo, UserGuildSettingsInfo,
+    UserGuildSettingsInfo,
+};
+// Upstream moved every thread type into its own module in v2.5.10; the copies
+// that used to live in events::types were the pre-move ones.
+use crate::discord::profile::FriendStatus;
+use crate::discord::thread::{
+    ArchivedThreadsPage, ForumPostDataInfo, ThreadGatewayInfo, ThreadListSyncInfo,
+    ThreadMemberInfo, ThreadMemberListUpdateInfo, ThreadMembersUpdateInfo,
 };
 
 // Suppress the unused import warning: `SnapshotAreas` is only referenced inside
@@ -104,8 +111,13 @@ pub enum AppEvent {
         features: Option<Vec<String>>,
         onboarding: Option<GuildOnboardingInfo>,
         channels: Vec<ChannelInfo>,
+        /// Whether the Gateway payload contained the guild's `threads` array.
+        /// An empty array clears the snapshot, while an omitted field in
+        /// `CLIENT_STATE_V2` partial mode must preserve cached thread state.
+        thread_snapshot_complete: bool,
+        current_user_thread_members: Vec<ThreadMemberInfo>,
         members: Vec<MemberInfo>,
-        presences: Vec<(Id<UserMarker>, PresenceStatus)>,
+        presences: Vec<PresenceEventFields>,
         roles: Option<Vec<RoleInfo>>,
         emojis: Vec<CustomEmojiInfo>,
         /// The guild's own stickers, which are the ones this account can send
@@ -176,18 +188,23 @@ pub enum AppEvent {
         guild_id: Option<Id<GuildMarker>>,
         channel_id: Id<ChannelMarker>,
     },
+    ThreadUpsert {
+        thread: ThreadGatewayInfo,
+        created: bool,
+    },
     ThreadListSync {
         sync: ThreadListSyncInfo,
     },
     ThreadMembersUpdateDispatch {
         update: ThreadMembersUpdateInfo,
     },
+    ThreadMemberListUpdate {
+        update: ThreadMemberListUpdateInfo,
+    },
     ThreadMemberUpdate {
         guild_id: Option<Id<GuildMarker>>,
         channel_id: Id<ChannelMarker>,
-        flags: Option<u64>,
-        muted: Option<bool>,
-        mute_end_time: Option<String>,
+        member: ThreadMemberInfo,
     },
     MessageCreate {
         message: MessageInfo,
@@ -233,19 +250,26 @@ pub enum AppEvent {
         channel_id: Id<ChannelMarker>,
         message_id: Id<MessageMarker>,
     },
-    ForumPostsLoaded {
+    ForumPostDataLoaded {
         channel_id: Id<ChannelMarker>,
-        archive_state: ForumPostArchiveState,
-        offset: usize,
-        next_offset: usize,
-        threads: Vec<ChannelInfo>,
-        first_messages: Vec<MessageInfo>,
-        has_more: bool,
+        requested_thread_ids: Vec<Id<ChannelMarker>>,
+        posts: Vec<ForumPostDataInfo>,
     },
-    ForumPostsLoadFailed {
+    ForumPostDataLoadFailed {
         channel_id: Id<ChannelMarker>,
-        archive_state: ForumPostArchiveState,
-        offset: usize,
+        thread_ids: Vec<Id<ChannelMarker>>,
+        message: String,
+    },
+    ArchivedThreadsLoaded {
+        guild_id: Id<GuildMarker>,
+        channel_id: Id<ChannelMarker>,
+        before: Option<String>,
+        page: ArchivedThreadsPage,
+    },
+    ArchivedThreadsLoadFailed {
+        guild_id: Id<GuildMarker>,
+        channel_id: Id<ChannelMarker>,
+        before: Option<String>,
         message: String,
     },
     MessageSearchLoaded {
@@ -779,6 +803,7 @@ pub enum AppEvent {
     },
     RelationshipRemove {
         user_id: Id<UserMarker>,
+        status: Option<FriendStatus>,
     },
     /// Full read-state replacement used by internal and test data sources.
     ReadStateInit {
@@ -830,6 +855,7 @@ pub enum AppEvent {
         channel_id: Id<ChannelMarker>,
         muted: bool,
         mute_end_time: Option<String>,
+        selected_time_window: Option<i64>,
     },
 }
 
@@ -881,8 +907,10 @@ define_app_event_kinds! {
     ChannelRecipientAdd: AppEvent::ChannelRecipientAdd { .. },
     ChannelRecipientRemove: AppEvent::ChannelRecipientRemove { .. },
     ChannelDelete: AppEvent::ChannelDelete { .. },
+    ThreadUpsert: AppEvent::ThreadUpsert { .. },
     ThreadListSync: AppEvent::ThreadListSync { .. },
     ThreadMembersUpdateDispatch: AppEvent::ThreadMembersUpdateDispatch { .. },
+    ThreadMemberListUpdate: AppEvent::ThreadMemberListUpdate { .. },
     ThreadMemberUpdate: AppEvent::ThreadMemberUpdate { .. },
     MessageCreate: AppEvent::MessageCreate { .. },
     MessageSendFailed: AppEvent::MessageSendFailed { .. },
@@ -894,8 +922,10 @@ define_app_event_kinds! {
     MessageHistoryAroundLoaded: AppEvent::MessageHistoryAroundLoaded { .. },
     ThreadPreviewLoaded: AppEvent::ThreadPreviewLoaded { .. },
     ThreadPreviewLoadFailed: AppEvent::ThreadPreviewLoadFailed { .. },
-    ForumPostsLoaded: AppEvent::ForumPostsLoaded { .. },
-    ForumPostsLoadFailed: AppEvent::ForumPostsLoadFailed { .. },
+    ForumPostDataLoaded: AppEvent::ForumPostDataLoaded { .. },
+    ForumPostDataLoadFailed: AppEvent::ForumPostDataLoadFailed { .. },
+    ArchivedThreadsLoaded: AppEvent::ArchivedThreadsLoaded { .. },
+    ArchivedThreadsLoadFailed: AppEvent::ArchivedThreadsLoadFailed { .. },
     MessageSearchLoaded: AppEvent::MessageSearchLoaded { .. },
     MessageSearchLoadFailed: AppEvent::MessageSearchLoadFailed { .. },
     InboxMentionsLoaded: AppEvent::InboxMentionsLoaded { .. },

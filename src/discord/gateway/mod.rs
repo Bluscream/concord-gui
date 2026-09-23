@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashSet, VecDeque},
+    collections::{BTreeSet, HashMap, HashSet, VecDeque},
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -51,7 +51,9 @@ use sender::gateway_guild_member_rate_limit;
 
 pub(in crate::discord) use parser::parse_activity;
 use parser::parse_user_account_dispatch;
-pub(crate) use parser::{parse_channel_info, parse_message_info};
+pub(crate) use parser::{
+    parse_channel_info, parse_member_info, parse_message_info, parse_thread_member_info,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GatewayCommand {
@@ -77,6 +79,7 @@ pub enum GatewayCommand {
     UpdateMemberListSubscription {
         guild_id: Id<GuildMarker>,
         channel_id: Id<ChannelMarker>,
+        thread_id: Option<Id<ChannelMarker>>,
         ranges: Vec<(u32, u32)>,
     },
     UpdateVoiceState {
@@ -167,6 +170,8 @@ const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(30);
 const GATEWAY_SEND_LIMIT: usize = 120;
 const GATEWAY_SEND_WINDOW: Duration = Duration::from_secs(60);
 const GATEWAY_SHUTDOWN_LEAVE_TIMEOUT: Duration = Duration::from_millis(1_500);
+/// How long a guild waits before another member request may go out for it.
+const GUILD_MEMBER_REQUEST_INTERVAL: Duration = Duration::from_secs(30);
 const GUILD_MEMBER_REQUEST_RESPONSE_TTL: Duration = Duration::from_secs(2 * 60);
 const MAX_PENDING_GUILD_MEMBER_REQUESTS: usize = 512;
 const MAX_SENT_GUILD_MEMBER_REQUESTS: usize = 512;
@@ -336,6 +341,9 @@ struct GuildMemberRequestScheduler {
     pending: VecDeque<PendingGuildMemberRequest>,
     in_flight: Option<ScheduledGuildMemberRequest>,
     awaiting_response: VecDeque<SentGuildMemberRequest>,
+    /// Earliest a guild may be asked again, kept outside `pending` so it
+    /// survives a request being dropped and re-queued across a resume.
+    next_guild_request_at: HashMap<Id<GuildMarker>, Instant>,
     next_nonce: u64,
 }
 

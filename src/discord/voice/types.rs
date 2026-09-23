@@ -337,20 +337,26 @@ pub(super) struct DiscoveredVoiceAddress {
 
 #[derive(Clone, Eq, PartialEq)]
 pub(super) struct VoiceSessionDescription {
+    pub(super) audio_codec: String,
     pub(super) mode: String,
     pub(super) secret_key: Vec<u8>,
     pub(super) dave_protocol_version: Option<u64>,
     pub(super) video_codec: Option<String>,
+    pub(super) media_session_id: String,
+    pub(super) keyframe_interval: Option<u64>,
 }
 
 impl fmt::Debug for VoiceSessionDescription {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("VoiceSessionDescription")
+            .field("audio_codec", &self.audio_codec)
             .field("mode", &self.mode)
             .field("secret_key", &"<redacted>")
             .field("secret_key_len", &self.secret_key.len())
             .field("dave_protocol_version", &self.dave_protocol_version)
             .field("video_codec", &self.video_codec)
+            .field("media_session_id", &self.media_session_id)
+            .field("keyframe_interval", &self.keyframe_interval)
             .finish()
     }
 }

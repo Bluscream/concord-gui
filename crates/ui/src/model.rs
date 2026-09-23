@@ -13,9 +13,9 @@ use concord::discord::ids::{
     marker::{ChannelMarker, GuildMarker, MessageMarker, UserMarker},
 };
 use concord::discord::{
-    AttachmentDownloadId, AttachmentMediaType, ChannelState, ChannelUnreadState, DiscordAction,
-    GuildFolder, GuildState, MuteDuration, PresenceStatus, ReactionEmoji, ReactionInfo,
-    VoiceParticipantState,
+    AttachmentDownloadId, AttachmentInfo, AttachmentMediaType, ChannelState, ChannelUnreadState,
+    DiscordAction, GuildFolder, GuildState, MuteDuration, PresenceStatus, ReactionEmoji,
+    ReactionInfo, VoiceParticipantState,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -486,8 +486,6 @@ pub enum MemberActionKind {
 
 pub type MemberActionItem = ActionItem<MemberActionKind>;
 
-const FORUM_POST_CARD_HEIGHT: usize = 6;
-
 /// A forum tag applied to a post, resolved into display-ready form. At most one
 /// emoji field is set: a unicode character, or a custom emoji's CDN image url.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -509,6 +507,15 @@ impl AppliedForumTag {
     }
 }
 
+/// The first image attachment shown in a thread card. Keeping the source
+/// attachment here lets the shared media runtime choose its normal proxy and
+/// quality settings instead of adding a second image-loading path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ThreadCardImagePreview {
+    pub message_id: Id<MessageMarker>,
+    pub attachment: AttachmentInfo,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChannelThreadItem {
     pub channel_id: Id<ChannelMarker>,
@@ -521,6 +528,8 @@ pub struct ChannelThreadItem {
     pub preview_author: Option<String>,
     pub preview_author_color: Option<u32>,
     pub preview_content: Option<String>,
+    pub preview_loading: bool,
+    pub preview_image: Option<ThreadCardImagePreview>,
     pub applied_tags: Vec<AppliedForumTag>,
     pub preview_reactions: Vec<ReactionInfo>,
     pub comment_count: Option<u64>,
@@ -528,18 +537,9 @@ pub struct ChannelThreadItem {
     pub last_activity_message_id: Option<Id<MessageMarker>>,
 }
 
-impl ChannelThreadItem {
-    pub fn rendered_height(&self) -> usize {
-        self.card_height() + usize::from(self.section_label.is_some())
-    }
-
-    /// Card body height. The tags row is dropped entirely when the post has no
-    /// tags, so an untagged post (and every regular thread) is one row shorter.
-    pub fn card_height(&self) -> usize {
-        FORUM_POST_CARD_HEIGHT - usize::from(self.applied_tags.is_empty())
-    }
-}
-
+// `any(test, ...)` rather than upstream's bare `test`: over here the front
+// ends are separate crates and reach these constructors through the fixtures
+// feature, not through cfg(test).
 #[cfg(any(test, feature = "fixtures"))]
 #[allow(dead_code)]
 impl ChannelThreadItem {
@@ -555,6 +555,8 @@ impl ChannelThreadItem {
             preview_author: None,
             preview_author_color: None,
             preview_content: None,
+            preview_loading: false,
+            preview_image: None,
             applied_tags: Vec::new(),
             preview_reactions: Vec::new(),
             comment_count: None,

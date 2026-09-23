@@ -166,10 +166,6 @@ fn blank_channel(id: u64, kind: &str, name: &str) -> ChannelState {
         user_limit: None,
         available_tags: Vec::new(),
         applied_tags: Vec::new(),
-        current_user_joined_thread: false,
-        current_user_thread_notification_flags: None,
-        current_user_thread_muted: false,
-        current_user_thread_mute_end_time: None,
         recipients: Vec::new(),
         permission_overwrites: Vec::new(),
         is_message_request: None,
@@ -1281,16 +1277,11 @@ pub fn message_info(message: &MessageState) -> crate::discord::MessageInfo {
 /// not a filtered view of the active page.
 pub fn forum_posts(
     forum: Id<marker::ChannelMarker>,
-    archive_state: crate::discord::ForumPostArchiveState,
+    archived: bool,
 ) -> (
     Vec<crate::discord::ChannelInfo>,
     Vec<crate::discord::MessageInfo>,
 ) {
-    let archived = matches!(
-        archive_state,
-        crate::discord::ForumPostArchiveState::Archived
-    );
-
     let posts: &[(u64, &str, &str, &str, u64)] = if archived {
         &[(
             940,
@@ -1362,10 +1353,6 @@ pub fn forum_posts(
             user_limit: None,
             available_tags: Vec::new(),
             applied_tags: Vec::new(),
-            current_user_joined_thread: Some(false),
-            current_user_thread_notification_flags: None,
-            current_user_thread_muted: Some(false),
-            current_user_thread_mute_end_time: None,
             recipients: None,
             permission_overwrites: Vec::new(),
             is_message_request: None,
@@ -1655,18 +1642,6 @@ pub fn set_thread_locked(
         && let Some(metadata) = channel.thread_metadata.as_mut()
     {
         metadata.locked = locked;
-    }
-}
-
-/// Mute or unmute a thread for the demo user.
-pub fn set_thread_muted(
-    state: &mut DiscordState,
-    channel_id: Id<marker::ChannelMarker>,
-    muted: bool,
-) {
-    let navigation = Arc::make_mut(&mut state.navigation);
-    if let Some(channel) = navigation.channels.get_mut(&channel_id) {
-        channel.current_user_thread_muted = muted;
     }
 }
 
@@ -2163,18 +2138,6 @@ pub fn set_thread_archived(
         && let Some(metadata) = channel.thread_metadata.as_mut()
     {
         metadata.archived = archived;
-    }
-}
-
-/// Join or leave a thread.
-pub fn set_thread_followed(
-    state: &mut DiscordState,
-    channel_id: Id<marker::ChannelMarker>,
-    followed: bool,
-) {
-    let navigation = Arc::make_mut(&mut state.navigation);
-    if let Some(channel) = navigation.channels.get_mut(&channel_id) {
-        channel.current_user_joined_thread = followed;
     }
 }
 

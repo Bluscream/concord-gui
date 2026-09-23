@@ -37,6 +37,9 @@ pub struct ForumView {
     pub showing_archived: bool,
     /// Offset for the next page, supplied by Discord.
     pub next_offset: usize,
+    /// The id the next archive page should come before, from the last
+    /// ArchivedThreadsLoaded. `None` means start at the newest.
+    pub archived_page_before: Option<String>,
     pub error: Option<String>,
 }
 
@@ -53,6 +56,7 @@ impl ForumView {
             complete: false,
             showing_archived: false,
             next_offset: 0,
+            archived_page_before: None,
             error: None,
         }
     }

@@ -14,5 +14,5 @@ pub use types::{
     ChannelUnreadInfo, GatewayDispatchInfo, GuildMemberListItem, GuildMemberListOperation,
     GuildMemberListUpdateInfo, GuildMembersChunkInfo, MessageHistoryLoadTarget,
     MessageUpdateDispatchInfo, MessageUpdateEventFields, PresenceEventFields, ReadySnapshotInfo,
-    ThreadListSyncInfo, ThreadMemberUpdateInfo, ThreadMembersUpdateInfo, UserGuildSettingsInfo,
+    UserGuildSettingsInfo,
 };

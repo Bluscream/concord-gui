@@ -347,8 +347,7 @@ impl DashboardState {
         let current_flags = self
             .discord
             .cache
-            .channel(channel_id)
-            .and_then(|channel| channel.thread_notification_level_flags())
+            .thread_notification_level_flags(channel_id)
             .unwrap_or(4);
         vec![
             ThreadNotificationItem::new("All messages", 2, current_flags),
@@ -522,11 +521,7 @@ impl DashboardState {
     /// Whether the current user is a member of the post thread (i.e. following
     /// it). Discord gates muting on this.
     fn is_thread_followed(&self, channel_id: Id<ChannelMarker>) -> bool {
-        self.discord
-            .cache
-            .channel(channel_id)
-            .map(|channel| channel.current_user_joined_thread)
-            .unwrap_or(false)
+        self.discord.cache.thread_is_joined(channel_id)
     }
 
     fn toggle_thread_follow(&self, channel_id: Id<ChannelMarker>) -> Option<AppCommand> {

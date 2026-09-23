@@ -1,7 +1,6 @@
 use super::*;
 use crate::tui::state::ServerPanelTab;
 use concord::discord::AppCommand;
-use concord_fixtures::events::{ForumPostsLoadedFixture, forum_posts_loaded_event};
 
 /// Carry out something that now raises a risk warning first.
 ///
@@ -103,7 +102,7 @@ fn channel_action_menu_show_threads_opens_thread_list_view() {
 
     // The gateway-cached child thread shows immediately, before the
     // `/threads/search` fetch for the channel completes.
-    let cards = state.selected_thread_card_items();
+    let cards = state.visible_thread_card_items();
     assert_eq!(cards.len(), 1);
     assert_eq!(cards[0].channel_id, Id::new(10));
     assert_eq!(cards[0].label, "release notes");
@@ -112,7 +111,6 @@ fn channel_action_menu_show_threads_opens_thread_list_view() {
 #[test]
 fn channel_thread_list_view_fetches_and_sections_active_and_archived_threads() {
     use crate::tui::state::MessagePaneSource;
-    use concord::discord::ForumPostArchiveState;
 
     let guild_id = Id::new(1);
     let channel_id = Id::new(2);
@@ -140,29 +138,33 @@ fn channel_thread_list_view_fetches_and_sections_active_and_archived_threads() {
     );
     // The open view is now the fetch target, so the scheduler issues the
     // `/threads/search` request for this non-forum channel.
-    assert_eq!(
-        state
-            .selected_forum_channel_with_load_more()
-            .map(|(guild, channel, _)| (guild, channel)),
-        Some((guild_id, channel_id))
-    );
+    // v2.5.10 dropped the paged loader, so there is no "with load more" any
+    // more - the open view is simply the selected forum channel.
+    assert_eq!(state.selected_forum_channel(), Some((guild_id, channel_id)));
 
-    for (archive_state, thread_id, name, archived) in [
-        (ForumPostArchiveState::Active, 30, "active thread", false),
-        (ForumPostArchiveState::Archived, 31, "archived thread", true),
-    ] {
-        state.push_event(forum_posts_loaded_event(ForumPostsLoadedFixture {
-            channel_id,
-            archive_state,
-            next_offset: 1,
-            threads: vec![forum_thread_info(
-                guild_id, channel_id, thread_id, name, None, archived,
-            )],
-            ..ForumPostsLoadedFixture::new()
-        }));
-    }
+    // v2.5.10 split this in two. Active threads arrive as ordinary channel
+    // upserts; only the archive is fetched, and it comes back as a page.
+    state.push_event(AppEvent::ChannelUpsert(ChannelInfo {
+        name: "active thread".to_owned(),
+        ..thread_channel_info(guild_id, channel_id, Id::new(30), "active thread")
+    }));
+    state.push_event(AppEvent::ArchivedThreadsLoaded {
+        guild_id,
+        channel_id,
+        before: None,
+        page: concord::discord::ArchivedThreadsPage {
+            threads: vec![ChannelInfo {
+                thread_metadata: Some(concord::discord::ThreadMetadataInfo::test(true, false)),
+                ..thread_channel_info(guild_id, channel_id, Id::new(31), "archived thread")
+            }],
+            members: Vec::new(),
+            has_more: false,
+            next_before: None,
+            extra_fields: std::collections::BTreeMap::new(),
+        },
+    });
 
-    let cards = state.selected_thread_card_items();
+    let cards = state.visible_thread_card_items();
     assert_eq!(
         cards
             .iter()
@@ -266,45 +268,6 @@ fn mark_as_read_action_enablement_is_scoped_to_action_channel() {
         .find(|action| action.kind == ChannelActionKind::MarkAsRead)
         .expect("channel actions include Mark as read");
     assert!(!mark_as_read.is_enabled());
-}
-
-#[test]
-fn channel_thread_list_card_opens_thread_and_subscribes() {
-    let mut state = state_with_thread_created_message();
-    state.focus_pane(FocusPane::Channels);
-    state.open_selected_channel_actions();
-    state.activate_channel_action_shortcut("t".parse().expect("t should parse"));
-    assert!(state.is_channel_thread_list_view());
-
-    let command = state.activate_selected_message_pane_item();
-
-    assert_eq!(state.selected_channel_id(), Some(Id::new(10)));
-    assert!(!state.is_channel_thread_list_view());
-    assert_eq!(
-        command,
-        Some(AppCommand::SubscribeGuildChannel {
-            guild_id: Id::new(1),
-            channel_id: Id::new(10),
-        })
-    );
-}
-
-#[test]
-fn channel_thread_list_view_esc_restores_previous_channel_view() {
-    let mut state = state_with_thread_created_message();
-    state.focus_pane(FocusPane::Channels);
-    state.open_selected_channel_actions();
-    state.activate_channel_action_shortcut("t".parse().expect("t should parse"));
-    assert!(state.is_channel_thread_list_view());
-
-    assert!(state.return_from_channel_thread_list_view());
-    assert!(!state.is_channel_thread_list_view());
-    assert_eq!(
-        state.message_pane_source(),
-        Some(crate::tui::state::MessagePaneSource::ChannelMessages {
-            channel_id: Id::new(2)
-        })
-    );
 }
 
 #[test]

@@ -120,7 +120,8 @@ impl DashboardState {
                     "Remove friend",
                     ActionAvailability::Enabled,
                 )),
-                FriendStatus::Blocked => {}
+                // Implicit is not a relationship anything here can act on.
+                FriendStatus::Blocked | FriendStatus::Implicit => {}
             }
 
             items.push(

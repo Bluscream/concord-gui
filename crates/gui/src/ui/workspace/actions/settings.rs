@@ -505,18 +505,10 @@ impl Workspace {
         } else {
             vec![ActivityInfo {
                 kind: ActivityKind::Custom,
-                name: "Custom Status".to_string(),
                 // Discord carries a custom status in `state`, not `details`;
                 // putting it in the wrong field shows nothing to anyone.
                 state: Some(text),
-                details: None,
-                url: None,
-                application_id: None,
-                emoji: None,
-                timestamps: None,
-                assets: None,
-                party: None,
-                buttons: Vec::new(),
+                ..ActivityInfo::playing("Custom Status")
             }]
         };
 

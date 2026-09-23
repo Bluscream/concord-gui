@@ -4,7 +4,8 @@ use std::sync::Arc;
 use crate::discord::{
     ChannelInfo, ChannelNotificationOverrideInfo, CustomEmojiInfo, GuildBoostTier,
     GuildNotificationSettingsInfo, GuildOnboardingInfo, GuildOnboardingMode,
-    GuildVerificationLevel, NotificationLevel, PremiumTier, RoleInfo, UserGuildSettingsInfo,
+    GuildVerificationLevel, NotificationLevel, PremiumTier, RoleInfo, ThreadMemberInfo,
+    UserGuildSettingsInfo,
     events::AppEvent,
     ids::{
         Id,
@@ -13,7 +14,7 @@ use crate::discord::{
 };
 
 use super::{
-    channels::parse_channel_info,
+    channels::{parse_channel_info, parse_thread_gateway_info},
     members::parse_member_info,
     presence::parse_presence_entry,
     shared::{parse_id, parse_nonnegative_i64},
@@ -21,10 +22,9 @@ use super::{
 
 pub(super) fn parse_guild_create(data: &Value) -> Option<AppEvent> {
     let guild_id = parse_id::<GuildMarker>(data.get("id")?)?;
-    // With user-account `capabilities` containing LAZY_USER_NOTIFICATIONS
-    // (bit 0), Discord nests the guild's name / icon / owner_id under a
-    // `properties` sub-object instead of placing them at the root. Fall back
-    // to that location so guilds don't all render as "unknown".
+    // With the CLIENT_STATE_V2 capability, Discord nests guild fields such as
+    // name and owner_id under `properties`. Fall back to that location so
+    // guilds do not render as "unknown".
     let name = guild_field(data, "name")
         .and_then(Value::as_str)
         .unwrap_or("unknown")
@@ -40,12 +40,22 @@ pub(super) fn parse_guild_create(data: &Value) -> Option<AppEvent> {
                 .collect()
         })
         .unwrap_or_default();
-    if let Some(threads) = data.get("threads").and_then(Value::as_array) {
-        channels.extend(
-            threads
-                .iter()
-                .filter_map(|channel| parse_channel_info(channel, Some(guild_id))),
-        );
+    let mut current_user_thread_members: Vec<ThreadMemberInfo> = Vec::new();
+    let thread_snapshot = data.get("threads").and_then(Value::as_array);
+    let thread_snapshot_complete = thread_snapshot.is_some();
+    if let Some(threads) = thread_snapshot {
+        for raw_thread in threads {
+            let Some(thread) = parse_thread_gateway_info(raw_thread, Some(guild_id)) else {
+                continue;
+            };
+            let thread_id = thread.channel.channel_id;
+            current_user_thread_members.push(
+                thread
+                    .current_user_member
+                    .unwrap_or_else(|| ThreadMemberInfo::joined_snapshot(thread_id)),
+            );
+            channels.push(thread.channel);
+        }
     }
 
     let members = data
@@ -60,17 +70,10 @@ pub(super) fn parse_guild_create(data: &Value) -> Option<AppEvent> {
         .unwrap_or_default();
     let member_count = data.get("member_count").and_then(Value::as_u64);
 
-    // Activities reach state via PresenceUpdate events, not GuildCreate.
     let presences = data
         .get("presences")
         .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(parse_presence_entry)
-                .map(|presence| (presence.user_id, presence.status))
-                .collect()
-        })
+        .map(|items| items.iter().filter_map(parse_presence_entry).collect())
         .unwrap_or_default();
 
     let roles = data
@@ -129,6 +132,8 @@ pub(super) fn parse_guild_create(data: &Value) -> Option<AppEvent> {
         features,
         onboarding,
         channels,
+        thread_snapshot_complete,
+        current_user_thread_members,
         members,
         presences,
         roles,
@@ -319,9 +324,8 @@ pub(super) fn parse_guild_role_delete(data: &Value) -> Option<AppEvent> {
 
 pub(super) fn parse_guild_update(data: &Value) -> Option<AppEvent> {
     let guild_id = parse_id::<GuildMarker>(data.get("id")?)?;
-    // Same lazy-mode caveat as `parse_guild_create`: with capabilities such
-    // as LAZY_USER_NOTIFICATIONS enabled, name/owner_id can ride inside a
-    // `properties` sub-object instead of at the root.
+    // Same CLIENT_STATE_V2 caveat as `parse_guild_create`: name and owner_id
+    // can be nested under `properties` instead of appearing at the root.
     let name = guild_field(data, "name")
         .and_then(Value::as_str)
         .unwrap_or("unknown")
@@ -408,6 +412,7 @@ fn parse_user_guild_notification_settings(value: &Value) -> Option<GuildNotifica
         message_notifications: parse_notification_level(value.get("message_notifications")),
         muted: value.get("muted").and_then(Value::as_bool).unwrap_or(false),
         mute_end_time: parse_mute_end_time(value),
+        selected_time_window: parse_selected_time_window(value),
         suppress_everyone: value
             .get("suppress_everyone")
             .and_then(Value::as_bool)
@@ -473,6 +478,7 @@ fn parse_channel_notification_override(value: &Value) -> Option<ChannelNotificat
         message_notifications: parse_notification_level(value.get("message_notifications")),
         muted: value.get("muted").and_then(Value::as_bool).unwrap_or(false),
         mute_end_time: parse_mute_end_time(value),
+        selected_time_window: parse_selected_time_window(value),
         collapsed: value
             .get("collapsed")
             .and_then(Value::as_bool)
@@ -490,6 +496,7 @@ fn parse_channel_notification_override_with_key(
         message_notifications: parse_notification_level(value.get("message_notifications")),
         muted: value.get("muted").and_then(Value::as_bool).unwrap_or(false),
         mute_end_time: parse_mute_end_time(value),
+        selected_time_window: parse_selected_time_window(value),
         collapsed: value
             .get("collapsed")
             .and_then(Value::as_bool)
@@ -511,6 +518,13 @@ fn parse_mute_end_time(value: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
+}
+
+fn parse_selected_time_window(value: &Value) -> Option<i64> {
+    value
+        .get("mute_config")
+        .and_then(|config| config.get("selected_time_window"))
+        .and_then(Value::as_i64)
 }
 
 fn guild_field<'a>(data: &'a Value, key: &str) -> Option<&'a Value> {

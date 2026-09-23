@@ -274,9 +274,9 @@ pub(super) fn close_code_outcome(code: u16) -> ConnectionOutcome {
     // Retrying the same IDENTIFY would hide the real problem behind Loading...
     // and can loop forever for codes such as 4004.
     match code {
-        4004 | 4010..=4014 => ConnectionOutcome::Fatal,
-        4007 | 4009 => ConnectionOutcome::Reidentify,
-        4000..=4003 | 4005 | 4008 => ConnectionOutcome::Resume,
+        4004 | 4010..=4016 => ConnectionOutcome::Fatal,
+        4003 | 4007 | 4009 => ConnectionOutcome::Reidentify,
+        4000..=4002 | 4005 | 4008 => ConnectionOutcome::Resume,
         _ => ConnectionOutcome::Reidentify,
     }
 }
@@ -391,11 +391,12 @@ pub(super) fn dispatch_command(
                     channel_id.get()
                 ),
             );
-            guild_channel_subscribe_payload(guild_id, channel_id, &[(0, 99)])
+            guild_channel_subscribe_payload(guild_id, channel_id, &[(0, 99)], None)
         }
         GatewayCommand::UpdateMemberListSubscription {
             guild_id,
             channel_id,
+            thread_id,
             ranges,
         } => {
             logging::debug(
@@ -407,7 +408,13 @@ pub(super) fn dispatch_command(
                     ranges
                 ),
             );
-            guild_channel_subscribe_payload(guild_id, channel_id, &ranges)
+            let thread_member_lists = thread_id.into_iter().collect::<Vec<_>>();
+            guild_channel_subscribe_payload(
+                guild_id,
+                channel_id,
+                &ranges,
+                Some(&thread_member_lists),
+            )
         }
         GatewayCommand::UpdateVoiceState {
             guild_id,

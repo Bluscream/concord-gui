@@ -87,7 +87,7 @@ fn message_rendered_height_reserves_rows_for_each_message_feature() {
                 ..height_test_message("release notes")
             },
             200,
-            8,
+            9,
         ),
         (
             "thread starter system card",

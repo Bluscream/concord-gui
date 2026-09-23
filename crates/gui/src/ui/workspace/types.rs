@@ -332,7 +332,9 @@ pub(crate) fn activity_kind_label(kind: ActivityKind) -> String {
         ActivityKind::Watching => t!("activity-watching"),
         ActivityKind::Competing => t!("activity-competing"),
         ActivityKind::Streaming => t!("activity-streaming"),
-        ActivityKind::Custom | ActivityKind::Unknown => t!("activity-custom"),
+        ActivityKind::Hang | ActivityKind::Custom | ActivityKind::Unknown(_) => {
+            t!("activity-custom")
+        }
     }
 }
 
@@ -375,16 +377,9 @@ impl ActivityDraft {
         };
         vec![ActivityInfo {
             kind: self.kind,
-            name,
             details: text(1),
             state: text(2),
-            url: None,
-            application_id: None,
-            emoji: None,
-            timestamps: None,
-            assets: None,
-            party: None,
-            buttons: Vec::new(),
+            ..ActivityInfo::playing(name)
         }]
     }
 

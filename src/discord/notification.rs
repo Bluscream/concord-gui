@@ -37,6 +37,7 @@ pub struct ChannelNotificationOverrideInfo {
     pub message_notifications: Option<NotificationLevel>,
     pub muted: bool,
     pub mute_end_time: Option<String>,
+    pub selected_time_window: Option<i64>,
     pub collapsed: bool,
     pub flags: u64,
 }
@@ -50,6 +51,7 @@ impl ChannelNotificationOverrideInfo {
             message_notifications: None,
             muted: false,
             mute_end_time: None,
+            selected_time_window: None,
             collapsed: false,
             flags: 0,
         }
@@ -62,6 +64,7 @@ pub struct GuildNotificationSettingsInfo {
     pub message_notifications: Option<NotificationLevel>,
     pub muted: bool,
     pub mute_end_time: Option<String>,
+    pub selected_time_window: Option<i64>,
     pub suppress_everyone: bool,
     pub suppress_roles: bool,
     pub flags: u64,
@@ -82,6 +85,7 @@ impl GuildNotificationSettingsInfo {
             message_notifications: None,
             muted: false,
             mute_end_time: None,
+            selected_time_window: None,
             suppress_everyone: false,
             suppress_roles: false,
             flags: 0,

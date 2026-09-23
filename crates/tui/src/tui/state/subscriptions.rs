@@ -31,6 +31,25 @@ impl DashboardState {
         Some((guild_id, channel_id))
     }
 
+    /// Selected thread whose complete participant list should be included in
+    /// the guild's op-37 subscription. Discord sends one authoritative
+    /// `THREAD_MEMBER_LIST_UPDATE` immediately after this value changes.
+    pub fn thread_member_list_subscription_target(
+        &self,
+    ) -> Option<(Id<GuildMarker>, Id<ChannelMarker>)> {
+        let guild_id = match self.navigation.guilds.active {
+            ActiveGuildScope::Guild(guild_id) => guild_id,
+            ActiveGuildScope::DirectMessages | ActiveGuildScope::Unset => return None,
+        };
+        let channel = self
+            .navigation
+            .channels
+            .active_channel_id
+            .and_then(|channel_id| self.discord.cache.channel(channel_id))?;
+        (channel.guild_id == Some(guild_id) && channel.is_thread())
+            .then_some((guild_id, channel.id))
+    }
+
     /// Highest 100-member bucket the user has scrolled the member sidebar
     /// into. Bucket 0 covers indexes 0..=99, bucket 1 covers 100..=199, etc.
     pub fn member_subscription_top_bucket(&self) -> u32 {

@@ -8,8 +8,8 @@ use crate::discord::ids::{
 };
 
 use crate::discord::{
-    ActivityInfo, AttachmentUpdate, ChannelInfo, EmbedInfo, GuildNotificationSettingsInfo,
-    MemberInfo, MentionInfo, PollInfo, PresenceStatus,
+    ActivityInfo, AttachmentUpdate, EmbedInfo, GuildNotificationSettingsInfo, MemberInfo,
+    MentionInfo, PollInfo, PresenceStatus,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -35,6 +35,7 @@ pub struct MessageUpdateEventFields {
     pub mention_everyone: Option<bool>,
     pub mention_roles: Option<Vec<Id<RoleMarker>>>,
     pub flags: Option<u64>,
+    pub pinned: Option<bool>,
     pub attachments: AttachmentUpdate,
     pub embeds: Option<Vec<EmbedInfo>>,
     pub edited_timestamp: Option<String>,
@@ -54,6 +55,7 @@ impl Default for MessageUpdateEventFields {
         Self {
             poll: None,
             content: None,
+            pinned: None,
             sticker_names: None,
             stickers: None,
             mentions: None,
@@ -77,36 +79,6 @@ pub struct PresenceEventFields {
 #[derive(Clone, Debug, PartialEq)]
 pub struct UserGuildSettingsInfo {
     pub notification_settings: GuildNotificationSettingsInfo,
-    pub extra_fields: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ThreadListSyncInfo {
-    pub guild_id: Id<GuildMarker>,
-    /// `None` means every parent channel in the guild. A present list limits
-    /// replacement to those parents, including parents with no active threads.
-    pub channel_ids: Option<Vec<Id<ChannelMarker>>>,
-    pub threads: Vec<ChannelInfo>,
-    pub thread_members: Vec<Value>,
-    pub extra_fields: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ThreadMemberUpdateInfo {
-    pub user_id: Id<UserMarker>,
-    pub flags: Option<u64>,
-    pub muted: Option<bool>,
-    pub mute_end_time: Option<String>,
-    pub extra_fields: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ThreadMembersUpdateInfo {
-    pub guild_id: Option<Id<GuildMarker>>,
-    pub channel_id: Id<ChannelMarker>,
-    pub member_count: Option<u64>,
-    pub added_members: Vec<ThreadMemberUpdateInfo>,
-    pub removed_user_ids: Vec<Id<UserMarker>>,
     pub extra_fields: BTreeMap<String, Value>,
 }
 

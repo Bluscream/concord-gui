@@ -160,8 +160,16 @@ async fn handle_command<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let Some(command) = protocol::parse_command(payload, client_id) else {
-        return Ok(());
+    let command = match protocol::parse_command(payload, client_id) {
+        Ok(command) => command,
+        Err(error) => {
+            return write_frame(
+                stream,
+                Opcode::Frame,
+                &protocol::build_command_error(&error),
+            )
+            .await;
+        }
     };
     match command {
         Command::SetActivity {
@@ -194,14 +202,6 @@ where
                 stream,
                 Opcode::Frame,
                 &protocol::build_command_ack("SET_ACTIVITY", nonce.as_deref(), echo),
-            )
-            .await
-        }
-        Command::Other { cmd, nonce } => {
-            write_frame(
-                stream,
-                Opcode::Frame,
-                &protocol::build_command_ack(&cmd, nonce.as_deref(), serde_json::Value::Null),
             )
             .await
         }
@@ -350,6 +350,16 @@ mod tests {
     use super::{RpcContext, is_external_image_url, needs_key_lookup, serve_connection};
     use crate::discord::DiscordClient;
 
+    fn test_context() -> RpcContext {
+        RpcContext {
+            client: DiscordClient::new("test-token".to_owned()).expect("valid token header"),
+            registry: Arc::new(Mutex::new(ActivityRegistry::default())),
+            names: Arc::new(Mutex::new(HashMap::new())),
+            assets: Arc::new(Mutex::new(HashMap::new())),
+            presence_dirty: Arc::new(Notify::new()),
+        }
+    }
+
     #[test]
     fn image_reference_shape_drives_asset_resolution() {
         assert!(is_external_image_url("https://example.com/icon.png"));
@@ -372,13 +382,7 @@ mod tests {
     #[tokio::test]
     async fn serve_connection_completes_handshake_and_answers_ping() {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let context = RpcContext {
-            client: DiscordClient::new("test-token".to_owned()).expect("valid token header"),
-            registry: Arc::new(Mutex::new(ActivityRegistry::default())),
-            names: Arc::new(Mutex::new(HashMap::new())),
-            assets: Arc::new(Mutex::new(HashMap::new())),
-            presence_dirty: Arc::new(Notify::new()),
-        };
+        let context = test_context();
         let (mut app, mut server) = tokio::io::duplex(4096);
         let server_task = tokio::spawn(async move {
             let _ = serve_connection(&mut server, &context).await;
@@ -402,6 +406,61 @@ mod tests {
         let pong = read_frame(&mut app).await.expect("pong frame");
         assert_eq!(pong.opcode, Opcode::Pong);
         assert_eq!(pong.payload, b"beat");
+
+        app.write_all(&encode_frame(Opcode::Close, b""))
+            .await
+            .expect("send close");
+        server_task.await.expect("server task joins cleanly");
+    }
+
+    #[tokio::test]
+    async fn rpc_command_errors_use_the_documented_error_event() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let context = test_context();
+        let (mut app, mut server) = tokio::io::duplex(4096);
+        let server_task = tokio::spawn(async move {
+            let _ = serve_connection(&mut server, &context).await;
+        });
+
+        app.write_all(&encode_frame(
+            Opcode::Handshake,
+            br#"{"v":1,"client_id":"123"}"#,
+        ))
+        .await
+        .expect("send handshake");
+        read_frame(&mut app).await.expect("ready frame");
+
+        let cases = [
+            (
+                br#"{"cmd":"GET_GUILD","nonce":"n1","args":{}}"#.as_slice(),
+                Some("GET_GUILD"),
+                Some("n1"),
+                4002,
+            ),
+            (
+                br#"{"cmd":"SET_ACTIVITY","nonce":"n2","args":{"pid":1,"activity":"invalid"}}"#
+                    .as_slice(),
+                Some("SET_ACTIVITY"),
+                Some("n2"),
+                4000,
+            ),
+            (br#"{"#.as_slice(), None, None, 4000),
+        ];
+
+        for (payload, cmd, nonce, code) in cases {
+            app.write_all(&encode_frame(Opcode::Frame, payload))
+                .await
+                .expect("send RPC command");
+            let response = read_frame(&mut app).await.expect("RPC error frame");
+            let response: serde_json::Value =
+                serde_json::from_slice(&response.payload).expect("RPC error should be JSON");
+
+            assert_eq!(response["evt"].as_str(), Some("ERROR"));
+            assert_eq!(response["cmd"].as_str(), cmd);
+            assert_eq!(response["nonce"].as_str(), nonce);
+            assert_eq!(response["data"]["code"].as_u64(), Some(code));
+            assert!(response["data"]["message"].as_str().is_some());
+        }
 
         app.write_all(&encode_frame(Opcode::Close, b""))
             .await

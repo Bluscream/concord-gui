@@ -34,6 +34,7 @@ pub struct NavigationSnapshot {
     pub(in crate::discord) presence: Arc<PresenceCache>,
     pub(in crate::discord) voice: Arc<VoiceStateCache>,
     pub(in crate::discord) session: Arc<SessionState>,
+    pub(in crate::discord) threads: Arc<ThreadCache>,
 }
 
 #[derive(Clone, Debug)]
@@ -121,6 +122,11 @@ impl SnapshotAreas {
 }
 
 impl DiscordSnapshot {
+    pub fn thread_card_catalog_changed_from(&self, state: &DiscordState) -> bool {
+        !Arc::ptr_eq(&self.navigation.navigation, &state.navigation)
+            || !Arc::ptr_eq(&self.navigation.threads, &state.threads)
+    }
+
     pub fn to_state(&self) -> DiscordState {
         let mut state = DiscordState::default();
         state.attach_snapshot_areas(self, SnapshotAreas::all());

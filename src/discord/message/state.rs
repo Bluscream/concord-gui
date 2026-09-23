@@ -196,7 +196,6 @@ pub(in crate::discord) type MessageAuthorRoleIds =
 
 pub(in crate::discord) struct MessageUpdateFields {
     pub(in crate::discord) body: MessageUpdateEventFields,
-    pub(in crate::discord) pinned: Option<bool>,
     pub(in crate::discord) reactions: Option<Vec<ReactionInfo>>,
     pub(in crate::discord) retain_body: bool,
 }
@@ -1666,7 +1665,7 @@ fn update_message_in(
     if let Some(poll) = &update.body.poll {
         existing.poll = Some(poll.clone());
     }
-    if let Some(pinned) = update.pinned {
+    if let Some(pinned) = update.body.pinned {
         existing.pinned = pinned;
     }
     if let Some(reactions) = &update.reactions {

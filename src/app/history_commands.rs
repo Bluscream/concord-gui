@@ -5,10 +5,7 @@ use crate::discord::ids::{
 
 use crate::{
     DiscordClient,
-    discord::{
-        AppEvent, ForumPostArchiveState, MessageHistoryAfterMode, MessageHistoryLoadTarget,
-        MessageSearchQuery,
-    },
+    discord::{AppEvent, MessageHistoryAfterMode, MessageHistoryLoadTarget, MessageSearchQuery},
     logging,
 };
 
@@ -266,48 +263,85 @@ pub(super) async fn load_thread_preview(
     }
 }
 
-pub(super) async fn load_forum_posts(
+pub(super) async fn load_forum_post_data(
     client: DiscordClient,
     guild_id: Id<GuildMarker>,
     channel_id: Id<ChannelMarker>,
-    archive_state: ForumPostArchiveState,
-    offset: usize,
+    thread_ids: Vec<Id<ChannelMarker>>,
 ) {
     match client
-        .load_forum_posts(guild_id, channel_id, archive_state, offset)
+        .load_forum_post_data(guild_id, channel_id, &thread_ids)
         .await
     {
-        Ok(page) => {
+        Ok(posts) => {
             client
-                .publish_event(AppEvent::ForumPostsLoaded {
+                .publish_event(AppEvent::ForumPostDataLoaded {
                     channel_id,
-                    archive_state,
-                    offset,
-                    next_offset: page.next_offset,
-                    threads: page.threads,
-                    first_messages: page.first_messages,
-                    has_more: page.has_more,
+                    requested_thread_ids: thread_ids,
+                    posts,
                 })
                 .await;
         }
         Err(error) => {
-            let message = format!("load forum posts failed: {error}");
+            let message = format!("load forum post data failed: {error}");
             let detail = error.log_detail();
             logging::error(
                 "history",
                 format!(
-                    "op=load_forum_posts guild_id={} channel_id={} archive_state={} offset={} {message}; detail={detail}",
+                    "op=load_forum_post_data guild_id={} channel_id={} thread_count={} {message}; detail={detail}",
                     guild_id.get(),
                     channel_id.get(),
-                    archive_state.as_log_label(),
-                    offset,
+                    thread_ids.len(),
                 ),
             );
             client
-                .publish_event(AppEvent::ForumPostsLoadFailed {
+                .publish_event(AppEvent::ForumPostDataLoadFailed {
                     channel_id,
-                    archive_state,
-                    offset,
+                    thread_ids,
+                    message,
+                })
+                .await;
+        }
+    }
+}
+
+pub(super) async fn load_archived_threads(
+    client: DiscordClient,
+    guild_id: Id<GuildMarker>,
+    channel_id: Id<ChannelMarker>,
+    before: Option<String>,
+) {
+    match client
+        .load_public_archived_threads(guild_id, channel_id, before.as_deref())
+        .await
+    {
+        Ok(page) => {
+            client
+                .publish_event(AppEvent::ArchivedThreadsLoaded {
+                    guild_id,
+                    channel_id,
+                    before,
+                    page,
+                })
+                .await;
+        }
+        Err(error) => {
+            let message = format!("load archived threads failed: {error}");
+            let detail = error.log_detail();
+            logging::error(
+                "history",
+                format!(
+                    "op=load_archived_threads guild_id={} channel_id={} before={:?} {message}; detail={detail}",
+                    guild_id.get(),
+                    channel_id.get(),
+                    before,
+                ),
+            );
+            client
+                .publish_event(AppEvent::ArchivedThreadsLoadFailed {
+                    guild_id,
+                    channel_id,
+                    before,
                     message,
                 })
                 .await;

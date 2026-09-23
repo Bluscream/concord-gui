@@ -180,7 +180,7 @@ pub async fn connect_stream_gateway(
                             }))
                             .await;
                         child_tasks
-                            .replace_keepalive(tokio::spawn(gateway::run_voice_udp_keepalive(
+                            .replace_udp_ping(tokio::spawn(gateway::run_voice_udp_ping(
                                 Arc::clone(socket),
                             )))
                             .await;

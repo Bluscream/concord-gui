@@ -679,7 +679,7 @@ fn friend_status_badge(status: FriendStatus) -> (String, Style) {
             "● Blocked".to_owned(),
             theme.style(theme::HighlightGroup::RelationshipBlocked),
         ),
-        FriendStatus::None => (
+        FriendStatus::None | FriendStatus::Implicit => (
             "● Not friends".to_owned(),
             theme.style(theme::HighlightGroup::RelationshipNone),
         ),
@@ -786,6 +786,7 @@ fn activity_priority(kind: ActivityKind) -> u8 {
         ActivityKind::Listening => 3,
         ActivityKind::Watching => 4,
         ActivityKind::Competing => 5,
-        ActivityKind::Unknown => 6,
+        ActivityKind::Hang => 6,
+        ActivityKind::Unknown(_) => 7,
     }
 }
