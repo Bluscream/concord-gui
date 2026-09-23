@@ -371,16 +371,11 @@ fn voice_audio_source_watch_retains_only_the_latest_selection() {
 
 #[cfg(feature = "voice-playback")]
 #[test]
-fn voice_input_buffer_size_requests_small_supported_fixed_buffer() {
-    let supported = cpal::SupportedBufferSize::Range { min: 128, max: 960 };
-    assert_eq!(
-        voice_input_buffer_size(&supported),
-        cpal::BufferSize::Fixed(VOICE_MIC_PREFERRED_BUFFER_FRAMES)
-    );
-    assert_eq!(
-        voice_input_buffer_size(&cpal::SupportedBufferSize::Unknown),
-        cpal::BufferSize::Default
-    );
+fn voice_input_buffer_size_lets_the_host_negotiate() {
+    // Upstream v2.5.19 (#356) stopped asking for a small fixed callback: a
+    // reported range does not mean the device and audio server can hold it,
+    // and the ones that cannot produced dropouts rather than an error.
+    assert_eq!(voice_input_buffer_size(), cpal::BufferSize::Default);
 }
 
 #[cfg(feature = "voice-playback")]
