@@ -1,0 +1,92 @@
+# Say when upstream has moved, so nobody has to remember to look.
+#
+# This is the one step of docs/UPSTREAM.md a person should never have to do:
+# noticing. The fork sat 87 commits behind for 40 days because checking was
+# a thing you had to think of.
+#
+# NOTE: this is inert until Actions are enabled for this fork. GitHub disables
+# workflows on a fork until a maintainer turns them on in Settings -> Actions,
+# and at the time of writing this repository has run zero workflows. Nothing
+# below runs before that switch is flipped; it is here so that flipping it is
+# the only thing needed.
+name: Upstream drift
+
+on:
+  schedule:
+    # Monday morning. Upstream releases every week or two, so this catches a
+    # release while it is still one release.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: gui
+          fetch-depth: 0
+
+      - name: Measure the drift
+        id: drift
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/chojs23/concord.git
+          git fetch --quiet upstream main --tags
+
+          base="$(git merge-base HEAD upstream/main)"
+          behind="$(git rev-list --count "$base..upstream/main")"
+          echo "behind=$behind" >> "$GITHUB_OUTPUT"
+          if [ "$behind" -eq 0 ]; then
+            echo "Up to date."
+            exit 0
+          fi
+
+          latest="$(git tag --list --sort=-v:refname --merged upstream/main 'v*' | head -n1)"
+          {
+            echo "body<<EOF"
+            echo "Upstream is **$behind commits** ahead of \`gui\` (latest release \`$latest\`)."
+            echo
+            echo "Where they land - \`src/tui\` is \`crates/tui\` here, and \`src/discord\` is split:"
+            echo
+            for area in src/discord src/tui src/app src/config; do
+              n="$(git log --oneline "$base..upstream/main" -- "$area" | wc -l)"
+              # An `if`, not `[ ] && echo`: the last iteration failing the test
+              # would make the loop - and this whole redirected group - exit
+              # non-zero under `set -e`.
+              if [ "$n" -gt 0 ]; then
+                echo "- \`$area\`: $n commits"
+              fi
+            done
+            echo
+            echo "See [docs/UPSTREAM.md](https://github.com/${GITHUB_REPOSITORY}/blob/gui/docs/UPSTREAM.md). Start with:"
+            echo
+            echo '```bash'
+            echo './scripts/upstream.sh preview'
+            echo '```'
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      # One issue, reopened and rewritten, rather than a new one every Monday.
+      - name: Open or update the tracking issue
+        if: steps.drift.outputs.behind != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BODY: ${{ steps.drift.outputs.body }}
+          TITLE: "Upstream is ahead of gui"
+        run: |
+          set -euo pipefail
+          existing="$(gh issue list --state all --search "$TITLE in:title" \
+            --json number,title --jq "[.[] | select(.title == \"$TITLE\")][0].number")"
+          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+            gh issue edit "$existing" --body "$BODY"
+            gh issue reopen "$existing" 2>/dev/null || true
+          else
+            # No --label: a label that does not exist on the fork fails the
+            # whole call, and an unlabelled issue still gets read.
+            gh issue create --title "$TITLE" --body "$BODY"
+          fi
