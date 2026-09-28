@@ -12,10 +12,10 @@
 name: Upstream drift
 
 on:
-  schedule:
+  #schedule:
     # Monday morning. Upstream releases every week or two, so this catches a
     # release while it is still one release.
-    - cron: "0 7 * * 1"
+    #- cron: "0 7 * * 1"
   workflow_dispatch:
 
 permissions:
